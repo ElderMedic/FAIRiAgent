@@ -1,120 +1,235 @@
-# FAIRiAgent
+# FAIRiAgent - FAIR Metadata Generation Framework
 
-FAIRifier Agentic Framework — Software Engineering Spec (LangGraph/LangChain, OSS-first)
+🧬 **Automated generation of FAIR metadata from research documents using multi-agent systems**
 
-0) TL;DR
+## 🎯 Overview
 
-Build an agentic system that reads scientific literature (PDF/HTML/images), understands the project, retrieves and enriches background knowledge, and auto-drafts a FAIR metadata template + RDF/RO-Crate package for the research. It integrates with FAIR Data Station (FAIR-DS) via API or MCP tools, keeps human-in-the-loop at all critical steps, and is implemented with LangGraph on top of LangChain, using open-source models, parsers, vector DBs, and triple stores.
+FAIRiAgent is a sophisticated multi-agent framework that automatically extracts information from research documents (PDF/text) and generates standardized FAIR metadata templates. Built with LangGraph and LangChain, it provides intelligent document processing, knowledge retrieval, and metadata generation with human-in-the-loop validation.
 
-⸻
+## ✨ Key Features
 
-## 1) Goals & Scope
+- 🤖 **Multi-Agent Architecture**: Specialized agents for document parsing, knowledge retrieval, template generation, RDF building, and validation
+- 📄 **Document Processing**: Extract metadata from PDF and text documents using GROBID and OCR
+- 🧠 **Knowledge Retrieval**: Integrate with FAIR Data Station and external knowledge sources
+- 🏷️ **Smart Field Generation**: Generate relevant metadata fields based on research domain (MIxS standards)
+- 📊 **Multiple Output Formats**: JSON Schema, YAML templates, RDF (Turtle/JSON-LD), and RO-Crate
+- 🎯 **Confidence Scoring**: Quality assessment with automatic human-in-the-loop triggers
+- 🔄 **Graceful Fallbacks**: Works with optional dependencies and external services
 
-	•	Parse papers/proposals/plans (text + figures) → research intent, entities, workflows, datasets, instruments, variables.
-	•	Auto-plan which metadata fields are needed; instantiate ISA-Model/FAIR-DS forms and RDF (PROV-O, RO-Crate, DCAT, schema.org, OBO).
-	•	Query open knowledge sources (Crossref, OpenAlex, arXiv, Europe PMC, Zenodo, WorkflowHub, MGnify, BioProject/SRA, EBI Ontologies) to fill/validate fields.
-	•	Generate:
-	•	Metadata Template (CSV/YAML/JSON Schema + SHACL).
-	•	RDF graphs (TTL/JSON-LD) + RO-Crate descriptor.
-	•	HITL review loops (editable diffs, confidence flags).
-	•	Multi-agent plan-execute-monitor; self-critique and tool-use.
-	•	Reproducible & auditable (provenance; run logs; versioned artifacts).
+## 🏗️ Architecture
 
+The system uses a multi-agent workflow orchestrated by LangGraph:
 
-## 2) FAIRifier Agentic Framework（精简技术文档）
+1. **Document Parser Agent**: Extracts structured information from documents
+2. **Knowledge Retriever Agent**: Enriches metadata with external knowledge
+3. **Template Generator Agent**: Creates metadata templates based on standards
+4. **RDF Builder Agent**: Generates semantic representations
+5. **Validator Agent**: Validates output quality and triggers human review
 
-1. 目标
-	•	读取科研文献/计划书（文本+图片），理解研究要素并自动生成：
-	•	Metadata 模板（ISA-Model + MIxS；JSON Schema/YAML）
-	•	RDF/RO-Crate（schema.org + PROV-O + SHACL）
-	•	与 FAIR Data Station（FAIR-DS）/ MCP 交互提交与校验。
-	•	全流程 human-in-the-loop（HITL） 审核，保留可追溯证据与决策记录。
+## 🚀 Quick Start
 
-2. 架构（OSS 优先）
-	•	编排：LangGraph（基于 LangChain 工具/检索）
-	•	LLM/Embedding：Qwen2.5-Instruct 或 Mistral-7B；BGE-m3（Apache 2.0）
-	•	向量库：Qdrant（默认）/pgvector
-	•	三元组/验证：RDFLib + Jena Fuseki（SPARQL），pySHACL
-	•	解析：GROBID（PDF 结构化），Tesseract OCR
-	•	打包：pyRO-Crate
-	•	服务层：FastAPI（API） + Streamlit（HITL）
-	•	存储：PostgreSQL（状态/审计）+ MinIO（制品）
+### Installation
 
-3. 关键 Agent（LangGraph 节点）
-	•	Planner：分解任务与验收标准（parse → retrieve → map → validate → RDF → submit）
-	•	Doc Ingestor：PDF/图片解析与分块
-	•	Retriever/Enricher：Qdrant 检索 + 标准/本体检索（FAIRsharing、BioPortal、OpenAlex/Europe PMC 等）
-	•	Schema Engineer：选择 MIxS 包，产出 JSON Schema + YAML 模板
-	•	RDF Assembler：生成 JSON-LD/Turtle + RO-Crate，写入 PROV-O
-	•	Critic：SHACL 校验、术语解析率、置信度门限；必要时转 HITL
-	•	FAIR-DS Connector：通过 REST/MCP 创建 Investigation/Study/Assay、上传模板与 RDF
+```bash
+# Clone the repository
+git clone <repository-url>
+cd FAIRiAgent
 
-4. 数据流（高层）
+# Install dependencies
+pip install -r requirements.txt
 
-上传文档 → 解析分块 → RAG 检索/扩充 → 模板生成 → SHACL 校验 → HITL 审核 → 生成 RDF/RO-Crate → 提交 FAIR-DS → 返回校验报告与持久化证据。
+# Or use Poetry (recommended)
+poetry install
+```
 
-5. 输出制品
-	•	template.schema.json（JSON Schema） + template.yaml（可填模板）
-	•	graph.ttl/metadata.jsonld（RDF）
-	•	ro-crate-metadata.json（RO-Crate）
-	•	validation_report.txt（SHACL/FAIR-DS）
+### Usage
 
-6. 最小接口（示例）
-	•	POST /projects/run：上传 PDF，启动流程 → 返回校验摘要
-	•	GET  /projects/{id}/status：查询状态与问题清单
-	•	POST /projects/{id}/hitl-edits：提交人工修改
-	•	GET  /projects/{id}/artifacts：下载模板/RDF/RO-Crate
+#### Command Line Interface
+```bash
+# Process a document
+python -m fairifier.cli your_document.pdf
 
-7. 内建规则与记忆
-	•	置信度 < 0.75 或必填 MIxS 字段缺失 → 进入 HITL
-	•	每个字段必须附带证据 URI + 文本跨度
-	•	长期记忆：历史项目的字段选择与本体偏好；在新项目中优先复用
+# Specify output directory
+python -m fairifier.cli document.txt --output results/
 
-8. 安全与合规
-	•	默认本地模型与缓存；禁外呼模式可开关
-	•	PII 抑制与日志脱敏；所有工具调用写入 PROV-O 审计
-	•	依赖与许可证清单（Apache/MIT 优先）
+# With FAIR Data Station integration
+python -m fairifier.cli paper.pdf --fair-ds-url http://localhost:8083
+```
 
-9. MVP 路线（建议顺序）
-	1.	Qdrant + GROBID 接入；文档→分块→检索
-	2.	规则+LLM 生成 MIxS 模板（YAML/Schema）
-	3.	SHACL 校验 + HITL UI
-	4.	产出 RDF/RO-Crate 并对接 FAIR-DS/MCP
+#### API Server
+```bash
+# Start the FastAPI server
+python run_fairifier.py api
 
-10. 最小目录
+# Access API documentation at http://localhost:8000/docs
+```
 
+#### Web Interface
+```bash
+# Start the Streamlit UI
+python run_fairifier.py ui
+
+# Access web interface at http://localhost:8501
+```
+
+#### Docker Deployment
+```bash
+# Start all services
+docker-compose -f docker/compose.yaml up
+```
+
+## 📊 Example Results
+
+### Input Document
+```
+Title: Metagenomic Analysis of Soil Microbial Communities in Agricultural Fields
+Authors: Dr. Maria Zhang, Prof. James Wilson
+Keywords: soil microbiome, metagenomics, agricultural soils
+```
+
+### Generated Metadata (YAML)
+```yaml
+# FAIR Metadata Template
+# Generated: 2025-01-27 10:30:00
+# Project: Metagenomic Analysis of Soil Microbial Communities
+# Domain: soil
+
+# REQUIRED FIELDS
+project_name: Metagenomic Analysis of Soil Microbial Communities in Agricultural Fields
+investigation_type: metagenome
+collection_date: July 15-20, 2023
+geo_loc_name: USA:Iowa
+
+# OPTIONAL FIELDS
+lat_lon: 42.0308 -93.6319
+env_biome: terrestrial biome
+env_material: soil
+seq_meth: # Sequencing method used
+```
+
+## 🧬 FAIR Data Station Integration
+
+When connected to a FAIR Data Station instance, FAIRiAgent can:
+
+- 🔍 Search for standardized terms relevant to your research
+- 📦 Use community-approved metadata packages
+- 🏷️ Enhance fields with validated definitions
+- 🌐 Ensure better interoperability
+
+### Setup FAIR Data Station
+
+```bash
+# Download and start FAIR Data Station
+wget http://download.systemsbiology.nl/unlock/fairds-latest.jar
+java -jar fairds-latest.jar
+
+# Access at http://localhost:8083
+```
+
+## 📁 Project Structure
+
+```
 fairifier/
-  apps/api (FastAPI)   apps/ui (Streamlit)
-  fairifier/graph (LangGraph 节点与状态)
-  fairifier/tools (Qdrant/GROBID/FAIR-DS/SHACL 等)
-  kb/schemas & kb/shapes (JSON Schema/SHACL)
-  docker/compose.yaml
+├── agents/           # Multi-agent implementations
+├── apps/            # API and UI applications
+├── graph/           # LangGraph workflow definitions
+├── services/        # External service integrations
+├── config.py        # Configuration management
+├── models.py        # Data models
+└── cli.py          # Command-line interface
 
-### Misc
+kb/                  # Knowledge base
+├── schemas/         # JSON Schema definitions
+├── shapes/          # SHACL validation shapes
+└── ontologies.json  # Ontology mappings
 
-验收与KPI
-	•	SHACL 通过率 ≥ 95%，术语可解析率（CURIE/IRI）≥ 95%
-	•	关键字段覆盖率（MIxS/ISA 必填）≥ 90%
-	•	HITL 平均编辑距离（自动→最终）≤ 15%，单项目总用时 ≤ X 分钟
-HITL 策略
-	•	置信度阈值 0.75 触发人工审核；所有 PII/许可证/伦理相关字段始终强制 HITL
-	•	每个字段保留证据 URI + 文本跨度；审核界面支持“一键跳转证据”
-版本与可追溯
-	•	对 JSON Schema / SHACL / 映射规则 使用语义化版本（semver），输出制品写入版本号与 Git 提交哈希
-	•	RO-Crate 内放入 provenance.json（包含模型、向量器、索引快照、配置哈希）
-安全与治理
-	•	OIDC + RBAC；工具调用白名单；请求/输出日志脱敏
-	•	Prompt 注入防护：RAG sandbox 提示词，外部文本一律当不可信输入处理
-测试矩阵（最小集）
-	•	解析：长 PDF、扫描件、混合语言
-	•	标准映射：MIMAG、MISAG、非宏基因组对照场景
-	•	失败场景：缺页/空表/格式异常、API 超时、术语未解析
-可扩展点
-	•	Package 选择策略可配置（policies/mixs_select.yaml）
-	•	工具适配层：搜索/本体/FAIR-DS 连接器皆为可插拔模块
-性能预算
-	•	首次运行（50–80页 PDF）端到端目标 ≤ 5–8 分钟（CPU+轻量GPU）
-	•	Qdrant 采用量化与分段索引；嵌入批量化
-“完成的定义”（DoD）
-	•	产出 template.schema.json + template.yaml + graph.ttl/jsonld + ro-crate-metadata.json + validation_report
-	•	FAIR-DS 返回有效校验 ID；所有制品均有校验和与证据链
+examples/            # Sample documents and outputs
+docker/              # Containerization files
+docs/                # Documentation
+```
+
+## 📈 Quality Metrics
+
+FAIRiAgent provides confidence scoring based on:
+
+- ✅ **Document extraction quality** (title, abstract, authors)
+- ✅ **Field completion rate** (how many fields have values)
+- ✅ **Research domain identification** accuracy
+- ✅ **Metadata standardization** level
+- ✅ **SHACL validation** compliance
+
+Confidence levels:
+- **> 0.8**: High confidence, ready to use
+- **0.5-0.8**: Good, may need minor review
+- **< 0.5**: Requires manual review
+
+## 🛠️ Dependencies
+
+Core dependencies (required):
+- `langgraph`: Multi-agent workflow orchestration
+- `langchain`: Agent framework and tools
+- `rdflib`: RDF processing and generation
+- `fastapi`: API framework
+- `streamlit`: Web interface
+
+Optional dependencies:
+- `PyMuPDF`: PDF document processing
+- `grobid-client`: Advanced PDF parsing
+- `qdrant-client`: Vector database
+- `requests`: External API integration
+
+## 📋 API Endpoints
+
+- `POST /projects/run`: Upload document and start processing
+- `GET /projects/{id}/status`: Check processing status
+- `POST /projects/{id}/hitl-edits`: Submit human-in-the-loop edits
+- `GET /projects/{id}/artifacts`: Download generated artifacts
+
+## 🧪 Testing
+
+Test with the provided sample documents:
+
+```bash
+# Test basic functionality
+python -m fairifier.cli examples/inputs/soil_metagenomics_paper.txt
+
+# Test with all features
+python -m fairifier.cli examples/inputs/soil_metagenomics_paper.txt --fair-ds-url http://localhost:8083
+```
+
+### LangSmith Integration
+
+FAIRiAgent includes comprehensive LangSmith integration for debugging and monitoring:
+
+```bash
+# Set up LangSmith (get API key from https://smith.langchain.com/)
+export LANGSMITH_API_KEY="your_api_key_here"
+export LANGSMITH_PROJECT="fairifier-testing"
+
+# Run LangSmith tests
+python test_langsmith.py
+```
+
+LangSmith provides:
+- 🔍 **Trace Visualization**: Complete workflow execution flow
+- 📊 **Performance Metrics**: Token usage, costs, and timing
+- 🐛 **Debug Tools**: Step-by-step debugging and error analysis
+- 📈 **Monitoring**: Track performance over time
+
+See [LangSmith Testing Guide](docs/LANGSMITH_TESTING_GUIDE.md) for detailed instructions.
+
+## 🤝 Contributing
+
+This is a research tool designed for:
+- Scientific metadata standardization
+- FAIR data principles implementation
+- Research workflow automation
+- Multi-agent system development
+
+## 📄 License
+
+MIT License - Free for academic and research use.
+
+---
+
+**🎯 FAIRiAgent makes your research data more Findable, Accessible, Interoperable, and Reusable!**
