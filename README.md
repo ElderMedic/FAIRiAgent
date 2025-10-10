@@ -1,30 +1,36 @@
 # FAIRiAgent - FAIR Metadata Generation Framework
 
-🧬 **Automated generation of FAIR metadata from research documents using multi-agent systems**
+🧬 **CLI-first, JSON-only FAIR metadata generation with FAIR-DS compatibility**
 
 ## 🎯 Overview
 
-FAIRiAgent is a sophisticated multi-agent framework that automatically extracts information from research documents (PDF/text) and generates standardized FAIR metadata templates. Built with LangGraph and LangChain, it provides intelligent document processing, knowledge retrieval, and metadata generation with human-in-the-loop validation.
+FAIRiAgent is a CLI-first multi-agent framework that automatically extracts information from research documents (PDF/text) and generates **FAIR-DS compatible JSON metadata**. Built with LangGraph and LangChain, it focuses on simplicity, standards compliance, and evidence-based metadata generation.
 
 ## ✨ Key Features
 
-- 🤖 **Multi-Agent Architecture**: Specialized agents for document parsing, knowledge retrieval, template generation, RDF building, and validation
-- 📄 **Document Processing**: Extract metadata from PDF and text documents using GROBID and OCR
-- 🧠 **Knowledge Retrieval**: Integrate with FAIR Data Station and external knowledge sources
-- 🏷️ **Smart Field Generation**: Generate relevant metadata fields based on research domain (MIxS standards)
-- 📊 **Multiple Output Formats**: JSON Schema, YAML templates, RDF (Turtle/JSON-LD), and RO-Crate
-- 🎯 **Confidence Scoring**: Quality assessment with automatic human-in-the-loop triggers
-- 🔄 **Graceful Fallbacks**: Works with optional dependencies and external services
+- 🤖 **Multi-Agent Architecture**: Specialized agents for document parsing, knowledge retrieval, and JSON generation
+- 📄 **Document Processing**: Extract metadata from PDF and text documents
+- 🧠 **Knowledge Retrieval**: Integrate with FAIR Data Station and local knowledge base
+- 🏷️ **Evidence-based Fields**: Every field includes evidence, confidence, origin, and package source
+- 📊 **JSON-only Output**: FAIR-DS compatible metadata format (no RDF/RO-Crate)
+- 📝 **JSON Line Logging**: Structured logging for debugging and monitoring
+- 🔧 **Local Provisional Support**: Extend with local terms (source=local, status=provisional)
+- 🎛️ **Multi-Model Support**: Ollama (local) / OpenAI / Anthropic
+- 🔍 **LangSmith Integration**: Complete tracing and debugging support
 
 ## 🏗️ Architecture
 
-The system uses a multi-agent workflow orchestrated by LangGraph:
+The system uses a simplified multi-agent workflow:
 
-1. **Document Parser Agent**: Extracts structured information from documents
-2. **Knowledge Retriever Agent**: Enriches metadata with external knowledge
-3. **Template Generator Agent**: Creates metadata templates based on standards
-4. **RDF Builder Agent**: Generates semantic representations
-5. **Validator Agent**: Validates output quality and triggers human review
+```
+Document → Parse → Retrieve Knowledge → Generate JSON → Validate → Output
+```
+
+**Agents:**
+1. **Document Parser**: Extracts structured information from documents
+2. **Knowledge Retriever**: Enriches metadata with FAIR-DS and local knowledge
+3. **JSON Generator**: Creates FAIR-DS compatible metadata
+4. **Validator**: Quality checks and confidence assessment
 
 ## 🚀 Quick Start
 
@@ -37,74 +43,90 @@ cd FAIRiAgent
 
 # Install dependencies
 pip install -r requirements.txt
-
-# Or use Poetry (recommended)
-poetry install
 ```
 
-### Usage
+### Basic Usage
 
-#### Command Line Interface
 ```bash
 # Process a document
-python -m fairifier.cli your_document.pdf
+python -m fairifier.cli process your_document.pdf
 
 # Specify output directory
-python -m fairifier.cli document.txt --output results/
+python -m fairifier.cli process document.txt --output-dir results/
 
-# With FAIR Data Station integration
-python -m fairifier.cli paper.pdf --fair-ds-url http://localhost:8083
+# Check configuration
+python -m fairifier.cli config-info
 ```
 
-#### API Server
+### Configuration
+
 ```bash
-# Start the FastAPI server
-python run_fairifier.py api
+# LLM Provider (Ollama/OpenAI/Anthropic)
+export LLM_PROVIDER=ollama  # or "openai" or "anthropic"
+export LLM_MODEL=qwen2.5:7b
+export LLM_API_KEY=your_key  # for OpenAI/Anthropic
 
-# Access API documentation at http://localhost:8000/docs
+# FAIR Data Station (optional)
+export FAIR_DS_API_URL=http://localhost:8083
+
+# LangSmith (optional)
+export LANGSMITH_API_KEY=your_key
+export LANGSMITH_PROJECT=fairifier-testing
 ```
 
-#### Web Interface
-```bash
-# Start the Streamlit UI
-python run_fairifier.py ui
+### Output Files
 
-# Access web interface at http://localhost:8501
+FAIRiAgent generates:
+1. **`metadata_json.json`** - FAIR-DS compatible metadata
+2. **`processing_log.jsonl`** - JSON line logs
+3. **`validation_report.txt`** - Validation results (optional)
+
+## 📊 Output Format
+
+### FAIR-DS Compatible JSON
+
+```json
+{
+  "fairifier_version": "0.2.0",
+  "generated_at": "2025-01-27T10:30:00",
+  "document_source": "paper.pdf",
+  "overall_confidence": 0.85,
+  
+  "metadata": [
+    {
+      "field_name": "project_name",
+      "value": "Soil Metagenomics Study",
+      "evidence": "Extracted from document title",
+      "confidence": 0.95,
+      "origin": "document_parser",
+      "package_source": "MIMAG",
+      "status": "confirmed"
+    },
+    {
+      "field_name": "investigation_type",
+      "value": "metagenome",
+      "evidence": "Inferred from research domain",
+      "confidence": 0.80,
+      "origin": "document_parser",
+      "package_source": "MIMAG",
+      "status": "provisional"
+    }
+  ],
+  
+  "statistics": {
+    "total_fields": 15,
+    "confirmed_fields": 8,
+    "provisional_fields": 7
+  }
+}
 ```
 
-#### Docker Deployment
-```bash
-# Start all services
-docker-compose -f docker/compose.yaml up
-```
+### JSON Line Logging
 
-## 📊 Example Results
-
-### Input Document
-```
-Title: Metagenomic Analysis of Soil Microbial Communities in Agricultural Fields
-Authors: Dr. Maria Zhang, Prof. James Wilson
-Keywords: soil microbiome, metagenomics, agricultural soils
-```
-
-### Generated Metadata (YAML)
-```yaml
-# FAIR Metadata Template
-# Generated: 2025-01-27 10:30:00
-# Project: Metagenomic Analysis of Soil Microbial Communities
-# Domain: soil
-
-# REQUIRED FIELDS
-project_name: Metagenomic Analysis of Soil Microbial Communities in Agricultural Fields
-investigation_type: metagenome
-collection_date: July 15-20, 2023
-geo_loc_name: USA:Iowa
-
-# OPTIONAL FIELDS
-lat_lon: 42.0308 -93.6319
-env_biome: terrestrial biome
-env_material: soil
-seq_meth: # Sequencing method used
+```json
+{"timestamp": "2025-01-27T10:30:00", "level": "info", "event": "processing_started", "document_path": "paper.pdf"}
+{"timestamp": "2025-01-27T10:30:05", "level": "info", "event": "field_extracted", "field_name": "project_name", "confidence": 0.95}
+{"timestamp": "2025-01-27T10:30:10", "level": "info", "event": "processing_completed", "status": "completed"}
 ```
 
 ## 🧬 FAIR Data Station Integration
@@ -126,25 +148,52 @@ java -jar fairds-latest.jar
 # Access at http://localhost:8083
 ```
 
+## 🔧 Local Provisional Extensions
+
+Add custom terms not in FAIR-DS:
+
+```python
+from fairifier.services.local_knowledge import initialize_local_kb, LocalTerm
+from pathlib import Path
+
+# Initialize local knowledge base
+local_kb = initialize_local_kb(Path("kb"))
+
+# Add custom term
+local_kb.add_term(LocalTerm(
+    name="custom_field",
+    label="Custom Field",
+    description="Project-specific metadata field",
+    source="local",
+    status="provisional",
+    confidence=0.7
+))
+```
+
+Local terms are automatically included with `source=local` and `status=provisional`.
+
 ## 📁 Project Structure
 
 ```
 fairifier/
 ├── agents/           # Multi-agent implementations
-├── apps/            # API and UI applications
-├── graph/           # LangGraph workflow definitions
-├── services/        # External service integrations
-├── config.py        # Configuration management
-├── models.py        # Data models
-└── cli.py          # Command-line interface
+│   ├── document_parser.py
+│   ├── knowledge_retriever.py
+│   ├── json_generator.py
+│   └── validator.py
+├── graph/           # LangGraph workflow
+├── services/        # FAIR-DS and local knowledge
+├── utils/           # JSON logger
+├── cli.py           # Command-line interface
+├── config.py        # Configuration
+└── models.py        # Data models
 
 kb/                  # Knowledge base
-├── schemas/         # JSON Schema definitions
-├── shapes/          # SHACL validation shapes
-└── ontologies.json  # Ontology mappings
+├── local_terms.json      # Local provisional terms
+├── local_packages.json   # Local packages
+└── ontologies.json       # Ontology mappings
 
-examples/            # Sample documents and outputs
-docker/              # Containerization files
+examples/            # Sample documents
 docs/                # Documentation
 ```
 
@@ -155,8 +204,7 @@ FAIRiAgent provides confidence scoring based on:
 - ✅ **Document extraction quality** (title, abstract, authors)
 - ✅ **Field completion rate** (how many fields have values)
 - ✅ **Research domain identification** accuracy
-- ✅ **Metadata standardization** level
-- ✅ **SHACL validation** compliance
+- ✅ **Evidence quality** (how well fields are supported)
 
 Confidence levels:
 - **> 0.8**: High confidence, ready to use
@@ -165,25 +213,33 @@ Confidence levels:
 
 ## 🛠️ Dependencies
 
-Core dependencies (required):
+Core dependencies:
 - `langgraph`: Multi-agent workflow orchestration
 - `langchain`: Agent framework and tools
-- `rdflib`: RDF processing and generation
-- `fastapi`: API framework
-- `streamlit`: Web interface
-
-Optional dependencies:
+- `langsmith`: Tracing and debugging
+- `rdflib`: RDF processing (minimal use)
 - `PyMuPDF`: PDF document processing
-- `grobid-client`: Advanced PDF parsing
-- `qdrant-client`: Vector database
-- `requests`: External API integration
+- `click`: CLI framework
 
-## 📋 API Endpoints
+## 📋 CLI Commands
 
-- `POST /projects/run`: Upload document and start processing
-- `GET /projects/{id}/status`: Check processing status
-- `POST /projects/{id}/hitl-edits`: Submit human-in-the-loop edits
-- `GET /projects/{id}/artifacts`: Download generated artifacts
+```bash
+# Process document
+python -m fairifier.cli process <document> [options]
+
+# Check status
+python -m fairifier.cli status <project-id>
+
+# Show configuration
+python -m fairifier.cli config-info
+
+# Validate document
+python -m fairifier.cli validate-document <document>
+```
+
+## ⚠️ Note on API/UI
+
+The `fairifier/apps/` directory contains optional API and UI components that are **not recommended for production use**. FAIRiAgent is designed as a **CLI-first tool**. See `fairifier/apps/README.md` for details.
 
 ## 🧪 Testing
 
@@ -218,13 +274,20 @@ LangSmith provides:
 
 See [LangSmith Testing Guide](docs/LANGSMITH_TESTING_GUIDE.md) for detailed instructions.
 
+## 📚 Documentation
+
+- [Requirements Analysis](REQUIREMENTS_ANALYSIS.md) - Detailed requirements compliance analysis
+- [Implementation Summary](IMPLEMENTATION_SUMMARY.md) - Technical implementation details
+- [LangSmith Testing Guide](docs/LANGSMITH_TESTING_GUIDE.md) - Testing and debugging guide
+- [Design Document](DESIGN.md) - System design and architecture
+
 ## 🤝 Contributing
 
 This is a research tool designed for:
 - Scientific metadata standardization
 - FAIR data principles implementation
-- Research workflow automation
-- Multi-agent system development
+- Multi-agent system research
+- Agentic RAG development
 
 ## 📄 License
 
@@ -232,4 +295,4 @@ MIT License - Free for academic and research use.
 
 ---
 
-**🎯 FAIRiAgent makes your research data more Findable, Accessible, Interoperable, and Reusable!**
+**🎯 FAIRiAgent v0.2 - Simple, Standards-compliant, Evidence-based Metadata Generation**

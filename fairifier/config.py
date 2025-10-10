@@ -18,9 +18,13 @@ class FAIRifierConfig:
     output_path: Path = project_root / "output"
     
     # LLM Configuration
-    llm_model: str = "qwen2.5:7b"  # Ollama model
-    llm_base_url: str = "http://localhost:11434"
+    llm_provider: str = "ollama"  # "ollama", "openai", or "anthropic"
+    llm_model: str = "qwen2.5:7b"  # Model name
+    llm_base_url: str = "http://localhost:11434"  # For Ollama
+    llm_api_key: Optional[str] = None  # For OpenAI/Anthropic
     embedding_model: str = "nomic-embed-text"
+    llm_temperature: float = 0.7
+    llm_max_tokens: int = 2000
     
     # Processing limits
     max_document_size_mb: int = 50
@@ -78,3 +82,16 @@ if os.getenv("LANGSMITH_PROJECT"):
 
 if os.getenv("LANGSMITH_ENDPOINT"):
     config.langsmith_endpoint = os.getenv("LANGSMITH_ENDPOINT")
+
+# LLM provider configuration
+if os.getenv("LLM_PROVIDER"):
+    config.llm_provider = os.getenv("LLM_PROVIDER")
+
+if os.getenv("LLM_API_KEY"):
+    config.llm_api_key = os.getenv("LLM_API_KEY")
+
+if os.getenv("LLM_TEMPERATURE"):
+    config.llm_temperature = float(os.getenv("LLM_TEMPERATURE"))
+
+if os.getenv("LLM_MAX_TOKENS"):
+    config.llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS"))
