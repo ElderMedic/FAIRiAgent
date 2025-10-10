@@ -2,19 +2,19 @@
 
 import asyncio
 import json
-import logging
 import sys
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 import click
 
 from .graph.workflow import FAIRifierWorkflow
 from .config import config
+from .utils.json_logger import get_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Use JSON logger
+json_logger = get_logger("fairifier.cli")
 
 
 @click.group()
@@ -27,11 +27,12 @@ def cli():
 @click.argument('document_path', type=click.Path(exists=True))
 @click.option('--output-dir', '-o', type=click.Path(), help='Output directory for artifacts')
 @click.option('--project-id', '-p', help='Project ID (auto-generated if not provided)')
-@click.option('--verbose', '-v', is_flag=True, help='Verbose output')
-def process(document_path: str, output_dir: Optional[str] = None, project_id: Optional[str] = None, verbose: bool = False):
+@click.option('--json-log', is_flag=True, default=True, help='Use JSON line logging (default: True)')
+def process(document_path: str, output_dir: Optional[str] = None, project_id: Optional[str] = None, json_log: bool = True):
     """Process a document and generate FAIR metadata."""
-    if verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    # JSON logging is now default
+    if not json_log:
+        click.echo("Warning: Non-JSON logging is deprecated", err=True)
     
     # Set up output directory
     if output_dir:

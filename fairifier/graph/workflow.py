@@ -10,8 +10,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from ..models import FAIRifierState, ProcessingStatus
 from ..agents.document_parser import DocumentParserAgent
 from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
-from ..agents.template_generator import TemplateGeneratorAgent
-from ..agents.rdf_builder import RDFBuilderAgent
+from ..agents.json_generator import JSONGeneratorAgent
 from ..agents.validator import ValidationAgent
 from ..config import config
 
@@ -25,8 +24,7 @@ class FAIRifierWorkflow:
         self.agents = {
             "parser": DocumentParserAgent(),
             "retriever": KnowledgeRetrieverAgent(),
-            "generator": TemplateGeneratorAgent(),
-            "builder": RDFBuilderAgent(),
+            "json_generator": JSONGeneratorAgent(),
             "validator": ValidationAgent()
         }
         
@@ -40,8 +38,7 @@ class FAIRifierWorkflow:
         # Add nodes
         workflow.add_node("parse_document", self._parse_document_node)
         workflow.add_node("retrieve_knowledge", self._retrieve_knowledge_node)
-        workflow.add_node("generate_template", self._generate_template_node)
-        workflow.add_node("build_rdf", self._build_rdf_node)
+        workflow.add_node("generate_json", self._generate_json_node)
         workflow.add_node("validate", self._validate_node)
         workflow.add_node("human_review", self._human_review_node)
         workflow.add_node("finalize", self._finalize_node)
@@ -49,11 +46,10 @@ class FAIRifierWorkflow:
         # Define the flow
         workflow.set_entry_point("parse_document")
         
-        # Linear flow with conditional human review
+        # Simplified linear flow: parse -> retrieve -> generate JSON -> validate
         workflow.add_edge("parse_document", "retrieve_knowledge")
-        workflow.add_edge("retrieve_knowledge", "generate_template")
-        workflow.add_edge("generate_template", "build_rdf")
-        workflow.add_edge("build_rdf", "validate")
+        workflow.add_edge("retrieve_knowledge", "generate_json")
+        workflow.add_edge("generate_json", "validate")
         
         # Conditional edge after validation
         workflow.add_conditional_edges(
@@ -76,13 +72,12 @@ class FAIRifierWorkflow:
             project_id = f"fairifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         # Initialize state
-        initial_state = FAIRifierState(
+            initial_state = FAIRifierState(
             document_path=document_path,
             document_content="",
             document_info={},
             retrieved_knowledge=[],
             metadata_fields=[],
-            rdf_graph="",
             validation_results={},
             confidence_scores={},
             needs_human_review=False,
@@ -121,17 +116,11 @@ class FAIRifierWorkflow:
         logger.info("Executing knowledge retrieval node")
         return await self.agents["retriever"].execute(state)
     
-    async def _generate_template_node(self, state: FAIRifierState) -> FAIRifierState:
-        """Template generation node."""
+    async def _generate_json_node(self, state: FAIRifierState) -> FAIRifierState:
+        """JSON metadata generation node."""
         state["status"] = ProcessingStatus.GENERATING.value
-        logger.info("Executing template generation node")
-        return await self.agents["generator"].execute(state)
-    
-    async def _build_rdf_node(self, state: FAIRifierState) -> FAIRifierState:
-        """RDF building node."""
-        state["status"] = ProcessingStatus.GENERATING.value
-        logger.info("Executing RDF building node")
-        return await self.agents["builder"].execute(state)
+        logger.info("Executing JSON generation node")
+        return await self.agents["json_generator"].execute(state)
     
     async def _validate_node(self, state: FAIRifierState) -> FAIRifierState:
         """Validation node."""
