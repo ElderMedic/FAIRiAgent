@@ -1,0 +1,35 @@
+{
+  "title": "Title: Metagenomic Analysis of Soil Microbial Communities in Agricultural Fields: Impact of Fertilization on Functional Diversity",
+  "type": "object",
+  "properties": {
+    "project_name": {
+      "type": "string",
+      "description": "project_name"
+    },
+    "investigation_type": {
+      "type": "string",
+      "description": "investigation_type"
+    },
+    "collection_date": {
+      "type": "string",
+      "description": "collection_date"
+    },
+    "geo_loc_name": {
+      "type": "string",
+      "description": "geo_loc_name"
+    },
+    "env_biome": {
+      "type": "string",
+      "description": "env_biome"
+    },
+    "env_material": {
+      "type": "string",
+      "description": "env_material"
+    }
+  },
+  "required": [
+    "project_name",
+    "investigation_type",
+    "collection_date"
+  ]
+}

@@ -1,0 +1,14 @@
+# FAIRifier - Core Dependencies
+# All dependencies are optional - the tool will work with just Python stdlib
+
+# For FAIR Data Station API integration (optional)
+requests>=2.25.0
+
+# For PDF processing (optional)
+PyMuPDF>=1.23.0
+
+# For RDF generation (optional)
+rdflib>=7.0.0
+
+# For YAML output (recommended)
+PyYAML>=6.0

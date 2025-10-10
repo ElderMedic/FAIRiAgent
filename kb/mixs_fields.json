@@ -1,0 +1,118 @@
+{
+  "MIMAG": {
+    "name": "Minimum Information about a Metagenome-Assembled Genome",
+    "description": "Minimum information standard for metagenome-assembled genomes",
+    "required_fields": [
+      {
+        "name": "investigation_type",
+        "description": "Nucleic Acid Sequence Report is the root element of all MIGS/MIMS compliant reports",
+        "data_type": "string",
+        "example": "metagenome"
+      },
+      {
+        "name": "project_name", 
+        "description": "Name of the project within which the sequencing was organized",
+        "data_type": "string",
+        "example": "Marine Microbiome Project"
+      },
+      {
+        "name": "lat_lon",
+        "description": "The geographical origin of the sample as defined by latitude and longitude",
+        "data_type": "string",
+        "example": "50.586825 6.408977"
+      },
+      {
+        "name": "geo_loc_name",
+        "description": "The geographical origin of the sample as defined by the country or ocean name",
+        "data_type": "string", 
+        "example": "Germany:North Rhine-Westphalia:Aachen"
+      },
+      {
+        "name": "collection_date",
+        "description": "The time of sampling, either as an instance or interval",
+        "data_type": "datetime",
+        "example": "2023-08-15"
+      },
+      {
+        "name": "env_biome",
+        "description": "Biomes are defined based on factors such as plant structures, leaf types, plant spacing, and other factors",
+        "data_type": "string",
+        "example": "marine biome [ENVO:00000447]"
+      },
+      {
+        "name": "env_feature", 
+        "description": "Environmental feature level includes geographic environmental features",
+        "data_type": "string",
+        "example": "oceanic epipelagic zone [ENVO:00000208]"
+      },
+      {
+        "name": "env_material",
+        "description": "The environmental material level refers to the material that was displaced by the sample",
+        "data_type": "string",
+        "example": "sea water [ENVO:00002149]"
+      },
+      {
+        "name": "sample_collect_device",
+        "description": "The method or device employed for collecting the sample",
+        "data_type": "string",
+        "example": "CTD rosette"
+      },
+      {
+        "name": "seq_meth",
+        "description": "Sequencing method used",
+        "data_type": "string", 
+        "example": "Illumina HiSeq 2500"
+      }
+    ],
+    "optional_fields": [
+      {
+        "name": "depth",
+        "description": "The vertical distance below local surface",
+        "data_type": "number",
+        "example": "10"
+      },
+      {
+        "name": "temp",
+        "description": "Temperature of the sample at the time of sampling",
+        "data_type": "number",
+        "example": "25"
+      },
+      {
+        "name": "ph",
+        "description": "pH measurement of the sample",
+        "data_type": "number",
+        "example": "7.5"
+      }
+    ]
+  },
+  "MISAG": {
+    "name": "Minimum Information about a Single Amplified Genome", 
+    "description": "Minimum information standard for single amplified genomes",
+    "required_fields": [
+      {
+        "name": "investigation_type",
+        "description": "Nucleic Acid Sequence Report is the root element of all MIGS/MIMS compliant reports",
+        "data_type": "string",
+        "example": "single amplified genome"
+      },
+      {
+        "name": "project_name",
+        "description": "Name of the project within which the sequencing was organized", 
+        "data_type": "string",
+        "example": "Single Cell Genomics Project"
+      },
+      {
+        "name": "lat_lon",
+        "description": "The geographical origin of the sample",
+        "data_type": "string",
+        "example": "50.586825 6.408977"
+      },
+      {
+        "name": "collection_date",
+        "description": "The time of sampling",
+        "data_type": "datetime", 
+        "example": "2023-08-15"
+      }
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "document": {
+    "title": "Title: Metagenomic Analysis of Soil Microbial Communities in Agricultural Fields: Impact of Fertilization on Functional Diversity",
+    "abstract": "Soil microorganisms play crucial roles in nutrient cycling, plant health, and ecosystem functioning. This study presents a comprehensive metagenomic analysis of soil microbial communities from agricultural fields under different fertilization regimes. We collected soil samples from 15 agricultural sites across three different fertilization treatments: organic compost, synthetic fertilizer, and control (no fertilization). DNA extraction was performed using the DNeasy PowerSoil Kit, followed by sh",
+    "authors": [
+      "Dr. Maria Zhang",
+      "Prof. James Wilson",
+      "Dr. Kenji Tanaka",
+      "Dr. Sarah O'Brien"
+    ],
+    "keywords": [
+      "soil microbiome",
+      "metagenomics",
+      "agricultural soils",
+      "fertilization",
+      "microbial diversity",
+      "nitrogen cycling",
+      "shotgun sequencing"
+    ],
+    "research_domain": "soil"
+  },
+  "fields_count": 12,
+  "required_fields": 4,
+  "confidence": 0.6499999999999999,
+  "fair_ds_enhanced": false,
+  "generated": "2025-09-26T10:53:56.448998"
+}

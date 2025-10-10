@@ -1,0 +1,14 @@
+# Core dependencies for minimal testing
+langchain>=0.1.0
+langchain-community>=0.0.38
+langgraph>=0.0.65
+langsmith>=0.1.0
+rdflib>=7.0.0
+pyshacl>=0.25.0
+PyMuPDF>=1.23.0
+pyyaml>=6.0.1
+click>=8.1.0
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-multipart>=0.0.6
+pydantic>=2.5.0

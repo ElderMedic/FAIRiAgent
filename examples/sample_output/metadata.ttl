@@ -1,0 +1,38 @@
+@prefix fairifier: <http://fairifier.org/> .
+@prefix schema: <https://schema.org/> .
+
+fairifier:dataset a schema:Dataset ;
+    fairifier:collection_date "July 15-20, 2023" ;
+    fairifier:env_biome "terrestrial biome" ;
+    fairifier:env_material "soil" ;
+    fairifier:geo_loc_name "USA:Iowa" ;
+    fairifier:investigation_type "genome" ;
+    fairifier:lat_lon "42.0308 93.6319" ;
+    fairifier:project_name "Title: Metagenomic Analysis of Soil Microbial Communities in Agricultural Fields: Impact of Fertilization on Functional Diversity" ;
+    schema:author <http://fairifier.org/person/0>,
+        <http://fairifier.org/person/1>,
+        <http://fairifier.org/person/2>,
+        <http://fairifier.org/person/3> ;
+    schema:description "Soil microorganisms play crucial roles in nutrient cycling, plant health, and ecosystem functioning. This study presents a comprehensive metagenomic analysis of soil microbial communities from agricultural fields under different fertilization regimes. We collected soil samples from 15 agricultural sites across three different fertilization treatments: organic compost, synthetic fertilizer, and control (no fertilization). DNA extraction was performed using the DNeasy PowerSoil Kit, followed by sh" ;
+    schema:keywords "agricultural soils",
+        "fertilization",
+        "metagenomics",
+        "microbial diversity",
+        "nitrogen cycling",
+        "shotgun sequencing",
+        "soil microbiome" ;
+    schema:name "Title: Metagenomic Analysis of Soil Microbial Communities in Agricultural Fields: Impact of Fertilization on Functional Diversity" .
+
+<http://fairifier.org/person/0> a schema:Person ;
+    schema:name "Dr. Maria Zhang" .
+
+<http://fairifier.org/person/1> a schema:Person ;
+    schema:name "Prof. James Wilson" .
+
+<http://fairifier.org/person/2> a schema:Person ;
+    schema:name "Dr. Kenji Tanaka" .
+
+<http://fairifier.org/person/3> a schema:Person ;
+    schema:name "Dr. Sarah O'Brien" .
+
+

@@ -1,0 +1,125 @@
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix mixs: <http://w3id.org/mixs/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix schema: <https://schema.org/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<http://fairifier.org/dataset/title__marine_microbiome_analysis_of_the_north_sea> a schema:Dataset ;
+    dcterms:description "This study presents a comprehensive metagenomic analysis of microbial communities in the North Sea. We collected water samples from multiple depths (10m, 50m, 100m) at coordinates 54.5°N, 3.2°E during August 2023. The samples were processed using Illumina HiSeq 2500 sequencing technology to characterize the taxonomic and functional diversity of marine microorganisms. Our analysis revealed significant variations in microbial community structure across different depths, with temperature and salinity being key environmental drivers." ;
+    dcterms:title "Title: Marine Microbiome Analysis of the North Sea" ;
+    mixs:collection_date "2023-08-15T00:00:00"^^xsd:dateTime ;
+    mixs:depth 10 ;
+    mixs:env_biome "marine biome [ENVO:00000447]" ;
+    mixs:env_feature "oceanic epipelagic zone [ENVO:00000208]" ;
+    mixs:env_material "sea water [ENVO:00002149]" ;
+    mixs:geo_loc_name "Sarah Johnson, Prof" ;
+    mixs:investigation_type "genome" ;
+    mixs:lat_lon "50.586825 6.408977" ;
+    mixs:ph 7.5 ;
+    mixs:project_name "Title: Marine Microbiome Analysis of the North Sea" ;
+    mixs:sample_collect_device "CTD rosette" ;
+    mixs:seq_meth "Illumina HiSeq 2500" ;
+    mixs:temp 25 ;
+    prov:wasAttributedTo [ a prov:Entity ;
+            rdfs:label "Evidence for depth" ;
+            prov:value "rth Sea. We collected water samples from multiple depths (10m, 50m, 100m) at coordinates 54.5°N, 3.2°E du" ],
+        [ a prov:Entity ;
+            rdfs:label "Evidence for project_name" ;
+            prov:value "Title: Marine Microbiome Analysis of the North Sea" ],
+        [ a prov:Entity ;
+            rdfs:label "Evidence for investigation_type" ;
+            prov:value "marine_biology" ],
+        [ a prov:Entity ;
+            rdfs:label "Evidence for ph" ;
+            prov:value "- pH: 8.1" ],
+        [ a prov:Entity ;
+            rdfs:label "Evidence for geo_loc_name" ;
+            prov:value "Location mentioned: Sarah Johnson, Prof" ],
+        [ a prov:Entity ;
+            rdfs:label "Evidence for temp" ;
+            prov:value "community structure across different depths, with temperature and salinity being key environmental drive" ] ;
+    prov:wasGeneratedBy <http://fairifier.org/activity/generation/20250925_222032> ;
+    schema:about "marine_biology" ;
+    schema:author <http://fairifier.org/person/dr._elena_rodriguez>,
+        <http://fairifier.org/person/dr._sarah_johnson>,
+        <http://fairifier.org/person/prof._michael_chen> ;
+    schema:keywords "16S rRNA",
+        "North Sea",
+        "marine microbiome",
+        "metagenomics",
+        "microbial diversity" .
+
+mixs:collection_date a rdf:Property ;
+    rdfs:label "collection_date" ;
+    rdfs:comment "The time of sampling, either as an instance or interval" .
+
+mixs:depth a rdf:Property ;
+    rdfs:label "depth" ;
+    rdfs:comment "The vertical distance below local surface" .
+
+mixs:env_biome a rdf:Property ;
+    rdfs:label "env_biome" ;
+    rdfs:comment "Biomes are defined based on factors such as plant structures, leaf types, plant spacing, and other factors" .
+
+mixs:env_feature a rdf:Property ;
+    rdfs:label "env_feature" ;
+    rdfs:comment "Environmental feature level includes geographic environmental features" .
+
+mixs:env_material a rdf:Property ;
+    rdfs:label "env_material" ;
+    rdfs:comment "The environmental material level refers to the material that was displaced by the sample" .
+
+mixs:geo_loc_name a rdf:Property ;
+    rdfs:label "geo_loc_name" ;
+    rdfs:comment "Geographical origin of the sample" .
+
+mixs:investigation_type a rdf:Property ;
+    rdfs:label "investigation_type" ;
+    rdfs:comment "Type of nucleic acid sequence investigation" .
+
+mixs:lat_lon a rdf:Property ;
+    rdfs:label "lat_lon" ;
+    rdfs:comment "The geographical origin of the sample as defined by latitude and longitude" .
+
+mixs:ph a rdf:Property ;
+    rdfs:label "ph" ;
+    rdfs:comment "pH measurement of the sample" .
+
+mixs:project_name a rdf:Property ;
+    rdfs:label "project_name" ;
+    rdfs:comment "Name of the research project" .
+
+mixs:sample_collect_device a rdf:Property ;
+    rdfs:label "sample_collect_device" ;
+    rdfs:comment "The method or device employed for collecting the sample" .
+
+mixs:seq_meth a rdf:Property ;
+    rdfs:label "seq_meth" ;
+    rdfs:comment "Sequencing method used" .
+
+mixs:temp a rdf:Property ;
+    rdfs:label "temp" ;
+    rdfs:comment "Temperature of the sample at the time of sampling" .
+
+<http://fairifier.org/activity/generation/20250925_222032> a prov:Activity ;
+    rdfs:label "FAIRifier metadata generation" ;
+    prov:startedAtTime "2025-09-25T22:20:32.623652"^^xsd:dateTime ;
+    prov:wasAssociatedWith <http://fairifier.org/agent/fairifier> .
+
+<http://fairifier.org/agent/fairifier> a prov:SoftwareAgent ;
+    foaf:name "FAIRifier Agentic Framework" ;
+    schema:version "0.1.0" .
+
+<http://fairifier.org/person/dr._elena_rodriguez> a schema:Person ;
+    foaf:name "Dr. Elena Rodriguez" .
+
+<http://fairifier.org/person/dr._sarah_johnson> a schema:Person ;
+    foaf:name "Dr. Sarah Johnson" .
+
+<http://fairifier.org/person/prof._michael_chen> a schema:Person ;
+    foaf:name "Prof. Michael Chen" .
+
+

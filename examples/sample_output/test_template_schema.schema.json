@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "fairifier-template-20250925",
+  "title": "Title: Marine Microbiome Analysis of the North Sea",
+  "description": "Metadata template generated for: Title: Marine Microbiome Analysis of the North Sea",
+  "type": "object",
+  "properties": {
+    "project_name": {
+      "type": "string",
+      "description": "Name of the research project",
+      "examples": [
+        "Title: Marine Microbiome Analysis of the North Sea"
+      ]
+    },
+    "investigation_type": {
+      "type": "string",
+      "description": "Type of nucleic acid sequence investigation",
+      "examples": [
+        "genome"
+      ]
+    },
+    "geo_loc_name": {
+      "type": "string",
+      "description": "Geographical origin of the sample",
+      "examples": [
+        "Sarah Johnson, Prof"
+      ]
+    },
+    "lat_lon": {
+      "type": "string",
+      "description": "The geographical origin of the sample as defined by latitude and longitude",
+      "examples": [
+        "50.586825 6.408977"
+      ]
+    },
+    "collection_date": {
+      "type": "string",
+      "description": "The time of sampling, either as an instance or interval",
+      "examples": [
+        "2023-08-15"
+      ]
+    },
+    "env_biome": {
+      "type": "string",
+      "description": "Biomes are defined based on factors such as plant structures, leaf types, plant spacing, and other factors",
+      "examples": [
+        "marine biome [ENVO:00000447]"
+      ]
+    },
+    "env_feature": {
+      "type": "string",
+      "description": "Environmental feature level includes geographic environmental features",
+      "examples": [
+        "oceanic epipelagic zone [ENVO:00000208]"
+      ]
+    },
+    "env_material": {
+      "type": "string",
+      "description": "The environmental material level refers to the material that was displaced by the sample",
+      "examples": [
+        "sea water [ENVO:00002149]"
+      ]
+    },
+    "sample_collect_device": {
+      "type": "string",
+      "description": "The method or device employed for collecting the sample",
+      "examples": [
+        "CTD rosette"
+      ]
+    },
+    "seq_meth": {
+      "type": "string",
+      "description": "Sequencing method used",
+      "examples": [
+        "Illumina HiSeq 2500"
+      ]
+    },
+    "depth": {
+      "type": "number",
+      "description": "The vertical distance below local surface",
+      "examples": [
+        "10"
+      ]
+    },
+    "temp": {
+      "type": "number",
+      "description": "Temperature of the sample at the time of sampling",
+      "examples": [
+        "25"
+      ]
+    },
+    "ph": {
+      "type": "number",
+      "description": "pH measurement of the sample",
+      "examples": [
+        "7.5"
+      ]
+    }
+  },
+  "required": [
+    "project_name",
+    "investigation_type",
+    "geo_loc_name"
+  ],
+  "additionalProperties": true
+}

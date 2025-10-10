@@ -1,0 +1,37 @@
+{
+  "environmental_ontologies": {
+    "ENVO": {
+      "name": "Environment Ontology",
+      "base_uri": "http://purl.obolibrary.org/obo/ENVO_",
+      "common_terms": {
+        "marine biome": "ENVO:00000447",
+        "oceanic epipelagic zone": "ENVO:00000208", 
+        "sea water": "ENVO:00002149",
+        "soil": "ENVO:00001998",
+        "freshwater": "ENVO:00002011"
+      }
+    }
+  },
+  "sequence_ontologies": {
+    "SO": {
+      "name": "Sequence Ontology",
+      "base_uri": "http://purl.obolibrary.org/obo/SO_",
+      "common_terms": {
+        "DNA": "SO:0000352",
+        "RNA": "SO:0000356",
+        "protein": "SO:0000104"
+      }
+    }
+  },
+  "units": {
+    "UO": {
+      "name": "Units of Measurement Ontology",
+      "base_uri": "http://purl.obolibrary.org/obo/UO_",
+      "common_terms": {
+        "meter": "UO:0000008",
+        "degree Celsius": "UO:0000027",
+        "pH unit": "UO:0000196"
+      }
+    }
+  }
+}

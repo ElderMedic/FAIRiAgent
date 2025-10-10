@@ -1,0 +1,141 @@
+{
+  "document": {
+    "title": "Title: Metagenomic Analysis of Soil Microbial Communities in Agricultural Fields: Impact of Fertilization on Functional Diversity",
+    "abstract": "Soil microorganisms play crucial roles in nutrient cycling, plant health, and ecosystem functioning. This study presents a comprehensive metagenomic analysis of soil microbial communities from agricultural fields under different fertilization regimes. We collected soil samples from 15 agricultural sites across three different fertilization treatments: organic compost, synthetic fertilizer, and control (no fertilization). DNA extraction was performed using the DNeasy PowerSoil Kit, followed by sh",
+    "authors": [
+      "Dr. Maria Zhang",
+      "Prof. James Wilson",
+      "Dr. Kenji Tanaka",
+      "Dr. Sarah O'Brien"
+    ],
+    "keywords": [
+      "soil microbiome",
+      "metagenomics",
+      "agricultural soils",
+      "fertilization",
+      "microbial diversity",
+      "nitrogen cycling",
+      "shotgun sequencing"
+    ],
+    "research_domain": "soil",
+    "raw_text": "Title: Metagenomic Analysis of Soil Microbial Communities in Agricultural Fields: Impact of Fertilization on Functional Diversity\n\nAuthors: Dr. Maria Zhang, Prof. James Wilson, Dr. Kenji Tanaka, Dr. Sarah O'Brien\n\nAbstract: Soil microorganisms play crucial roles in nutrient cycling, plant health, and ecosystem functioning. This study presents a comprehensive metagenomic analysis of soil microbial communities from agricultural fields under different fertilization regimes. We collected soil samples from 15 agricultural sites across three different fertilization treatments: organic compost, synthetic fertilizer, and control (no fertilization). DNA extraction was performed using the DNeasy PowerSoil Kit, followed by shotgun metagenomic sequencing on the Illumina NovaSeq 6000 platform. Bioinformatics analysis revealed significant differences in microbial community structure and functional potential between treatments. Organic fertilization promoted higher microbial diversity and enhanced nitrogen cycling genes, while synthetic fertilization led to shifts toward copiotrophic bacterial taxa. Our findings demonstrate that fertilization practices significantly impact soil microbiome composition and metabolic capabilities, with implications for sustainable agriculture.\n\nKeywords: soil microbiome, metagenomics, agricultural soils, fertilization, microbial diversity, nitrogen cycling, shotgun sequencing\n\nIntroduction: Soil ecosystems harbor immense microbial diversity, with estimates of 10^9 to 10^10 microbial cells per gram of soil. These microorganisms are essential for biogeochemical cycling, organic matter decomposition, and plant-microbe interactions. Agricultural practices, particularly fertilization, can significantly alter soil microbial communities.\n\nMethods: \nSample Collection: Soil samples were collected from 15 agricultural fields in Iowa, USA (42.0308°N, 93.6319°W) during July 2023. Samples were taken from the top 15 cm of soil using sterile techniques. The fields represented three fertilization treatments: organic compost (5 sites), synthetic NPK fertilizer (5 sites), and unfertilized control (5 sites).\n\nDNA Extraction and Sequencing: Total DNA was extracted using the DNeasy PowerSoil Kit (Qiagen). DNA quality was assessed using NanoDrop spectrophotometry and agarose gel electrophoresis. Shotgun metagenomic libraries were prepared using the NEBNext Ultra II DNA Library Prep Kit and sequenced on the Illumina NovaSeq 6000 platform, generating 2×150 bp paired-end reads.\n\nEnvironmental Parameters:\n- Location: Iowa, USA (42.0308°N, 93.6319°W)\n- Collection Date: July 15-20, 2023\n- Soil Type: Mollisol\n- pH: 6.2-7.1\n- Organic Matter: 3.2-4.8%\n- Temperature: 22-25°C during sampling\n- Moisture Content: 18-24%\n\nBioinformatics Analysis: Raw reads were quality-filtered using Trimmomatic and assembled using MEGAHIT. Gene prediction was performed with Prodigal, and functional annotation was conducted using KEGG and CAZy databases. Taxonomic classification was performed using Kraken2 and Bracken.\n\nResults: We generated approximately 2.5 billion high-quality reads across all samples. Taxonomic analysis revealed dominance of Proteobacteria, Actinobacteria, and Acidobacteria. Organic fertilization significantly increased microbial diversity (Shannon index: 8.2 ± 0.3) compared to synthetic fertilization (7.1 ± 0.4) and control (7.5 ± 0.2). Functional analysis showed enrichment of nitrogen fixation genes (nifH) in organically fertilized soils and increased phosphorus solubilization genes in synthetic fertilizer treatments.\n\nDiscussion: Our metagenomic analysis provides insights into how different fertilization practices shape soil microbial communities. The higher diversity observed in organically fertilized soils suggests that organic amendments promote a more stable and resilient microbiome. The enrichment of specific functional genes indicates that microbial communities adapt their metabolic capabilities to available nutrient sources.\n\nConclusion: This study demonstrates the power of metagenomic approaches in understanding soil microbiome responses to agricultural management. Our findings have implications for developing sustainable fertilization strategies that support both crop productivity and soil health.\n\nFunding: This research was supported by the USDA National Institute of Food and Agriculture (Grant #2022-67019-36007) and the National Science Foundation (DEB-2045123).\n\nData Availability: Raw sequencing data have been deposited in the NCBI Sequence Read Archive under BioProject PRJNA123456."
+  },
+  "processing": {
+    "fields_generated": 12,
+    "required_fields": 4,
+    "fair_ds_enhanced": false,
+    "confidence": 0.9375,
+    "processing_time_seconds": 0.006162,
+    "generated_at": "2025-09-26T11:03:49.879207"
+  },
+  "fields": [
+    {
+      "name": "project_name",
+      "description": "Name of the research project",
+      "value": "Title: Metagenomic Analysis of Soil Microbial Communities in Agricultural Fields: Impact of Fertilization on Functional Diversity",
+      "required": true,
+      "data_type": "string",
+      "source": "local",
+      "source_id": null
+    },
+    {
+      "name": "investigation_type",
+      "description": "Type of nucleic acid sequence investigation",
+      "value": "genome",
+      "required": true,
+      "data_type": "string",
+      "source": "local",
+      "source_id": null
+    },
+    {
+      "name": "collection_date",
+      "description": "Date when the sample was collected",
+      "value": "July 15-20, 2023",
+      "required": true,
+      "data_type": "date",
+      "source": "local",
+      "source_id": null
+    },
+    {
+      "name": "geo_loc_name",
+      "description": "Geographic location of sample collection",
+      "value": "USA:Iowa",
+      "required": true,
+      "data_type": "string",
+      "source": "local",
+      "source_id": null
+    },
+    {
+      "name": "lat_lon",
+      "description": "Latitude and longitude coordinates",
+      "value": "42.0308 93.6319",
+      "required": false,
+      "data_type": "string",
+      "source": "local",
+      "source_id": null
+    },
+    {
+      "name": "env_biome",
+      "description": "Environmental biome classification",
+      "value": "terrestrial biome",
+      "required": false,
+      "data_type": "string",
+      "source": "local",
+      "source_id": null
+    },
+    {
+      "name": "env_material",
+      "description": "Environmental material sampled",
+      "value": "soil",
+      "required": false,
+      "data_type": "string",
+      "source": "local",
+      "source_id": null
+    },
+    {
+      "name": "sample_collect_device",
+      "description": "Device or method used for sample collection",
+      "value": "",
+      "required": false,
+      "data_type": "string",
+      "source": "local",
+      "source_id": null
+    },
+    {
+      "name": "seq_meth",
+      "description": "Sequencing method used",
+      "value": "",
+      "required": false,
+      "data_type": "string",
+      "source": "local",
+      "source_id": null
+    },
+    {
+      "name": "depth",
+      "description": "Depth of sample collection in meters",
+      "value": "",
+      "required": false,
+      "data_type": "number",
+      "source": "local",
+      "source_id": null
+    },
+    {
+      "name": "temp",
+      "description": "Temperature at time of sampling in Celsius",
+      "value": "",
+      "required": false,
+      "data_type": "number",
+      "source": "local",
+      "source_id": null
+    },
+    {
+      "name": "ph",
+      "description": "pH measurement of the sample",
+      "value": "",
+      "required": false,
+      "data_type": "number",
+      "source": "local",
+      "source_id": null
+    }
+  ]
+}

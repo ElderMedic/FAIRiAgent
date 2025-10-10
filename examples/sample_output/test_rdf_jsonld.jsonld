@@ -1,0 +1,520 @@
+[
+  {
+    "@id": "http://fairifier.org/person/prof._michael_chen",
+    "@type": [
+      "https://schema.org/Person"
+    ],
+    "http://xmlns.com/foaf/0.1/name": [
+      {
+        "@value": "Prof. Michael Chen"
+      }
+    ]
+  },
+  {
+    "@id": "http://fairifier.org/dataset/title__marine_microbiome_analysis_of_the_north_sea",
+    "@type": [
+      "https://schema.org/Dataset"
+    ],
+    "http://purl.org/dc/terms/description": [
+      {
+        "@value": "This study presents a comprehensive metagenomic analysis of microbial communities in the North Sea. We collected water samples from multiple depths (10m, 50m, 100m) at coordinates 54.5°N, 3.2°E during August 2023. The samples were processed using Illumina HiSeq 2500 sequencing technology to characterize the taxonomic and functional diversity of marine microorganisms. Our analysis revealed significant variations in microbial community structure across different depths, with temperature and salinity being key environmental drivers."
+      }
+    ],
+    "http://purl.org/dc/terms/title": [
+      {
+        "@value": "Title: Marine Microbiome Analysis of the North Sea"
+      }
+    ],
+    "http://w3id.org/mixs/collection_date": [
+      {
+        "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+        "@value": "2023-08-15T00:00:00"
+      }
+    ],
+    "http://w3id.org/mixs/depth": [
+      {
+        "@type": "http://www.w3.org/2001/XMLSchema#integer",
+        "@value": 10
+      }
+    ],
+    "http://w3id.org/mixs/env_biome": [
+      {
+        "@value": "marine biome [ENVO:00000447]"
+      }
+    ],
+    "http://w3id.org/mixs/env_feature": [
+      {
+        "@value": "oceanic epipelagic zone [ENVO:00000208]"
+      }
+    ],
+    "http://w3id.org/mixs/env_material": [
+      {
+        "@value": "sea water [ENVO:00002149]"
+      }
+    ],
+    "http://w3id.org/mixs/geo_loc_name": [
+      {
+        "@value": "Sarah Johnson, Prof"
+      }
+    ],
+    "http://w3id.org/mixs/investigation_type": [
+      {
+        "@value": "genome"
+      }
+    ],
+    "http://w3id.org/mixs/lat_lon": [
+      {
+        "@value": "50.586825 6.408977"
+      }
+    ],
+    "http://w3id.org/mixs/ph": [
+      {
+        "@type": "http://www.w3.org/2001/XMLSchema#decimal",
+        "@value": "7.5"
+      }
+    ],
+    "http://w3id.org/mixs/project_name": [
+      {
+        "@value": "Title: Marine Microbiome Analysis of the North Sea"
+      }
+    ],
+    "http://w3id.org/mixs/sample_collect_device": [
+      {
+        "@value": "CTD rosette"
+      }
+    ],
+    "http://w3id.org/mixs/seq_meth": [
+      {
+        "@value": "Illumina HiSeq 2500"
+      }
+    ],
+    "http://w3id.org/mixs/temp": [
+      {
+        "@type": "http://www.w3.org/2001/XMLSchema#integer",
+        "@value": 25
+      }
+    ],
+    "http://www.w3.org/ns/prov#wasAttributedTo": [
+      {
+        "@id": "_:N2c625e7519044d17b1d810b67e262057"
+      },
+      {
+        "@id": "_:N4b7467f55959406b8b3a8adc7e6ce7f5"
+      },
+      {
+        "@id": "_:N9ce14c8edcf54f6face71a6095e1ba06"
+      },
+      {
+        "@id": "_:N17dc54deedd74cec8ef853b2c3f92c6a"
+      },
+      {
+        "@id": "_:Na645ed86fb41462fbe8d651c5af65183"
+      },
+      {
+        "@id": "_:N548396c88f8c4b92a9cb2e72441fa15a"
+      }
+    ],
+    "http://www.w3.org/ns/prov#wasGeneratedBy": [
+      {
+        "@id": "http://fairifier.org/activity/generation/20250925_222032"
+      }
+    ],
+    "https://schema.org/about": [
+      {
+        "@value": "marine_biology"
+      }
+    ],
+    "https://schema.org/author": [
+      {
+        "@id": "http://fairifier.org/person/dr._sarah_johnson"
+      },
+      {
+        "@id": "http://fairifier.org/person/prof._michael_chen"
+      },
+      {
+        "@id": "http://fairifier.org/person/dr._elena_rodriguez"
+      }
+    ],
+    "https://schema.org/keywords": [
+      {
+        "@value": "metagenomics"
+      },
+      {
+        "@value": "marine microbiome"
+      },
+      {
+        "@value": "North Sea"
+      },
+      {
+        "@value": "microbial diversity"
+      },
+      {
+        "@value": "16S rRNA"
+      }
+    ]
+  },
+  {
+    "@id": "_:N2c625e7519044d17b1d810b67e262057",
+    "@type": [
+      "http://www.w3.org/ns/prov#Entity"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "Evidence for project_name"
+      }
+    ],
+    "http://www.w3.org/ns/prov#value": [
+      {
+        "@value": "Title: Marine Microbiome Analysis of the North Sea"
+      }
+    ]
+  },
+  {
+    "@id": "_:N4b7467f55959406b8b3a8adc7e6ce7f5",
+    "@type": [
+      "http://www.w3.org/ns/prov#Entity"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "Evidence for investigation_type"
+      }
+    ],
+    "http://www.w3.org/ns/prov#value": [
+      {
+        "@value": "marine_biology"
+      }
+    ]
+  },
+  {
+    "@id": "_:N9ce14c8edcf54f6face71a6095e1ba06",
+    "@type": [
+      "http://www.w3.org/ns/prov#Entity"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "Evidence for geo_loc_name"
+      }
+    ],
+    "http://www.w3.org/ns/prov#value": [
+      {
+        "@value": "Location mentioned: Sarah Johnson, Prof"
+      }
+    ]
+  },
+  {
+    "@id": "_:N17dc54deedd74cec8ef853b2c3f92c6a",
+    "@type": [
+      "http://www.w3.org/ns/prov#Entity"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "Evidence for depth"
+      }
+    ],
+    "http://www.w3.org/ns/prov#value": [
+      {
+        "@value": "rth Sea. We collected water samples from multiple depths (10m, 50m, 100m) at coordinates 54.5°N, 3.2°E du"
+      }
+    ]
+  },
+  {
+    "@id": "_:Na645ed86fb41462fbe8d651c5af65183",
+    "@type": [
+      "http://www.w3.org/ns/prov#Entity"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "Evidence for temp"
+      }
+    ],
+    "http://www.w3.org/ns/prov#value": [
+      {
+        "@value": "community structure across different depths, with temperature and salinity being key environmental drive"
+      }
+    ]
+  },
+  {
+    "@id": "_:N548396c88f8c4b92a9cb2e72441fa15a",
+    "@type": [
+      "http://www.w3.org/ns/prov#Entity"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "Evidence for ph"
+      }
+    ],
+    "http://www.w3.org/ns/prov#value": [
+      {
+        "@value": "- pH: 8.1"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/seq_meth",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "Sequencing method used"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "seq_meth"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/depth",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "The vertical distance below local surface"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "depth"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/collection_date",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "The time of sampling, either as an instance or interval"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "collection_date"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/lat_lon",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "The geographical origin of the sample as defined by latitude and longitude"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "lat_lon"
+      }
+    ]
+  },
+  {
+    "@id": "http://fairifier.org/activity/generation/20250925_222032",
+    "@type": [
+      "http://www.w3.org/ns/prov#Activity"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "FAIRifier metadata generation"
+      }
+    ],
+    "http://www.w3.org/ns/prov#startedAtTime": [
+      {
+        "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+        "@value": "2025-09-25T22:20:32.623652"
+      }
+    ],
+    "http://www.w3.org/ns/prov#wasAssociatedWith": [
+      {
+        "@id": "http://fairifier.org/agent/fairifier"
+      }
+    ]
+  },
+  {
+    "@id": "http://fairifier.org/person/dr._sarah_johnson",
+    "@type": [
+      "https://schema.org/Person"
+    ],
+    "http://xmlns.com/foaf/0.1/name": [
+      {
+        "@value": "Dr. Sarah Johnson"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/env_material",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "The environmental material level refers to the material that was displaced by the sample"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "env_material"
+      }
+    ]
+  },
+  {
+    "@id": "http://fairifier.org/agent/fairifier",
+    "@type": [
+      "http://www.w3.org/ns/prov#SoftwareAgent"
+    ],
+    "http://xmlns.com/foaf/0.1/name": [
+      {
+        "@value": "FAIRifier Agentic Framework"
+      }
+    ],
+    "https://schema.org/version": [
+      {
+        "@value": "0.1.0"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/investigation_type",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "Type of nucleic acid sequence investigation"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "investigation_type"
+      }
+    ]
+  },
+  {
+    "@id": "http://fairifier.org/person/dr._elena_rodriguez",
+    "@type": [
+      "https://schema.org/Person"
+    ],
+    "http://xmlns.com/foaf/0.1/name": [
+      {
+        "@value": "Dr. Elena Rodriguez"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/ph",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "pH measurement of the sample"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "ph"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/sample_collect_device",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "The method or device employed for collecting the sample"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "sample_collect_device"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/geo_loc_name",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "Geographical origin of the sample"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "geo_loc_name"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/env_feature",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "Environmental feature level includes geographic environmental features"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "env_feature"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/project_name",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "Name of the research project"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "project_name"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/env_biome",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "Biomes are defined based on factors such as plant structures, leaf types, plant spacing, and other factors"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "env_biome"
+      }
+    ]
+  },
+  {
+    "@id": "http://w3id.org/mixs/temp",
+    "@type": [
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property"
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#comment": [
+      {
+        "@value": "Temperature of the sample at the time of sampling"
+      }
+    ],
+    "http://www.w3.org/2000/01/rdf-schema#label": [
+      {
+        "@value": "temp"
+      }
+    ]
+  }
+]
