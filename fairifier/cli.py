@@ -50,10 +50,15 @@ def process(document_path: str, output_dir: Optional[str] = None, project_id: Op
 
 async def _run_workflow(document_path: str, output_path: Path, project_id: Optional[str] = None):
     """Run the FAIRifier workflow."""
+    start_time = datetime.now()
+    
+    if not project_id:
+        project_id = f"fairifier_{start_time.strftime('%Y%m%d_%H%M%S')}"
+    
     try:
         workflow = FAIRifierWorkflow()
         
-        click.echo("Starting FAIRifier workflow...")
+        json_logger.log_processing_start(document_path, project_id)
         
         # Run the workflow
         result = await workflow.run(document_path, project_id)
@@ -65,74 +70,54 @@ async def _run_workflow(document_path: str, output_path: Path, project_id: Optio
         errors = result.get("errors", [])
         artifacts = result.get("artifacts", {})
         
-        # Display results
-        click.echo(f"\n📊 Processing Results:")
-        click.echo(f"Status: {status}")
+        # Calculate duration
+        duration = (datetime.now() - start_time).total_seconds()
+        json_logger.log_processing_end(project_id, status, duration)
         
-        if confidence_scores:
-            click.echo(f"Confidence Scores:")
-            for component, score in confidence_scores.items():
-                click.echo(f"  - {component}: {score:.2f}")
+        # Log confidence scores
+        for component, score in confidence_scores.items():
+            json_logger.log_confidence_score(component, score)
         
-        if needs_review:
-            click.echo("⚠️  Human review recommended")
-        
-        if errors:
-            click.echo(f"❌ Errors ({len(errors)}):")
-            for error in errors[:5]:  # Show first 5 errors
-                click.echo(f"  - {error}")
-            if len(errors) > 5:
-                click.echo(f"  ... and {len(errors) - 5} more")
-        
-        # Save artifacts
+        # Save artifacts (JSON only)
         if artifacts:
-            click.echo(f"\n💾 Saving artifacts to {output_path}:")
+            json_logger.info("saving_artifacts", output_path=str(output_path), artifact_count=len(artifacts))
             
             for artifact_name, content in artifacts.items():
                 if content:
                     # Determine file extension
                     extensions = {
-                        "template_schema": ".schema.json",
-                        "template_yaml": ".yaml",
-                        "rdf_turtle": ".ttl",
-                        "rdf_jsonld": ".jsonld",
-                        "ro_crate": ".json",
-                        "validation_report": ".txt"
+                        "metadata_json": ".json",
+                        "validation_report": ".txt",
+                        "processing_log": ".jsonl"
                     }
                     
-                    ext = extensions.get(artifact_name, ".txt")
+                    ext = extensions.get(artifact_name, ".json")
                     filename = f"{artifact_name}{ext}"
                     filepath = output_path / filename
                     
                     with open(filepath, 'w', encoding='utf-8') as f:
                         f.write(content)
                     
-                    click.echo(f"  ✓ {filename} ({len(content)} chars)")
+                    json_logger.info("artifact_saved", filename=filename, size_bytes=len(content))
         
-        # Save full results
-        results_file = output_path / "results.json"
-        with open(results_file, 'w', encoding='utf-8') as f:
-            # Make result serializable
-            serializable_result = {
-                k: v for k, v in result.items() 
-                if k not in ['artifacts']  # Skip large artifacts
-            }
-            json.dump(serializable_result, f, indent=2, default=str)
+        # Save processing log
+        log_file = output_path / "processing_log.jsonl"
+        with open(log_file, 'w', encoding='utf-8') as f:
+            for log_entry in json_logger.get_logs():
+                f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
         
-        click.echo(f"  ✓ results.json")
-        
-        # Summary
-        click.echo(f"\n✨ Processing completed!")
-        if status == "completed" and not errors:
-            click.echo("🎉 All steps completed successfully!")
-        elif needs_review:
-            click.echo("🔍 Please review the results before using.")
-        else:
-            click.echo("⚠️  Some issues were detected. Check the validation report.")
+        # Log completion
+        json_logger.info(
+            "processing_summary",
+            status=status,
+            needs_review=needs_review,
+            error_count=len(errors),
+            overall_confidence=confidence_scores.get("overall", 0.0),
+            duration_seconds=round(duration, 2)
+        )
         
     except Exception as e:
-        click.echo(f"❌ Workflow failed: {str(e)}", err=True)
-        logger.error(f"Workflow error: {str(e)}", exc_info=True)
+        json_logger.error("workflow_failed", error=str(e), project_id=project_id)
         sys.exit(1)
 
 
