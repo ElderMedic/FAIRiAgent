@@ -48,6 +48,7 @@ class KnowledgeItem:
     source: str
     ontology_uri: Optional[str] = None
     confidence: float = 0.0
+    metadata: Optional[Dict[str, Any]] = None  # Additional metadata (level, package, etc.)
 
 
 @dataclass
@@ -86,7 +87,7 @@ class ProcessingArtifacts:
 
 
 class FAIRifierState(TypedDict):
-    """State object for LangGraph workflow - FAIR-DS compatible."""
+    """State object for LangGraph workflow - FAIR-DS compatible with self-reflection."""
     # Input
     document_path: str
     document_content: str
@@ -103,6 +104,13 @@ class FAIRifierState(TypedDict):
     
     # Output (JSON only)
     artifacts: Dict[str, str]  # Only contains metadata_json and validation_report
+    
+    # Self-reflection and human-in-the-loop
+    human_interventions: Dict[str, Dict[str, Any]]  # {step_id: {feedback, context_updates}}
+    execution_history: List[Dict[str, Any]]  # Full execution history with critic reviews
+    reasoning_chain: List[str]  # Orchestrator's reasoning steps
+    execution_plan: Dict[str, Any]  # Current execution plan
+    execution_summary: Dict[str, Any]  # Summary of execution (completed, failed, etc.)
     
     # Metadata
     status: str

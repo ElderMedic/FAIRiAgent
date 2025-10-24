@@ -5,61 +5,92 @@ import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import fitz  # PyMuPDF
+from langsmith import traceable
 
 from .base import BaseAgent
 from ..models import FAIRifierState, DocumentInfo
 from ..config import config
+from ..utils.llm_helper import get_llm_helper
 
 
 class DocumentParserAgent(BaseAgent):
     """Agent for parsing research documents and extracting key information."""
     
-    def __init__(self):
+    def __init__(self, use_llm: bool = True):
         super().__init__("DocumentParser")
+        self.use_llm = use_llm
+        if use_llm:
+            self.llm_helper = get_llm_helper()
         
+    @traceable(name="DocumentParser", tags=["agent", "parsing"])
     async def execute(self, state: FAIRifierState) -> FAIRifierState:
         """Parse document and extract research information."""
-        self.log_execution(state, "Starting document parsing")
+        self.log_execution(state, "📄 Starting document parsing")
         
         try:
             # Extract text from document
-            if state["document_path"].endswith('.pdf'):
-                text = self._extract_pdf_text(state["document_path"])
+            document_path = state.get("document_path", "")
+            self.log_execution(state, f"📖 Reading document: {document_path}")
+            if document_path.endswith('.pdf'):
+                text = self._extract_pdf_text(document_path)
+                self.log_execution(state, f"✅ Extracted {len(text)} characters from PDF")
             else:
                 # Assume plain text
-                with open(state["document_path"], 'r', encoding='utf-8') as f:
+                with open(document_path, 'r', encoding='utf-8') as f:
                     text = f.read()
+                self.log_execution(state, f"✅ Read {len(text)} characters from text file")
             
             state["document_content"] = text
             
-            # Extract structured information
-            doc_info = self._extract_document_info(text)
-            state["document_info"] = {
-                "title": doc_info.title,
-                "abstract": doc_info.abstract,
-                "authors": doc_info.authors,
-                "keywords": doc_info.keywords,
-                "research_domain": doc_info.research_domain,
-                "methodology": doc_info.methodology,
-                "datasets_mentioned": doc_info.datasets_mentioned,
-                "instruments": doc_info.instruments,
-                "variables": doc_info.variables,
-                "raw_text": doc_info.raw_text
-            }
+            # Extract structured information using LLM
+            if self.use_llm:
+                self.log_execution(state, "🤖 Using LLM for intelligent extraction...")
+                doc_info_dict = await self.llm_helper.extract_document_info(text)
+                self.log_execution(state, f"✅ LLM extracted: {list(doc_info_dict.keys())}")
+                
+                # Store in state directly as dict
+                state["document_info"] = doc_info_dict
+                state["document_info"]["raw_text"] = text
+                
+                # Calculate confidence
+                confidence = self._calculate_llm_confidence(doc_info_dict)
+                
+            else:
+                # Fallback to regex-based extraction
+                self.log_execution(state, "⚠️  Using regex-based extraction (no LLM)")
+                doc_info = self._extract_document_info(text)
+                state["document_info"] = {
+                    "title": doc_info.title,
+                    "abstract": doc_info.abstract,
+                    "authors": doc_info.authors,
+                    "keywords": doc_info.keywords,
+                    "research_domain": doc_info.research_domain,
+                    "methodology": doc_info.methodology,
+                    "datasets_mentioned": doc_info.datasets_mentioned,
+                    "instruments": doc_info.instruments,
+                    "variables": doc_info.variables,
+                    "raw_text": doc_info.raw_text
+                }
+                confidence = self._calculate_parsing_confidence(doc_info)
             
-            # Calculate confidence based on extraction quality
-            confidence = self._calculate_parsing_confidence(doc_info)
             self.update_confidence(state, "document_parsing", confidence)
             
+            # Log extracted info
+            doc_info = state["document_info"]
             self.log_execution(
                 state, 
-                f"Document parsing completed. Extracted: title={bool(doc_info.title)}, "
-                f"abstract={bool(doc_info.abstract)}, authors={len(doc_info.authors)}, "
-                f"confidence={confidence:.2f}"
+                f"✅ Parsing completed!\n"
+                f"   - Title: {bool(doc_info.get('title'))}\n"
+                f"   - Abstract: {bool(doc_info.get('abstract'))}\n"
+                f"   - Authors: {len(doc_info.get('authors', []))}\n"
+                f"   - Keywords: {len(doc_info.get('keywords', []))}\n"
+                f"   - Location: {doc_info.get('location', 'N/A')}\n"
+                f"   - Coordinates: {doc_info.get('coordinates', 'N/A')}\n"
+                f"   - Confidence: {confidence:.2%}"
             )
             
         except Exception as e:
-            self.log_execution(state, f"Document parsing failed: {str(e)}", "error")
+            self.log_execution(state, f"❌ Document parsing failed: {str(e)}", "error")
             self.update_confidence(state, "document_parsing", 0.0)
         
         return state
@@ -261,5 +292,29 @@ class DocumentParserAgent(BaseAgent):
         # Research domain identification
         if doc_info.research_domain:
             score += 0.1
+        
+        return min(score, 1.0)
+    
+    def _calculate_llm_confidence(self, doc_info_dict: Dict[str, Any]) -> float:
+        """Calculate confidence score for LLM-based parsing."""
+        score = 0.0
+        
+        # Core fields (higher weight)
+        if doc_info_dict.get('title') and len(str(doc_info_dict['title'])) > 10:
+            score += 0.25
+        if doc_info_dict.get('abstract') and len(str(doc_info_dict['abstract'])) > 50:
+            score += 0.25
+        if doc_info_dict.get('authors') and len(doc_info_dict['authors']) > 0:
+            score += 0.15
+        
+        # Additional extracted fields (bonus)
+        if doc_info_dict.get('keywords'):
+            score += 0.10
+        if doc_info_dict.get('research_domain'):
+            score += 0.10
+        if doc_info_dict.get('location') or doc_info_dict.get('coordinates'):
+            score += 0.10
+        if doc_info_dict.get('environmental_parameters'):
+            score += 0.05
         
         return min(score, 1.0)

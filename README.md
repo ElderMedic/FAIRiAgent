@@ -16,7 +16,7 @@ FAIRiAgent is a CLI-first multi-agent framework that automatically extracts info
 - 📝 **JSON Line Logging**: Structured logging for debugging and monitoring
 - 🔧 **Local Provisional Support**: Extend with local terms (source=local, status=provisional)
 - 🎛️ **Multi-Model Support**: Ollama (local) / OpenAI / Anthropic
-- 🔍 **LangSmith Integration**: Complete tracing and debugging support
+- 🔍 **LangSmith Integration**: Complete tracing and debugging support (默认启用)
 
 ## 🏗️ Architecture
 

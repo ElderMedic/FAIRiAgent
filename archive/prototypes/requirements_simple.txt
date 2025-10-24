@@ -1,4 +1,0 @@
-# Minimal dependencies for FAIRifier PoC
-PyYAML>=6.0
-PyMuPDF>=1.23.0  # For PDF parsing (optional)
-rdflib>=7.0.0    # For RDF generation (optional)

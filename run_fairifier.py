@@ -4,8 +4,13 @@
 import subprocess
 import sys
 import time
-import signal
+import os
 from pathlib import Path
+
+# Enable LangSmith tracing by default
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "fairifier")
+
 
 def run_api():
     """Run the FastAPI server."""
@@ -18,6 +23,7 @@ def run_api():
     ]
     return subprocess.Popen(cmd)
 
+
 def run_ui():
     """Run the Streamlit UI."""
     ui_path = Path(__file__).parent / "fairifier" / "apps" / "ui" / "streamlit_app.py"
@@ -29,12 +35,13 @@ def run_ui():
     ]
     return subprocess.Popen(cmd)
 
+
 def main():
     """Main launcher."""
     if len(sys.argv) < 2:
         print("Usage: python run_fairifier.py [api|ui|both|cli]")
         print("  api  - Run FastAPI server only")
-        print("  ui   - Run Streamlit UI only") 
+        print("  ui   - Run Streamlit UI only")
         print("  both - Run both API and UI")
         print("  cli  - Run CLI interface")
         sys.exit(1)
@@ -97,9 +104,10 @@ def main():
         for process in processes:
             try:
                 process.terminate()
-            except:
+            except Exception:
                 pass
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

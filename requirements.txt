@@ -1,14 +1,27 @@
-# Core dependencies for minimal testing
+# Core dependencies
 langchain>=0.1.0
 langchain-community>=0.0.38
+langchain-ollama>=1.0.0
+langchain-openai>=1.0.0
 langgraph>=0.0.65
 langsmith>=0.1.0
+
+# Document processing
+PyMuPDF>=1.23.0
 rdflib>=7.0.0
 pyshacl>=0.25.0
-PyMuPDF>=1.23.0
-pyyaml>=6.0.1
-click>=8.1.0
+
+# Web scraping (for FAIR-DS data extraction)
+playwright>=1.40.0
+beautifulsoup4>=4.12.0
+
+# API and CLI
 fastapi>=0.104.0
 uvicorn>=0.24.0
 python-multipart>=0.0.6
+click>=8.1.0
+
+# Data handling
 pydantic>=2.5.0
+pyyaml>=6.0.1
+requests>=2.31.0

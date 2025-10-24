@@ -3,6 +3,7 @@
 from typing import Dict, Any, List, Tuple
 from rdflib import Graph
 import pyshacl
+from langsmith import traceable
 
 from .base import BaseAgent
 from ..models import FAIRifierState, ValidationResult
@@ -15,13 +16,14 @@ class ValidationAgent(BaseAgent):
     def __init__(self):
         super().__init__("Validator")
         
+    @traceable(name="Validator", tags=["agent", "validation"])
     async def execute(self, state: FAIRifierState) -> FAIRifierState:
         """Validate RDF graph and assess metadata quality."""
         self.log_execution(state, "Starting validation")
         
         try:
             rdf_graph = state.get("rdf_graph", "")
-            metadata_fields = state["metadata_fields"]
+            metadata_fields = state.get("metadata_fields", [])
             
             # Validate RDF syntax
             syntax_valid, syntax_errors = self._validate_rdf_syntax(rdf_graph)

@@ -1,7 +1,7 @@
 """Base agent class for FAIRifier agents."""
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import logging
 from datetime import datetime
 
@@ -22,6 +22,22 @@ class BaseAgent(ABC):
     async def execute(self, state: FAIRifierState) -> FAIRifierState:
         """Execute the agent's main functionality."""
         pass
+    
+    def get_context_feedback(self, state: FAIRifierState) -> Dict[str, Any]:
+        """
+        Extract feedback from context (critic feedback, human feedback, previous attempts)
+        This allows agents to adapt based on reflective feedback
+        """
+        context = state.get("context", {})
+        
+        feedback = {
+            "critic_feedback": context.get("critic_feedback", None),
+            "human_feedback": context.get("human_feedback", None),
+            "previous_attempt": context.get("previous_attempt", None),
+            "retry_count": context.get("retry_count", 0)
+        }
+        
+        return feedback
     
     def log_execution(self, state: FAIRifierState, message: str, level: str = "info"):
         """Log agent execution with context."""

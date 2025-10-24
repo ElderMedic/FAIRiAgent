@@ -1,226 +1,171 @@
-"""Main LangGraph workflow for the FAIRifier system."""
+"""
+FAIRifier Workflow - Orchestrator-driven architecture
+
+Flow:
+1. Read file content (no LLM) → raw text
+2. Orchestrator plans and executes:
+   - DocumentParser (LLM): Extract key info as JSON summary
+   - KnowledgeRetriever: Get FAIR-DS packages & terms from API
+   - JSONGenerator: Generate ISA metadata template (5 layers)
+   - Validator: Validate using confidence scores / FAIR-DS API
+   
+Output: ISA-structured metadata template JSON
+"""
 
 import logging
 from typing import Dict, Any
 from datetime import datetime
+from langsmith import traceable
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from ..models import FAIRifierState, ProcessingStatus
+from ..agents.orchestrator import OrchestratorAgent
 from ..agents.document_parser import DocumentParserAgent
 from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
 from ..agents.json_generator import JSONGeneratorAgent
 from ..agents.validator import ValidationAgent
-from ..config import config
 
 logger = logging.getLogger(__name__)
 
 
 class FAIRifierWorkflow:
-    """Main workflow orchestrator using LangGraph."""
+    """Workflow orchestrated by Orchestrator Agent"""
     
     def __init__(self):
-        self.agents = {
-            "parser": DocumentParserAgent(),
-            "retriever": KnowledgeRetrieverAgent(),
-            "json_generator": JSONGeneratorAgent(),
-            "validator": ValidationAgent()
-        }
+        # Create Orchestrator
+        self.orchestrator = OrchestratorAgent()
+        
+        # Register all agents for Orchestrator to schedule
+        self.orchestrator.register_agent("DocumentParser", DocumentParserAgent(use_llm=True))
+        self.orchestrator.register_agent("KnowledgeRetriever", KnowledgeRetrieverAgent())
+        self.orchestrator.register_agent("JSONGenerator", JSONGeneratorAgent())
+        self.orchestrator.register_agent("Validator", ValidationAgent())
         
         self.checkpointer = MemorySaver()
         self.workflow = self._create_workflow()
     
     def _create_workflow(self) -> StateGraph:
-        """Create the LangGraph workflow."""
+        """Create workflow: Read file, then Orchestrator controls everything"""
+        
+        # Use FAIRifierState as the state schema
+        from langgraph.graph import StateGraph
         workflow = StateGraph(FAIRifierState)
         
-        # Add nodes
-        workflow.add_node("parse_document", self._parse_document_node)
-        workflow.add_node("retrieve_knowledge", self._retrieve_knowledge_node)
-        workflow.add_node("generate_json", self._generate_json_node)
-        workflow.add_node("validate", self._validate_node)
-        workflow.add_node("human_review", self._human_review_node)
-        workflow.add_node("finalize", self._finalize_node)
+        # Step 1: Read file content (no LLM)
+        workflow.add_node("read_file", self._read_file_node)
         
-        # Define the flow
-        workflow.set_entry_point("parse_document")
+        # Step 2: Orchestrator controls all agents
+        workflow.add_node("orchestrate", self._orchestrate_node)
         
-        # Simplified linear flow: parse -> retrieve -> generate JSON -> validate
-        workflow.add_edge("parse_document", "retrieve_knowledge")
-        workflow.add_edge("retrieve_knowledge", "generate_json")
-        workflow.add_edge("generate_json", "validate")
+        # Set entry point - start with reading file
+        workflow.set_entry_point("read_file")
         
-        # Conditional edge after validation
-        workflow.add_conditional_edges(
-            "validate",
-            self._should_review,
-            {
-                "review": "human_review",
-                "finalize": "finalize"
-            }
-        )
-        
-        workflow.add_edge("human_review", "finalize")
-        workflow.add_edge("finalize", END)
+        # Flow: read_file -> orchestrate -> end
+        workflow.add_edge("read_file", "orchestrate")
+        workflow.add_edge("orchestrate", END)
         
         return workflow.compile(checkpointer=self.checkpointer)
     
+    @traceable(name="ReadFile", tags=["workflow", "io"])
+    async def _read_file_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Read file content (no LLM) - just extract raw text"""
+        logger.info("📄 Reading file content")
+        state["status"] = ProcessingStatus.PARSING.value
+        
+        try:
+            document_path = state.get("document_path", "")
+            
+            # Read based on file type
+            if document_path.endswith('.pdf'):
+                import fitz  # PyMuPDF
+                doc = fitz.open(document_path)
+                text = ""
+                for page in doc:
+                    text += page.get_text()
+                doc.close()
+                logger.info(f"✅ Extracted {len(text)} characters from PDF")
+            else:
+                # Plain text file
+                with open(document_path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+                logger.info(f"✅ Read {len(text)} characters from text file")
+            
+            # Store raw content for Orchestrator
+            state["document_content"] = text
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to read file: {e}")
+            state["errors"].append(f"File reading error: {str(e)}")
+            state["document_content"] = ""
+        
+        return state
+    
+    async def _orchestrate_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Orchestrator node"""
+        state["status"] = ProcessingStatus.PARSING.value
+        logger.info("🎯 Orchestrator starting execution")
+        
+        result = await self.orchestrator.execute(state)
+        
+        # Set status based on execution results
+        execution_summary = result.get("execution_summary", {})
+        if execution_summary.get("failed_steps", 0) > 0:
+            result["status"] = ProcessingStatus.REVIEWING.value
+            result["needs_human_review"] = True
+        else:
+            result["status"] = ProcessingStatus.COMPLETED.value
+        
+        result["processing_end"] = datetime.now().isoformat()
+        
+        return result
+    
     async def run(self, document_path: str, project_id: str = None) -> Dict[str, Any]:
-        """Run the complete FAIRifier workflow."""
+        """Run the workflow"""
         if not project_id:
             project_id = f"fairifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
-        # Initialize state
-            initial_state = FAIRifierState(
-            document_path=document_path,
-            document_content="",
-            document_info={},
-            retrieved_knowledge=[],
-            metadata_fields=[],
-            validation_results={},
-            confidence_scores={},
-            needs_human_review=False,
-            artifacts={},
-            status=ProcessingStatus.PENDING.value,
-            processing_start=datetime.now().isoformat(),
-            processing_end=None,
-            errors=[]
-        )
+        # Initialize state - use dict literal for TypedDict
+        initial_state = {
+            "document_path": document_path,
+            "document_content": "",
+            "document_info": {},
+            "retrieved_knowledge": [],
+            "metadata_fields": [],
+            "validation_results": {},
+            "confidence_scores": {},
+            "needs_human_review": False,
+            "artifacts": {},
+            "human_interventions": {},  # For human-in-the-loop
+            "execution_history": [],  # Execution history with critic reviews
+            "reasoning_chain": [],  # Orchestrator reasoning
+            "execution_plan": {},  # Execution plan
+            "execution_summary": {},  # Execution summary
+            "status": ProcessingStatus.PENDING.value,
+            "processing_start": datetime.now().isoformat(),
+            "processing_end": None,
+            "errors": []
+        }
         
-        logger.info(f"Starting FAIRifier workflow for project {project_id}")
+        logger.info(f"🚀 Starting FAIRifier Workflow (project: {project_id})")
+        logger.info("📋 Using Orchestrator Agent for intelligent scheduling")
         
         try:
-            # Run the workflow
+            # Run workflow
             config_dict = {"configurable": {"thread_id": project_id}}
             result = await self.workflow.ainvoke(initial_state, config=config_dict)
             
-            logger.info(f"Workflow completed for project {project_id}")
+            logger.info(f"✅ Workflow completed (project: {project_id})")
+            
+            # Add workflow version info
+            result["workflow_version"] = "orchestrator"
+            
             return result
             
         except Exception as e:
-            logger.error(f"Workflow failed for project {project_id}: {str(e)}")
+            logger.error(f"❌ Workflow failed (project: {project_id}): {str(e)}")
             initial_state["status"] = ProcessingStatus.FAILED.value
             initial_state["errors"].append(str(e))
             return initial_state
-    
-    async def _parse_document_node(self, state: FAIRifierState) -> FAIRifierState:
-        """Document parsing node."""
-        state["status"] = ProcessingStatus.PARSING.value
-        logger.info("Executing document parsing node")
-        return await self.agents["parser"].execute(state)
-    
-    async def _retrieve_knowledge_node(self, state: FAIRifierState) -> FAIRifierState:
-        """Knowledge retrieval node."""
-        state["status"] = ProcessingStatus.RETRIEVING.value
-        logger.info("Executing knowledge retrieval node")
-        return await self.agents["retriever"].execute(state)
-    
-    async def _generate_json_node(self, state: FAIRifierState) -> FAIRifierState:
-        """JSON metadata generation node."""
-        state["status"] = ProcessingStatus.GENERATING.value
-        logger.info("Executing JSON generation node")
-        return await self.agents["json_generator"].execute(state)
-    
-    async def _validate_node(self, state: FAIRifierState) -> FAIRifierState:
-        """Validation node."""
-        state["status"] = ProcessingStatus.VALIDATING.value
-        logger.info("Executing validation node")
-        return await self.agents["validator"].execute(state)
-    
-    async def _human_review_node(self, state: FAIRifierState) -> FAIRifierState:
-        """Human review node (placeholder for now)."""
-        state["status"] = ProcessingStatus.REVIEWING.value
-        logger.info("Human review required - workflow paused")
-        
-        # For now, just log the review requirement
-        # In a full implementation, this would integrate with a UI
-        review_items = []
-        
-        # Check what needs review
-        if state.get("confidence_scores"):
-            low_confidence = {k: v for k, v in state["confidence_scores"].items() if v < config.min_confidence_threshold}
-            if low_confidence:
-                review_items.append(f"Low confidence components: {list(low_confidence.keys())}")
-        
-        if state.get("errors"):
-            review_items.append(f"Errors to address: {len(state['errors'])}")
-        
-        validation_results = state.get("validation_results", {})
-        if not validation_results.get("is_valid", True):
-            review_items.append("Validation failures detected")
-        
-        logger.warning(f"Human review needed for: {'; '.join(review_items)}")
-        
-        # For MVP, we'll just flag it and continue
-        # In production, this would wait for human input
-        state["needs_human_review"] = True
-        
-        return state
-    
-    async def _finalize_node(self, state: FAIRifierState) -> FAIRifierState:
-        """Finalization node."""
-        state["status"] = ProcessingStatus.COMPLETED.value
-        state["processing_end"] = datetime.now().isoformat()
-        
-        logger.info("Finalizing workflow results")
-        
-        # Calculate overall success metrics
-        confidence_scores = state.get("confidence_scores", {})
-        if confidence_scores:
-            overall_confidence = sum(confidence_scores.values()) / len(confidence_scores)
-            state["confidence_scores"]["overall"] = overall_confidence
-        
-        # Log summary
-        artifacts = state.get("artifacts", {})
-        logger.info(
-            f"Workflow finalized. Artifacts: {list(artifacts.keys())}, "
-            f"Overall confidence: {state.get('confidence_scores', {}).get('overall', 0):.2f}"
-        )
-        
-        return state
-    
-    def _should_review(self, state: FAIRifierState) -> str:
-        """Determine if human review is needed."""
-        # Check if human review is explicitly flagged
-        if state.get("needs_human_review", False):
-            return "review"
-        
-        # Check overall confidence
-        confidence_scores = state.get("confidence_scores", {})
-        if confidence_scores:
-            overall_confidence = sum(confidence_scores.values()) / len(confidence_scores)
-            if overall_confidence < config.min_confidence_threshold:
-                return "review"
-        
-        # Check validation results
-        validation_results = state.get("validation_results", {})
-        if not validation_results.get("is_valid", True):
-            return "review"
-        
-        # Check for errors
-        if state.get("errors"):
-            return "review"
-        
-        return "finalize"
-    
-    async def get_workflow_status(self, project_id: str) -> Dict[str, Any]:
-        """Get current workflow status for a project."""
-        try:
-            config_dict = {"configurable": {"thread_id": project_id}}
-            # Get latest state from checkpointer
-            checkpoint = self.checkpointer.get(config_dict)
-            if checkpoint:
-                return {
-                    "project_id": project_id,
-                    "status": checkpoint.get("status", "unknown"),
-                    "confidence_scores": checkpoint.get("confidence_scores", {}),
-                    "needs_review": checkpoint.get("needs_human_review", False),
-                    "errors": checkpoint.get("errors", []),
-                    "artifacts": list(checkpoint.get("artifacts", {}).keys())
-                }
-            else:
-                return {"project_id": project_id, "status": "not_found"}
-        except Exception as e:
-            logger.error(f"Failed to get workflow status: {str(e)}")
-            return {"project_id": project_id, "status": "error", "error": str(e)}
+

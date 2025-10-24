@@ -19,12 +19,12 @@ class FAIRifierConfig:
     
     # LLM Configuration
     llm_provider: str = "ollama"  # "ollama", "openai", or "anthropic"
-    llm_model: str = "qwen2.5:7b"  # Model name
+    llm_model: str = "qwen3:8b"  # Model name
     llm_base_url: str = "http://localhost:11434"  # For Ollama
     llm_api_key: Optional[str] = None  # For OpenAI/Anthropic
     embedding_model: str = "nomic-embed-text"
     llm_temperature: float = 0.7
-    llm_max_tokens: int = 2000
+    llm_max_tokens: int = 100000
     
     # Processing limits
     max_document_size_mb: int = 50
@@ -35,19 +35,18 @@ class FAIRifierConfig:
     auto_approve_threshold: float = 0.90
     
     # FAIR standards
-    default_mixs_package: str = "MIMAG"  # Default MIxS package
     required_fields_coverage: float = 0.8  # Minimum required field coverage
     
-    # External services (optional)
-    qdrant_url: Optional[str] = None
-    grobid_url: Optional[str] = None
-    fair_ds_api_url: Optional[str] = None
+    # External services
+    fair_ds_api_url: Optional[str] = "http://localhost:8083"  # FAIR Data Station API URL (default: local)
+    qdrant_url: Optional[str] = None  # Vector database (optional)
+    grobid_url: Optional[str] = None  # PDF parsing service (optional)
     
     # LangSmith configuration
     langsmith_api_key: Optional[str] = None
     langsmith_project: str = "fairifier"
     langsmith_endpoint: str = "https://api.smith.langchain.com"
-    enable_langsmith: bool = False
+    enable_langsmith: bool = True  # Enabled by default
     
     def __post_init__(self):
         """Create necessary directories."""
@@ -61,8 +60,12 @@ class FAIRifierConfig:
 config = FAIRifierConfig()
 
 # Environment overrides
+# Ensure correct model name is used
 if os.getenv("FAIRIFIER_LLM_MODEL"):
     config.llm_model = os.getenv("FAIRIFIER_LLM_MODEL")
+else:
+    # Use model from config file
+    config.llm_model = "qwen3:8b"
 
 if os.getenv("FAIRIFIER_LLM_BASE_URL"):
     config.llm_base_url = os.getenv("FAIRIFIER_LLM_BASE_URL")
@@ -76,6 +79,12 @@ if os.getenv("GROBID_URL"):
 if os.getenv("LANGSMITH_API_KEY"):
     config.langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
     config.enable_langsmith = True
+
+# Auto-enable tracing environment variables if API key is set
+if config.langsmith_api_key and config.enable_langsmith:
+    import os
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_PROJECT"] = config.langsmith_project
 
 if os.getenv("LANGSMITH_PROJECT"):
     config.langsmith_project = os.getenv("LANGSMITH_PROJECT")
@@ -95,3 +104,6 @@ if os.getenv("LLM_TEMPERATURE"):
 
 if os.getenv("LLM_MAX_TOKENS"):
     config.llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS"))
+
+if os.getenv("FAIR_DS_API_URL"):
+    config.fair_ds_api_url = os.getenv("FAIR_DS_API_URL")

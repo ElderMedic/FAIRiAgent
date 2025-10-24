@@ -3,6 +3,8 @@
 import asyncio
 import json
 import sys
+import logging
+import os
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -12,9 +14,29 @@ import click
 from .graph.workflow import FAIRifierWorkflow
 from .config import config
 from .utils.json_logger import get_logger
+from .utils.llm_helper import get_llm_helper, save_llm_responses
+
+# Enable LangSmith tracing by default
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "fairifier")
 
 # Use JSON logger
 json_logger = get_logger("fairifier.cli")
+
+# Also set up console logging for visibility
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter(
+    '%(asctime)s | %(name)s | %(message)s',
+    datefmt='%H:%M:%S'
+)
+console_handler.setFormatter(console_formatter)
+
+# Add to root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+if not root_logger.handlers:
+    root_logger.addHandler(console_handler)
 
 
 @click.group()
@@ -25,14 +47,30 @@ def cli():
 
 @cli.command()
 @click.argument('document_path', type=click.Path(exists=True))
-@click.option('--output-dir', '-o', type=click.Path(), help='Output directory for artifacts')
-@click.option('--project-id', '-p', help='Project ID (auto-generated if not provided)')
-@click.option('--json-log', is_flag=True, default=True, help='Use JSON line logging (default: True)')
-def process(document_path: str, output_dir: Optional[str] = None, project_id: Optional[str] = None, json_log: bool = True):
+@click.option('--output-dir', '-o', type=click.Path(),
+              help='Output directory for artifacts')
+@click.option('--project-id', '-p',
+              help='Project ID (auto-generated if not provided)')
+@click.option('--json-log', is_flag=True, default=True,
+              help='Use JSON line logging (default: True)')
+@click.option('--verbose', '-v', is_flag=True,
+              help='Show detailed processing steps')
+def process(
+    document_path: str,
+    output_dir: Optional[str] = None,
+    project_id: Optional[str] = None,
+    json_log: bool = True,
+    verbose: bool = False
+):
     """Process a document and generate FAIR metadata."""
     # JSON logging is now default
     if not json_log:
         click.echo("Warning: Non-JSON logging is deprecated", err=True)
+    
+    # Enable verbose logging if requested
+    if verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+        click.echo("🔍 Verbose mode enabled\n")
     
     # Set up output directory
     if output_dir:
@@ -41,14 +79,37 @@ def process(document_path: str, output_dir: Optional[str] = None, project_id: Op
     else:
         output_path = config.output_path
     
-    click.echo(f"Processing document: {document_path}")
-    click.echo(f"Output directory: {output_path}")
+    click.echo("=" * 70)
+    click.echo("🚀 FAIRifier - Automated FAIR Metadata Generation")
+    click.echo("=" * 70)
+    click.echo(f"📄 Document: {document_path}")
+    click.echo(f"📁 Output: {output_path}")
+    click.echo(f"🤖 LLM: {config.llm_model} ({config.llm_provider})")
+    click.echo(f"🌐 FAIR-DS API: {config.fair_ds_api_url or 'http://localhost:8083 (default)'}")
+    
+    # LangSmith status
+    if config.enable_langsmith and config.langsmith_api_key:
+        click.echo(f"📊 LangSmith: ✅ Enabled "
+                   f"(Project: {config.langsmith_project})")
+    elif config.enable_langsmith:
+        click.echo("📊 LangSmith: ⚠️  Enabled but no API key "
+                   "(set LANGSMITH_API_KEY)")
+    else:
+        click.echo("📊 LangSmith: ❌ Disabled")
+    
+    click.echo("=" * 70)
+    click.echo()
     
     # Run workflow
-    asyncio.run(_run_workflow(document_path, output_path, project_id))
+    asyncio.run(_run_workflow(document_path, output_path, project_id, verbose))
 
 
-async def _run_workflow(document_path: str, output_path: Path, project_id: Optional[str] = None):
+async def _run_workflow(
+    document_path: str,
+    output_path: Path,
+    project_id: Optional[str] = None,
+    verbose: bool = False
+):
     """Run the FAIRifier workflow."""
     start_time = datetime.now()
     
@@ -59,6 +120,7 @@ async def _run_workflow(document_path: str, output_path: Path, project_id: Optio
         workflow = FAIRifierWorkflow()
         
         json_logger.log_processing_start(document_path, project_id)
+        click.echo(f"🔄 Starting processing (Project ID: {project_id})\n")
         
         # Run the workflow
         result = await workflow.run(document_path, project_id)
@@ -74,11 +136,31 @@ async def _run_workflow(document_path: str, output_path: Path, project_id: Optio
         duration = (datetime.now() - start_time).total_seconds()
         json_logger.log_processing_end(project_id, status, duration)
         
-        # Log confidence scores
+        click.echo("\n" + "=" * 70)
+        click.echo("📊 Processing Results")
+        click.echo("=" * 70)
+        
+        # Display confidence scores
+        click.echo("\n🎯 Confidence Scores:")
         for component, score in confidence_scores.items():
             json_logger.log_confidence_score(component, score)
+            emoji = "✅" if score >= 0.8 else "⚠️" if score >= 0.6 else "❌"
+            click.echo(f"  {emoji} {component}: {score:.2%}")
         
-        # Save artifacts (JSON only)
+        # Display status
+        click.echo(f"\n📈 Status: {status.upper()}")
+        click.echo(f"⏱️  Duration: {duration:.2f} seconds")
+        
+        if needs_review:
+            click.echo("⚠️  Human review recommended")
+        
+        if errors:
+            click.echo(f"\n❌ Errors ({len(errors)}):")
+            for error in errors[:5]:  # Show first 5 errors
+                click.echo(f"  - {error}")
+        
+        # Save artifacts
+        click.echo("\n💾 Saving artifacts...")
         if artifacts:
             json_logger.info("saving_artifacts", output_path=str(output_path), artifact_count=len(artifacts))
             
@@ -97,14 +179,30 @@ async def _run_workflow(document_path: str, output_path: Path, project_id: Optio
                     
                     with open(filepath, 'w', encoding='utf-8') as f:
                         f.write(content)
-                    
-                    json_logger.info("artifact_saved", filename=filename, size_bytes=len(content))
+
+                    size_kb = len(content) / 1024
+                    click.echo(f"  ✓ {filename} ({size_kb:.1f} KB)")
+                    json_logger.info("artifact_saved", filename=filename,
+                                     size_bytes=len(content))
         
         # Save processing log
         log_file = output_path / "processing_log.jsonl"
         with open(log_file, 'w', encoding='utf-8') as f:
             for log_entry in json_logger.get_logs():
                 f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+        click.echo(f"  ✓ processing_log.jsonl")
+
+        # Save LLM responses for inspection
+        try:
+            llm_helper = get_llm_helper()
+            if llm_helper.llm_responses:
+                save_llm_responses(output_path, llm_helper)
+                click.echo(f"  ✓ llm_responses.json "
+                           f"({len(llm_helper.llm_responses)} interactions)")
+                click.echo(f"\n💡 Tip: Check llm_responses.json to see "
+                           f"LLM's thinking process")
+        except Exception as e:
+            click.echo(f"  ⚠️  Could not save LLM responses: {e}", err=True)
         
         # Log completion
         json_logger.info(
@@ -116,7 +214,13 @@ async def _run_workflow(document_path: str, output_path: Path, project_id: Optio
             duration_seconds=round(duration, 2)
         )
         
+        click.echo("\n" + "=" * 70)
+        click.echo("✨ Processing complete!")
+        click.echo(f"📁 Output saved to: {output_path}")
+        click.echo("=" * 70)
+        
     except Exception as e:
+        click.echo(f"\n❌ Error: {str(e)}", err=True)
         json_logger.error("workflow_failed", error=str(e), project_id=project_id)
         sys.exit(1)
 
@@ -156,12 +260,15 @@ def validate_document(input_file: str):
     max_size = config.max_document_size_mb * 1024 * 1024
     
     if file_size > max_size:
-        click.echo(f"❌ File too large: {file_size / (1024*1024):.1f}MB (max: {config.max_document_size_mb}MB)")
+        click.echo(f"❌ File too large: "
+                   f"{file_size / (1024*1024):.1f}MB "
+                   f"(max: {config.max_document_size_mb}MB)")
         return
     
     # Check file type
     if file_path.suffix.lower() not in ['.pdf', '.txt', '.md']:
-        click.echo(f"⚠️  File type {file_path.suffix} may not be fully supported")
+        click.echo(f"⚠️  File type {file_path.suffix} "
+                   f"may not be fully supported")
     
     click.echo(f"✓ File size: {file_size / (1024*1024):.1f}MB")
     click.echo(f"✓ File type: {file_path.suffix}")
