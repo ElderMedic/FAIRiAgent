@@ -35,7 +35,8 @@ class CriticAgent(BaseAgent):
     def __init__(self):
         super().__init__("Critic")
         self.llm_helper = get_llm_helper()
-        self.max_retries_per_step = 2  # Maximum retries before escalation
+        # Get retry limit from config (can be overridden by env vars)
+        self.max_retries_per_step = config.max_step_retries
         
         logger.info("✅ Critic Agent initialized with LLM (required mode - no fallback)")
     
@@ -147,7 +148,8 @@ class CriticAgent(BaseAgent):
         
         # Ensure required fields
         if "decision" not in result:
-            result["decision"] = "ACCEPT" if result.get("overall_score", 0) >= 0.75 else "RETRY"
+            threshold = config.critic_accept_threshold_document_parser
+            result["decision"] = "ACCEPT" if result.get("overall_score", 0) >= threshold else "RETRY"
         if "confidence" not in result:
             result["confidence"] = result.get("overall_score", 0.5)
         if "feedback" not in result:
@@ -181,15 +183,15 @@ class CriticAgent(BaseAgent):
         knowledge_summary = {
             "total_terms": len(retrieved_knowledge),
             "packages": list(packages_found),
-            "sample_terms": [
+            "all_terms": [
                 {"term": item.get("term"), "package": item.get("metadata", {}).get("package")}
-                for item in retrieved_knowledge[:10]
+                for item in retrieved_knowledge  # ALL terms - no sampling
             ]
         }
         
-        # Prepare content with complete doc_info + retrieval results
+        # Prepare content with complete doc_info + retrieval results (no truncation)
         evaluation_content = f"""**Complete Document Info:**
-{json.dumps(doc_info, indent=2, ensure_ascii=False)[:2000]}
+{json.dumps(doc_info, indent=2, ensure_ascii=False)}  # Complete info - no truncation
 
 **Retrieved FAIR-DS Knowledge:**
 {json.dumps(knowledge_summary, indent=2)}
@@ -210,7 +212,8 @@ class CriticAgent(BaseAgent):
         
         # Ensure required fields
         if "decision" not in result:
-            result["decision"] = "ACCEPT" if result.get("overall_score", 0) >= 0.7 else "RETRY"
+            threshold = config.critic_accept_threshold_knowledge_retriever
+            result["decision"] = "ACCEPT" if result.get("overall_score", 0) >= threshold else "RETRY"
         if "confidence" not in result:
             result["confidence"] = result.get("overall_score", 0.5)
         
@@ -240,15 +243,15 @@ class CriticAgent(BaseAgent):
                 "suggestions": ["Generate metadata fields based on document info and FAIR-DS knowledge"]
             }
         
-        # Prepare summary for LLM
+        # Prepare summary for LLM (ALL fields - no sampling)
         fields_summary = []
         total_confidence = 0
         fields_with_evidence = 0
         
-        for field in metadata_fields[:15]:  # Sample first 15 for context
+        for field in metadata_fields:  # ALL fields - no sampling
             fields_summary.append({
                 "name": field.get("field_name"),
-                "value": str(field.get("value", ""))[:100],
+                "value": str(field.get("value", "")),  # Full value - no truncation
                 "has_evidence": bool(field.get("evidence")),
                 "confidence": field.get("confidence", 0)
             })
@@ -259,9 +262,9 @@ class CriticAgent(BaseAgent):
         avg_confidence = total_confidence / len(metadata_fields) if metadata_fields else 0
         evidence_coverage = fields_with_evidence / len(metadata_fields) if metadata_fields else 0
         
-        # Prepare content with complete doc_info + generated metadata
+        # Prepare content with complete doc_info + generated metadata (no truncation)
         evaluation_content = f"""**Complete Document Info:**
-{json.dumps(doc_info, indent=2, ensure_ascii=False)[:2000]}
+{json.dumps(doc_info, indent=2, ensure_ascii=False)}  # Complete info - no truncation
 
 **Generated Metadata:**
 - Total fields: {len(metadata_fields)}
@@ -288,7 +291,8 @@ class CriticAgent(BaseAgent):
         
         # Ensure required fields
         if "decision" not in result:
-            result["decision"] = "ACCEPT" if result.get("overall_score", 0) >= 0.75 else "RETRY"
+            threshold = config.critic_accept_threshold_json_generator
+            result["decision"] = "ACCEPT" if result.get("overall_score", 0) >= threshold else "RETRY"
         if "confidence" not in result:
             result["confidence"] = result.get("overall_score", 0.5)
         
@@ -311,11 +315,11 @@ class CriticAgent(BaseAgent):
         validation_warnings = validation_results.get("warnings", [])
         
         if validation_errors:
-            issues.extend([f"Validation error: {err}" for err in validation_errors[:3]])
+            issues.extend([f"Validation error: {err}" for err in validation_errors])  # ALL errors - no truncation
             suggestions.append("Fix validation errors before finalizing metadata")
         
         if validation_warnings:
-            issues.extend([f"Validation warning: {warn}" for warn in validation_warnings[:2]])
+            issues.extend([f"Validation warning: {warn}" for warn in validation_warnings])  # ALL warnings - no truncation
         
         # Calculate confidence
         error_count = len(validation_errors)

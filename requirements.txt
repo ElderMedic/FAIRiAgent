@@ -28,3 +28,7 @@ requests>=2.31.0
 
 # Environment variables
 python-dotenv>=1.0.0
+
+# LangGraph CLI (optional, for langgraph dev command)
+# Install with: pip install -U "langgraph-cli[inmem]"
+# langgraph-cli[inmem]>=0.0.1

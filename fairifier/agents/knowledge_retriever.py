@@ -1,7 +1,7 @@
 """Knowledge retrieval agent using FAIR Data Station API."""
 
 import json
-from pathlib import Path
+import logging
 from typing import Dict, Any, List, Optional
 from langsmith import traceable
 
@@ -12,6 +12,8 @@ from ..services.fair_data_station import FAIRDataStationClient
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.llm_helper import get_llm_helper
 from . import knowledge_retriever_llm_methods as llm_methods
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeRetrieverAgent(BaseAgent):
@@ -92,9 +94,9 @@ class KnowledgeRetrieverAgent(BaseAgent):
             self.log_execution(state, f"   Total unique packages: {len(all_packages)}")
             self.log_execution(state, f"   Total terms: {len(terms)}")
             
-            # Show top packages
-            self.log_execution(state, "📦 Top packages by field count:")
-            for pkg in all_packages[:10]:
+            # Show all packages (no truncation)
+            self.log_execution(state, "📦 All packages by field count:")
+            for pkg in all_packages:  # ALL packages - no truncation
                 self.log_execution(
                     state,
                     f"   • {pkg['name']}: {pkg['field_count']} fields "
@@ -108,7 +110,7 @@ class KnowledgeRetrieverAgent(BaseAgent):
             
             if critic_feedback:
                 self.log_execution(state, "🔄 Retrying with Critic feedback...")
-                for suggestion in critic_feedback.get("suggestions", [])[:2]:
+                for suggestion in critic_feedback.get("suggestions", []):  # ALL suggestions - no truncation
                     self.log_execution(state, f"   💡 {suggestion}")
             
             self.log_execution(state, "🤖 Phase 1: LLM selecting relevant metadata packages...")
@@ -127,37 +129,141 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 selected_package_names = [pkg["name"] for pkg in all_packages[:3]]
                 self.log_execution(state, f"   Using default packages: {selected_package_names}")
             
-            # Phase 2: Get all fields from selected packages (auto-deduplicated)
-            self.log_execution(state, "📦 Phase 2: Collecting fields from selected packages...")
+            # Phase 2: Get all fields from selected packages, grouped by ISA sheet
+            self.log_execution(state, "📦 Phase 2: Collecting fields from selected packages (by ISA sheet)...")
             
-            all_fields_from_packages = FAIRDSAPIParser.get_fields_by_package(
+            # Get fields grouped by ISA sheet, with mandatory/optional separation
+            fields_by_isa_sheet = FAIRDSAPIParser.get_fields_by_package_and_isa_sheet(
                 packages_by_sheet, selected_package_names
             )
             
-            # Separate mandatory and optional
-            mandatory_fields = [f for f in all_fields_from_packages if f.get("requirement") == "MANDATORY"]
-            optional_fields = [f for f in all_fields_from_packages if f.get("requirement") == "OPTIONAL"]
+            # Log statistics for each ISA sheet
+            isa_sheets = ["investigation", "study", "assay", "sample", "observationunit"]
+            for sheet in isa_sheets:
+                mandatory_count = len(fields_by_isa_sheet[sheet]["mandatory"])
+                optional_count = len(fields_by_isa_sheet[sheet]["optional"])
+                if mandatory_count > 0 or optional_count > 0:
+                    self.log_execution(
+                        state,
+                        f"   {sheet}: {mandatory_count} mandatory, {optional_count} optional"
+                    )
             
-            self.log_execution(
-                state,
-                f"   Collected: {len(all_fields_from_packages)} unique fields "
-                f"({len(mandatory_fields)} mandatory, {len(optional_fields)} optional)"
-            )
+            # Check if critical ISA levels (investigation, study) have mandatory fields
+            # If not, automatically add "default" package to ensure completeness
+            critical_sheets = ["investigation", "study"]
+            missing_critical_fields = []
+            for sheet in critical_sheets:
+                if len(fields_by_isa_sheet[sheet]["mandatory"]) == 0:
+                    missing_critical_fields.append(sheet)
             
-            # Phase 3: LLM selects relevant optional fields
-            self.log_execution(state, "🤖 Phase 3: LLM selecting relevant optional fields...")
+            # Check if "default" package exists and has fields for missing ISA levels
+            if missing_critical_fields:
+                # Check if "default" package (case-insensitive) exists in available packages
+                default_package_name = None
+                for pkg in all_packages:
+                    if pkg["name"].lower() == "default":
+                        default_package_name = pkg["name"]  # Use actual name (may be "default" or "Default")
+                        break
+                
+                # Check if default package is already selected (case-insensitive)
+                default_already_selected = any(
+                    pkg_name.lower() == "default" for pkg_name in selected_package_names
+                )
+                
+                if default_package_name and not default_already_selected:
+                    # Check if default package has fields for missing ISA levels
+                    default_fields = FAIRDSAPIParser.get_fields_by_package_and_isa_sheet(
+                        packages_by_sheet, [default_package_name]
+                    )
+                    
+                    has_missing_fields = any(
+                        len(default_fields[sheet]["mandatory"]) > 0 
+                        for sheet in missing_critical_fields
+                    )
+                    
+                    if has_missing_fields:
+                        selected_package_names.append(default_package_name)
+                        self.log_execution(
+                            state,
+                            f"⚠️  Auto-adding '{default_package_name}' package to cover "
+                            f"missing ISA levels: {missing_critical_fields}"
+                        )
+                        
+                        # Re-fetch fields with default package included
+                        fields_by_isa_sheet = FAIRDSAPIParser.get_fields_by_package_and_isa_sheet(
+                            packages_by_sheet, selected_package_names
+                        )
+                        
+                        # Log updated statistics
+                        self.log_execution(
+                            state, 
+                            f"📦 Updated field statistics after adding '{default_package_name}' package:"
+                        )
+                        for sheet in isa_sheets:
+                            mandatory_count = len(fields_by_isa_sheet[sheet]["mandatory"])
+                            optional_count = len(fields_by_isa_sheet[sheet]["optional"])
+                            if mandatory_count > 0 or optional_count > 0:
+                                self.log_execution(
+                                    state,
+                                    f"   {sheet}: {mandatory_count} mandatory, "
+                                    f"{optional_count} optional"
+                                )
             
-            selected_optional = await llm_methods.llm_select_optional_fields(
-                self.llm_helper, doc_info, mandatory_fields, optional_fields, critic_feedback
-            )
+            # Phase 3: LLM selects relevant optional fields for each ISA sheet
+            self.log_execution(state, "🤖 Phase 3: LLM selecting relevant optional fields (by ISA sheet)...")
             
-            # Combine mandatory (all) + selected optional
-            final_selected_fields = mandatory_fields + selected_optional
+            # Collect all mandatory fields (from all ISA sheets)
+            all_mandatory_fields = []
+            for sheet in isa_sheets:
+                all_mandatory_fields.extend(fields_by_isa_sheet[sheet]["mandatory"])
+            
+            # Select optional fields for each ISA sheet separately
+            final_selected_fields = list(all_mandatory_fields)  # Start with all mandatory
+            
+            for sheet in isa_sheets:
+                optional_fields_for_sheet = fields_by_isa_sheet[sheet]["optional"]
+                if optional_fields_for_sheet:
+                    self.log_execution(
+                        state,
+                        f"   Selecting optional fields for {sheet} ({len(optional_fields_for_sheet)} available)..."
+                    )
+                    
+                    # Select optional fields for this ISA sheet
+                    selected_optional_for_sheet = await llm_methods.llm_select_optional_fields_by_isa_sheet(
+                        self.llm_helper,
+                        doc_info,
+                        sheet,
+                        fields_by_isa_sheet[sheet]["mandatory"],
+                        optional_fields_for_sheet,
+                        critic_feedback
+                    )
+                    
+                    final_selected_fields.extend(selected_optional_for_sheet)
+                    
+                    self.log_execution(
+                        state,
+                        f"   ✅ {sheet}: selected {len(selected_optional_for_sheet)} optional fields"
+                    )
+            
+            # Log final statistics
+            total_mandatory = len(all_mandatory_fields)
+            total_optional = len(final_selected_fields) - total_mandatory
+            
+            # Count ISA sheets that have fields
+            sheets_with_fields = [
+                s for s in isa_sheets
+                if fields_by_isa_sheet[s]["mandatory"]
+                or any(
+                    f in final_selected_fields
+                    for f in fields_by_isa_sheet[s]["optional"]
+                )
+            ]
             
             self.log_execution(
                 state,
                 f"✅ Final selection: {len(final_selected_fields)} fields "
-                f"({len(mandatory_fields)} mandatory + {len(selected_optional)} optional)"
+                f"({total_mandatory} mandatory + {total_optional} optional) "
+                f"across {len(sheets_with_fields)} ISA sheets"
             )
             
             # Convert to KnowledgeItem objects
@@ -418,7 +524,7 @@ Return ONLY JSON."""
 
             try:
                 from langchain_core.messages import HumanMessage
-                response = await self.llm_helper.llm.ainvoke([HumanMessage(content=prompt)])
+                response = await self.llm_helper._call_llm([HumanMessage(content=prompt)])
                 result = self.llm_helper._parse_json_response(response.content)
                 selected[level] = result.get("selected_packages", [pkg["name"] for pkg in pkg_list])
             except:
@@ -480,7 +586,7 @@ Return ONLY JSON."""
 
             try:
                 from langchain_core.messages import HumanMessage
-                response = await self.llm_helper.llm.ainvoke([HumanMessage(content=prompt)])
+                response = await self.llm_helper._call_llm([HumanMessage(content=prompt)])
                 result = self.llm_helper._parse_json_response(response.content)
                 selected_term_names = result.get("selected_terms", [])
                 

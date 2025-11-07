@@ -1,0 +1,9 @@
+{
+  "graphs": {
+    "fairifier": "./fairifier/graph/__dev__.py:graph"
+  },
+  "env": ".env",
+  "dependencies": [
+    "."
+  ]
+}

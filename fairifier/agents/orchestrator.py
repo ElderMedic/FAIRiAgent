@@ -37,7 +37,9 @@ class OrchestratorAgent(BaseAgent):
         super().__init__("Orchestrator")
         self.critic = CriticAgent()
         self.registered_agents = {}
-        self.max_global_retries = 5  # Maximum total retries across all steps
+        # Get retry limits from config (can be overridden by env vars)
+        self.max_global_retries = config.max_global_retries
+        self.max_step_retries = config.max_step_retries
         self.global_retry_count = 0
         
         # LLM is required for intelligent planning (no fallback)
@@ -100,7 +102,7 @@ class OrchestratorAgent(BaseAgent):
         self.log_execution(state, f"   Document type: {execution_plan.get('document_type', 'N/A')}")
         self.log_execution(state, f"   Research domain: {execution_plan.get('research_domain', 'N/A')}")
         self.log_execution(state, f"   Strategy: {execution_plan.get('strategy', 'standard')}")
-        self.log_execution(state, f"   Reasoning: {execution_plan.get('reasoning', 'N/A')[:200]}")
+        self.log_execution(state, f"   Reasoning: {execution_plan.get('reasoning', 'N/A')}")  # Full reasoning - no truncation
         
         state["execution_plan"] = execution_plan
         state["reasoning_chain"].append(f"Plan based on parsing: {execution_plan.get('reasoning', '')}")
@@ -165,7 +167,8 @@ class OrchestratorAgent(BaseAgent):
             state["context"] = {}
         state["context"]["retry_count"] = 0
         
-        max_step_retries = 2
+        # Use configurable max_step_retries
+        max_step_retries = self.max_step_retries
         attempt = 0
         
         while attempt <= max_step_retries:
@@ -197,9 +200,13 @@ class OrchestratorAgent(BaseAgent):
                         f"✅ {step_name} has produced output despite retry limit. Accepting with low confidence.",
                         "warning"
                     )
-                    # Get last critic evaluation if available
-                    last_eval = execution_record.get("critic_evaluation", {})
-                    confidence = last_eval.get("confidence", 0.3)
+                    # Get last critic evaluation if available from history
+                    execution_history = state.get("execution_history", [])
+                    if execution_history:
+                        last_eval = execution_history[-1].get("critic_evaluation", {})
+                        confidence = last_eval.get("confidence", 0.3)
+                    else:
+                        confidence = 0.3
                     self.update_confidence(state, step_name.lower(), confidence)
                     return True
                 else:
@@ -252,11 +259,15 @@ class OrchestratorAgent(BaseAgent):
             self.log_execution(state, f"🔍 Calling Critic to evaluate {step_name} output...")
             state = await self.critic.execute(state)
             
-            # Get critic's decision
-            critic_evaluation = execution_record["critic_evaluation"]
-            if critic_evaluation is None:
-                # Retrieve from history
-                critic_evaluation = state["execution_history"][-1].get("critic_evaluation", {})
+            # Get critic's decision - ALWAYS retrieve from history after Critic execution
+            # Critic updates state["execution_history"][-1], so we must get it from there
+            execution_history = state.get("execution_history", [])
+            if execution_history:
+                last_execution = execution_history[-1]
+                critic_evaluation = last_execution.get("critic_evaluation", {})
+            else:
+                # Fallback if history is empty (shouldn't happen)
+                critic_evaluation = execution_record.get("critic_evaluation", {})
             
             decision = critic_evaluation.get("decision", "ACCEPT")
             confidence = critic_evaluation.get("confidence", 0.0)
@@ -267,12 +278,13 @@ class OrchestratorAgent(BaseAgent):
             self.log_execution(
                 state,
                 f"📊 Critic Decision: {decision} (confidence: {confidence:.2f})\n"
-                f"   Feedback: {feedback[:150] if feedback else 'N/A'}"
+                f"   Feedback: {feedback if feedback else 'N/A'}\n"  # Full feedback - no truncation
+                f"   Current attempt: {attempt}/{max_step_retries}"
             )
             
             if issues:
                 self.log_execution(state, f"   Issues identified: {len(issues)}")
-                for i, issue in enumerate(issues[:3], 1):
+                for i, issue in enumerate(issues, 1):  # ALL issues - no truncation
                     self.log_execution(state, f"      {i}. {issue}")
             
             # Decide next action based on critic's decision
@@ -290,6 +302,12 @@ class OrchestratorAgent(BaseAgent):
                 return True
                 
             elif decision == "RETRY":
+                self.log_execution(
+                    state,
+                    f"🔄 RETRY decision received for {step_name} (attempt {attempt}/{max_step_retries})",
+                    "warning"
+                )
+                
                 if attempt < max_step_retries:
                     # Prepare feedback for retry
                     self.log_execution(
@@ -298,8 +316,13 @@ class OrchestratorAgent(BaseAgent):
                         "warning"
                     )
                     
-                    # Store retry reason
-                    execution_record["retry_reason"] = str(feedback) if feedback else "Retry requested by Critic"
+                    # Update retry count in context
+                    state["context"]["retry_count"] = attempt
+                    
+                    # Store retry reason in the execution record (which is in history)
+                    if execution_history:
+                        last_execution = execution_history[-1]
+                        last_execution["retry_reason"] = str(feedback) if feedback else "Retry requested by Critic"
                     
                     # Prepare state with critic feedback
                     state = await self.critic.provide_feedback_to_agent(
@@ -315,7 +338,12 @@ class OrchestratorAgent(BaseAgent):
                         for i, suggestion in enumerate(suggestions, 1):
                             self.log_execution(state, f"      {i}. {suggestion}")
                     
-                    # Continue to next retry attempt
+                    # Continue to next retry attempt - this will loop back to execute the agent again
+                    self.log_execution(
+                        state,
+                        f"🔄 Continuing to retry loop (will execute {step_name} again)...",
+                        "warning"
+                    )
                     continue
                 else:
                     # Max retries reached
@@ -368,7 +396,7 @@ class OrchestratorAgent(BaseAgent):
         planning_prompt = f"""You are an intelligent workflow orchestrator for FAIR metadata generation.
 
 **Extracted Document Information (complete):**
-{json.dumps(doc_info, indent=2, ensure_ascii=False)[:3000]}
+{json.dumps(doc_info, indent=2, ensure_ascii=False)}  # Complete info - no truncation
 
 **Your task:** Analyze this document and plan the optimal execution strategy.
 
@@ -413,7 +441,7 @@ Return JSON as in following example format:
         ]
         
         # LLM planning is required - no fallback
-        response = await self.llm_helper.llm.ainvoke(messages)
+        response = await self.llm_helper._call_llm(messages)
         content = response.content
         
         # Parse JSON response

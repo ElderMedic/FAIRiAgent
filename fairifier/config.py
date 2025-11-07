@@ -73,14 +73,27 @@ class FAIRifierConfig:
     embedding_model: str = "nomic-embed-text"
     llm_temperature: float = 0.5
     llm_max_tokens: int = 100000
+    llm_enable_thinking: bool = False  # Enable thinking mode (requires streaming for some models)
     
     # Processing limits
     max_document_size_mb: int = 50
     max_processing_time_minutes: int = 10
     
+    # Retry configuration
+    max_step_retries: int = 2  # Maximum retries per step before escalation
+    max_global_retries: int = 5  # Maximum total retries across all steps
+    
     # Confidence thresholds
     min_confidence_threshold: float = 0.75
     auto_approve_threshold: float = 0.90
+    
+    # Critic decision thresholds
+    critic_accept_threshold_document_parser: float = 0.75  # ACCEPT threshold for DocumentParser
+    critic_accept_threshold_knowledge_retriever: float = 0.7  # ACCEPT threshold for KnowledgeRetriever
+    critic_accept_threshold_json_generator: float = 0.75  # ACCEPT threshold for JSONGenerator
+    critic_accept_threshold_general: float = 0.7  # General ACCEPT threshold for LLM evaluation
+    critic_retry_min_threshold: float = 0.4  # Minimum score for RETRY (below this is ESCALATE)
+    critic_retry_max_threshold: float = 0.69  # Maximum score for RETRY (above this is ACCEPT)
     
     # FAIR standards
     required_fields_coverage: float = 0.8  # Minimum required field coverage
@@ -170,9 +183,51 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
 
     if os.getenv("LLM_MAX_TOKENS"):
         config_instance.llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS"))
+    
+    # Thinking mode configuration
+    if os.getenv("LLM_ENABLE_THINKING"):
+        config_instance.llm_enable_thinking = os.getenv("LLM_ENABLE_THINKING").lower() in ("true", "1", "yes")
 
     if os.getenv("FAIR_DS_API_URL"):
         config_instance.fair_ds_api_url = os.getenv("FAIR_DS_API_URL")
+    
+    # Retry configuration
+    if os.getenv("FAIRIFIER_MAX_STEP_RETRIES"):
+        config_instance.max_step_retries = int(os.getenv("FAIRIFIER_MAX_STEP_RETRIES"))
+    
+    if os.getenv("FAIRIFIER_MAX_GLOBAL_RETRIES"):
+        config_instance.max_global_retries = int(os.getenv("FAIRIFIER_MAX_GLOBAL_RETRIES"))
+    
+    # Critic decision thresholds
+    if os.getenv("FAIRIFIER_CRITIC_ACCEPT_THRESHOLD_DOCUMENT_PARSER"):
+        config_instance.critic_accept_threshold_document_parser = float(
+            os.getenv("FAIRIFIER_CRITIC_ACCEPT_THRESHOLD_DOCUMENT_PARSER")
+        )
+    
+    if os.getenv("FAIRIFIER_CRITIC_ACCEPT_THRESHOLD_KNOWLEDGE_RETRIEVER"):
+        config_instance.critic_accept_threshold_knowledge_retriever = float(
+            os.getenv("FAIRIFIER_CRITIC_ACCEPT_THRESHOLD_KNOWLEDGE_RETRIEVER")
+        )
+    
+    if os.getenv("FAIRIFIER_CRITIC_ACCEPT_THRESHOLD_JSON_GENERATOR"):
+        config_instance.critic_accept_threshold_json_generator = float(
+            os.getenv("FAIRIFIER_CRITIC_ACCEPT_THRESHOLD_JSON_GENERATOR")
+        )
+    
+    if os.getenv("FAIRIFIER_CRITIC_ACCEPT_THRESHOLD_GENERAL"):
+        config_instance.critic_accept_threshold_general = float(
+            os.getenv("FAIRIFIER_CRITIC_ACCEPT_THRESHOLD_GENERAL")
+        )
+    
+    if os.getenv("FAIRIFIER_CRITIC_RETRY_MIN_THRESHOLD"):
+        config_instance.critic_retry_min_threshold = float(
+            os.getenv("FAIRIFIER_CRITIC_RETRY_MIN_THRESHOLD")
+        )
+    
+    if os.getenv("FAIRIFIER_CRITIC_RETRY_MAX_THRESHOLD"):
+        config_instance.critic_retry_max_threshold = float(
+            os.getenv("FAIRIFIER_CRITIC_RETRY_MAX_THRESHOLD")
+        )
 
 
 # Global config instance

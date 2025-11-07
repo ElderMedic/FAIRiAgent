@@ -42,6 +42,67 @@ class LLMHelper:
         self.model = config.llm_model
         self.llm = self._initialize_llm()
         self.llm_responses = []  # Store all LLM interactions for debugging
+    
+    async def _call_llm(self, messages):
+        """Helper method to call LLM with proper parameters.
+        
+        Supports both thinking and non-thinking modes.
+        For Qwen models, enable_thinking is passed via extra_body as per official docs.
+        """
+        enable_thinking = config.llm_enable_thinking
+        
+        # For Qwen provider, use extra_body as per official documentation
+        if self.provider == "qwen":
+            if enable_thinking:
+                # Thinking mode: use streaming for Qwen3 models
+                # Qwen3 models require streaming when thinking is enabled
+                try:
+                    # Use bind with extra_body for Qwen (as per official docs)
+                    llm_with_params = self.llm.bind(
+                        extra_body={"enable_thinking": True},
+                        stream=True
+                    )
+                    # Collect streaming response
+                    content_parts = []
+                    async for chunk in llm_with_params.astream(messages):
+                        if hasattr(chunk, 'content') and chunk.content:
+                            content_parts.append(chunk.content)
+                    
+                    # Create a response-like object
+                    full_content = "".join(content_parts)
+                    return AIMessage(content=full_content)
+                except Exception as e:
+                    logger.warning(f"Streaming with thinking failed: {e}, trying non-streaming")
+                    # If streaming doesn't work, try non-streaming with thinking
+                    # Note: Qwen3 open-source models require enable_thinking=False for non-streaming
+                    try:
+                        llm_with_params = self.llm.bind(
+                            extra_body={"enable_thinking": True}
+                        )
+                        return await llm_with_params.ainvoke(messages)
+                    except Exception as e2:
+                        logger.warning(f"Non-streaming with thinking failed: {e2}, falling back to regular call")
+                        # Fall back to regular call without thinking
+                        return await self.llm.ainvoke(messages)
+            else:
+                # Non-thinking mode: ensure enable_thinking=False
+                # Qwen3 open-source models require this for non-streaming calls
+                try:
+                    llm_with_params = self.llm.bind(
+                        extra_body={"enable_thinking": False}
+                    )
+                    return await llm_with_params.ainvoke(messages)
+                except Exception as e:
+                    logger.warning(f"Failed to set enable_thinking=False via extra_body: {e}, using regular call")
+                    # Fall back to regular call
+                    return await self.llm.ainvoke(messages)
+        elif self.provider == "openai":
+            # For OpenAI provider, no special handling needed
+            # enable_thinking is not a standard OpenAI parameter
+            return await self.llm.ainvoke(messages)
+        else:
+            # For other providers (ollama, anthropic), no special handling needed
+            return await self.llm.ainvoke(messages)
         
     def _initialize_llm(self):
         """Initialize LLM based on provider configuration.
@@ -68,6 +129,8 @@ class LLMHelper:
                 raise ValueError("LLM_API_KEY environment variable is required for OpenAI provider")
             base_url = config.llm_base_url if config.llm_base_url != "http://localhost:11434" else None
             logger.info(f"Initializing OpenAI LLM: {self.model}" + (f" at {base_url}" if base_url else ""))
+            # Initialize ChatOpenAI
+            # For OpenAI, enable_thinking is not a standard parameter
             return ChatOpenAI(
                 model=self.model,
                 api_key=config.llm_api_key,
@@ -82,6 +145,9 @@ class LLMHelper:
             # Qwen uses OpenAI-compatible API
             base_url = config.llm_base_url
             logger.info(f"Initializing Qwen LLM: {self.model} at {base_url}")
+            # Initialize ChatOpenAI for Qwen
+            # Note: enable_thinking is passed via extra_body in _call_llm, not here
+            # This is because extra_body needs to be set per-call, not at initialization
             return ChatOpenAI(
                 model=self.model,
                 api_key=config.llm_api_key,
@@ -179,7 +245,7 @@ Extract all relevant information and return as JSON with clear, descriptive fiel
         ]
         
         try:
-            response = await self.llm.ainvoke(messages)
+            response = await self._call_llm(messages)
             content = response.content
             
             # Store interaction for debugging
@@ -203,7 +269,93 @@ Extract all relevant information and return as JSON with clear, descriptive fiel
             
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM response as JSON: {e}")
-            logger.error(f"Response content: {content[:500]}")
+            logger.error(f"Error position: {getattr(e, 'pos', 'unknown')}")
+            logger.error(f"Response content (first 1000 chars): {content[:1000]}")
+            
+            # Try to extract partial JSON or fix common issues
+            try:
+                # Try to find JSON object start
+                json_start = content.find('{')
+                if json_start >= 0:
+                    error_pos = getattr(e, 'pos', len(content))
+                    
+                    # Strategy 1: Try to extract complete JSON up to error
+                    # Find the last complete key-value pair before error
+                    partial_content = content[json_start:error_pos]
+                    
+                    # Try to find last complete property (ends with , or })
+                    # Look for pattern: "key": value followed by comma or closing brace
+                    import re
+                    # Find all complete properties
+                    property_pattern = r'"([^"]+)":\s*([^,}]+?)(?=,\s*"|})'
+                    matches = list(re.finditer(property_pattern, partial_content))
+                    
+                    if matches:
+                        # Get the last complete property
+                        last_match = matches[-1]
+                        # Extract up to and including this property
+                        end_pos = last_match.end()
+                        # Find the comma or closing brace after this property
+                        remaining = partial_content[end_pos:]
+                        if remaining.startswith(','):
+                            end_pos += 1
+                        elif remaining.startswith('}'):
+                            end_pos += 1
+                        
+                        # Extract the partial JSON
+                        partial_json = partial_content[:end_pos]
+                        
+                        # Close any open braces
+                        open_braces = partial_json.count('{') - partial_json.count('}')
+                        if open_braces > 0:
+                            partial_json += '}' * open_braces
+                        elif open_braces < 0:
+                            # Too many closing braces, remove them
+                            partial_json = partial_json.rstrip('}')
+                            open_braces = partial_json.count('{') - partial_json.count('}')
+                            partial_json += '}' * open_braces
+                        
+                        # Try parsing the fixed JSON
+                        try:
+                            fixed_doc_info = json.loads(partial_json)
+                            logger.warning(
+                                f"Successfully extracted partial JSON with "
+                                f"{len(fixed_doc_info)} fields from truncated response"
+                            )
+                            return fixed_doc_info
+                        except json.JSONDecodeError:
+                            logger.warning("Partial JSON extraction still failed")
+                    
+                    # Strategy 2: Try to extract JSON from first complete object
+                    # Find the first complete JSON object
+                    brace_count = 0
+                    complete_end = -1
+                    for i, char in enumerate(partial_content):
+                        if char == '{':
+                            brace_count += 1
+                        elif char == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                complete_end = i + 1
+                                break
+                    
+                    if complete_end > 0:
+                        complete_json = partial_content[:complete_end]
+                        try:
+                            fixed_doc_info = json.loads(complete_json)
+                            logger.warning(
+                                f"Successfully extracted complete JSON object with "
+                                f"{len(fixed_doc_info)} fields"
+                            )
+                            return fixed_doc_info
+                        except json.JSONDecodeError:
+                            logger.warning("Complete JSON object extraction failed")
+                            
+            except Exception as fix_error:
+                logger.warning(f"Failed to fix JSON: {fix_error}")
+            
+            # If all fixes fail, return minimal structure but log the full response
+            logger.error(f"Full response content (truncated to 2000 chars): {content[:2000]}")
             # Return minimal structure
             return {
                 "title": "",
@@ -264,7 +416,7 @@ Return JSON with value, evidence, and confidence."""
         ]
         
         try:
-            response = await self.llm.ainvoke(messages)
+            response = await self._call_llm(messages)
             content = response.content
             
             # Store interaction
@@ -327,38 +479,66 @@ Return JSON with value, evidence, and confidence."""
             "type": document_info.get("document_type", "unknown")
         }
         
-        # Prepare available fields summary
-        fields_summary = []
-        for field in available_fields[:50]:  # Limit for context
-            fields_summary.append({
-                "name": field.get("name", ""),
-                "description": field.get("description", "")[:100],
-                "package": field.get("metadata", {}).get("package", "")
-            })
+        # Group fields by ISA sheet to ensure balanced selection across ISA levels
+        isa_sheets = ["investigation", "study", "assay", "sample", "observationunit"]
+        fields_by_isa = {sheet: [] for sheet in isa_sheets}
+        
+        for field in available_fields:
+            isa_sheet = field.get("isa_sheet", "study")
+            if isa_sheet in fields_by_isa:
+                fields_by_isa[isa_sheet].append(field)
+            else:
+                # Fallback to study if unknown
+                fields_by_isa["study"].append(field)
+        
+        # Prepare available fields summary, grouped by ISA sheet
+        fields_summary_by_isa = {}
+        for sheet in isa_sheets:
+            fields_summary_by_isa[sheet] = []
+            # Show ALL fields for each ISA sheet (no truncation)
+            for field in fields_by_isa[sheet]:
+                fields_summary_by_isa[sheet].append({
+                    "name": field.get("name", ""),
+                    "description": field.get("description", "")[:200],  # Increased limit
+                    "package": field.get("metadata", {}).get("package", ""),
+                    "required": field.get("required", False)
+                })
+        
+        # Count fields per ISA sheet
+        field_counts = {sheet: len(fields_by_isa[sheet]) for sheet in isa_sheets}
         
         system_prompt = """You are an expert at selecting appropriate metadata fields for scientific research data.
 
-**Your task:** Analyze the document and intelligently select the MOST RELEVANT metadata fields from the available options.
+**Your task:** Analyze the document and intelligently select the MOST RELEVANT metadata fields from the available options, ensuring balanced coverage across ISA hierarchy levels.
+
+**ISA Hierarchy:**
+- **Investigation**: Project/investigation-level metadata (e.g., investigation title, description, investigators)
+- **Study**: Study-level metadata (e.g., study title, description, experimental design)
+- **Assay**: Assay-level metadata (e.g., assay type, protocol, measurement technology)
+- **Sample**: Sample-level metadata (e.g., sample description, collection method, biological material)
+- **ObservationUnit**: ObservationUnit-level metadata (e.g., sampling sites, environmental context)
 
 **Principles:**
 1. Match fields to actual document content - don't select fields for information that isn't present
 2. Prioritize fields that capture the core information of this specific study
 3. Consider the research domain and adapt field selection accordingly
 4. Include both core bibliographic fields and domain-specific fields
-5. Select 15-25 fields - enough for comprehensive metadata but not overwhelming
+5. **IMPORTANT**: Ensure balanced selection across ISA hierarchy levels - select fields from multiple ISA sheets, not just one
+6. Select 20-30 fields total - enough for comprehensive metadata but not overwhelming
 
 **Selection criteria:**
 - Relevance to the document's content and domain
 - Availability of information in the document
 - FAIR principles - findability, accessibility, interoperability, reusability
 - Balance between general and specific fields
+- **Balance across ISA hierarchy levels** - don't focus only on one ISA sheet
 
 Return JSON with:
 {
   "selected_fields": [
     {"field_name": "...", "reason": "why this field is relevant"}
   ],
-  "rationale": "overall selection strategy"
+  "rationale": "overall selection strategy, including ISA level balance"
 }"""
 
         if critic_feedback:
@@ -372,10 +552,15 @@ Return JSON with:
         user_prompt = f"""Document summary:
 {json.dumps(doc_summary, indent=2)}
 
-Available metadata fields:
-{json.dumps(fields_summary, indent=2)}
+Available metadata fields by ISA sheet:
+{json.dumps(fields_summary_by_isa, indent=2)}
 
-Select the most appropriate 15-25 metadata fields for this document. Return JSON."""
+Field counts per ISA sheet:
+{json.dumps(field_counts, indent=2)}
+
+**IMPORTANT**: Select fields from MULTIPLE ISA sheets to ensure balanced coverage. Don't focus only on one ISA level.
+
+Select the most appropriate 20-30 metadata fields for this document, ensuring representation across ISA hierarchy levels. Return JSON."""
 
         messages = [
             SystemMessage(content=system_prompt),
@@ -383,7 +568,7 @@ Select the most appropriate 15-25 metadata fields for this document. Return JSON
         ]
         
         try:
-            response = await self.llm.ainvoke(messages)
+            response = await self._call_llm(messages)
             content = response.content
             
             self.llm_responses.append({
@@ -439,19 +624,34 @@ Select the most appropriate 15-25 metadata fields for this document. Return JSON
         
         system_prompt = """You are an expert at generating FAIR metadata from research documents.
 
-**Your task:** For each metadata field, extract or generate an appropriate value from the document.
+**Your task:** For EACH AND EVERY metadata field in the list, extract or generate an appropriate value from the document.
+
+**CRITICAL REQUIREMENTS:**
+1. **MUST generate a value for ALL fields** - You must return a value for every single field in the provided list, no exceptions
+2. **Investigation-level fields** (e.g., investigation title, investigation description) - These are project-level metadata. Extract from document title, abstract, or generate from research context
+3. **Study-level fields** (e.g., study title, study description) - These describe the specific study. Extract from document title, abstract, methods, or results
+4. **Assay-level fields** - These describe measurement methods. Extract from methods section
+5. **Sample-level fields** - These describe biological material. Extract from methods or results
+6. **ObservationUnit-level fields** - These describe sampling sites. Extract from methods or environmental context
 
 **Principles:**
 1. Extract values directly from document when possible
-2. Generate appropriate values when information is implicit
+2. Generate appropriate values when information is implicit (e.g., investigation title can be derived from document title)
 3. Provide clear evidence/provenance for each value
 4. Assign realistic confidence scores (0.0-1.0)
-5. Be honest - use null or "not specified" if information truly isn't available
+5. If information truly isn't available, use "not specified" or null, but STILL include the field in your response
 
 **For each field, provide:**
-- value: The actual metadata value (be specific and accurate)
-- evidence: Where/how you determined this value (quote or describe)
-- confidence: Float 0.0-1.0 (1.0 = explicitly stated, 0.5 = inferred, 0.0 = unknown)
+- field_name: MUST match exactly one of the field names in the provided list
+- value: The actual metadata value (be specific and accurate, or "not specified" if unavailable)
+- evidence: Where/how you determined this value (quote or describe the source)
+- confidence: Float 0.0-1.0 (1.0 = explicitly stated, 0.7-0.9 = strongly inferred, 0.4-0.6 = reasonably inferred, 0.0-0.3 = not available)
+
+**IMPORTANT:** 
+- You MUST return a JSON array with exactly the same number of fields as provided in the input list
+- Do NOT skip any fields, even if information is limited
+- For investigation/study fields: If not explicitly stated, derive from document title, abstract, or research context
+- For fields with limited information, use "not specified" as the value but still include the field
 
 Return JSON array of metadata objects."""
 
@@ -472,26 +672,53 @@ Return JSON array of metadata objects."""
                 "required": field.get("required", False)
             })
 
+        # Group fields by ISA sheet for better context
+        isa_sheets = ["investigation", "study", "assay", "sample", "observationunit"]
+        fields_by_isa = {sheet: [] for sheet in isa_sheets}
+        for field in selected_fields:
+            isa_sheet = field.get("isa_sheet", "study")
+            if isa_sheet in fields_by_isa:
+                fields_by_isa[isa_sheet].append(field)
+            else:
+                fields_by_isa["study"].append(field)
+        
+        # Count fields per ISA sheet
+        field_counts = {sheet: len(fields_by_isa[sheet]) for sheet in isa_sheets}
+        
         user_prompt = f"""Document information:
 {json.dumps(document_info, indent=2, ensure_ascii=False)}
 
 Document excerpt:
 {document_text[:3000]}
 
-Metadata fields to populate:
+Metadata fields to populate (TOTAL: {len(selected_fields)} fields):
 {json.dumps(field_descriptions, indent=2)}
 
-**IMPORTANT:** Use the EXACT field_name from the list above. Do not modify or abbreviate field names.
+Fields by ISA hierarchy:
+{json.dumps(field_counts, indent=2)}
 
-For each field, extract or generate appropriate values. Return JSON array:
+**CRITICAL REQUIREMENTS:**
+1. You MUST return a JSON array with EXACTLY {len(selected_fields)} fields - one for each field in the list above
+2. Use the EXACT field_name from the list above. Do not modify or abbreviate field names
+3. **Investigation-level fields** ({field_counts.get('investigation', 0)} fields): Must generate values from document title, abstract, or research context
+4. **Study-level fields** ({field_counts.get('study', 0)} fields): Must generate values from document title, abstract, methods, or results
+5. **Assay-level fields** ({field_counts.get('assay', 0)} fields): Must generate values from methods section
+6. **Sample-level fields** ({field_counts.get('sample', 0)} fields): Must generate values from methods or results
+7. **ObservationUnit-level fields** ({field_counts.get('observationunit', 0)} fields): Must generate values from methods or environmental context
+
+**For fields where information is not explicitly stated:**
+- Investigation/Study fields: Derive from document title, abstract, or research context (e.g., investigation title = document title, study title = document title)
+- Other fields: Use "not specified" as value but STILL include the field in your response
+
+Return JSON array with EXACTLY {len(selected_fields)} fields:
 [
   {{
     "field_name": "...",  // MUST match exactly one of the field_name values above
-    "value": "...",
-    "evidence": "...",
-    "confidence": 0.X
+    "value": "...",  // Actual value or "not specified" if unavailable
+    "evidence": "...",  // Where/how you determined this value
+    "confidence": 0.X  // Float 0.0-1.0
   }},
-  ...
+  ...  // MUST include ALL {len(selected_fields)} fields
 ]"""
 
         messages = [
@@ -500,7 +727,7 @@ For each field, extract or generate appropriate values. Return JSON array:
         ]
         
         try:
-            response = await self.llm.ainvoke(messages)
+            response = await self._call_llm(messages)
             content = response.content
             
             self.llm_responses.append({
@@ -575,11 +802,36 @@ For each field, extract or generate appropriate values. Return JSON array:
         Returns:
             Dict with evaluation results (always includes issues and suggestions)
         """
-        system_prompt = """You are an expert quality evaluator.
+        # Get thresholds from config
+        accept_threshold = config.critic_accept_threshold_general
+        retry_min = config.critic_retry_min_threshold
+        retry_max = config.critic_retry_max_threshold
+        
+        system_prompt = f"""You are an expert quality evaluator for scientific metadata extraction.
 Evaluate the provided content against the given criteria.
 
+**Evaluation Principles:**
+1. Assess what IS present, not what is missing - focus on the quality of extracted information
+2. Be realistic - if information is not in the source document, don't penalize heavily
+3. Consider the extraction quality: Are extracted fields accurate and complete based on available source?
+4. Distinguish between:
+   - Missing information that was never in the source (minor issue)
+   - Incorrect or incomplete extraction from available source (major issue)
+   - Poor quality or truncated values (major issue)
+
+**Scoring Guidelines:**
+- overall_score: 0.8-1.0 = Excellent extraction quality, all available information captured well
+- overall_score: 0.6-0.79 = Good extraction, minor gaps or issues
+- overall_score: 0.4-0.59 = Acceptable but needs improvement
+- overall_score: 0.0-0.39 = Poor quality, significant issues
+
+**Decision Guidelines:**
+- ACCEPT: overall_score >= {accept_threshold} AND extraction quality is good (even if some info missing from source)
+- RETRY: overall_score {retry_min}-{retry_max} OR extraction quality can be improved
+- ESCALATE: overall_score < {retry_min} OR critical errors in extraction
+
 Return JSON with:
-- overall_score: Float 0-1
+- overall_score: Float 0-1 (based on extraction quality, not completeness of source)
 - passed_criteria: List of criteria that passed
 - failed_criteria: List of criteria that failed
 - issues: List of specific issues found (empty list if none)
@@ -592,14 +844,19 @@ Return ONLY valid JSON."""
 
         criteria_text = "\n".join(f"- {c}" for c in criteria)
         
-        user_prompt = f"""Evaluate this content:
+        user_prompt = f"""Evaluate this extracted content:
 
 {content}
 
-Criteria:
+Criteria to evaluate:
 {criteria_text}
 
 {f"Context: {context}" if context else ""}
+
+**Important:** Evaluate the QUALITY of extraction, not whether the source document contains all ideal information.
+- If information is missing because it's not in the source document, note it but don't heavily penalize
+- If information is incorrectly extracted or truncated, this is a quality issue
+- Focus on: Are the extracted fields accurate, complete, and well-structured based on what was available?
 
 Provide detailed evaluation as JSON with issues and suggestions arrays."""
 
@@ -609,7 +866,7 @@ Provide detailed evaluation as JSON with issues and suggestions arrays."""
         ]
         
         try:
-            response = await self.llm.ainvoke(messages)
+            response = await self._call_llm(messages)
             response_content = getattr(response, 'content', None)
             
             # Store interaction

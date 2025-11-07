@@ -196,6 +196,83 @@ class FAIRDSAPIParser:
         return all_fields
     
     @staticmethod
+    def get_fields_by_package_and_isa_sheet(
+        packages_by_sheet: Dict[str, List[Dict[str, Any]]],
+        package_names: List[str]
+    ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        """
+        获取指定 packages 的所有字段，按 ISA sheet 分组，每个 sheet 内按 mandatory/optional 分类
+        
+        Args:
+            packages_by_sheet: 按 ISA sheet 分组的所有字段
+            package_names: 要获取的 package 名称列表
+            
+        Returns:
+            按 ISA sheet 分组的字段字典:
+            {
+                "investigation": {"mandatory": [...], "optional": [...]},
+                "study": {"mandatory": [...], "optional": [...]},
+                "assay": {"mandatory": [...], "optional": [...]},
+                "sample": {"mandatory": [...], "optional": [...]},
+                "observationunit": {"mandatory": [...], "optional": [...]}
+            }
+        """
+        # ISA sheet 列表
+        isa_sheets = ["investigation", "study", "assay", "sample", "observationunit"]
+        
+        # 初始化结果结构
+        result = {
+            sheet: {"mandatory": [], "optional": []}
+            for sheet in isa_sheets
+        }
+        
+        # 用于去重的集合（按 ISA sheet 分别去重）
+        seen_labels_by_sheet = {sheet: set() for sheet in isa_sheets}
+        
+        # 遍历所有 ISA sheets
+        for sheet_name, fields in packages_by_sheet.items():
+            # 标准化 sheet 名称（转换为小写）
+            normalized_sheet = sheet_name.lower()
+            
+            # 如果 sheet 名称不在 ISA sheets 列表中，跳过
+            if normalized_sheet not in isa_sheets:
+                logger.warning(f"⚠️  Unknown ISA sheet: {sheet_name}, skipping")
+                continue
+            
+            # 遍历该 sheet 中的所有字段
+            for field in fields:
+                # 检查是否属于指定的 packages
+                if field.get("packageName") in package_names:
+                    label = field.get("label")
+                    requirement = field.get("requirement", "").upper()
+                    
+                    # 去重：同一个 label 在同一 ISA sheet 中只保留第一次出现
+                    if label and label not in seen_labels_by_sheet[normalized_sheet]:
+                        seen_labels_by_sheet[normalized_sheet].add(label)
+                        
+                        # 根据 requirement 分类
+                        if requirement == "MANDATORY":
+                            result[normalized_sheet]["mandatory"].append(field)
+                        else:
+                            result[normalized_sheet]["optional"].append(field)
+        
+        # 统计信息
+        total_fields = sum(
+            len(result[sheet]["mandatory"]) + len(result[sheet]["optional"])
+            for sheet in isa_sheets
+        )
+        total_mandatory = sum(len(result[sheet]["mandatory"]) for sheet in isa_sheets)
+        total_optional = sum(len(result[sheet]["optional"]) for sheet in isa_sheets)
+        
+        logger.info(
+            f"✅ Collected {total_fields} unique fields from {len(package_names)} packages "
+            f"({total_mandatory} mandatory, {total_optional} optional) "
+            f"across {len([s for s in isa_sheets if result[s]['mandatory'] or result[s]['optional']])} ISA sheets"
+        )
+        
+        return result
+    
+    @staticmethod
     def extract_field_info(field: Dict[str, Any]) -> Dict[str, Any]:
         """
         从 package field 中提取关键信息，包括 isa_sheet 和 package

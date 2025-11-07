@@ -430,7 +430,7 @@ class JSONGeneratorAgent(BaseAgent):
                 fields.append(MetadataField(
                     field_name=field_name,
                     value=term,
-                    evidence=f"Retrieved from {source}: {definition[:100]}...",
+                    evidence=f"Retrieved from {source}: {definition}",  # Full definition - no truncation
                     confidence=confidence,
                     origin="knowledge_retriever",
                     package_source=source if source in ["MIMAG", "MISAG", "MIUVIG"] else "local",

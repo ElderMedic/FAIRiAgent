@@ -59,6 +59,48 @@ class DocumentParserAgent(BaseAgent):
                 if "raw_text" in doc_info_dict:
                     del doc_info_dict["raw_text"]
                 
+                # Check if extraction failed (empty or minimal structure)
+                # Consider empty if all key fields are missing
+                has_title = bool(doc_info_dict.get("title"))
+                has_abstract = bool(doc_info_dict.get("abstract"))
+                has_authors = bool(doc_info_dict.get("authors")) and len(doc_info_dict.get("authors", [])) > 0
+                field_count = len(doc_info_dict)
+                
+                # Empty if no key fields AND minimal field count (likely fallback structure)
+                is_empty = (
+                    not has_title and
+                    not has_abstract and
+                    not has_authors and
+                    field_count <= 5  # Only has minimal fields (title, abstract, authors, keywords, research_domain)
+                )
+                
+                if is_empty:
+                    # Preserve previous document_info if this is a retry and extraction failed
+                    previous_doc_info = state.get("document_info", {})
+                    if previous_doc_info and any([
+                        previous_doc_info.get("title"),
+                        previous_doc_info.get("abstract"),
+                        previous_doc_info.get("authors")
+                    ]):
+                        self.log_execution(
+                            state,
+                            "⚠️ LLM extraction returned empty result. Preserving previous extraction.",
+                            "warning"
+                        )
+                        # Merge: keep previous data, but update with any new non-empty fields
+                        for key, value in doc_info_dict.items():
+                            if value and (isinstance(value, str) and value.strip()) or \
+                               (isinstance(value, list) and len(value) > 0) or \
+                               (not isinstance(value, (str, list)) and value):
+                                previous_doc_info[key] = value
+                        doc_info_dict = previous_doc_info
+                    else:
+                        self.log_execution(
+                            state,
+                            "⚠️ LLM extraction returned empty result and no previous data available.",
+                            "warning"
+                        )
+                
                 self.log_execution(state, f"✅ LLM extracted: {list(doc_info_dict.keys())}")
                 
                 # Store in state directly as dict (without raw_text - it's already in document_content)
