@@ -7,6 +7,7 @@ Provides a unified interface for working with different LLM providers
 
 import json
 import logging
+import re
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
@@ -32,6 +33,199 @@ except ImportError:
 from ..config import config
 
 logger = logging.getLogger(__name__)
+
+
+def _fix_json_string(content: str) -> str:
+    """Fix common JSON formatting issues.
+    
+    Args:
+        content: JSON string that may have formatting issues
+        
+    Returns:
+        Fixed JSON string
+    """
+    # Remove markdown code blocks if present
+    if "```json" in content:
+        content = content.split("```json")[1].split("```")[0].strip()
+    elif "```" in content:
+        content = content.split("```")[1].split("```")[0].strip()
+    
+    # Find JSON object start
+    json_start = content.find('{')
+    if json_start < 0:
+        return content
+    
+    content = content[json_start:]
+    
+    # Try to find the last complete JSON object
+    # Count braces to find where the main object ends
+    brace_count = 0
+    last_valid_pos = -1
+    in_string = False
+    escape_next = False
+    
+    for i, char in enumerate(content):
+        if escape_next:
+            escape_next = False
+            continue
+        
+        if char == '\\':
+            escape_next = True
+            continue
+        
+        if char == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        
+        if in_string:
+            continue
+        
+        if char == '{':
+            brace_count += 1
+        elif char == '}':
+            brace_count -= 1
+            if brace_count == 0:
+                last_valid_pos = i + 1
+                break
+    
+    # If we found a complete object, use it
+    if last_valid_pos > 0:
+        return content[:last_valid_pos]
+    
+    # Otherwise, try to fix common issues
+    # Remove trailing incomplete content
+    # Find the last complete property before error
+    # Look for pattern: "key": value followed by comma or closing brace
+    # This is a simplified approach - find last complete key-value pair
+    
+    # Try to find last complete property by looking for patterns
+    # Pattern: "key": value, or "key": value}
+    property_pattern = r'"([^"]+)":\s*([^,}]+?)(?=,\s*"|})'
+    matches = list(re.finditer(property_pattern, content))
+    
+    if matches:
+        # Get the last complete property
+        last_match = matches[-1]
+        end_pos = last_match.end()
+        
+        # Check what comes after
+        remaining = content[end_pos:].strip()
+        if remaining.startswith(','):
+            end_pos += 1
+        elif remaining.startswith('}'):
+            end_pos += 1
+        
+        # Extract up to this point
+        partial_content = content[:end_pos]
+        
+        # Close any open braces
+        open_braces = partial_content.count('{') - partial_content.count('}')
+        if open_braces > 0:
+            partial_content += '}' * open_braces
+        
+        return partial_content
+    
+    return content
+
+
+def _parse_json_with_fallback(content: str) -> Optional[Dict[str, Any]]:
+    """Parse JSON with multiple fallback strategies.
+    
+    Args:
+        content: JSON string to parse
+        
+    Returns:
+        Parsed JSON dict or None if all strategies fail
+    """
+    # Strategy 1: Direct parse
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+    
+    # Strategy 2: Fix common issues and parse
+    try:
+        fixed_content = _fix_json_string(content)
+        return json.loads(fixed_content)
+    except json.JSONDecodeError as e:
+        logger.debug(f"Fixed JSON still failed: {e}")
+    
+    # Strategy 3: Extract first complete JSON object
+    try:
+        json_start = content.find('{')
+        if json_start >= 0:
+            brace_count = 0
+            complete_end = -1
+            in_string = False
+            escape_next = False
+            
+            for i, char in enumerate(content[json_start:], start=json_start):
+                if escape_next:
+                    escape_next = False
+                    continue
+                
+                if char == '\\':
+                    escape_next = True
+                    continue
+                
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                
+                if in_string:
+                    continue
+                
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        complete_end = i + 1
+                        break
+            
+            if complete_end > json_start:
+                complete_json = content[json_start:complete_end]
+                return json.loads(complete_json)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.debug(f"Complete object extraction failed: {e}")
+    
+    # Strategy 4: Try to extract partial JSON by removing incomplete trailing content
+    try:
+        json_start = content.find('{')
+        if json_start >= 0:
+            # Find error position (approximate)
+            error_pos = len(content)
+            
+            # Try to find last valid property before error
+            partial_content = content[json_start:error_pos]
+            
+            # Remove incomplete trailing content
+            # Look for last complete property
+            # Pattern: "key": value followed by comma
+            last_comma = partial_content.rfind(',')
+            if last_comma > 0:
+                # Check if there's a complete property before this comma
+                before_comma = partial_content[:last_comma]
+                # Find the last property key before comma
+                last_key_match = re.search(r'"([^"]+)":\s*[^,}]+(?=,\s*"|})', before_comma)
+                if last_key_match:
+                    # Extract up to and including this property
+                    prop_end = last_key_match.end()
+                    # Include the comma if it's there
+                    if partial_content[prop_end:prop_end+1] == ',':
+                        prop_end += 1
+                    
+                    partial_json = partial_content[:prop_end]
+                    # Close braces
+                    open_braces = partial_json.count('{') - partial_json.count('}')
+                    if open_braces > 0:
+                        partial_json += '}' * open_braces
+                    
+                    return json.loads(partial_json)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.debug(f"Partial extraction failed: {e}")
+    
+    return None
 
 
 class LLMHelper:
@@ -488,115 +682,26 @@ Extract all relevant information and return as JSON with clear, descriptive fiel
                 "response": content
             })
             
-            # Parse JSON response
-            # Remove markdown code blocks if present
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
+            # Parse JSON response using improved parser
+            doc_info = _parse_json_with_fallback(content)
             
-            doc_info = json.loads(content)
-            
-            logger.info(f"Extracted document info with {len(doc_info)} fields")
-            return doc_info
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse LLM response as JSON: {e}")
-            logger.error(f"Error position: {getattr(e, 'pos', 'unknown')}")
-            logger.error(f"Response content (first 1000 chars): {content[:1000]}")
-            
-            # Try to extract partial JSON or fix common issues
-            try:
-                # Try to find JSON object start
-                json_start = content.find('{')
-                if json_start >= 0:
-                    error_pos = getattr(e, 'pos', len(content))
-                    
-                    # Strategy 1: Try to extract complete JSON up to error
-                    # Find the last complete key-value pair before error
-                    partial_content = content[json_start:error_pos]
-                    
-                    # Try to find last complete property (ends with , or })
-                    # Look for pattern: "key": value followed by comma or closing brace
-                    import re
-                    # Find all complete properties
-                    property_pattern = r'"([^"]+)":\s*([^,}]+?)(?=,\s*"|})'
-                    matches = list(re.finditer(property_pattern, partial_content))
-                    
-                    if matches:
-                        # Get the last complete property
-                        last_match = matches[-1]
-                        # Extract up to and including this property
-                        end_pos = last_match.end()
-                        # Find the comma or closing brace after this property
-                        remaining = partial_content[end_pos:]
-                        if remaining.startswith(','):
-                            end_pos += 1
-                        elif remaining.startswith('}'):
-                            end_pos += 1
-                        
-                        # Extract the partial JSON
-                        partial_json = partial_content[:end_pos]
-                        
-                        # Close any open braces
-                        open_braces = partial_json.count('{') - partial_json.count('}')
-                        if open_braces > 0:
-                            partial_json += '}' * open_braces
-                        elif open_braces < 0:
-                            # Too many closing braces, remove them
-                            partial_json = partial_json.rstrip('}')
-                            open_braces = partial_json.count('{') - partial_json.count('}')
-                            partial_json += '}' * open_braces
-                        
-                        # Try parsing the fixed JSON
-                        try:
-                            fixed_doc_info = json.loads(partial_json)
-                            logger.warning(
-                                f"Successfully extracted partial JSON with "
-                                f"{len(fixed_doc_info)} fields from truncated response"
-                            )
-                            return fixed_doc_info
-                        except json.JSONDecodeError:
-                            logger.warning("Partial JSON extraction still failed")
-                    
-                    # Strategy 2: Try to extract JSON from first complete object
-                    # Find the first complete JSON object
-                    brace_count = 0
-                    complete_end = -1
-                    for i, char in enumerate(partial_content):
-                        if char == '{':
-                            brace_count += 1
-                        elif char == '}':
-                            brace_count -= 1
-                            if brace_count == 0:
-                                complete_end = i + 1
-                                break
-                    
-                    if complete_end > 0:
-                        complete_json = partial_content[:complete_end]
-                        try:
-                            fixed_doc_info = json.loads(complete_json)
-                            logger.warning(
-                                f"Successfully extracted complete JSON object with "
-                                f"{len(fixed_doc_info)} fields"
-                            )
-                            return fixed_doc_info
-                        except json.JSONDecodeError:
-                            logger.warning("Complete JSON object extraction failed")
-                            
-            except Exception as fix_error:
-                logger.warning(f"Failed to fix JSON: {fix_error}")
-            
-            # If all fixes fail, return minimal structure but log the full response
-            logger.error(f"Full response content (truncated to 2000 chars): {content[:2000]}")
-            # Return minimal structure
-            return {
-                "title": "",
-                "abstract": "",
-                "authors": [],
-                "keywords": [],
-                "research_domain": None
-            }
+            if doc_info:
+                logger.info(f"Extracted document info with {len(doc_info)} fields")
+                return doc_info
+            else:
+                # All parsing strategies failed
+                logger.error(f"Failed to parse LLM response as JSON after all fallback strategies")
+                logger.error(f"Response content (first 2000 chars): {content[:2000]}")
+                logger.error(f"Response length: {len(content)} chars")
+                
+                # Return minimal structure
+                return {
+                    "title": "",
+                    "abstract": "",
+                    "authors": [],
+                    "keywords": [],
+                    "research_domain": None
+                }
         except Exception as e:
             logger.error(f"Error during document info extraction: {e}")
             raise
@@ -1131,23 +1236,18 @@ Provide detailed evaluation as JSON with issues and suggestions arrays."""
                 "decision": "RETRY"
             }
         
-        # Parse JSON
-        try:
-            if "```json" in response_content:
-                response_content = response_content.split("```json")[1].split("```")[0].strip()
-            elif "```" in response_content:
-                response_content = response_content.split("```")[1].split("```")[0].strip()
-            
-            result = json.loads(response_content)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse LLM response as JSON: {e}")
+        # Parse JSON using improved parser
+        result = _parse_json_with_fallback(response_content)
+        
+        if not result:
+            logger.error(f"Failed to parse LLM response as JSON after all fallback strategies")
             logger.error(f"Response content: {response_content[:500]}")
             # Return default structure
             return {
                 "overall_score": 0.5,
                 "passed_criteria": [],
                 "failed_criteria": criteria,
-                "issues": [f"JSON parsing error: {str(e)}"],
+                "issues": ["JSON parsing error: all fallback strategies failed"],
                 "suggestions": ["LLM response format invalid, retry needed"],
                 "decision": "RETRY"
             }

@@ -436,6 +436,16 @@ def process_document(uploaded_file, project_name):
         # Update status
         status_container.info(f"🚀 Starting processing... Project ID: {project_id}")
         
+        # Determine output directory
+        from fairifier.config import config
+        output_path = config.output_path / project_id
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Save runtime configuration
+        from fairifier.utils.config_saver import save_runtime_config
+        config_file = save_runtime_config(tmp_path, project_id, output_path)
+        logger.info(f"💾 Saved runtime configuration to {config_file}")
+        
         # Run LangGraph workflow
         app = FAIRifierLangGraphApp()
         result = asyncio.run(app.run(tmp_path, project_id))
@@ -444,6 +454,7 @@ def process_document(uploaded_file, project_name):
         st.session_state.last_result = result
         st.session_state.project_id = project_id
         st.session_state.project_name = project_name or uploaded_file.name
+        st.session_state.output_path = str(output_path)
         
         # Check for errors
         errors = result.get("errors", [])
@@ -604,6 +615,18 @@ def process_document_from_path(file_path, project_name):
         # Generate project ID
         project_id = f"fairifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
+        # Determine output directory
+        from fairifier.config import config
+        output_path = config.output_path / project_id
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Save runtime configuration
+        from fairifier.utils.config_saver import save_runtime_config
+        import logging
+        logger = logging.getLogger(__name__)
+        config_file = save_runtime_config(file_path, project_id, output_path)
+        logger.info(f"💾 Saved runtime configuration to {config_file}")
+        
         # Set LangSmith project for this run
         langsmith_project = st.session_state.get("langsmith_project", "fairifier-streamlit")
         os.environ["LANGCHAIN_PROJECT"] = langsmith_project
@@ -619,6 +642,7 @@ def process_document_from_path(file_path, project_name):
         st.session_state.last_result = result
         st.session_state.project_id = project_id
         st.session_state.project_name = project_name or Path(file_path).name
+        st.session_state.output_path = str(output_path)
         
         # Check for errors
         errors = result.get("errors", [])

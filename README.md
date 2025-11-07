@@ -15,22 +15,33 @@ FAIRiAgent is a CLI-first multi-agent framework that automatically extracts info
 - 📊 **JSON-only Output**: FAIR-DS compatible metadata format (no RDF/RO-Crate)
 - 📝 **JSON Line Logging**: Structured logging for debugging and monitoring
 - 🔧 **Local Provisional Support**: Extend with local terms (source=local, status=provisional)
-- 🎛️ **Multi-Model Support**: Ollama (local) / OpenAI / Anthropic
+- 🎛️ **Multi-Model Support**: Ollama (local) / OpenAI / Qwen / Anthropic
 - 🔍 **LangSmith Integration**: Complete tracing and debugging support (默认启用)
+- 🎨 **Streamlit Web UI**: Interactive web interface with real-time streaming output
+- 💬 **Chat-like Streaming**: Real-time LLM response streaming with chat bubble interface
+- ⚙️ **Configuration Management**: Save and manage runtime configurations
+- 📋 **Runtime Config Export**: Automatic export of input, .env, and runtime configurations
 
 ## 🏗️ Architecture
 
-The system uses a simplified multi-agent workflow:
+The system uses a LangGraph-based multi-agent workflow:
 
 ```
-Document → Parse → Retrieve Knowledge → Generate JSON → Validate → Output
+Document → Parse → Plan → Retrieve Knowledge → Generate JSON → Evaluate → Output
 ```
 
 **Agents:**
 1. **Document Parser**: Extracts structured information from documents
-2. **Knowledge Retriever**: Enriches metadata with FAIR-DS and local knowledge
-3. **JSON Generator**: Creates FAIR-DS compatible metadata
-4. **Validator**: Quality checks and confidence assessment
+2. **Orchestrator**: Plans workflow strategy based on document content
+3. **Knowledge Retriever**: Enriches metadata with FAIR-DS and local knowledge
+4. **JSON Generator**: Creates FAIR-DS compatible metadata
+5. **Critic**: Evaluates quality and provides feedback for retry/escalation
+
+**Workflow Features:**
+- 🔄 **Retry Logic**: Automatic retry with feedback from Critic agent
+- 🎯 **Conditional Routing**: Dynamic workflow based on evaluation results
+- 📊 **Execution Summary**: Track steps, retries, and outcomes
+- 💾 **State Persistence**: LangGraph checkpointer for state management
 
 ## 🚀 Quick Start
 
@@ -47,39 +58,74 @@ pip install -r requirements.txt
 
 ### Basic Usage
 
+**CLI Mode:**
 ```bash
 # Process a document
-python -m fairifier.cli process your_document.pdf
+python run_fairifier.py process your_document.pdf
 
 # Specify output directory
-python -m fairifier.cli process document.txt --output-dir results/
+python run_fairifier.py process document.txt --output-dir results/
 
 # Check configuration
-python -m fairifier.cli config-info
+python run_fairifier.py config-info
+```
+
+**Web UI Mode:**
+```bash
+# Start Streamlit web interface
+python run_fairifier.py ui
+
+# Access at http://localhost:8501
+```
+
+**LangGraph Studio (Development):**
+```bash
+# Start LangGraph dev server
+langgraph dev
+
+# Access LangGraph Studio at http://localhost:8123
 ```
 
 ### Configuration
 
+**Environment Variables (.env file):**
 ```bash
-# LLM Provider (Ollama/OpenAI/Anthropic)
-export LLM_PROVIDER=ollama  # or "openai" or "anthropic"
-export LLM_MODEL=qwen3:8b
-export LLM_API_KEY=your_key  # for OpenAI/Anthropic
+# LLM Provider (Ollama/OpenAI/Qwen/Anthropic)
+LLM_PROVIDER=ollama  # or "openai", "qwen", or "anthropic"
+FAIRIFIER_LLM_MODEL=llama3  # Model name
+FAIRIFIER_LLM_BASE_URL=http://localhost:11434  # For Ollama
+LLM_API_KEY=your_key  # For OpenAI/Qwen/Anthropic
+LLM_TEMPERATURE=0.5
+LLM_MAX_TOKENS=100000
+LLM_ENABLE_THINKING=false  # For Qwen models
 
 # FAIR Data Station (optional)
-export FAIR_DS_API_URL=http://localhost:8083
+FAIR_DS_API_URL=http://localhost:8083
 
 # LangSmith (optional)
-export LANGSMITH_API_KEY=your_key
-export LANGSMITH_PROJECT=fairifier-testing
+LANGSMITH_API_KEY=your_key
+LANGSMITH_PROJECT=fairifier-testing
 ```
+
+**Web UI Configuration:**
+- Access the "⚙️ Configuration" tab in the Streamlit UI
+- Configure LLM, LangSmith, and FAIR-DS settings
+- Save to session or export to .env file
+- Changes apply to next processing run
 
 ### Output Files
 
-FAIRiAgent generates:
+FAIRiAgent generates (in `output/<project_id>/`):
 1. **`metadata_json.json`** - FAIR-DS compatible metadata
 2. **`processing_log.jsonl`** - JSON line logs
-3. **`validation_report.txt`** - Validation results (optional)
+3. **`llm_responses.json`** - All LLM API interactions
+4. **`runtime_config.json`** - Complete runtime configuration including:
+   - Input document path
+   - Environment variables (.env)
+   - LLM configuration
+   - Runtime settings
+   - Project metadata
+5. **`validation_report.txt`** - Validation results (optional)
 
 ## 📊 Output Format
 
@@ -176,25 +222,43 @@ Local terms are automatically included with `source=local` and `status=provision
 
 ```
 fairifier/
-├── agents/           # Multi-agent implementations
+├── agents/              # Multi-agent implementations
 │   ├── document_parser.py
 │   ├── knowledge_retriever.py
 │   ├── json_generator.py
-│   └── validator.py
-├── graph/           # LangGraph workflow
-├── services/        # FAIR-DS and local knowledge
-├── utils/           # JSON logger
-├── cli.py           # Command-line interface
-├── config.py        # Configuration
-└── models.py        # Data models
+│   ├── critic.py
+│   └── orchestrator.py
+├── graph/               # LangGraph workflow
+│   ├── langgraph_app.py # Main LangGraph application
+│   └── __dev__.py       # LangGraph Studio entry point
+├── apps/                # Web UI and API
+│   ├── ui/
+│   │   └── streamlit_app.py  # Streamlit web interface
+│   └── api/             # FastAPI (optional)
+├── services/            # FAIR-DS and local knowledge
+├── utils/               # Utilities
+│   ├── llm_helper.py    # LLM interaction utilities
+│   ├── config_saver.py # Runtime config export
+│   └── json_logger.py  # JSON logging
+├── cli.py               # Command-line interface
+├── config.py            # Configuration management
+└── models.py            # Data models
 
-kb/                  # Knowledge base
-├── local_terms.json      # Local provisional terms
-├── local_packages.json   # Local packages
-└── ontologies.json       # Ontology mappings
+kb/                      # Knowledge base
+├── local_terms.json     # Local provisional terms
+├── local_packages.json  # Local packages
+└── ontologies.json      # Ontology mappings
 
-examples/            # Sample documents
-docs/                # Documentation
+output/                  # Generated outputs
+└── <project_id>/
+    ├── metadata_json.json
+    ├── processing_log.jsonl
+    ├── llm_responses.json
+    └── runtime_config.json
+
+examples/                # Sample documents
+docs/                    # Documentation
+langgraph.json           # LangGraph Studio config
 ```
 
 ## 📈 Quality Metrics
@@ -225,33 +289,64 @@ Core dependencies:
 
 ```bash
 # Process document
-python -m fairifier.cli process <document> [options]
+python run_fairifier.py process <document> [options]
+
+# Start web UI
+python run_fairifier.py ui
 
 # Check status
-python -m fairifier.cli status <project-id>
+python run_fairifier.py status <project-id>
 
 # Show configuration
-python -m fairifier.cli config-info
+python run_fairifier.py config-info
 
 # Validate document
-python -m fairifier.cli validate-document <document>
+python run_fairifier.py validate-document <document>
 ```
 
-## ⚠️ Note on API/UI
+**Options:**
+- `--output-dir, -o`: Specify output directory
+- `--project-id, -p`: Custom project ID
+- `--env-file, -e`: Use custom .env file
+- `--json-log`: Enable JSON line logging (default: True)
+- `--verbose, -v`: Show detailed processing steps
 
-The `fairifier/apps/` directory contains optional API and UI components that are **not recommended for production use**. FAIRiAgent is designed as a **CLI-first tool**. See `fairifier/apps/README.md` for details.
+## 🎨 Web UI Features
+
+The Streamlit web interface provides:
+
+- 📄 **Document Upload**: Drag-and-drop or use example files
+- 💬 **Real-time Streaming**: Chat-like interface showing LLM responses as they're generated
+- 📊 **Live Logs**: Real-time processing logs and error display
+- ⚙️ **Configuration Management**: Configure LLM, LangSmith, and FAIR-DS settings
+- 🔍 **Result Review**: View and download generated metadata
+- 📋 **LLM API Logs**: View all LLM interactions in formatted display
+
+**Access the UI:**
+```bash
+python run_fairifier.py ui
+```
+
+Then open http://localhost:8501 in your browser.
 
 ## 🧪 Testing
 
 Test with the provided sample documents:
 
 ```bash
-# Test basic functionality
-python -m fairifier.cli examples/inputs/soil_metagenomics_paper.txt
+# Test basic functionality (CLI)
+python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf
 
 # Test with all features
-python -m fairifier.cli examples/inputs/soil_metagenomics_paper.txt --fair-ds-url http://localhost:8083
+python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf --fair-ds-url http://localhost:8083
+
+# Test web UI
+python run_fairifier.py ui
+# Then use the example file option in the UI
 ```
+
+**Example Files:**
+- `examples/inputs/earthworm_4n_paper_bioRXiv.pdf` - Research paper example
 
 ### LangSmith Integration
 
@@ -262,8 +357,7 @@ FAIRiAgent includes comprehensive LangSmith integration for debugging and monito
 export LANGSMITH_API_KEY="your_api_key_here"
 export LANGSMITH_PROJECT="fairifier-testing"
 
-# Run LangSmith tests
-python test_langsmith.py
+# Or configure in Streamlit UI under "⚙️ Configuration" tab
 ```
 
 LangSmith provides:
@@ -271,15 +365,26 @@ LangSmith provides:
 - 📊 **Performance Metrics**: Token usage, costs, and timing
 - 🐛 **Debug Tools**: Step-by-step debugging and error analysis
 - 📈 **Monitoring**: Track performance over time
+- 🔗 **Trace Links**: Direct links to traces from Streamlit UI
 
-See [LangSmith Testing Guide](docs/LANGSMITH_TESTING_GUIDE.md) for detailed instructions.
+**LangGraph Studio Integration:**
+```bash
+# Start LangGraph dev server
+langgraph dev
+
+# Access LangGraph Studio at http://localhost:8123
+# Visualize and debug the workflow graph
+```
+
+See [LangGraph Studio Setup](LANGGRAPH_STUDIO_SETUP.md) and [LangSmith Testing Guide](docs/LANGSMITH_TESTING_GUIDE.md) for detailed instructions.
 
 ## 📚 Documentation
 
-- [Requirements Analysis](REQUIREMENTS_ANALYSIS.md) - Detailed requirements compliance analysis
-- [Implementation Summary](IMPLEMENTATION_SUMMARY.md) - Technical implementation details
+- [LangGraph Studio Setup](LANGGRAPH_STUDIO_SETUP.md) - Setup guide for LangGraph Studio
+- [LLM Integration Guide](docs/LLM_INTEGRATION_GUIDE.md) - LLM provider configuration and usage
 - [LangSmith Testing Guide](docs/LANGSMITH_TESTING_GUIDE.md) - Testing and debugging guide
-- [Design Document](DESIGN.md) - System design and architecture
+- [Design Document](docs/DESIGN.md) - System design and architecture
+- [Web UI Guide](fairifier/apps/README.md) - Streamlit UI features and usage
 
 ## 🤝 Contributing
 
@@ -295,4 +400,17 @@ MIT License - Free for academic and research use.
 
 ---
 
-**🎯 FAIRiAgent v0.2 - Simple, Standards-compliant, Evidence-based Metadata Generation**
+**🎯 FAIRiAgent v0.3 - LangGraph-powered, Web UI-enabled, Standards-compliant Metadata Generation**
+
+---
+
+## 🔄 Recent Updates (v0.3)
+
+- ✅ **LangGraph Integration**: Full LangGraph workflow with state persistence
+- ✅ **Streamlit Web UI**: Interactive web interface with real-time streaming
+- ✅ **Chat-like Streaming**: Real-time LLM response display with chat bubbles
+- ✅ **Configuration Management**: Web-based configuration with .env export
+- ✅ **Runtime Config Export**: Automatic export of all runtime configurations
+- ✅ **Multi-Provider Support**: Enhanced support for Ollama, OpenAI, Qwen, Anthropic
+- ✅ **LangGraph Studio**: Visual workflow debugging and development
+- ✅ **Improved Retry Logic**: Critic-based evaluation with automatic retry/escalation

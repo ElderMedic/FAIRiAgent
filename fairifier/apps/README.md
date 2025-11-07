@@ -1,52 +1,101 @@
-# Optional Web Components
+# FAIRiAgent Apps
 
-⚠️ **Note**: The API and UI components in this directory are **optional** and not part of the core FAIRifier functionality.
+This directory contains the Streamlit web UI and optional API components for FAIRiAgent.
 
-## Core FAIRifier
+## 🎨 Streamlit Web UI
 
-The core FAIRifier is a **CLI-only tool** that:
-- Processes documents via command line
-- Outputs JSON metadata in FAIR-DS format
-- Uses JSON line logging
-- Supports LangSmith tracing
+The Streamlit web interface provides an interactive way to use FAIRiAgent without command-line access.
 
-## Optional Components
+### Features
 
-### API Server (`api/`)
-- **Status**: Optional, not maintained
-- **Purpose**: REST API for web integration
-- **Usage**: Not recommended for production use
-- **Note**: May be removed in future versions
+- 📄 **Document Upload**: Upload PDF, text, or markdown files
+- 💬 **Real-time Streaming**: Chat-like interface showing LLM responses as they're generated
+- 📊 **Live Logs**: Real-time processing logs and error display
+- ⚙️ **Configuration Management**: Configure LLM, LangSmith, and FAIR-DS settings
+- 🔍 **Result Review**: View and download generated metadata
+- 📋 **LLM API Logs**: View all LLM interactions in formatted display
+- 💾 **Runtime Config Export**: Automatic export of runtime configurations
 
-### Web UI (`ui/`)
-- **Status**: Optional, not maintained  
-- **Purpose**: Streamlit-based web interface
-- **Usage**: For demonstration only
-- **Note**: May be removed in future versions
-
-## Recommended Usage
-
-Use the CLI tool instead:
+### Usage
 
 ```bash
-# Process a document
-python -m fairifier.cli process your_document.pdf
+# Start the web UI
+python run_fairifier.py ui
 
-# With custom output directory
-python -m fairifier.cli process document.pdf --output-dir results/
-
-# Check configuration
-python -m fairifier.cli config-info
+# Access at http://localhost:8501
 ```
 
-## Why CLI Only?
+### Configuration
 
-Following the minimal requirements:
-1. **Simplicity**: No server management needed
-2. **Portability**: Works anywhere Python runs
-3. **Automation**: Easy to integrate in scripts and pipelines
-4. **Debugging**: Direct access to JSON logs and LangSmith traces
-5. **Security**: No authentication/authorization complexity
+The web UI includes a configuration page where you can:
+- Set LLM provider (Ollama, OpenAI, Qwen, Anthropic)
+- Configure LLM parameters (model, temperature, max tokens, etc.)
+- Set up LangSmith tracing
+- Configure FAIR-DS API
+- Export configuration to .env file
 
-If you need web access, consider building a thin wrapper around the CLI tool rather than using these optional components.
+### Streaming Output
 
+The UI features a chat-like streaming interface that displays:
+- Agent name and operation
+- Real-time LLM response streaming
+- Timestamp for each message
+- Formatted chat bubbles
+
+Enable/disable streaming in the "Upload & Process" tab.
+
+### Output Files
+
+All outputs are saved to `output/<project_id>/`:
+- `metadata_json.json` - Generated metadata
+- `processing_log.jsonl` - Processing logs
+- `llm_responses.json` - All LLM interactions
+- `runtime_config.json` - Complete runtime configuration including:
+  - Input document path
+  - Environment variables (.env)
+  - LLM configuration
+  - Runtime settings
+  - Project metadata
+
+### Example Usage
+
+1. **Start the UI:**
+   ```bash
+   python run_fairifier.py ui
+   ```
+
+2. **Upload a document:**
+   - Use the "📄 Upload & Process" tab
+   - Upload a PDF, text, or markdown file
+   - Or use the example file option (Earthworm paper)
+
+3. **Configure settings:**
+   - Go to "⚙️ Configuration" tab
+   - Set LLM provider, model, and other parameters
+   - Save to session or export to .env file
+
+4. **Process the document:**
+   - Click "🚀 Process Document" button
+   - Watch real-time streaming output in the chat interface
+   - View processing logs and LLM API responses
+
+5. **Review results:**
+   - Go to "🔍 Review Results" tab
+   - View generated metadata
+   - Download artifacts
+
+## 🚀 API Server (Optional)
+
+The `api/` directory contains an optional FastAPI server for programmatic access.
+
+**Status**: Optional, not maintained  
+**Purpose**: REST API for web integration  
+**Usage**: Not recommended for production use  
+**Note**: May be removed in future versions
+
+## 📝 Notes
+
+- The Streamlit UI is the recommended way to interact with FAIRiAgent interactively
+- All configurations can be managed through the web UI
+- Runtime configurations are automatically saved for each run
+- The UI supports both streaming and non-streaming modes
