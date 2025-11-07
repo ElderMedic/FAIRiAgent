@@ -75,10 +75,15 @@ class FAIRifierLangGraphApp:
         workflow.set_entry_point("read_file")
         
         # Define edges
-        workflow.add_edge("read_file", "plan_workflow")
-        workflow.add_edge("plan_workflow", "parse_document")
+        workflow.add_edge("read_file", "parse_document")
         
-        # Conditional routing after parsing evaluation
+        # After parsing, plan workflow based on parsed content
+        workflow.add_edge("parse_document", "plan_workflow")
+        
+        # After planning, evaluate parsing results
+        workflow.add_edge("plan_workflow", "evaluate_parsing")
+        
+        # After evaluation, route based on parsing evaluation decision
         workflow.add_conditional_edges(
             "evaluate_parsing",
             self._route_after_parsing,
@@ -88,6 +93,9 @@ class FAIRifierLangGraphApp:
                 "escalate": "finalize"
             }
         )
+        
+        # After retrieval, always evaluate
+        workflow.add_edge("retrieve_knowledge", "evaluate_retrieval")
         
         # Conditional routing after retrieval evaluation
         workflow.add_conditional_edges(
@@ -99,6 +107,9 @@ class FAIRifierLangGraphApp:
                 "escalate": "finalize"
             }
         )
+        
+        # After generation, always evaluate
+        workflow.add_edge("generate_json", "evaluate_generation")
         
         # Conditional routing after generation evaluation
         workflow.add_conditional_edges(
@@ -161,15 +172,20 @@ class FAIRifierLangGraphApp:
             state["reasoning_chain"] = []
         
         try:
+            # Get parsed document info (if available)
+            doc_info = state.get("document_info", {})
             document_content = state.get("document_content", "")
             
-            # Use LLM to analyze document and plan strategy
+            # Use LLM to analyze document and plan strategy based on parsed content
             planning_prompt = f"""You are an intelligent workflow orchestrator for FAIR metadata generation.
+
+**Parsed Document Information:**
+{json.dumps(doc_info, indent=2) if doc_info else "Document parsing in progress..."}
 
 **Document Content Preview:**
 {document_content[:2000]}...
 
-**Your task:** Analyze this document and plan the optimal execution strategy.
+**Your task:** Analyze the parsed document information and plan the optimal execution strategy.
 
 **Think step by step:**
 1. What type of document is this? (research paper, dataset description, protocol, etc.)
@@ -211,7 +227,7 @@ Return JSON in the following format:
                 HumanMessage(content=planning_prompt)
             ]
             
-            response = await self.llm_helper._call_llm(messages)
+            response = await self.llm_helper._call_llm(messages, operation_name="Plan Workflow")
             content = response.content
             
             # Parse JSON response

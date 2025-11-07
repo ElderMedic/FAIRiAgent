@@ -43,47 +43,141 @@ class LLMHelper:
         self.llm = self._initialize_llm()
         self.llm_responses = []  # Store all LLM interactions for debugging
     
-    async def _call_llm(self, messages):
+    async def _call_llm(self, messages, stream_to_streamlit=None, operation_name="LLM Call"):
         """Helper method to call LLM with proper parameters.
         
         Supports both thinking and non-thinking modes.
         For Qwen models, enable_thinking is passed via extra_body as per official docs.
+        
+        Args:
+            messages: List of messages to send to LLM
+            stream_to_streamlit: If True, stream output to Streamlit container (if available).
+                                If None, auto-detect if Streamlit container is available.
+            operation_name: Name of the operation for display purposes.
         """
         enable_thinking = config.llm_enable_thinking
         
+        # Extract prompt preview for display
+        prompt_preview = ""
+        if messages:
+            last_message = messages[-1]
+            if hasattr(last_message, 'content'):
+                prompt_preview = last_message.content[:500] if last_message.content else ""
+        
+        # Extract agent name from operation_name
+        agent_name = "System"
+        if "DocumentParser" in operation_name or "parse" in operation_name.lower():
+            agent_name = "📄 Document Parser"
+        elif "KnowledgeRetriever" in operation_name or "retrieve" in operation_name.lower() or "package" in operation_name.lower():
+            agent_name = "🔍 Knowledge Retriever"
+        elif "JSONGenerator" in operation_name or "generate" in operation_name.lower() or "json" in operation_name.lower():
+            agent_name = "📝 JSON Generator"
+        elif "Critic" in operation_name or "evaluate" in operation_name.lower() or "critic" in operation_name.lower():
+            agent_name = "🎯 Critic"
+        elif "Orchestrator" in operation_name or "plan" in operation_name.lower() or "workflow" in operation_name.lower():
+            agent_name = "🎼 Orchestrator"
+        
+        # Auto-detect Streamlit chat container if stream_to_streamlit is None
+        chat_container = None
+        message_id = None
+        if stream_to_streamlit is None:
+            # Try to detect if we're in Streamlit mode
+            try:
+                from fairifier.apps.ui.streamlit_app import get_streamlit_chat_container
+                chat_container = get_streamlit_chat_container()
+                stream_to_streamlit = chat_container is not None
+                if stream_to_streamlit:
+                    # Create a new chat message
+                    from fairifier.apps.ui.streamlit_app import create_chat_message
+                    _, message_id = create_chat_message(agent_name, operation_name)
+            except (ImportError, AttributeError):
+                stream_to_streamlit = False
+        elif stream_to_streamlit:
+            # Explicitly requested streaming
+            try:
+                from fairifier.apps.ui.streamlit_app import get_streamlit_chat_container, create_chat_message
+                chat_container = get_streamlit_chat_container()
+                if chat_container:
+                    # Create a new chat message
+                    _, message_id = create_chat_message(agent_name, operation_name)
+            except (ImportError, AttributeError):
+                chat_container = None
+                stream_to_streamlit = False
+        
         # For Qwen provider, use extra_body as per official documentation
         if self.provider == "qwen":
-            if enable_thinking:
-                # Thinking mode: use streaming for Qwen3 models
-                # Qwen3 models require streaming when thinking is enabled
+            if enable_thinking or stream_to_streamlit:
+                # Thinking mode or streaming mode: use streaming
                 try:
                     # Use bind with extra_body for Qwen (as per official docs)
                     llm_with_params = self.llm.bind(
-                        extra_body={"enable_thinking": True},
+                        extra_body={"enable_thinking": True if enable_thinking else False},
                         stream=True
                     )
                     # Collect streaming response
                     content_parts = []
+                    full_text = ""
+                    
                     async for chunk in llm_with_params.astream(messages):
                         if hasattr(chunk, 'content') and chunk.content:
-                            content_parts.append(chunk.content)
+                            content = chunk.content
+                            content_parts.append(content)
+                            full_text += content
+                            
+                            # Stream to Streamlit chat if available
+                            if message_id:
+                                try:
+                                    from fairifier.apps.ui.streamlit_app import update_chat_message
+                                    update_chat_message(message_id, full_text, is_streaming=True)
+                                except Exception:
+                                    pass  # Ignore errors in Streamlit update
+                    
+                    # Finalize chat message (remove cursor)
+                    if message_id:
+                        try:
+                            from fairifier.apps.ui.streamlit_app import finalize_chat_message
+                            finalize_chat_message(message_id)
+                        except Exception:
+                            pass
                     
                     # Create a response-like object
-                    full_content = "".join(content_parts)
-                    return AIMessage(content=full_content)
+                    result = AIMessage(content=full_text)
+                    
+                    # Add to Streamlit display if available
+                    try:
+                        from fairifier.apps.ui.streamlit_app import add_llm_response
+                        add_llm_response(operation_name, prompt_preview, full_text)
+                    except (ImportError, AttributeError):
+                        pass
+                    
+                    return result
                 except Exception as e:
-                    logger.warning(f"Streaming with thinking failed: {e}, trying non-streaming")
-                    # If streaming doesn't work, try non-streaming with thinking
-                    # Note: Qwen3 open-source models require enable_thinking=False for non-streaming
+                    logger.warning(f"Streaming failed: {e}, trying non-streaming")
+                    # If streaming doesn't work, try non-streaming
                     try:
                         llm_with_params = self.llm.bind(
-                            extra_body={"enable_thinking": True}
+                            extra_body={"enable_thinking": True if enable_thinking else False}
                         )
-                        return await llm_with_params.ainvoke(messages)
+                        result = await llm_with_params.ainvoke(messages)
+                        # Add to Streamlit display
+                        try:
+                            from fairifier.apps.ui.streamlit_app import add_llm_response
+                            content = result.content if hasattr(result, 'content') else str(result)
+                            add_llm_response(operation_name, prompt_preview, content)
+                        except (ImportError, AttributeError):
+                            pass
+                        return result
                     except Exception as e2:
-                        logger.warning(f"Non-streaming with thinking failed: {e2}, falling back to regular call")
-                        # Fall back to regular call without thinking
-                        return await self.llm.ainvoke(messages)
+                        logger.warning(f"Non-streaming failed: {e2}, falling back to regular call")
+                        result = await self.llm.ainvoke(messages)
+                        # Add to Streamlit display
+                        try:
+                            from fairifier.apps.ui.streamlit_app import add_llm_response
+                            content = result.content if hasattr(result, 'content') else str(result)
+                            add_llm_response(operation_name, prompt_preview, content)
+                        except (ImportError, AttributeError):
+                            pass
+                        return result
             else:
                 # Non-thinking mode: ensure enable_thinking=False
                 # Qwen3 open-source models require this for non-streaming calls
@@ -91,18 +185,157 @@ class LLMHelper:
                     llm_with_params = self.llm.bind(
                         extra_body={"enable_thinking": False}
                     )
-                    return await llm_with_params.ainvoke(messages)
+                    result = await llm_with_params.ainvoke(messages)
+                    # Add to Streamlit display
+                    try:
+                        from fairifier.apps.ui.streamlit_app import add_llm_response
+                        content = result.content if hasattr(result, 'content') else str(result)
+                        add_llm_response(operation_name, prompt_preview, content)
+                    except (ImportError, AttributeError):
+                        pass
+                    return result
                 except Exception as e:
                     logger.warning(f"Failed to set enable_thinking=False via extra_body: {e}, using regular call")
-                    # Fall back to regular call
-                    return await self.llm.ainvoke(messages)
+                    result = await self.llm.ainvoke(messages)
+                    # Add to Streamlit display
+                    try:
+                        from fairifier.apps.ui.streamlit_app import add_llm_response
+                        content = result.content if hasattr(result, 'content') else str(result)
+                        add_llm_response(operation_name, prompt_preview, content)
+                    except (ImportError, AttributeError):
+                        pass
+                    return result
         elif self.provider == "openai":
-            # For OpenAI provider, no special handling needed
-            # enable_thinking is not a standard OpenAI parameter
-            return await self.llm.ainvoke(messages)
+            # For OpenAI provider, support streaming if requested
+            if stream_to_streamlit:
+                try:
+                    llm_with_params = self.llm.bind(stream=True)
+                    content_parts = []
+                    full_text = ""
+                    
+                    async for chunk in llm_with_params.astream(messages):
+                        if hasattr(chunk, 'content') and chunk.content:
+                            content = chunk.content
+                            content_parts.append(content)
+                            full_text += content
+                            
+                            # Stream to Streamlit chat if available
+                            if message_id:
+                                try:
+                                    from fairifier.apps.ui.streamlit_app import update_chat_message
+                                    update_chat_message(message_id, full_text, is_streaming=True)
+                                except Exception:
+                                    pass
+                    
+                    # Finalize chat message (remove cursor)
+                    if message_id:
+                        try:
+                            from fairifier.apps.ui.streamlit_app import finalize_chat_message
+                            finalize_chat_message(message_id)
+                        except Exception:
+                            pass
+                    
+                    result = AIMessage(content=full_text)
+                    # Add to Streamlit display
+                    try:
+                        from fairifier.apps.ui.streamlit_app import add_llm_response
+                        add_llm_response(operation_name, prompt_preview, full_text)
+                    except (ImportError, AttributeError):
+                        pass
+                    return result
+                except Exception as e:
+                    logger.warning(f"OpenAI streaming failed: {e}, falling back to regular call")
+                    result = await self.llm.ainvoke(messages)
+                    # Add to Streamlit display
+                    try:
+                        from fairifier.apps.ui.streamlit_app import add_llm_response
+                        content = result.content if hasattr(result, 'content') else str(result)
+                        add_llm_response(operation_name, prompt_preview, content)
+                    except (ImportError, AttributeError):
+                        pass
+                    return result
+            else:
+                result = await self.llm.ainvoke(messages)
+                # Add to Streamlit display
+                try:
+                    from fairifier.apps.ui.streamlit_app import add_llm_response
+                    content = result.content if hasattr(result, 'content') else str(result)
+                    add_llm_response(operation_name, prompt_preview, content)
+                except (ImportError, AttributeError):
+                    pass
+                return result
+        elif self.provider == "ollama":
+            # Ollama supports streaming
+            if stream_to_streamlit:
+                try:
+                    llm_with_params = self.llm.bind(stream=True)
+                    content_parts = []
+                    full_text = ""
+                    
+                    async for chunk in llm_with_params.astream(messages):
+                        if hasattr(chunk, 'content') and chunk.content:
+                            content = chunk.content
+                            content_parts.append(content)
+                            full_text += content
+                            
+                            # Stream to Streamlit chat if available
+                            if message_id:
+                                try:
+                                    from fairifier.apps.ui.streamlit_app import update_chat_message
+                                    update_chat_message(message_id, full_text, is_streaming=True)
+                                except Exception:
+                                    pass
+                    
+                    # Finalize chat message (remove cursor)
+                    if message_id:
+                        try:
+                            from fairifier.apps.ui.streamlit_app import finalize_chat_message
+                            finalize_chat_message(message_id)
+                        except Exception:
+                            pass
+                    
+                    result = AIMessage(content=full_text)
+                    # Add to Streamlit display
+                    try:
+                        from fairifier.apps.ui.streamlit_app import add_llm_response
+                        add_llm_response(operation_name, prompt_preview, full_text)
+                    except (ImportError, AttributeError):
+                        pass
+                    return result
+                except Exception as e:
+                    logger.warning(f"Ollama streaming failed: {e}, falling back to regular call")
+                    result = await self.llm.ainvoke(messages)
+                    # Add to Streamlit display
+                    try:
+                        from fairifier.apps.ui.streamlit_app import add_llm_response
+                        content = result.content if hasattr(result, 'content') else str(result)
+                        add_llm_response(operation_name, prompt_preview, content)
+                    except (ImportError, AttributeError):
+                        pass
+                    return result
+            else:
+                result = await self.llm.ainvoke(messages)
+                # Add to Streamlit display
+                try:
+                    from fairifier.apps.ui.streamlit_app import add_llm_response
+                    content = result.content if hasattr(result, 'content') else str(result)
+                    add_llm_response(operation_name, prompt_preview, content)
+                except (ImportError, AttributeError):
+                    pass
+                return result
         else:
-            # For other providers (ollama, anthropic), no special handling needed
-            return await self.llm.ainvoke(messages)
+            # For other providers (anthropic), no special handling needed
+            result = await self.llm.ainvoke(messages)
+            
+            # Add to Streamlit display if available
+            try:
+                from fairifier.apps.ui.streamlit_app import add_llm_response
+                content = result.content if hasattr(result, 'content') else str(result)
+                add_llm_response(operation_name, prompt_preview, content)
+            except (ImportError, AttributeError):
+                pass
+            
+            return result
         
     def _initialize_llm(self):
         """Initialize LLM based on provider configuration.
@@ -245,7 +478,7 @@ Extract all relevant information and return as JSON with clear, descriptive fiel
         ]
         
         try:
-            response = await self._call_llm(messages)
+            response = await self._call_llm(messages, operation_name="Extract Document Info")
             content = response.content
             
             # Store interaction for debugging
@@ -416,7 +649,7 @@ Return JSON with value, evidence, and confidence."""
         ]
         
         try:
-            response = await self._call_llm(messages)
+            response = await self._call_llm(messages, operation_name="Generate Metadata Value")
             content = response.content
             
             # Store interaction
@@ -568,7 +801,7 @@ Select the most appropriate 20-30 metadata fields for this document, ensuring re
         ]
         
         try:
-            response = await self._call_llm(messages)
+            response = await self._call_llm(messages, operation_name="Select Relevant Fields")
             content = response.content
             
             self.llm_responses.append({
@@ -727,7 +960,7 @@ Return JSON array with EXACTLY {len(selected_fields)} fields:
         ]
         
         try:
-            response = await self._call_llm(messages)
+            response = await self._call_llm(messages, operation_name="Generate Complete Metadata")
             content = response.content
             
             self.llm_responses.append({
@@ -866,7 +1099,7 @@ Provide detailed evaluation as JSON with issues and suggestions arrays."""
         ]
         
         try:
-            response = await self._call_llm(messages)
+            response = await self._call_llm(messages, operation_name="Evaluate Quality")
             response_content = getattr(response, 'content', None)
             
             # Store interaction
@@ -934,14 +1167,50 @@ Provide detailed evaluation as JSON with issues and suggestions arrays."""
 
 # Global instance
 _llm_helper = None
+_last_provider = None
+_last_model = None
+_last_base_url = None
 
 
-def get_llm_helper() -> LLMHelper:
-    """Get or create the global LLM helper instance."""
-    global _llm_helper
-    if _llm_helper is None:
+def get_llm_helper(force_reinit=False) -> LLMHelper:
+    """Get or create the global LLM helper instance.
+    
+    Args:
+        force_reinit: If True, force reinitialization even if instance exists.
+                     This is useful when configuration has changed.
+    """
+    global _llm_helper, _last_provider, _last_model, _last_base_url
+    
+    # Check if we need to reinitialize due to config changes
+    current_provider = config.llm_provider
+    current_model = config.llm_model
+    current_base_url = config.llm_base_url
+    
+    needs_reinit = (
+        force_reinit or
+        _llm_helper is None or
+        _last_provider != current_provider or
+        _last_model != current_model or
+        _last_base_url != current_base_url
+    )
+    
+    if needs_reinit:
         _llm_helper = LLMHelper()
+        _last_provider = current_provider
+        _last_model = current_model
+        _last_base_url = current_base_url
+        logger.info(f"🔄 Reinitialized LLMHelper: provider={current_provider}, model={current_model}, base_url={current_base_url}")
+    
     return _llm_helper
+
+
+def reset_llm_helper():
+    """Reset the global LLM helper instance (force reinitialization on next call)."""
+    global _llm_helper, _last_provider, _last_model, _last_base_url
+    _llm_helper = None
+    _last_provider = None
+    _last_model = None
+    _last_base_url = None
 
 
 def save_llm_responses(output_path: Path, llm_helper: Optional[LLMHelper] = None):

@@ -114,7 +114,7 @@ Select the relevant packages for this document. Return JSON."""
     
     try:
         logger.info("Calling LLM to select relevant packages...")
-        response = await llm_helper._call_llm(messages)
+        response = await llm_helper._call_llm(messages, operation_name="Extract Package Terms")
         
         # Defensive checks
         if response is None:
@@ -417,7 +417,7 @@ Select 5-15 most relevant optional fields for {isa_sheet} level. Return JSON."""
     
     try:
         logger.info(f"Calling LLM to select optional fields for {isa_sheet} ISA sheet...")
-        response = await llm_helper._call_llm(messages)
+        response = await llm_helper._call_llm(messages, operation_name="Extract Package Terms")
         
         # Defensive checks
         if response is None:
@@ -612,7 +612,7 @@ Select 10-20 most relevant optional fields. Return JSON."""
     
     try:
         logger.info("Calling LLM to select optional fields...")
-        response = await llm_helper._call_llm(messages)
+        response = await llm_helper._call_llm(messages, operation_name="Extract Package Terms")
         
         # Defensive checks
         if response is None:

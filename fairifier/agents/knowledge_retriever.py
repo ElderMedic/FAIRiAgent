@@ -524,7 +524,7 @@ Return ONLY JSON."""
 
             try:
                 from langchain_core.messages import HumanMessage
-                response = await self.llm_helper._call_llm([HumanMessage(content=prompt)])
+                response = await self.llm_helper._call_llm([HumanMessage(content=prompt)], operation_name="Knowledge Retriever - Extract Terms")
                 result = self.llm_helper._parse_json_response(response.content)
                 selected[level] = result.get("selected_packages", [pkg["name"] for pkg in pkg_list])
             except:
@@ -539,7 +539,11 @@ Return ONLY JSON."""
         structure: Dict[str, Any],
         selected_packages: Dict[str, List[str]]
     ) -> List[Dict[str, Any]]:
-        """Phase 3: LLM selects specific terms from selected packages."""
+        """Phase 3: LLM selects specific terms from selected packages.
+        
+        IMPORTANT: All mandatory terms are automatically included.
+        LLM only selects from optional terms.
+        """
         
         all_selected_terms = []
         
@@ -556,17 +560,43 @@ Return ONLY JSON."""
             if not relevant_terms_for_level:
                 continue
             
-            # Use LLM to select most relevant terms for this level
-            terms_list = []
-            for term in relevant_terms_for_level[:20]:  # Limit to first 20 for prompt size
-                terms_list.append({
+            # Separate mandatory and optional terms
+            mandatory_terms = []
+            optional_terms = []
+            for term in relevant_terms_for_level:
+                if term.get("required", False):
+                    mandatory_terms.append(term)
+                else:
+                    optional_terms.append(term)
+            
+            # Always include all mandatory terms
+            all_selected_terms.extend(mandatory_terms)
+            
+            if not optional_terms:
+                # No optional terms to select
+                continue
+            
+            # Use LLM to select relevant optional terms for this level
+            optional_terms_list = []
+            for term in optional_terms[:30]:  # Limit to first 30 for prompt size
+                optional_terms_list.append({
                     "name": term.get("name"),
                     "label": term.get("label"),
                     "description": term.get("description"),
-                    "required": term.get("required", False)
+                    "required": False  # All are optional
                 })
             
-            prompt = f"""Select terms relevant to this document for {level.upper()} level:
+            # Prepare mandatory terms summary for context
+            mandatory_summary = [
+                {
+                    "name": term.get("name"),
+                    "label": term.get("label"),
+                    "description": term.get("description")
+                }
+                for term in mandatory_terms[:10]  # Show first 10 mandatory terms
+            ]
+            
+            prompt = f"""Select OPTIONAL terms relevant to this document for {level.upper()} level:
 
 Document Info:
 - Title: {doc_info.get('title', 'N/A')[:100]}
@@ -575,10 +605,18 @@ Document Info:
 - Location: {doc_info.get('location', 'N/A')}
 - Has Environmental Data: {bool(doc_info.get('environmental_parameters'))}
 
-Available Terms ({level}):
-{json.dumps(terms_list, indent=2)[:2000]}
+**IMPORTANT:**
+- Mandatory terms ({len(mandatory_terms)} terms) are ALREADY INCLUDED and do not need to be selected
+- You only need to select from OPTIONAL terms below
 
-Select terms that can be populated from the document.
+Mandatory Terms (already included - for reference only):
+{json.dumps(mandatory_summary, indent=2)[:1000]}
+
+Available OPTIONAL Terms ({level}):
+{json.dumps(optional_terms_list, indent=2)[:2000]}
+
+**Your task:** Select 5-15 most relevant OPTIONAL terms that can be populated from the document.
+
 Return JSON array of term names:
 {{"selected_terms": ["term_1", "term_2", ...]}}
 
@@ -586,17 +624,24 @@ Return ONLY JSON."""
 
             try:
                 from langchain_core.messages import HumanMessage
-                response = await self.llm_helper._call_llm([HumanMessage(content=prompt)])
+                response = await self.llm_helper._call_llm([HumanMessage(content=prompt)], operation_name="Knowledge Retriever - Extract Terms")
                 result = self.llm_helper._parse_json_response(response.content)
                 selected_term_names = result.get("selected_terms", [])
                 
-                # Find full term objects
-                for term in relevant_terms_for_level:
+                # Find full term objects for selected optional terms
+                for term in optional_terms:
                     if term.get("name") in selected_term_names:
                         all_selected_terms.append(term)
+                
+                self.log_info(
+                    f"✅ {level}: {len(mandatory_terms)} mandatory + "
+                    f"{len([t for t in optional_terms if t.get('name') in selected_term_names])} optional terms"
+                )
                         
             except Exception as e:
-                self.log_info(f"⚠️  LLM term selection failed for {level}: {e}, using all terms")
-                all_selected_terms.extend(relevant_terms_for_level[:10])  # Take first 10
+                self.log_info(f"⚠️  LLM term selection failed for {level}: {e}, using mandatory terms only")
+                # At least keep all mandatory terms
+                # Optionally add some optional terms as fallback
+                all_selected_terms.extend(optional_terms[:5])  # Take first 5 optional as fallback
         
         return all_selected_terms

@@ -441,7 +441,7 @@ Return JSON as in following example format:
         ]
         
         # LLM planning is required - no fallback
-        response = await self.llm_helper._call_llm(messages)
+        response = await self.llm_helper._call_llm(messages, operation_name="Orchestrator Plan Workflow")
         content = response.content
         
         # Parse JSON response

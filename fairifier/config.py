@@ -168,6 +168,17 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.llm_base_url = (
             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
         )
+    
+    # Ollama base URL (default: localhost:11434)
+    if config_instance.llm_provider == "ollama":
+        if os.getenv("FAIRIFIER_LLM_BASE_URL"):
+            # Use explicitly set base URL
+            config_instance.llm_base_url = os.getenv("FAIRIFIER_LLM_BASE_URL")
+        elif config_instance.llm_base_url != "http://localhost:11434" and not os.getenv("FAIRIFIER_LLM_BASE_URL"):
+            # If base_url is not the default Ollama URL and not explicitly set, reset to default
+            # This handles the case when switching from Qwen to Ollama
+            if "dashscope" in config_instance.llm_base_url.lower() or "aliyuncs" in config_instance.llm_base_url.lower():
+                config_instance.llm_base_url = "http://localhost:11434"
 
     # OpenAI API base URL (default: official OpenAI API)
     if (os.getenv("OPENAI_API_BASE_URL") and
