@@ -63,7 +63,7 @@ python -m fairifier.cli config-info
 ```bash
 # LLM Provider (Ollama/OpenAI/Anthropic)
 export LLM_PROVIDER=ollama  # or "openai" or "anthropic"
-export LLM_MODEL=qwen2.5:7b
+export LLM_MODEL=qwen3:8b
 export LLM_API_KEY=your_key  # for OpenAI/Anthropic
 
 # FAIR Data Station (optional)

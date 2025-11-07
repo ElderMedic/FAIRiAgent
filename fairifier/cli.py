@@ -51,6 +51,8 @@ def cli():
               help='Output directory for artifacts')
 @click.option('--project-id', '-p',
               help='Project ID (auto-generated if not provided)')
+@click.option('--env-file', '-e', type=click.Path(exists=True),
+              help='Path to .env file with configuration (optional)')
 @click.option('--json-log', is_flag=True, default=True,
               help='Use JSON line logging (default: True)')
 @click.option('--verbose', '-v', is_flag=True,
@@ -59,10 +61,28 @@ def process(
     document_path: str,
     output_dir: Optional[str] = None,
     project_id: Optional[str] = None,
+    env_file: Optional[str] = None,
     json_log: bool = True,
     verbose: bool = False
 ):
     """Process a document and generate FAIR metadata."""
+    # Load custom .env file if provided (before importing config)
+    if env_file:
+        from .config import load_env_file, apply_env_overrides
+        import fairifier.config as config_module
+        env_path = Path(env_file)
+        if load_env_file(env_path, verbose=verbose):
+            click.echo(f"📋 Using configuration from: {env_path}")
+            # Reload config after loading env file
+            # This ensures each run uses independent configuration
+            apply_env_overrides(config_module.config)
+        else:
+            click.echo(f"⚠️  Could not load .env file: {env_path}", err=True)
+            sys.exit(1)
+    
+    # Import config after potentially loading custom env file
+    from .config import config
+    
     # JSON logging is now default
     if not json_log:
         click.echo("Warning: Non-JSON logging is deprecated", err=True)
@@ -72,12 +92,20 @@ def process(
         logging.getLogger().setLevel(logging.DEBUG)
         click.echo("🔍 Verbose mode enabled\n")
     
-    # Set up output directory
+    # Set up output directory with timestamp
     if output_dir:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
     else:
-        output_path = config.output_path
+        # Create timestamped output directory
+        # Include env file name in output dir if using custom env file
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        if env_file:
+            env_name = Path(env_file).stem  # Get filename without extension
+            output_path = config.project_root / f"output_{env_name}_{timestamp}"
+        else:
+            output_path = config.project_root / f"output_{timestamp}"
+        output_path.mkdir(parents=True, exist_ok=True)
     
     click.echo("=" * 70)
     click.echo("🚀 FAIRifier - Automated FAIR Metadata Generation")
@@ -87,10 +115,17 @@ def process(
     click.echo(f"🤖 LLM: {config.llm_model} ({config.llm_provider})")
     click.echo(f"🌐 FAIR-DS API: {config.fair_ds_api_url or 'http://localhost:8083 (default)'}")
     
-    # LangSmith status
+    # LangSmith status - use unique project name if custom env file
+    langsmith_project = config.langsmith_project
+    if env_file:
+        env_name = Path(env_file).stem
+        langsmith_project = f"{config.langsmith_project}-{env_name}"
+        # Set unique LangSmith project for this run
+        os.environ["LANGCHAIN_PROJECT"] = langsmith_project
+    
     if config.enable_langsmith and config.langsmith_api_key:
         click.echo(f"📊 LangSmith: ✅ Enabled "
-                   f"(Project: {config.langsmith_project})")
+                   f"(Project: {langsmith_project})")
     elif config.enable_langsmith:
         click.echo("📊 LangSmith: ⚠️  Enabled but no API key "
                    "(set LANGSMITH_API_KEY)")
@@ -101,20 +136,25 @@ def process(
     click.echo()
     
     # Run workflow
-    asyncio.run(_run_workflow(document_path, output_path, project_id, verbose))
+    asyncio.run(_run_workflow(document_path, output_path, project_id, verbose, langsmith_project))
 
 
 async def _run_workflow(
     document_path: str,
     output_path: Path,
     project_id: Optional[str] = None,
-    verbose: bool = False
+    verbose: bool = False,
+    langsmith_project: Optional[str] = None
 ):
     """Run the FAIRifier workflow."""
     start_time = datetime.now()
     
     if not project_id:
         project_id = f"fairifier_{start_time.strftime('%Y%m%d_%H%M%S')}"
+    
+    # Set LangSmith project if provided (for isolation)
+    if langsmith_project:
+        os.environ["LANGCHAIN_PROJECT"] = langsmith_project
     
     try:
         workflow = FAIRifierWorkflow()

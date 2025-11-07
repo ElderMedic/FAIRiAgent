@@ -1,7 +1,7 @@
 """JSON metadata generator for FAIR-DS compatible output."""
 
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from langsmith import traceable
 
@@ -37,9 +37,16 @@ class JSONGeneratorAgent(BaseAgent):
             
             # Generate metadata fields with LLM value extraction
             if self.use_llm:
-                self.log_execution(state, "🤖 Using LLM to extract field values...")
+                # Get critic feedback if this is a retry
+                feedback = self.get_context_feedback(state)
+                critic_feedback = feedback.get("critic_feedback")
+                
+                if critic_feedback:
+                    self.log_execution(state, "🔄 Retrying metadata generation with Critic feedback...")
+                
+                self.log_execution(state, "🤖 Using LLM for intelligent, adaptive metadata generation...")
                 metadata_fields = await self._generate_with_llm(
-                    doc_info, knowledge_items, document_text
+                    doc_info, knowledge_items, document_text, critic_feedback
                 )
                 self.log_execution(
                     state, 
@@ -94,7 +101,13 @@ class JSONGeneratorAgent(BaseAgent):
                 f"❌ JSON generation failed: {str(e)}", 
                 "error"
             )
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(f"JSON generation error: {str(e)}")
             self.update_confidence(state, "json_generation", 0.0)
+            # Ensure metadata_fields exists even on error
+            if "metadata_fields" not in state:
+                state["metadata_fields"] = []
         
         return state
     
@@ -102,28 +115,114 @@ class JSONGeneratorAgent(BaseAgent):
         self,
         doc_info: Dict[str, Any],
         knowledge_items: List[Dict[str, Any]],
-        document_text: str
+        document_text: str,
+        critic_feedback: Optional[Dict[str, Any]] = None
     ) -> List[MetadataField]:
-        """Generate metadata fields with LLM-based value extraction."""
-        # Use LLM to map document content to metadata fields
-        mapped_fields = await self.llm_helper.map_to_metadata_fields(
-            doc_info, knowledge_items, document_text
+        """Generate metadata fields with LLM-based value extraction (adaptive)."""
+        # Convert knowledge_items to format expected by select_relevant_metadata_fields
+        # knowledge_items has structure: [{"term": "...", "definition": "...", "metadata": {...}}, ...]
+        available_fields = []
+        for item in knowledge_items:
+            term = item.get('term', '')
+            metadata = item.get('metadata', {})
+            available_fields.append({
+                "name": term,  # Use term as name
+                "description": item.get('definition', ''),
+                "required": metadata.get('required', False),
+                "package": metadata.get('package', ''),
+                "isa_sheet": metadata.get('isa_sheet', 'study'),
+                "metadata": metadata  # Preserve full metadata
+            })
+        
+        # Step 1: Select relevant fields intelligently
+        self.logger.info("Step 1: Selecting relevant metadata fields based on document content...")
+        selected_fields = await self.llm_helper.select_relevant_metadata_fields(
+            doc_info, available_fields, critic_feedback
         )
         
-        # Convert to MetadataField objects
+        self.logger.info(f"Selected {len(selected_fields)} relevant fields")
+        
+        # Step 2: Generate values for selected fields
+        self.logger.info("Step 2: Generating metadata values for selected fields...")
+        mapped_fields = await self.llm_helper.generate_complete_metadata(
+            doc_info, selected_fields, document_text, critic_feedback
+        )
+        
+        # Build lookup for knowledge items (to get FAIR-DS metadata)
+        # Use multiple keys for matching: term, name, label (normalized)
+        knowledge_lookup = {}
+        for item in knowledge_items:
+            term = item.get('term', '').lower().strip()
+            # Add multiple lookup keys for flexible matching
+            knowledge_lookup[term] = item
+            # Also add normalized versions (remove spaces, underscores, etc.)
+            normalized = term.replace(' ', '').replace('_', '').replace('-', '')
+            if normalized and normalized != term:
+                knowledge_lookup[normalized] = item
+        
+        # Also build lookup from selected_fields to preserve original field names
+        selected_fields_lookup = {f.get('name', '').lower().strip(): f for f in selected_fields}
+        
+        # Convert to MetadataField objects with REAL FAIR-DS metadata
         fields = []
         for field_data in mapped_fields:
+            field_name = field_data.get('field_name', '')
+            field_name_lower = field_name.lower().strip()
+            
+            # Try multiple matching strategies:
+            # 1. Direct match with knowledge_items term
+            knowledge_item = knowledge_lookup.get(field_name_lower, None)
+            
+            # 2. Try normalized match (remove spaces/underscores)
+            if not knowledge_item:
+                normalized = field_name_lower.replace(' ', '').replace('_', '').replace('-', '')
+                knowledge_item = knowledge_lookup.get(normalized, None)
+            
+            # 3. Try matching with selected_fields original name
+            if not knowledge_item:
+                original_field = selected_fields_lookup.get(field_name_lower, None)
+                if original_field:
+                    original_name = original_field.get('name', '').lower().strip()
+                    knowledge_item = knowledge_lookup.get(original_name, None)
+                    if not knowledge_item:
+                        normalized_original = original_name.replace(' ', '').replace('_', '').replace('-', '')
+                        knowledge_item = knowledge_lookup.get(normalized_original, None)
+            
+            # 4. Fuzzy match: find best match in knowledge_items
+            if not knowledge_item:
+                # Try to find similar field names
+                for item in knowledge_items:
+                    term = item.get('term', '').lower().strip()
+                    # Simple similarity check: if field_name contains term or vice versa
+                    if (field_name_lower in term or term in field_name_lower) and len(term) > 3:
+                        knowledge_item = item
+                        break
+            
+            # Extract metadata
+            if knowledge_item:
+                fairds_metadata = knowledge_item.get('metadata', {})
+                package_source = fairds_metadata.get('package', 'unknown')
+                isa_sheet = fairds_metadata.get('isa_sheet', 'study')
+            else:
+                # Fallback: try to infer from selected_fields
+                original_field = selected_fields_lookup.get(field_name_lower, {})
+                fairds_metadata = original_field.get('metadata', {})
+                package_source = fairds_metadata.get('package', 'unknown')
+                isa_sheet = fairds_metadata.get('isa_sheet', 'study')
+            
             field = MetadataField(
-                field_name=field_data.get('field_name', ''),
+                field_name=field_name,
                 value=field_data.get('value'),
                 evidence=field_data.get('evidence', ''),
                 confidence=field_data.get('confidence', 0.5),
                 origin="llm_extraction",
-                package_source="FAIR-DS",
+                package_source=package_source,  # From FAIR-DS API
+                isa_sheet=isa_sheet,  # From FAIR-DS API
                 status="provisional" if field_data.get('confidence', 0) < 0.9 else "confirmed",
-                data_type="string",
-                required=False,
-                description=field_data.get('evidence', '')
+                data_type=fairds_metadata.get('type', 'string'),
+                required=fairds_metadata.get('required', False),
+                description=fairds_metadata.get('definition', field_data.get('evidence', '')),
+                metadata=fairds_metadata  # Store complete FAIR-DS metadata
             )
             fields.append(field)
         
@@ -409,15 +508,24 @@ class JSONGeneratorAgent(BaseAgent):
         doc_info: Dict[str, Any],
         state: FAIRifierState
     ) -> Dict[str, Any]:
-        """Generate ISA-structured metadata template (5 layers)."""
+        """Generate ISA-structured metadata template (5 layers) - uses ONLY real FAIR-DS data."""
         
         # Calculate overall confidence
         overall_confidence = sum(f.confidence for f in fields) / len(fields) if fields else 0.0
         
-        # Group fields by ISA level (Investigation, Study, Assay, Sample, ObservationUnit)
-        fields_by_level = self._group_fields_by_isa_level(fields, doc_info)
+        # Group fields by ISA level based on their actual 'isa_sheet' attribute from FAIR-DS
+        fields_by_level = self._group_fields_by_isa_sheet(fields)
         
-        # Build ISA-structured output
+        # Collect actual packages used (from KnowledgeRetriever, stored in field.package_source)
+        packages_used = set()
+        for field in fields:
+            if hasattr(field, 'package_source') and field.package_source:
+                if isinstance(field.package_source, list):
+                    packages_used.update(field.package_source)
+                else:
+                    packages_used.add(field.package_source)
+        
+        # Build ISA-structured output - NO HARDCODED PACKAGE NAMES
         output = {
             "fairifier_version": "0.2.0",
             "generated_at": datetime.now().isoformat(),
@@ -425,26 +533,29 @@ class JSONGeneratorAgent(BaseAgent):
             "overall_confidence": round(overall_confidence, 3),
             "needs_review": state.get("needs_human_review", False),
             
-            # ISA 5-layer structure
+            # Packages used (from FAIR-DS API, selected by LLM)
+            "packages_used": sorted(list(packages_used)) if packages_used else [],
+            
+            # ISA 5-sheet structure (based on actual field.isa_sheet from FAIR-DS)
             "isa_structure": {
                 "investigation": {
-                    "metadata_package": "investigation_core",
+                    "description": "Investigation-level metadata (project info)",
                     "fields": fields_by_level.get("investigation", [])
                 },
                 "study": {
-                    "metadata_package": "study_core",
+                    "description": "Study-level metadata (experimental design)",
                     "fields": fields_by_level.get("study", [])
                 },
                 "assay": {
-                    "metadata_package": "assay_core",
+                    "description": "Assay-level metadata (measurement details)",
                     "fields": fields_by_level.get("assay", [])
                 },
                 "sample": {
-                    "metadata_package": "sample_core",
+                    "description": "Sample-level metadata (biological material)",
                     "fields": fields_by_level.get("sample", [])
                 },
                 "observationunit": {
-                    "metadata_package": "observationunit_core",
+                    "description": "ObservationUnit-level metadata (individual observations)",
                     "fields": fields_by_level.get("observationunit", [])
                 }
             },
@@ -487,12 +598,53 @@ class JSONGeneratorAgent(BaseAgent):
         
         return output
     
-    def _group_fields_by_isa_level(
+    def _group_fields_by_isa_sheet(
+        self, 
+        fields: List[MetadataField]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Group metadata fields by ISA sheet based on REAL 'isa_sheet' attribute from FAIR-DS.
+        
+        NO hardcoded mappings - uses only what FAIR-DS API provides.
+        """
+        
+        grouped = {
+            "investigation": [],
+            "study": [],
+            "assay": [],
+            "sample": [],
+            "observationunit": []
+        }
+        
+        for field in fields:
+            # Use the actual 'isa_sheet' attribute from FAIR-DS metadata
+            # This is set by KnowledgeRetriever when it retrieves fields from the API
+            isa_sheet = getattr(field, 'isa_sheet', None)
+            
+            if not isa_sheet:
+                # Fallback: try to infer from field metadata if not set
+                # Check if field object has metadata dict
+                if hasattr(field, 'metadata') and isinstance(field.metadata, dict):
+                    isa_sheet = field.metadata.get('isa_sheet')
+            
+            # If still no isa_sheet, assign to 'study' as default (most common)
+            if not isa_sheet or isa_sheet not in grouped:
+                isa_sheet = "study"
+            
+            # Convert field to dict and add to appropriate group
+            grouped[isa_sheet].append(self._field_to_dict(field))
+        
+        return grouped
+    
+    def _group_fields_by_isa_level_OLD_DEPRECATED(
         self, 
         fields: List[MetadataField],
         doc_info: Dict[str, Any]
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """Group metadata fields by ISA hierarchy level."""
+        """
+        DEPRECATED: This method uses hardcoded field name mappings.
+        Use _group_fields_by_isa_sheet instead which uses real FAIR-DS data.
+        """
         
         # ISA level mapping based on field characteristics
         level_mapping = {

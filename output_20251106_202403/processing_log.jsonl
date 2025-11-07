@@ -1,0 +1,11 @@
+{"timestamp": "2025-11-06T20:24:04.270637", "level": "info", "component": "fairifier.cli", "event": "processing_started", "document_path": "examples/inputs/earthworm_4n_paper_bioRxiv.pdf", "project_id": "fairifier_20251106_202403"}
+{"timestamp": "2025-11-06T20:26:40.479842", "level": "info", "component": "fairifier.cli", "event": "processing_completed", "project_id": "fairifier_20251106_202403", "status": "completed", "duration_seconds": 156.69}
+{"timestamp": "2025-11-06T20:26:40.480052", "level": "info", "component": "document_parsing", "event": "confidence_score", "score": 0.65}
+{"timestamp": "2025-11-06T20:26:40.480097", "level": "info", "component": "documentparser", "event": "confidence_score", "score": 0.65}
+{"timestamp": "2025-11-06T20:26:40.480130", "level": "info", "component": "knowledge_retrieval", "event": "confidence_score", "score": 1.0}
+{"timestamp": "2025-11-06T20:26:40.480157", "level": "info", "component": "knowledgeretriever", "event": "confidence_score", "score": 0.4}
+{"timestamp": "2025-11-06T20:26:40.480180", "level": "info", "component": "json_generation", "event": "confidence_score", "score": 0.909}
+{"timestamp": "2025-11-06T20:26:40.480203", "level": "info", "component": "jsongenerator", "event": "confidence_score", "score": 0.68}
+{"timestamp": "2025-11-06T20:26:40.480225", "level": "info", "component": "overall", "event": "confidence_score", "score": 0.715}
+{"timestamp": "2025-11-06T20:26:40.480296", "level": "info", "component": "fairifier.cli", "event": "saving_artifacts", "output_path": "/Users/changlinke/Documents/Main/SSB/PhD/Research/FAIRiAgent/output_20251106_202403", "artifact_count": 1}
+{"timestamp": "2025-11-06T20:26:40.481156", "level": "info", "component": "fairifier.cli", "event": "artifact_saved", "filename": "metadata_json.json", "size_bytes": 15184}

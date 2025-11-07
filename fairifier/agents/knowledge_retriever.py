@@ -9,7 +9,9 @@ from .base import BaseAgent
 from ..models import FAIRifierState, KnowledgeItem
 from ..config import config
 from ..services.fair_data_station import FAIRDataStationClient
+from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.llm_helper import get_llm_helper
+from . import knowledge_retriever_llm_methods as llm_methods
 
 
 class KnowledgeRetrieverAgent(BaseAgent):
@@ -53,124 +55,143 @@ class KnowledgeRetrieverAgent(BaseAgent):
             doc_info = state.get("document_info", {})
             knowledge_items = []
             
-            # Step 1: Try to fetch from FAIR-DS API first
-            self.log_execution(state, "🌐 Attempting to fetch from FAIR-DS API (localhost:8083)...")
+            # Fetch from FAIR-DS API (strict mode - no local fallback)
+            self.log_execution(state, "🌐 Fetching metadata from FAIR-DS API...")
             
-            if self.fair_ds_client:
-                self.log_execution(state, "   📡 Trying GET /api/packages...")
-                self.log_execution(state, "   📡 Trying GET /api/terms...")
-                
-                # Get packages and terms from API
-                packages = self.fair_ds_client.get_packages()
-                terms = self.fair_ds_client.get_terms()
-                
-                # Check if we got real data or fallback
-                if packages and isinstance(packages, list) and len(packages) > 0:
-                    if 'level' in packages[0]:  # This indicates it's from our structured fallback
-                        self.log_execution(state, "⚠️  API returned HTML (Vaadin app), using FAIR-DS standard fallback")
-                        data_source = "FAIR-DS-Fallback"
-                    else:
-                        self.log_execution(state, f"✅ Successfully retrieved from API: {len(packages)} packages, {len(terms)} terms")
-                        data_source = "FAIR-DS-API"
-                else:
-                    self.log_execution(state, "⚠️  No data from API, using fallback")
-                    data_source = "FAIR-DS-Fallback"
-                
-                # Get hierarchical structure
-                structure = self.fair_ds_client.get_hierarchical_structure()
-                self.log_execution(state, f"🏗️  Retrieved FAIR-DS hierarchical structure ({data_source}):")
-                
-                total_terms = 0
-                total_packages = 0
-                for level, content in structure.items():
-                    level_terms = len(content.get('terms', []))
-                    level_packages = len(content.get('packages', []))
-                    total_terms += level_terms
-                    total_packages += level_packages
-                    self.log_execution(state, f"   📊 {level}: {level_terms} terms, {level_packages} packages")
-                
-                self.log_execution(state, f"✅ Total: {total_terms} terms, {total_packages} packages from {data_source}")
-                
-                # Step 2: Use LLM for intelligent analysis (broad to deep)
-                if self.use_llm:
-                    self.log_execution(state, "🤖 Phase 1: LLM analyzing document to determine relevant ISA levels...")
-                    
-                    # Phase 1: Determine which ISA levels are relevant
-                    relevant_levels = await self._llm_determine_relevant_levels(doc_info, structure)
-                    self.log_execution(state, f"✅ Relevant ISA levels: {relevant_levels}")
-                    
-                    # Phase 2: For each relevant level, select appropriate packages
-                    self.log_execution(state, "🤖 Phase 2: LLM selecting relevant packages for each level...")
-                    selected_packages = await self._llm_select_packages_by_level(
-                        doc_info, structure, relevant_levels
-                    )
-                    
-                    # Phase 3: For each selected package, choose specific terms
-                    self.log_execution(state, "🤖 Phase 3: LLM selecting specific terms from packages...")
-                    relevant_terms = await self._llm_select_terms_from_packages(
-                        doc_info, structure, selected_packages
-                    )
-                    
-                    self.log_execution(
-                        state, 
-                        f"✅ LLM analysis complete: {len(relevant_terms)} terms selected across {len(relevant_levels)} ISA levels"
-                    )
-                else:
-                    # Fallback: use simple keyword matching
-                    self.log_execution(state, "⚠️  Using keyword matching (LLM disabled)")
-                    all_terms = []
-                    for level_content in structure.values():
-                        all_terms.extend(level_content.get('terms', []))
-                    relevant_terms = self._simple_field_selection(doc_info, all_terms)
-                
-                # Convert to knowledge items with level and package information
-                for term in relevant_terms:
-                    item = KnowledgeItem(
-                        term=term.get('name', ''),
-                        definition=term.get('description', ''),
-                        source=f"FAIR-DS-{term.get('level', 'unknown')}",
-                        ontology_uri=term.get('uri', ''),
-                        confidence=0.90,  # Higher confidence for FAIR-DS structured data
-                        metadata={
-                            'level': term.get('level'),
-                            'package': term.get('package'),
-                            'required': term.get('required'),
-                            'data_type': term.get('data_type')
-                        }
-                    )
-                    knowledge_items.append(item)
-                
-                # Store full hierarchical structure in state for later use
-                state["fair_ds_structure"] = structure
-                
-                # Also store raw packages and terms for Generator
-                state["fair_ds_packages"] = self.fair_ds_client.get_packages()
-                state["fair_ds_terms"] = self.fair_ds_client.get_terms()
-                
+            if not self.fair_ds_client:
+                error_msg = "FAIR-DS API client not available. Please ensure FAIR-DS is running at localhost:8083"
+                self.log_execution(state, f"❌ {error_msg}", "error")
+                state["errors"] = state.get("errors", []) + [error_msg]
+                self.update_confidence(state, "knowledge_retrieval", 0.0)
+                return state
+            
+            self.log_execution(state, "   📡 GET /api/packages...")
+            self.log_execution(state, "   📡 GET /api/terms...")
+            
+            # Get packages and terms from FAIR-DS API
+            packages_response = self.fair_ds_client.get_packages()
+            terms_response = self.fair_ds_client.get_terms()
+            
+            # Parse API responses
+            packages_by_sheet = FAIRDSAPIParser.parse_packages_response(packages_response)
+            terms = FAIRDSAPIParser.parse_terms_response(terms_response)
+            
+            # Validate we got real API data
+            if not packages_by_sheet or len(packages_by_sheet) == 0:
+                error_msg = "FAIR-DS API returned no data. Ensure API is properly configured."
+                self.log_execution(state, f"❌ {error_msg}", "error")
+                state["errors"] = state.get("errors", []) + [error_msg]
+                self.update_confidence(state, "knowledge_retrieval", 0.0)
+                return state
+            
+            # Get all unique package names with stats
+            all_packages = FAIRDSAPIParser.get_all_package_names(packages_by_sheet)
+            
+            self.log_execution(state, f"✅ Retrieved from FAIR-DS API:")
+            self.log_execution(state, f"   ISA Sheets: {list(packages_by_sheet.keys())}")
+            self.log_execution(state, f"   Total unique packages: {len(all_packages)}")
+            self.log_execution(state, f"   Total terms: {len(terms)}")
+            
+            # Show top packages
+            self.log_execution(state, "📦 Top packages by field count:")
+            for pkg in all_packages[:10]:
                 self.log_execution(
                     state,
-                    f"💾 Stored complete FAIR-DS data: {len(state['fair_ds_packages'])} packages, {len(state['fair_ds_terms'])} terms"
+                    f"   • {pkg['name']}: {pkg['field_count']} fields "
+                    f"({pkg['mandatory_count']} mandatory, {pkg['optional_count']} optional)"
                 )
                 
-            else:
-                # Fallback to local knowledge base
-                self.log_execution(
-                    state, 
-                    "⚠️  FAIR-DS not available, using local fallback"
-                )
-                knowledge_items = self._get_local_knowledge(doc_info)
+            # Use LLM for intelligent, adaptive analysis (required)
+            # Get critic feedback if this is a retry
+            feedback = self.get_context_feedback(state)
+            critic_feedback = feedback.get("critic_feedback")
             
-            # Store retrieved knowledge
+            if critic_feedback:
+                self.log_execution(state, "🔄 Retrying with Critic feedback...")
+                for suggestion in critic_feedback.get("suggestions", [])[:2]:
+                    self.log_execution(state, f"   💡 {suggestion}")
+            
+            self.log_execution(state, "🤖 Phase 1: LLM selecting relevant metadata packages...")
+            
+            # Phase 1: LLM selects relevant packages based on research type
+            self.log_execution(state, "   Calling LLM to select relevant packages...")
+            try:
+                selected_package_names = await llm_methods.llm_select_relevant_packages(
+                    self.llm_helper, doc_info, all_packages, critic_feedback
+                )
+                self.log_execution(state, f"✅ LLM selected packages: {selected_package_names}")
+            except Exception as e:
+                logger.error(f"Error in llm_select_relevant_packages: {e}", exc_info=True)
+                self.log_execution(state, f"❌ LLM package selection failed: {e}", "error")
+                # Use top 3 packages as fallback
+                selected_package_names = [pkg["name"] for pkg in all_packages[:3]]
+                self.log_execution(state, f"   Using default packages: {selected_package_names}")
+            
+            # Phase 2: Get all fields from selected packages (auto-deduplicated)
+            self.log_execution(state, "📦 Phase 2: Collecting fields from selected packages...")
+            
+            all_fields_from_packages = FAIRDSAPIParser.get_fields_by_package(
+                packages_by_sheet, selected_package_names
+            )
+            
+            # Separate mandatory and optional
+            mandatory_fields = [f for f in all_fields_from_packages if f.get("requirement") == "MANDATORY"]
+            optional_fields = [f for f in all_fields_from_packages if f.get("requirement") == "OPTIONAL"]
+            
+            self.log_execution(
+                state,
+                f"   Collected: {len(all_fields_from_packages)} unique fields "
+                f"({len(mandatory_fields)} mandatory, {len(optional_fields)} optional)"
+            )
+            
+            # Phase 3: LLM selects relevant optional fields
+            self.log_execution(state, "🤖 Phase 3: LLM selecting relevant optional fields...")
+            
+            selected_optional = await llm_methods.llm_select_optional_fields(
+                self.llm_helper, doc_info, mandatory_fields, optional_fields, critic_feedback
+            )
+            
+            # Combine mandatory (all) + selected optional
+            final_selected_fields = mandatory_fields + selected_optional
+            
+            self.log_execution(
+                state,
+                f"✅ Final selection: {len(final_selected_fields)} fields "
+                f"({len(mandatory_fields)} mandatory + {len(selected_optional)} optional)"
+            )
+            
+            # Convert to KnowledgeItem objects
+            knowledge_items = []
+            for field in final_selected_fields:
+                field_info = FAIRDSAPIParser.extract_field_info(field)
+                
+                item = KnowledgeItem(
+                    term=field_info['name'],
+                    definition=field_info['definition'],
+                    source="FAIR-DS-API",
+                    ontology_uri=field_info.get('ontology_uri'),
+                    confidence=0.95 if field_info['required'] else 0.85,
+                    metadata=field_info
+                )
+                knowledge_items.append(item)
+            
+            # Store retrieved knowledge in state
             state["retrieved_knowledge"] = [
                 {
                     "term": item.term,
                     "definition": item.definition,
                     "source": item.source,
                     "ontology_uri": item.ontology_uri,
-                    "confidence": item.confidence
+                    "confidence": item.confidence,
+                    "metadata": item.metadata
                 }
                 for item in knowledge_items
             ]
+            
+            self.log_execution(
+                state,
+                f"✅ Knowledge retrieval completed: {len(knowledge_items)} FAIR-DS fields"
+            )
             
             # Calculate confidence
             confidence = self._calculate_retrieval_confidence(
@@ -192,7 +213,13 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 f"❌ Knowledge retrieval failed: {str(e)}", 
                 "error"
             )
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(f"Knowledge retrieval error: {str(e)}")
             self.update_confidence(state, "knowledge_retrieval", 0.0)
+            # Ensure knowledge_items exists even on error
+            if "knowledge_items" not in state:
+                state["knowledge_items"] = []
         
         return state
     
@@ -235,104 +262,52 @@ class KnowledgeRetrieverAgent(BaseAgent):
         
         return selected[:20]  # Limit to 20 fields
     
-    def _get_local_knowledge(
+    def _keyword_based_selection(
         self, 
-        doc_info: Dict[str, Any]
-    ) -> List[KnowledgeItem]:
-        """Fallback: Get knowledge from local files."""
-        knowledge_items = []
+        doc_info: Dict[str, Any], 
+        all_terms: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Basic keyword-based field selection when LLM is not available.
+        Only uses FAIR-DS terms, no local fallback.
+        """
+        selected = []
         
-        # Define minimal core metadata fields
-        core_fields = [
-            {
-                "name": "title",
-                "description": "The title or name of the dataset or study",
-                "required": True
-            },
-            {
-                "name": "description",
-                "description": "A detailed description of the dataset",
-                "required": True
-            },
-            {
-                "name": "creator",
-                "description": "The person or organization who created the dataset",
-                "required": True
-            },
-            {
-                "name": "date_created",
-                "description": "The date when the dataset was created",
-                "required": False
-            },
-            {
-                "name": "keywords",
-                "description": "Keywords or tags describing the dataset",
-                "required": False
-            },
-            {
-                "name": "geographic_location",
-                "description": "The geographic location where data was collected",
-                "required": False
-            },
-            {
-                "name": "temporal_coverage",
-                "description": "The time period covered by the dataset",
-                "required": False
-            },
-            {
-                "name": "methodology",
-                "description": "Methods and procedures used for data collection",
-                "required": False
-            },
-            {
-                "name": "instrument",
-                "description": "Instruments or equipment used",
-                "required": False
-            },
-            {
-                "name": "license",
-                "description": "The license under which the dataset is published",
-                "required": False
-            }
-        ]
+        # Extract keywords from document
+        keywords = set()
+        if doc_info.get('keywords'):
+            keywords.update([k.lower() for k in doc_info['keywords']])
+        if doc_info.get('research_domain'):
+            keywords.add(doc_info['research_domain'].lower())
         
-        for field in core_fields:
-            item = KnowledgeItem(
-                term=field["name"],
-                definition=field["description"],
-                source="Local",
-                confidence=0.7 if field["required"] else 0.5
-            )
-            knowledge_items.append(item)
+        # Identify core investigation-level fields (always include)
+        investigation_terms = [t for t in all_terms if t.get('isa_level') == 'investigation']
+        selected.extend(investigation_terms[:10])  # Include first 10 investigation fields
         
-        # Add domain-specific fields if research domain is known
-        domain = doc_info.get("research_domain", "").lower()
-        if "genom" in domain or "metagen" in domain or "microb" in domain:
-            genomics_fields = [
-                {
-                    "name": "sequencing_platform",
-                    "description": "The sequencing platform or technology used",
-                },
-                {
-                    "name": "assembly_method",
-                    "description": "Method used for sequence assembly",
-                },
-                {
-                    "name": "sequence_quality",
-                    "description": "Quality metrics for sequences",
-                }
-            ]
+        # Add study-level fields if mentioned in keywords
+        study_terms = [t for t in all_terms if t.get('isa_level') == 'study']
+        for term in study_terms:
+            term_name = term.get('name', '').lower()
+            term_desc = term.get('description', '').lower()
             
-            for field in genomics_fields:
-                item = KnowledgeItem(
-                    term=field["name"],
-                    definition=field["description"],
-                    source="Local (domain-specific)",
-                    confidence=0.6
-                )
-                knowledge_items.append(item)
+            if keywords and any(kw in term_name or kw in term_desc for kw in keywords):
+                selected.append(term)
+                if len(selected) >= 20:
+                    break
         
-        return knowledge_items
+        # Add relevant assay-level fields based on research domain
+        if len(selected) < 20:
+            assay_terms = [t for t in all_terms if t.get('isa_level') == 'assay']
+            for term in assay_terms:
+                term_name = term.get('name', '').lower()
+                term_desc = term.get('description', '').lower()
+                
+                if keywords and any(kw in term_name or kw in term_desc for kw in keywords):
+                    selected.append(term)
+                    if len(selected) >= 20:
+                        break
+        
+        return selected[:25]  # Limit to 25 fields
     
     def _calculate_retrieval_confidence(
         self, 
@@ -360,7 +335,8 @@ class KnowledgeRetrieverAgent(BaseAgent):
     async def _llm_determine_relevant_levels(
         self, 
         doc_info: Dict[str, Any],
-        structure: Dict[str, Any]
+        structure: Dict[str, Any],
+        critic_feedback: Optional[Dict[str, Any]] = None
     ) -> List[str]:
         """Phase 1: LLM determines which ISA levels are relevant for this document."""
         

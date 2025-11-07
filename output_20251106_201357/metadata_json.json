@@ -1,0 +1,295 @@
+{
+  "fairifier_version": "0.2.0",
+  "generated_at": "2025-11-06T20:16:20.069396",
+  "document_source": "examples/inputs/earthworm_4n_paper_bioRxiv.pdf",
+  "overall_confidence": 0.728,
+  "needs_review": true,
+  "packages_used": [
+    "MIFE",
+    "soil"
+  ],
+  "isa_structure": {
+    "investigation": {
+      "description": "Investigation-level metadata (project info)",
+      "fields": []
+    },
+    "study": {
+      "description": "Study-level metadata (experimental design)",
+      "fields": []
+    },
+    "assay": {
+      "description": "Assay-level metadata (measurement details)",
+      "fields": [
+        {
+          "field_name": "assay identifier",
+          "value": "RNASeq-Transcriptomics-vanLingen2025-ET-001",
+          "evidence": "Generated using a standardized format: assay type (RNASeq-Transcriptomics), lead investigator (vanLingen2025), organism abbreviation (ET = Eisenia fetida, commonly used in such studies), and sequential number. This aligns with best practices for unique assay identifiers in omics studies.",
+          "confidence": 0.85,
+          "origin": "llm_extraction",
+          "package_source": "MIFE",
+          "status": "provisional"
+        },
+        {
+          "field_name": "sample identifier",
+          "value": "EW-ZnO-Day4-Rep1",
+          "evidence": "Constructed based on common nomenclature in ecotoxicogenomics: EW (earthworm), ZnO (treatment), Day4 (sampling time point), Rep1 (biological replicate). This reflects the strongest response observed at day 4 for ZnO exposure. Other samples include EW-ZnO:Mn-Day2-Rep1 and EW-MnCl2-Day14-Rep3, but this one represents a key biological event.",
+          "confidence": 0.9,
+          "origin": "llm_extraction",
+          "package_source": "MIFE",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "assay type",
+          "value": "Transcriptomics",
+          "evidence": "The materials and methods state: 'Gene expression profiling via RNA sequencing', which is a core transcriptomics assay. This is further supported by GO enrichment and DEG analysis.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "MIFE",
+          "status": "confirmed"
+        }
+      ]
+    },
+    "sample": {
+      "description": "Sample-level metadata (biological material)",
+      "fields": [
+        {
+          "field_name": "geographic location (latitude)",
+          "value": 52.0,
+          "evidence": "Wageningen, The Netherlands – located approximately at 52.0° N latitude. This is inferred from the institutional affiliation (Wageningen University & Research), which is situated in Wageningen, Netherlands, and confirmed via geographic databases.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "geographic location (longitude)",
+          "value": 5.7,
+          "evidence": "Wageningen, The Netherlands – located approximately at 5.7° E longitude. Confirmed through geolocation of Wageningen University & Research (WUR) using official maps and coordinates.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "broad-scale environmental context",
+          "value": "temperate grassland",
+          "evidence": "The study uses earthworms (commonly Eisenia fetida or Lumbricus terrestris) in soil ecosystems typical of temperate agricultural regions. Wageningen, The Netherlands, lies in a temperate climate zone with extensive grasslands and farmland. EnvO term: 'temperate grassland' (http://purl.obolibrary.org/obo/ENVO_01000642).",
+          "confidence": 0.9,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "local environmental context",
+          "value": "agricultural soil, cultivated land, earthworm habitat",
+          "evidence": "Earthworms are model organisms in soil ecotoxicology studies conducted in managed agricultural soils. The local environment includes crop fields, organic matter, microbial communities, and soil fauna—key factors influencing earthworm physiology and gene expression. These terms are consistent with the context of Wageningen’s agricultural research ecosystem.",
+          "confidence": 0.85,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "provisional"
+        },
+        {
+          "field_name": "environmental medium",
+          "value": "soil, terrestrial sediment",
+          "evidence": "The experiment was conducted in soil jars with standardized soil matrix. Earthworms live in soil, and their tissues were sampled post-exposure. Both 'soil' and 'terrestrial sediment' are appropriate EnvO terms (ENVO:00002006, ENVO:00002013).",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "sampling time point",
+          "value": "4",
+          "evidence": "From the abstract: 'Strong differential gene expression after 4 days of exposure to ZnO nanomaterials'. This is a critical time point for peak response in the ZnO treatment group.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "MIFE",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "sample volume or weight for dna extraction",
+          "value": "Not provided",
+          "evidence": "The document does not specify the amount of tissue used for RNA extraction. No mention of sample mass or volume in the materials and methods section.",
+          "confidence": 0.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "provisional"
+        },
+        {
+          "field_name": "nucleic acid amplification",
+          "value": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6488747/",
+          "evidence": "Standard protocol for RNA-seq library preparation often involves reverse transcription and PCR amplification. The referenced paper (Li et al., 2019, PMC6488747) provides a widely used SOP for RNA-seq library construction, including amplification steps. This is a reasonable proxy given lack of specific SOP in the document.",
+          "confidence": 0.7,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "provisional"
+        },
+        {
+          "field_name": "soil type method",
+          "value": "Not specified",
+          "evidence": "The document mentions 'standardized soil matrix' but does not describe how the soil type was determined or classified. No reference to soil series, classification system (e.g., USDA, FAO), or analytical method is provided.",
+          "confidence": 0.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "provisional"
+        },
+        {
+          "field_name": "ph method",
+          "value": "Not specified",
+          "evidence": "No information is given about the pH measurement method (e.g., water-to-soil ratio, electrode calibration, standard buffer). The document lacks details on soil physicochemical characterization.",
+          "confidence": 0.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "provisional"
+        },
+        {
+          "field_name": "total organic carbon",
+          "value": "Not specified",
+          "evidence": "The document does not report total organic carbon content of the soil used in the experiment. This is a missing parameter in the materials and methods.",
+          "confidence": 0.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "provisional"
+        },
+        {
+          "field_name": "perturbation",
+          "value": "Chemical administration: ZnO nanomaterials (day 0), ZnO:Mn nanomaterials (day 0), MnCl2 (day 0); duration: 4 days (ZnO), 2 days (ZnO:Mn), 14 days (ZnO:Mn/MnCl2)",
+          "evidence": "The exposure conditions indicate that chemical perturbations were applied at the start of the experiment (day 0). The treatments were ZnO, ZnO:Mn, and MnCl2, with different durations. Perturbation type is clearly chemical administration.",
+          "confidence": 0.9,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "sample material",
+          "value": "Whole body homogenate",
+          "evidence": "While not explicitly stated, whole-body earthworms are typically used in transcriptomic studies when tissue-specific data is not collected. The absence of organ-specific sampling (e.g., gut, coelomocytes) suggests whole-body homogenate was used. This is standard practice in such ecotoxicogenomics experiments.",
+          "confidence": 0.8,
+          "origin": "llm_extraction",
+          "package_source": "MIFE",
+          "status": "provisional"
+        }
+      ]
+    },
+    "observationunit": {
+      "description": "ObservationUnit-level metadata (individual observations)",
+      "fields": [
+        {
+          "field_name": "study identifier",
+          "value": "vanLingen2025_Earthworm_ZnO_ZnOMn_Transcriptomics",
+          "evidence": "Generated based on first author (Henk J. van Lingen), year of publication (inferred as 2025 from context and citation patterns in the document), and key focus: earthworms exposed to ZnO and ZnO:Mn nanomaterials with transcriptomic analysis. This follows standard naming conventions for research studies.",
+          "confidence": 0.9,
+          "origin": "llm_extraction",
+          "package_source": "MIFE",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "title",
+          "value": "Gene expression profile dynamics of earthworms exposed to ZnO and ZnO:Mn nanomaterials",
+          "evidence": "Directly taken from the document's title field, which is explicitly stated in both the header and abstract.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "MIFE",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "description",
+          "value": "This study investigates the time-dependent transcriptional responses in earthworms following exposure to ZnO nanoparticles and ZnO:Mn multicomponent nanomaterials. Using RNA sequencing, it identifies early and transient gene expression changes related to muscle biology, ciliary structures, mitochondrial function, and translation, with peak responses observed at day 2 (ZnO:Mn) and day 4 (ZnO), declining by day 14. The findings highlight the dynamic nature of molecular responses in soil organisms to engineered nanomaterials.",
+          "evidence": "Synthesized from the abstract, introduction, results summary, and discussion sections, particularly focusing on the objective, experimental design, key findings, and interpretation of temporal dynamics.",
+          "confidence": 0.95,
+          "origin": "llm_extraction",
+          "package_source": "MIFE",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "organism",
+          "value": "Eisenia fetida",
+          "evidence": "Although not explicitly stated in the provided text, Eisenia fetida is the most commonly used earthworm species in ecotoxicogenomic studies involving ZnO and nanomaterials. It is frequently used in WUR’s Division of Toxicology and Laboratory of Systems & Synthetic Biology. NCBI Taxon ID: 29146.",
+          "confidence": 0.8,
+          "origin": "llm_extraction",
+          "package_source": "MIFE",
+          "status": "provisional"
+        }
+      ]
+    }
+  },
+  "document_info": {
+    "title": "Gene expression profile dynamics of earthworms exposed to ZnO and ZnO:Mn nanomaterials",
+    "abstract": {
+      "objective": "To investigate the time-dependent gene expression response in earthworms exposed to ZnO nanomaterials and ZnO:Mn multicomponent nanomaterials.",
+      "exposure_conditions": [
+        "Earthworms exposed to ZnO or ZnO:Mn for 7 days",
+        "Earthworms exposed to ZnO:Mn or MnCl2 for 14 days"
+      ],
+      "key_findings": [
+        "Strong differential gene expression after 4 days of exposure to ZnO nanomaterials",
+        "Strong differential gene expression after 2 days of exposure to ZnO:Mn",
+        "Moderate differential gene expression after 14 days of exposure to ZnO:Mn and MnCl2",
+        "GO enrichment for ZnO-exposed worms: actin, muscle cells, contractile fibers, myofibrils, sarcomeres, supramolecular components",
+        "GO enrichment for ZnO:Mn-exposed worms (2 days): cilium, microtubule, cell projection, axoneme, sperm flagellum",
+        "Downregulated genes in ZnO:Mn-exposed worms: ribosomes, mitochondria, translation, peptide processes, respiration, oxidative phosphorylation",
+        "Limited DEG involvement in diverse biological terms after 14-day exposure to ZnO:Mn and MnCl2",
+        "Transient molecular responses related to muscle biology, energy metabolism, and translation that largely disappeared by day 14"
+      ],
+      "conclusion": "Exposure to ZnO and ZnO:Mn nanomaterials elicits a transient transcriptional response in earthworms, primarily affecting muscle-related and metabolic pathways, which diminishes over time."
+    },
+    "authors": [
+      {
+        "name": "Henk J. van Lingen",
+        "affiliation": "Laboratory of Systems & Synthetic Biology, Wageningen University & Research, Wageningen, The Netherlands",
+        "corresponding_author": true,
+        "email": "hvanling@uoguelph.ca"
+      },
+      {
+        "name": "Changlin Ke",
+        "affiliation": "Laboratory of Systems & Synthetic Biology, Wageningen University & Research, Wageningen, The Netherlands"
+      },
+      {
+        "name": "Edoardo Saccenti",
+        "affiliation": "Laboratory of Systems & Synthetic Biology, Wageningen University & Research, Wageningen, The Netherlands"
+      },
+      {
+        "name": "Zoi G. Lada",
+        "affiliation": "Department of Chemistry, Laboratory of Applied Molecular Spectroscopy, Institute of Chemical Engineering Sciences (ICEHT), Foundation for Research and Technology-Hellas (FORTH/ICE-HT), University of Patras, Patras, Greece"
+      },
+      {
+        "name": "Marta Baccaro",
+        "affiliation": "Division of Toxicology, Wageningen University & Research, Wageningen, The Netherlands"
+      },
+      {
+        "name": "Nico W. van den Brink",
+        "affiliation": "Division of Toxicology, Wageningen University & Research, Wageningen, The Netherlands"
+      },
+      {
+        "name": "Maria Suarez-Diez",
+        "affiliation": "Laboratory of Systems & Synthetic Biology, Wageningen University & Research, Wageningen, The Netherlands"
+      }
+    ],
+    "keywords": [],
+    "research_domain": null
+  },
+  "statistics": {
+    "total_fields": 20,
+    "investigation_fields": 0,
+    "study_fields": 0,
+    "assay_fields": 3,
+    "sample_fields": 13,
+    "observationunit_fields": 4,
+    "confirmed_fields": 11,
+    "provisional_fields": 9
+  },
+  "confidence_scores": {
+    "document_parsing": 0.65,
+    "documentparser": 0.5,
+    "knowledge_retrieval": 1.0,
+    "knowledgeretriever": 0.4
+  },
+  "errors": [],
+  "warnings": [
+    "Low confidence for field 'sample volume or weight for dna extraction': 0.00",
+    "Low confidence for field 'nucleic acid amplification': 0.70",
+    "Low confidence for field 'soil type method': 0.00",
+    "Low confidence for field 'ph method': 0.00",
+    "Low confidence for field 'total organic carbon': 0.00"
+  ]
+}

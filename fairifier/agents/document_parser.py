@@ -44,13 +44,27 @@ class DocumentParserAgent(BaseAgent):
             
             # Extract structured information using LLM
             if self.use_llm:
-                self.log_execution(state, "🤖 Using LLM for intelligent extraction...")
-                doc_info_dict = await self.llm_helper.extract_document_info(text)
+                # Get critic feedback if this is a retry
+                feedback = self.get_context_feedback(state)
+                critic_feedback = feedback.get("critic_feedback")
+                
+                if critic_feedback:
+                    self.log_execution(state, "🔄 Retrying with Critic feedback...")
+                    self.log_execution(state, f"   Feedback: {critic_feedback.get('feedback')}")
+                
+                self.log_execution(state, "🤖 Using LLM for intelligent, adaptive extraction...")
+                doc_info_dict = await self.llm_helper.extract_document_info(text, critic_feedback)
+                
+                # Remove raw_text if LLM included it (to avoid passing large text to subsequent agents)
+                if "raw_text" in doc_info_dict:
+                    del doc_info_dict["raw_text"]
+                
                 self.log_execution(state, f"✅ LLM extracted: {list(doc_info_dict.keys())}")
                 
-                # Store in state directly as dict
+                # Store in state directly as dict (without raw_text - it's already in document_content)
                 state["document_info"] = doc_info_dict
-                state["document_info"]["raw_text"] = text
+                # Note: raw_text is NOT included in document_info to avoid passing large text to subsequent agents
+                # The full text is available in state["document_content"] if needed
                 
                 # Calculate confidence
                 confidence = self._calculate_llm_confidence(doc_info_dict)
@@ -68,8 +82,8 @@ class DocumentParserAgent(BaseAgent):
                     "methodology": doc_info.methodology,
                     "datasets_mentioned": doc_info.datasets_mentioned,
                     "instruments": doc_info.instruments,
-                    "variables": doc_info.variables,
-                    "raw_text": doc_info.raw_text
+                    "variables": doc_info.variables
+                    # Note: raw_text is NOT included - it's already in state["document_content"]
                 }
                 confidence = self._calculate_parsing_confidence(doc_info)
             
@@ -91,7 +105,13 @@ class DocumentParserAgent(BaseAgent):
             
         except Exception as e:
             self.log_execution(state, f"❌ Document parsing failed: {str(e)}", "error")
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(f"Document parsing error: {str(e)}")
             self.update_confidence(state, "document_parsing", 0.0)
+            # Ensure document_info exists even on error
+            if "document_info" not in state:
+                state["document_info"] = {"title": "Unknown", "abstract": "", "authors": [], "keywords": []}
         
         return state
     

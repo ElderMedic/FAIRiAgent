@@ -1,15 +1,17 @@
 """
-FAIRifier Workflow - Orchestrator-driven architecture
+FAIRifier Workflow - Orchestrator-driven architecture with Critic feedback
 
 Flow:
-1. Read file content (no LLM) → raw text
-2. Orchestrator plans and executes:
-   - DocumentParser (LLM): Extract key info as JSON summary
+1. Read file content → raw text
+2. Orchestrator plans and executes with Critic review:
+   - DocumentParser (LLM): Extract key info adaptively
+   - Critic: Evaluate quality → Accept/Retry/Escalate
    - KnowledgeRetriever: Get FAIR-DS packages & terms from API
-   - JSONGenerator: Generate ISA metadata template (5 layers)
-   - Validator: Validate using confidence scores / FAIR-DS API
+   - Critic: Evaluate quality → Accept/Retry/Escalate
+   - JSONGenerator: Generate FAIR-DS compatible metadata
+   - Critic: Evaluate quality → Accept/Retry/Escalate
    
-Output: ISA-structured metadata template JSON
+Output: FAIR-DS compatible JSON metadata with full traceability
 """
 
 import logging
@@ -25,7 +27,6 @@ from ..agents.orchestrator import OrchestratorAgent
 from ..agents.document_parser import DocumentParserAgent
 from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
 from ..agents.json_generator import JSONGeneratorAgent
-from ..agents.validator import ValidationAgent
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,6 @@ class FAIRifierWorkflow:
         self.orchestrator.register_agent("DocumentParser", DocumentParserAgent(use_llm=True))
         self.orchestrator.register_agent("KnowledgeRetriever", KnowledgeRetrieverAgent())
         self.orchestrator.register_agent("JSONGenerator", JSONGeneratorAgent())
-        self.orchestrator.register_agent("Validator", ValidationAgent())
         
         self.checkpointer = MemorySaver()
         self.workflow = self._create_workflow()
@@ -97,6 +97,8 @@ class FAIRifierWorkflow:
             
         except Exception as e:
             logger.error(f"❌ Failed to read file: {e}")
+            if "errors" not in state:
+                state["errors"] = []
             state["errors"].append(f"File reading error: {str(e)}")
             state["document_content"] = ""
         

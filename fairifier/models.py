@@ -59,14 +59,18 @@ class MetadataField:
     evidence: Optional[str] = None
     confidence: float = 0.0
     origin: str = "unknown"  # e.g., "document_parser", "knowledge_retriever"
-    package_source: Optional[str] = None  # e.g., "MIMAG", "MISAG", "local"
+    package_source: Optional[str] = None  # e.g., "miappe", "soil", "default" (from FAIR-DS API)
     status: str = "provisional"  # "provisional" or "confirmed"
+    
+    # ISA sheet from FAIR-DS API (one of: investigation, study, assay, sample, observationunit)
+    isa_sheet: Optional[str] = None
     
     # Additional metadata for internal use
     data_type: Optional[str] = None
     required: bool = False
     description: Optional[str] = None
     ontology_term: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None  # Raw metadata from FAIR-DS
 
 
 @dataclass

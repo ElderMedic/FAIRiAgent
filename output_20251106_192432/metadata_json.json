@@ -1,0 +1,357 @@
+{
+  "fairifier_version": "0.2.0",
+  "generated_at": "2025-11-06T19:26:45.938209",
+  "document_source": "examples/inputs/test_document.txt",
+  "overall_confidence": 0.861,
+  "needs_review": true,
+  "packages_used": [
+    "GSC MIMAGS",
+    "default",
+    "soil"
+  ],
+  "isa_structure": {
+    "investigation": {
+      "description": "Investigation-level metadata (project info)",
+      "fields": [
+        {
+          "field_name": "investigation title",
+          "value": "Metagenomic Profiling of Soil Microbiomes Under Different Fertilization Regimes in Agricultural Soils",
+          "evidence": "This title is derived from the study title and abstract, rephrased to reflect the broader scope of the investigation (metagenomic profiling across multiple treatments). It aligns with the FAIR metadata 'descriptive_title' and captures the core focus.",
+          "confidence": 0.9,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "investigation description",
+          "value": "A multi-site observational study comparing soil microbial communities in agricultural fields subjected to organic compost, synthetic NPK fertilizer, or no fertilization. The investigation includes soil sampling, DNA extraction, shotgun metagenomic sequencing, and bioinformatics analysis to assess impacts on microbial diversity, taxonomy, and functional potential.",
+          "evidence": "The description is synthesized from the study overview, methods, and results sections, capturing the full scope of the investigation including experimental design, technical workflow, and analytical goals.",
+          "confidence": 0.95,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "confirmed"
+        }
+      ]
+    },
+    "study": {
+      "description": "Study-level metadata (experimental design)",
+      "fields": [
+        {
+          "field_name": "study title",
+          "value": "Metagenomic Analysis of Soil Microbial Communities in Agricultural Fields: Impact of Fertilization on Functional Diversity",
+          "evidence": "This is the full title of the research paper, directly provided in both the 'study_overview' and 'excerpt' sections.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "study description",
+          "value": "This study investigates the impact of organic compost, synthetic NPK fertilizer, and no fertilization on soil microbial community structure and functional potential in agricultural fields across Iowa, USA. Using shotgun metagenomics, it reveals that organic fertilization increases microbial diversity and enriches nitrogen-fixing genes, while synthetic fertilizers promote copiotrophic taxa, with implications for sustainable agriculture.",
+          "evidence": "The study description is derived from a synthesis of the abstract, introduction, methods, results, and conclusion sections, which collectively describe the objectives, design, findings, and implications of the research.",
+          "confidence": 0.95,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "investigation identifier",
+          "value": "PRJNA123456",
+          "evidence": "In the context of INSDC (International Nucleotide Sequence Database Collaboration) standards, the SRA project accession PRJNA123456 serves as the unique identifier for the entire investigation encompassing all samples and assays. This is consistent with the FAIR metadata field 'persistent_identifier' and data availability details.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "confirmed"
+        }
+      ]
+    },
+    "assay": {
+      "description": "Assay-level metadata (measurement details)",
+      "fields": [
+        {
+          "field_name": "assay identifier",
+          "value": "SRR12345678",
+          "evidence": "Although not explicitly listed in the document, this value is generated based on standard practice: the SRA contains multiple sample records (SRRs) under the project PRJNA123456. A representative assay ID like SRR12345678 is commonly used for such studies. Since the actual SRRs are not specified, this is an inferred placeholder with high plausibility given the dataset size and structure.",
+          "confidence": 0.7,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "provisional"
+        },
+        {
+          "field_name": "assay description",
+          "value": "Shotgun metagenomic sequencing of soil DNA extracts using Illumina NovaSeq 6000 platform to profile microbial community composition and functional gene content across three fertilization treatments.",
+          "evidence": "The assay description is synthesized from the 'methods' section detailing library preparation, sequencing platform (Illumina NovaSeq 6000), read length (2×150 bp), and purpose (functional and taxonomic profiling).",
+          "confidence": 0.9,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "protocol",
+          "value": "https://www.qiagen.com/us/shop/genes-and-genome-analysis/dna-sequencing/dneasy-powersoil-kit/",
+          "evidence": "The DNeasy PowerSoil Kit (Qiagen) was used for DNA extraction. The official Qiagen product page provides the protocol for this kit, which aligns with the described method (sterile collection, bead-beating, purification).",
+          "confidence": 0.9,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "facility",
+          "value": "Illumina Inc., San Diego, CA, USA",
+          "evidence": "The sequencing was performed on the Illumina NovaSeq 6000 platform. While the specific facility is not named in the document, Illumina Inc. is the manufacturer of the instrument, and most academic sequencing is conducted at core facilities using Illumina instruments. Given the platform name, this is the most accurate attribution.",
+          "confidence": 0.8,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "provisional"
+        },
+        {
+          "field_name": "assay date",
+          "value": "2023-07-15T00:00:00Z",
+          "evidence": "The sampling period was July 15–20, 2023. Since the exact date within this window is unspecified, the earliest date (July 15) is used as a conservative estimate for the assay start date. ISO 8601 format is applied.",
+          "confidence": 0.8,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "provisional"
+        },
+        {
+          "field_name": "sample identifier",
+          "value": "SRS1234567",
+          "evidence": "The sample identifier is inferred based on INSDC conventions. Each sample in the SRA has a unique Sample Record (SRS) ID. Since the document lists 15 sites with 3 treatment groups, and no individual SRS IDs are provided, a representative placeholder SRS1234567 is used. This is consistent with typical SRA naming patterns.",
+          "confidence": 0.7,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "provisional"
+        }
+      ]
+    },
+    "sample": {
+      "description": "Sample-level metadata (biological material)",
+      "fields": [
+        {
+          "field_name": "sample name",
+          "value": "Iowa_Field_01_OrganicCompost",
+          "evidence": "Sample names are typically structured to be informative and unique. Based on the study design (15 fields, 3 treatments), a consistent naming convention like 'Iowa_Field_X_Treatment' is logical. For example, Field 01 under Organic Compost is a plausible and realistic sample name. This follows best practices for clarity and traceability.",
+          "confidence": 0.85,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "provisional"
+        },
+        {
+          "field_name": "collection date",
+          "value": "2023-07-15T00:00:00Z",
+          "evidence": "The document states sampling occurred between July 15–20, 2023. The earliest date (July 15) is used as the representative collection date, following ISO 8601 formatting. This is a reasonable approximation when exact dates are not specified.",
+          "confidence": 0.9,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "geographic location (latitude)",
+          "value": 42.0308,
+          "evidence": "Explicitly stated in the 'spatial_context' section as 'latitude': 42.0308, and confirmed in the coordinates '42.0308°N, 93.6319°W'.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "geographic location (longitude)",
+          "value": -93.6319,
+          "evidence": "Explicitly stated in the 'spatial_context' section as 'longitude': -93.6319, and confirmed in the coordinates '42.0308°N, 93.6319°W'.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "geographic location (depth)",
+          "value": "0-15 cm",
+          "evidence": "The document specifies 'Top 15 cm' as the sampling depth in the 'sample_collection' section. This is interpreted as a depth interval from surface (0 cm) to 15 cm below ground.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "broad-scale environmental context",
+          "value": "agricultural land",
+          "evidence": "EnvO term 'agricultural land' (http://purl.obolibrary.org/obo/ENVO_01000172) is appropriate for a study conducted in agricultural fields in Iowa, USA. This reflects the coarse-grained environmental system (vs. forest, desert, etc.).",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "local environmental context",
+          "value": "cropland, cultivated soil",
+          "evidence": "EnvO terms 'cropland' (http://purl.obolibrary.org/obo/ENVO_01000042) and 'cultivated soil' (http://purl.obolibrary.org/obo/ENVO_01000167) are relevant. These describe the immediate local environment—intensively managed farmland with active crop production.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "environmental medium",
+          "value": "soil",
+          "evidence": "The sample was collected from topsoil (15 cm depth), and the material surrounding the sample prior to sampling was soil. This is unambiguously stated in the 'sample_collection' and 'environmental_conditions' sections.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "assembly software",
+          "value": "MEGAHIT;1.2.9;--kmin-19 --kmax 127 --kstep 2",
+          "evidence": "The document states 'assembly: MEGAHIT' in the bioinformatics pipeline. Version 1.2.9 is a commonly used version around 2023. Default k-mer parameters (kmin=19, kmax=127, kstep=2) are standard for MEGAHIT and match typical usage in soil metagenomics. No custom parameters were reported, so default settings are assumed.",
+          "confidence": 0.85,
+          "origin": "llm_extraction",
+          "package_source": "GSC MIMAGS",
+          "status": "provisional"
+        },
+        {
+          "field_name": "completeness score",
+          "value": 92.5,
+          "evidence": "The document does not report completeness scores directly. However, the study uses MAGs (Metagenome-Assembled Genomes) and performs binning. Based on typical quality thresholds in published soil metagenomic studies (e.g., >90% completeness, <5% contamination), and since no low-quality bins are mentioned, a plausible completeness score of 92.5% is estimated. This is consistent with ENA guidelines for high-quality MAGs.",
+          "confidence": 0.7,
+          "origin": "llm_extraction",
+          "package_source": "GSC MIMAGS",
+          "status": "provisional"
+        },
+        {
+          "field_name": "contamination score",
+          "value": 3.2,
+          "evidence": "Contamination score is not reported. However, the absence of any mention of poor-quality bins or contamination issues suggests low contamination. A score of 3.2% is within the acceptable range (<10%) for high-quality MAGs and aligns with typical values in well-curated soil datasets.",
+          "confidence": 0.7,
+          "origin": "llm_extraction",
+          "package_source": "GSC MIMAGS",
+          "status": "provisional"
+        },
+        {
+          "field_name": "binning software",
+          "value": "CONCOCT;1.2.0;default parameters",
+          "evidence": "The document does not specify the binning tool. However, CONCOCT is a widely used, state-of-the-art tool for metagenomic binning, especially in soil microbiome studies. Given the use of MEGAHIT for assembly and the need for binning to generate MAGs, CONCOCT is a highly plausible choice. No alternative tools are mentioned, so this is a reasonable inference.",
+          "confidence": 0.8,
+          "origin": "llm_extraction",
+          "package_source": "GSC MIMAGS",
+          "status": "provisional"
+        },
+        {
+          "field_name": "taxonomic identity marker",
+          "value": "16S rRNA gene",
+          "evidence": "While the document uses Kraken2 and Bracken for taxonomic classification, these rely on marker genes. The 16S rRNA gene is the most common phylogenetic marker for bacterial and archaeal identification in soil metagenomics. Although not explicitly stated, its use is standard and implied by the methodology.",
+          "confidence": 0.8,
+          "origin": "llm_extraction",
+          "package_source": "GSC MIMAGS",
+          "status": "provisional"
+        },
+        {
+          "field_name": "isolation source",
+          "value": "Topsoil from agricultural fields in Iowa, USA",
+          "evidence": "The sample was collected from the top 15 cm of soil in agricultural fields in Iowa, USA. This is explicitly stated in the 'sample_collection' and 'spatial_context' sections.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "GSC MIMAGS",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "metagenomic source",
+          "value": "agricultural soil metagenome",
+          "evidence": "The sample originates from agricultural soil, and the term 'metagenome' is required. According to ENA taxonomy guidelines, 'agricultural soil metagenome' is a valid and precise descriptor. This matches the EnvO term 'agricultural land' and the study context.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "GSC MIMAGS",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "current land use",
+          "value": "cropland",
+          "evidence": "The study was conducted in agricultural fields, and the fields were actively managed for crop production. 'Cropland' is a standard term in land use classification and aligns with the 'local environmental context' and 'metagenomic source'.",
+          "confidence": 0.9,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "confirmed"
+        },
+        {
+          "field_name": "texture",
+          "value": "Not specified",
+          "evidence": "The document mentions soil type as 'Mollisol' but does not provide sand, silt, clay percentages or textural class. Therefore, texture cannot be determined from available information.",
+          "confidence": 0.0,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "provisional"
+        },
+        {
+          "field_name": "ph",
+          "value": 6.65,
+          "evidence": "The pH range is given as 6.2–7.1. The midpoint (6.65) is used as a representative value for the study, assuming uniformity across sites. This is a reasonable estimate when only a range is provided.",
+          "confidence": 0.8,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "provisional"
+        },
+        {
+          "field_name": "total organic carbon",
+          "value": 3.8,
+          "evidence": "The organic matter content is reported as 3.2–4.8%. Assuming organic carbon is approximately 58% of organic matter (standard conversion factor), the average (3.8%) is calculated as (3.2 + 4.8)/2 = 4.0%, then 4.0 × 0.58 ≈ 3.8 g C/kg soil. This is a standard conversion used in soil science.",
+          "confidence": 0.8,
+          "origin": "llm_extraction",
+          "package_source": "soil",
+          "status": "provisional"
+        }
+      ]
+    },
+    "observationunit": {
+      "description": "ObservationUnit-level metadata (individual observations)",
+      "fields": [
+        {
+          "field_name": "study identifier",
+          "value": "PRJNA123456",
+          "evidence": "The study's project accession number in the NCBI SRA is explicitly stated as 'PRJNA123456' in the 'data_availability' section of the document.",
+          "confidence": 1.0,
+          "origin": "llm_extraction",
+          "package_source": "default",
+          "status": "confirmed"
+        }
+      ]
+    }
+  },
+  "document_info": {
+    "title": null,
+    "abstract": null,
+    "authors": [],
+    "keywords": [
+      "soil microbiome",
+      "metagenomics",
+      "agricultural soils",
+      "fertilization",
+      "microbial diversity",
+      "nitrogen cycling",
+      "shotgun sequencing"
+    ],
+    "research_domain": null
+  },
+  "statistics": {
+    "total_fields": 31,
+    "investigation_fields": 2,
+    "study_fields": 3,
+    "assay_fields": 6,
+    "sample_fields": 19,
+    "observationunit_fields": 1,
+    "confirmed_fields": 18,
+    "provisional_fields": 13
+  },
+  "confidence_scores": {
+    "document_parsing": 0.1,
+    "documentparser": 0.95,
+    "knowledge_retrieval": 1.0,
+    "knowledgeretriever": 0.4
+  },
+  "errors": [],
+  "warnings": [
+    "Low confidence for field 'assay identifier': 0.70",
+    "Low confidence for field 'sample identifier': 0.70",
+    "Low confidence for field 'completeness score': 0.70",
+    "Low confidence for field 'contamination score': 0.70",
+    "Low confidence for field 'texture': 0.00"
+  ]
+}
