@@ -1,9 +1,0 @@
-{"timestamp": "2025-11-06T19:24:33.363479", "level": "info", "component": "fairifier.cli", "event": "processing_started", "document_path": "examples/inputs/test_document.txt", "project_id": "fairifier_20251106_192432"}
-{"timestamp": "2025-11-06T19:26:54.286767", "level": "info", "component": "fairifier.cli", "event": "processing_completed", "project_id": "fairifier_20251106_192432", "status": "completed", "duration_seconds": 141.36}
-{"timestamp": "2025-11-06T19:26:54.287522", "level": "info", "component": "document_parsing", "event": "confidence_score", "score": 0.1}
-{"timestamp": "2025-11-06T19:26:54.287571", "level": "info", "component": "documentparser", "event": "confidence_score", "score": 0.95}
-{"timestamp": "2025-11-06T19:26:54.287595", "level": "info", "component": "knowledge_retrieval", "event": "confidence_score", "score": 1.0}
-{"timestamp": "2025-11-06T19:26:54.287615", "level": "info", "component": "knowledgeretriever", "event": "confidence_score", "score": 0.4}
-{"timestamp": "2025-11-06T19:26:54.287633", "level": "info", "component": "json_generation", "event": "confidence_score", "score": 0.961}
-{"timestamp": "2025-11-06T19:26:54.287761", "level": "info", "component": "fairifier.cli", "event": "saving_artifacts", "output_path": "/Users/changlinke/Documents/Main/SSB/PhD/Research/FAIRiAgent/output_20251106_192432", "artifact_count": 1}
-{"timestamp": "2025-11-06T19:26:54.289417", "level": "info", "component": "fairifier.cli", "event": "artifact_saved", "filename": "metadata_json.json", "size_bytes": 19227}

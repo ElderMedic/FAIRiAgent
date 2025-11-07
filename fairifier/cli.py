@@ -97,14 +97,17 @@ def process(
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
     else:
-        # Create timestamped output directory
+        # Create timestamped output directory under output folder
         # Include env file name in output dir if using custom env file
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        base_output_dir = config.project_root / "output"
+        base_output_dir.mkdir(parents=True, exist_ok=True)
+        
         if env_file:
             env_name = Path(env_file).stem  # Get filename without extension
-            output_path = config.project_root / f"output_{env_name}_{timestamp}"
+            output_path = base_output_dir / f"{env_name}_{timestamp}"
         else:
-            output_path = config.project_root / f"output_{timestamp}"
+            output_path = base_output_dir / timestamp
         output_path.mkdir(parents=True, exist_ok=True)
     
     click.echo("=" * 70)

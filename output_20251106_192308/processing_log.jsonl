@@ -1,4 +1,0 @@
-{"timestamp": "2025-11-06T19:23:08.536350", "level": "info", "component": "fairifier.cli", "event": "processing_started", "document_path": "examples/inputs/test_document.txt", "project_id": "fairifier_20251106_192308"}
-{"timestamp": "2025-11-06T19:23:11.114748", "level": "info", "component": "fairifier.cli", "event": "processing_completed", "project_id": "fairifier_20251106_192308", "status": "failed", "duration_seconds": 2.74}
-{"timestamp": "2025-11-06T19:23:11.114823", "level": "info", "component": "document_parsing", "event": "confidence_score", "score": 0.0}
-{"timestamp": "2025-11-06T19:23:11.114851", "level": "info", "component": "documentparser", "event": "confidence_score", "score": 0.3}
