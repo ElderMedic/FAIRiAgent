@@ -3,6 +3,7 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+.DS_Store
 
 /output/
 
@@ -211,3 +212,7 @@ __marimo__/
 
 # langgraph studio
 .langgraph_api/
+
+# examples
+examples/
+

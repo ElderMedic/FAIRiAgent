@@ -166,7 +166,7 @@ async def _run_workflow(
         click.echo(f"🔄 Starting processing (Project ID: {project_id})\n")
         
         # Run the workflow
-        result = await workflow.run(document_path, project_id)
+        result = await workflow.run(document_path, project_id, output_dir=str(output_path))
         
         # Extract results
         status = result.get("status", "unknown")

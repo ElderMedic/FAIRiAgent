@@ -75,6 +75,11 @@ class FAIRifierConfig:
     llm_max_tokens: int = 100000
     llm_enable_thinking: bool = False  # Enable thinking mode (requires streaming for some models)
     
+    # Document parsing context limits (characters)
+    # Modern LLMs support 200K+ tokens (~800K chars), these limits are conservative
+    max_doc_context_markdown: int = 600000  # For MinerU-converted Markdown (150K tokens)
+    max_doc_context_text: int = 500000      # For raw text/PDF extraction (125K tokens)
+    
     # Processing limits
     max_document_size_mb: int = 50
     max_processing_time_minutes: int = 10
@@ -205,6 +210,13 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     # Thinking mode configuration
     if os.getenv("LLM_ENABLE_THINKING"):
         config_instance.llm_enable_thinking = os.getenv("LLM_ENABLE_THINKING").lower() in ("true", "1", "yes")
+    
+    # Document parsing context limits
+    if os.getenv("MAX_DOC_CONTEXT_MARKDOWN"):
+        config_instance.max_doc_context_markdown = int(os.getenv("MAX_DOC_CONTEXT_MARKDOWN"))
+    
+    if os.getenv("MAX_DOC_CONTEXT_TEXT"):
+        config_instance.max_doc_context_text = int(os.getenv("MAX_DOC_CONTEXT_TEXT"))
 
     if os.getenv("FAIR_DS_API_URL"):
         config_instance.fair_ds_api_url = os.getenv("FAIR_DS_API_URL")

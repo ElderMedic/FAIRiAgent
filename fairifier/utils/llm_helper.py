@@ -548,6 +548,7 @@ class LLMHelper:
                 model=self.model,
                 base_url=config.llm_base_url,
                 temperature=config.llm_temperature,
+                num_predict=config.llm_max_tokens,  # Limit output tokens to prevent infinite generation
             )
         elif self.provider == "openai":
             if ChatOpenAI is None:
@@ -563,6 +564,7 @@ class LLMHelper:
                 api_key=config.llm_api_key,
                 base_url=base_url,  # None uses default OpenAI API
                 temperature=config.llm_temperature,
+                max_tokens=config.llm_max_tokens,  # Limit output tokens
             )
         elif self.provider == "qwen":
             if ChatOpenAI is None:
@@ -580,6 +582,7 @@ class LLMHelper:
                 api_key=config.llm_api_key,
                 base_url=base_url,
                 temperature=config.llm_temperature,
+                max_tokens=config.llm_max_tokens,  # Limit output tokens
             )
         elif self.provider == "anthropic" or self.provider == "claude":
             if ChatAnthropic is None:
@@ -591,6 +594,7 @@ class LLMHelper:
                 model=self.model,
                 api_key=config.llm_api_key,
                 temperature=config.llm_temperature,
+                max_tokens=config.llm_max_tokens,  # Limit output tokens
             )
         else:
             raise ValueError(
@@ -617,10 +621,79 @@ class LLMHelper:
         Returns:
             Dictionary containing extracted information
         """
-        # Truncate text if too long (keep more for structured markdown)
-        max_length = 12000 if is_structured_markdown else 8000
-        if len(text) > max_length:
-            text = text[:max_length] + "\n\n[... text truncated ...]"
+        # Use generous context window for modern LLMs (200K+ token support)
+        # Get limits from config (adjustable based on your LLM capabilities)
+        max_length = (
+            config.max_doc_context_markdown if is_structured_markdown 
+            else config.max_doc_context_text
+        )
+        
+        original_length = len(text)
+        if original_length > max_length:
+            # Smart truncation for scientific papers: try to exclude References section
+            # Look for common reference section markers
+            import re
+            ref_patterns = [
+                r'\n#+\s*References?\s*\n',  # Markdown headers: # References, ## Reference
+                r'\n\*\*References?\*\*\s*\n',  # Bold: **References**
+                r'\nReferences?\s*\n',  # Plain: References
+                r'\nBIBLIOGRAPHY\s*\n',
+                r'\nCitations?\s*\n'
+            ]
+            
+            ref_start_pos = None
+            for pattern in ref_patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    ref_start_pos = match.start()
+                    logger.info(f"Detected References section at position {ref_start_pos:,}")
+                    break
+            
+            # If we found references and they start beyond our max_length, just truncate before them
+            if ref_start_pos and ref_start_pos < original_length * 0.9:  # References in last 10%
+                # Try to keep content before references
+                if ref_start_pos <= max_length:
+                    # References start within our limit - keep everything before references
+                    text = text[:ref_start_pos] + "\n\n[... References section truncated ...]"
+                    logger.warning(
+                        f"Document truncated at References section: {original_length:,} chars -> {ref_start_pos:,} chars"
+                    )
+                else:
+                    # References start beyond our limit - use start/end strategy but stop before refs
+                    keep_start = int(max_length * 0.95)  # 95% from start
+                    keep_end = min(int(max_length * 0.05), ref_start_pos - keep_start)  # 5% from end, but before refs
+                    if keep_end > 0 and keep_start + keep_end < ref_start_pos:
+                        truncated_chars = ref_start_pos - keep_start - keep_end
+                        text = (
+                            text[:keep_start] + 
+                            f"\n\n[... middle section truncated ({truncated_chars:,} characters) ...]\n\n" +
+                            text[ref_start_pos - keep_end:ref_start_pos] +
+                            "\n\n[... References section truncated ...]"
+                        )
+                        logger.warning(
+                            f"Document truncated: {original_length:,} chars -> ~{max_length:,} chars "
+                            f"(kept {keep_start:,} start + {keep_end:,} pre-references, removed middle + references)"
+                        )
+                    else:
+                        # Fallback: just take from start up to limit
+                        text = text[:max_length] + "\n\n[... remainder including References truncated ...]"
+                        logger.warning(f"Document truncated: {original_length:,} chars -> {max_length:,} chars (simple cut)")
+            else:
+                # No references found or they're very early - use smart start-heavy strategy
+                # For scientific papers, prioritize beginning (abstract, methods, results)
+                keep_start = int(max_length * 0.95)  # 95% from start
+                keep_end = int(max_length * 0.05)    # 5% from end
+                truncated_chars = original_length - keep_start - keep_end
+                
+                text = (
+                    text[:keep_start] + 
+                    f"\n\n[... end section truncated ({truncated_chars:,} characters) ...]\n\n" +
+                    text[-keep_end:]
+                )
+                logger.warning(
+                    f"Document truncated: {original_length:,} chars -> {max_length:,} chars "
+                    f"(kept {keep_start:,} start + {keep_end:,} end)"
+                )
         
         # Build adaptive system prompt based on input format
         if is_structured_markdown:

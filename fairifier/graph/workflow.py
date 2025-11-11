@@ -98,7 +98,8 @@ class FAIRifierWorkflow:
         
         try:
             document_path = state.get("document_path", "")
-            text, conversion_info = self._read_document_content(document_path)
+            output_dir = state.get("output_dir")  # Get output dir from state
+            text, conversion_info = self._read_document_content(document_path, output_dir)
             logger.info(f"✅ Loaded {len(text)} characters from document")
             
             # Store raw content for Orchestrator
@@ -114,15 +115,33 @@ class FAIRifierWorkflow:
         
         return state
     
-    def _read_document_content(self, document_path: str) -> Tuple[str, Dict[str, Any]]:
+    def _read_document_content(
+        self, 
+        document_path: str,
+        output_dir: Optional[str] = None
+    ) -> Tuple[str, Dict[str, Any]]:
         """Read document content using MinerU when available."""
         conversion_info: Dict[str, Any] = {}
         if document_path.endswith(".pdf"):
             if self.mineru_client:
                 try:
-                    conversion = self.mineru_client.convert_document(document_path)
+                    # Use output_dir for MinerU artifacts if provided
+                    mineru_output = None
+                    if output_dir:
+                        from pathlib import Path
+                        doc_name = Path(document_path).stem
+                        mineru_output = Path(output_dir) / f"mineru_{doc_name}"
+                        logger.info(f"MinerU will save artifacts to: {mineru_output}")
+                    
+                    conversion = self.mineru_client.convert_document(
+                        document_path,
+                        output_dir=mineru_output
+                    )
                     conversion_info = conversion.to_dict()
                     logger.info("MinerU conversion successful: %s", conversion.markdown_path)
+                    logger.info(f"MinerU artifacts: {conversion.output_dir}")
+                    if conversion.images_dir:
+                        logger.info(f"MinerU images: {conversion.images_dir}")
                     return conversion.markdown_text, conversion_info
                 except MinerUConversionError as exc:
                     logger.warning("MinerU conversion failed (%s). Falling back to PyMuPDF.", exc)
@@ -157,7 +176,12 @@ class FAIRifierWorkflow:
         
         return result
     
-    async def run(self, document_path: str, project_id: str = None) -> Dict[str, Any]:
+    async def run(
+        self, 
+        document_path: str, 
+        project_id: str = None,
+        output_dir: str = None
+    ) -> Dict[str, Any]:
         """Run the workflow"""
         if not project_id:
             project_id = f"fairifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -167,6 +191,7 @@ class FAIRifierWorkflow:
             "document_path": document_path,
             "document_content": "",
             "document_conversion": {},
+            "output_dir": output_dir,  # Pass output directory for MinerU artifacts
             "document_info": {},
             "retrieved_knowledge": [],
             "metadata_fields": [],
@@ -189,8 +214,46 @@ class FAIRifierWorkflow:
         logger.info("📋 Using Orchestrator Agent for intelligent scheduling")
         
         try:
-            # Run workflow
-            config_dict = {"configurable": {"thread_id": project_id}}
+            # Prepare LangSmith metadata for better tracing
+            from pathlib import Path
+            doc_name = Path(document_path).stem
+            
+            # Build descriptive run name with key configs
+            mineru_status = "MinerU" if config.mineru_enabled else "PyMuPDF"
+            run_name = f"{doc_name} | {config.llm_provider}:{config.llm_model} | {mineru_status}"
+            
+            # Collect important configuration metadata
+            langsmith_metadata = {
+                "document": doc_name,
+                "document_path": document_path,
+                "workflow_type": "orchestrator",
+                "llm_provider": config.llm_provider,
+                "llm_model": config.llm_model,
+                "llm_temperature": config.llm_temperature,
+                "llm_max_tokens": config.llm_max_tokens,
+                "mineru_enabled": config.mineru_enabled,
+                "mineru_backend": config.mineru_backend if config.mineru_enabled else None,
+                "fair_ds_api": config.fair_ds_api_url,
+                "max_step_retries": config.max_step_retries,
+                "max_global_retries": config.max_global_retries,
+                "critic_accept_threshold_parser": config.critic_accept_threshold_document_parser,
+                "critic_accept_threshold_retriever": config.critic_accept_threshold_knowledge_retriever,
+                "critic_accept_threshold_generator": config.critic_accept_threshold_json_generator,
+                "timestamp": datetime.now().isoformat(),
+            }
+            
+            # Run workflow with enhanced LangSmith metadata
+            config_dict = {
+                "configurable": {"thread_id": project_id},
+                "run_name": run_name,
+                "metadata": langsmith_metadata,
+                "tags": [
+                    "orchestrator-workflow",
+                    config.llm_provider,
+                    mineru_status.lower(),
+                    f"model:{config.llm_model}",
+                ]
+            }
             result = await self.workflow.ainvoke(initial_state, config=config_dict)
             
             logger.info(f"✅ Workflow completed (project: {project_id})")

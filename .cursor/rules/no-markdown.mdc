@@ -1,5 +1,0 @@
----
-alwaysApply: true
----
-
-Don't create new markdown files unlees absolutely necessary or specifically requested.

@@ -96,6 +96,7 @@ class FAIRifierState(TypedDict):
     document_path: str
     document_content: str
     document_conversion: Dict[str, Any]
+    output_dir: Optional[str]  # Output directory for artifacts (including MinerU)
     
     # Processing stages
     document_info: Dict[str, Any]
