@@ -105,6 +105,13 @@ class FAIRifierConfig:
     qdrant_url: Optional[str] = None  # Vector database (optional)
     grobid_url: Optional[str] = None  # PDF parsing service (optional)
     
+    # Document conversion (MinerU)
+    mineru_enabled: bool = False
+    mineru_cli_path: str = "mineru"
+    mineru_backend: str = "vlm-http-client"
+    mineru_server_url: Optional[str] = "http://localhost:30000"
+    mineru_timeout_seconds: int = 300
+    
     # LangSmith configuration
     langsmith_api_key: Optional[str] = None
     langsmith_project: str = "fairifier"
@@ -239,6 +246,20 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.critic_retry_max_threshold = float(
             os.getenv("FAIRIFIER_CRITIC_RETRY_MAX_THRESHOLD")
         )
+    
+    # MinerU document conversion
+    if os.getenv("MINERU_ENABLED"):
+        enabled_value = os.getenv("MINERU_ENABLED").lower()
+        config_instance.mineru_enabled = enabled_value in ("true", "1", "yes")
+    if os.getenv("MINERU_CLI_PATH"):
+        config_instance.mineru_cli_path = os.getenv("MINERU_CLI_PATH")
+    if os.getenv("MINERU_BACKEND"):
+        config_instance.mineru_backend = os.getenv("MINERU_BACKEND")
+    if os.getenv("MINERU_SERVER_URL"):
+        config_instance.mineru_server_url = os.getenv("MINERU_SERVER_URL")
+    if os.getenv("MINERU_TIMEOUT_SECONDS"):
+        timeout_value = os.getenv("MINERU_TIMEOUT_SECONDS")
+        config_instance.mineru_timeout_seconds = int(timeout_value)
 
 
 # Global config instance

@@ -1,9 +1,10 @@
 """Document parsing agent for extracting research information from PDFs and text."""
 
+import logging
 import re
 import json
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import fitz  # PyMuPDF
 from langsmith import traceable
 
@@ -11,6 +12,7 @@ from .base import BaseAgent
 from ..models import FAIRifierState, DocumentInfo
 from ..config import config
 from ..utils.llm_helper import get_llm_helper
+from ..services.mineru_client import MinerUClient, MinerUConversionError
 
 
 class DocumentParserAgent(BaseAgent):
@@ -19,8 +21,29 @@ class DocumentParserAgent(BaseAgent):
     def __init__(self, use_llm: bool = True):
         super().__init__("DocumentParser")
         self.use_llm = use_llm
+        self.logger = logging.getLogger(__name__)
         if use_llm:
             self.llm_helper = get_llm_helper()
+        
+        self.mineru_client: Optional[MinerUClient] = None
+        if config.mineru_enabled and config.mineru_server_url:
+            try:
+                candidate = MinerUClient(
+                    cli_path=config.mineru_cli_path,
+                    server_url=config.mineru_server_url,
+                    backend=config.mineru_backend,
+                    timeout_seconds=config.mineru_timeout_seconds,
+                )
+                if candidate.is_available():
+                    self.mineru_client = candidate
+                    self.logger.info("MinerU client enabled for DocumentParser.")
+                else:
+                    self.logger.warning(
+                        "MinerU CLI not available or misconfigured. Falling back to PyMuPDF."
+                    )
+            except Exception as exc:  # pragma: no cover - defensive
+                self.logger.warning("Failed to initialize MinerU client: %s", exc)
+                self.mineru_client = None
         
     @traceable(name="DocumentParser", tags=["agent", "parsing"])
     async def execute(self, state: FAIRifierState) -> FAIRifierState:
@@ -30,17 +53,26 @@ class DocumentParserAgent(BaseAgent):
         try:
             # Extract text from document
             document_path = state.get("document_path", "")
-            self.log_execution(state, f"📖 Reading document: {document_path}")
-            if document_path.endswith('.pdf'):
-                text = self._extract_pdf_text(document_path)
-                self.log_execution(state, f"✅ Extracted {len(text)} characters from PDF")
-            else:
-                # Assume plain text
-                with open(document_path, 'r', encoding='utf-8') as f:
-                    text = f.read()
-                self.log_execution(state, f"✅ Read {len(text)} characters from text file")
+            text = state.get("document_content", "")
+            if "document_conversion" not in state or not isinstance(state["document_conversion"], dict):
+                state["document_conversion"] = {}
             
-            state["document_content"] = text
+            if text:
+                self.log_execution(
+                    state,
+                    f"📄 Using existing document content from state ({len(text)} characters)"
+                )
+            else:
+                self.log_execution(state, f"📖 Reading document: {document_path}")
+                text, conversion_info, source = self._load_document_content(document_path, state)
+                state["document_content"] = text
+                if conversion_info:
+                    state["document_conversion"] = conversion_info
+                source_label = "MinerU Markdown" if source == "mineru" else "PDF text extraction" if source == "pdf_text" else "text file"
+                self.log_execution(
+                    state,
+                    f"✅ Loaded {len(text)} characters ({source_label})"
+                )
             
             # Extract structured information using LLM
             if self.use_llm:
@@ -167,6 +199,38 @@ class DocumentParserAgent(BaseAgent):
         
         doc.close()
         return text
+    
+    def _load_document_content(
+        self, document_path: str, state: FAIRifierState
+    ) -> Tuple[str, Dict[str, Any], str]:
+        """
+        Load document content, preferring MinerU conversion when available.
+        
+        Returns:
+            tuple of (text, conversion_info, source) where source is one of
+            {"mineru", "pdf_text", "text_file"}.
+        """
+        conversion_info: Dict[str, Any] = {}
+        if document_path.endswith('.pdf'):
+            if self.mineru_client:
+                try:
+                    conversion = self.mineru_client.convert_document(document_path)
+                    conversion_info = conversion.to_dict()
+                    self.log_execution(
+                        state,
+                        f"🪄 MinerU converted PDF to Markdown at {conversion.markdown_path}"
+                    )
+                    return conversion.markdown_text, conversion_info, "mineru"
+                except MinerUConversionError as exc:
+                    warning_msg = f"MinerU conversion failed: {exc}. Falling back to local PDF extraction."
+                    self.log_execution(state, f"⚠️ {warning_msg}", "warning")
+                    self.logger.warning(warning_msg)
+            text = self._extract_pdf_text(document_path)
+            return text, conversion_info, "pdf_text"
+        
+        with open(document_path, 'r', encoding='utf-8') as file:
+            text = file.read()
+        return text, conversion_info, "text_file"
     
     def _extract_document_info(self, text: str) -> DocumentInfo:
         """Extract structured information from document text using patterns and heuristics."""

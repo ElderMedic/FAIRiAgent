@@ -10,7 +10,7 @@ This implements a proper LangGraph application where:
 
 import logging
 import json
-from typing import Dict, Any, Literal
+from typing import Dict, Any, Literal, Optional, Tuple
 from datetime import datetime
 from langsmith import traceable
 
@@ -24,6 +24,7 @@ from ..agents.json_generator import JSONGeneratorAgent
 from ..agents.critic import CriticAgent
 from ..config import config
 from ..utils.llm_helper import get_llm_helper
+from ..services.mineru_client import MinerUClient, MinerUConversionError
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class FAIRifierLangGraphApp:
         self.json_generator = JSONGeneratorAgent(use_llm=True)
         self.critic = CriticAgent()
         self.llm_helper = get_llm_helper()
+        self.mineru_client = self._initialize_mineru_client()
         
         # Initialize checkpointer
         self.checkpointer = MemorySaver()
@@ -48,6 +50,25 @@ class FAIRifierLangGraphApp:
         self.workflow = graph_structure.compile(checkpointer=self.checkpointer)
         
         logger.info("✅ LangGraph app initialized")
+    
+    def _initialize_mineru_client(self) -> Optional[MinerUClient]:
+        """Instantiate MinerU client if configuration is enabled."""
+        if not (config.mineru_enabled and config.mineru_server_url):
+            return None
+        try:
+            client = MinerUClient(
+                cli_path=config.mineru_cli_path,
+                server_url=config.mineru_server_url,
+                backend=config.mineru_backend,
+                timeout_seconds=config.mineru_timeout_seconds,
+            )
+            if client.is_available():
+                logger.info("MinerU client enabled for LangGraph document loading.")
+                return client
+            logger.warning("MinerU CLI not available; LangGraph will fall back to PyMuPDF.")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to initialize MinerU client: %s", exc)
+        return None
     
     def get_graph_without_checkpointer(self):
         """Get a compiled graph without checkpointer for LangGraph Studio."""
@@ -136,20 +157,11 @@ class FAIRifierLangGraphApp:
         try:
             document_path = state.get("document_path", "")
             
-            if document_path.endswith('.pdf'):
-                import fitz  # PyMuPDF
-                doc = fitz.open(document_path)
-                text = ""
-                for page in doc:
-                    text += page.get_text()
-                doc.close()
-                logger.info(f"✅ Extracted {len(text)} characters from PDF")
-            else:
-                with open(document_path, 'r', encoding='utf-8') as f:
-                    text = f.read()
-                logger.info(f"✅ Read {len(text)} characters from text file")
+            text, conversion_info = self._read_document_content(document_path)
+            logger.info(f"✅ Loaded {len(text)} characters from document")
             
             state["document_content"] = text
+            state["document_conversion"] = conversion_info
             
         except Exception as e:
             logger.error(f"❌ Failed to read file: {e}")
@@ -159,6 +171,30 @@ class FAIRifierLangGraphApp:
             state["document_content"] = ""
         
         return state
+    
+    def _read_document_content(self, document_path: str) -> Tuple[str, Dict[str, Any]]:
+        """Read content using MinerU when available."""
+        conversion_info: Dict[str, Any] = {}
+        if document_path.endswith(".pdf"):
+            if self.mineru_client:
+                try:
+                    conversion = self.mineru_client.convert_document(document_path)
+                    conversion_info = conversion.to_dict()
+                    logger.info("MinerU conversion successful: %s", conversion.markdown_path)
+                    return conversion.markdown_text, conversion_info
+                except MinerUConversionError as exc:
+                    logger.warning("MinerU conversion failed (%s). Falling back to PyMuPDF.", exc)
+            import fitz  # PyMuPDF
+            doc = fitz.open(document_path)
+            text = ""
+            for page in doc:
+                text += page.get_text()
+            doc.close()
+            return text, conversion_info
+        
+        with open(document_path, "r", encoding="utf-8") as file:
+            text = file.read()
+        return text, conversion_info
     
     @traceable(name="PlanWorkflow", tags=["workflow", "planning"])
     async def _plan_workflow_node(self, state: FAIRifierState) -> FAIRifierState:
@@ -617,6 +653,7 @@ Return JSON in the following format:
         initial_state = {
             "document_path": document_path,
             "document_content": "",
+            "document_conversion": {},
             "document_info": {},
             "retrieved_knowledge": [],
             "metadata_fields": [],

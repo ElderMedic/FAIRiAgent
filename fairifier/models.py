@@ -95,6 +95,7 @@ class FAIRifierState(TypedDict):
     # Input
     document_path: str
     document_content: str
+    document_conversion: Dict[str, Any]
     
     # Processing stages
     document_info: Dict[str, Any]

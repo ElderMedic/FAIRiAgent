@@ -15,7 +15,7 @@ Output: FAIR-DS compatible JSON metadata with full traceability
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 from langsmith import traceable
 
@@ -27,6 +27,8 @@ from ..agents.orchestrator import OrchestratorAgent
 from ..agents.document_parser import DocumentParserAgent
 from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
 from ..agents.json_generator import JSONGeneratorAgent
+from ..config import config
+from ..services.mineru_client import MinerUClient, MinerUConversionError
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ class FAIRifierWorkflow:
     def __init__(self):
         # Create Orchestrator
         self.orchestrator = OrchestratorAgent()
+        self.mineru_client = self._initialize_mineru_client()
         
         # Register all agents for Orchestrator to schedule
         self.orchestrator.register_agent("DocumentParser", DocumentParserAgent(use_llm=True))
@@ -68,6 +71,25 @@ class FAIRifierWorkflow:
         
         return workflow.compile(checkpointer=self.checkpointer)
     
+    def _initialize_mineru_client(self) -> Optional[MinerUClient]:
+        """Instantiate MinerU client if configuration is enabled."""
+        if not (config.mineru_enabled and config.mineru_server_url):
+            return None
+        try:
+            client = MinerUClient(
+                cli_path=config.mineru_cli_path,
+                server_url=config.mineru_server_url,
+                backend=config.mineru_backend,
+                timeout_seconds=config.mineru_timeout_seconds,
+            )
+            if client.is_available():
+                logger.info("MinerU client enabled for workflow document loading.")
+                return client
+            logger.warning("MinerU CLI not available; workflow will fall back to PyMuPDF.")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to initialize MinerU client: %s", exc)
+        return None
+    
     @traceable(name="ReadFile", tags=["workflow", "io"])
     async def _read_file_node(self, state: FAIRifierState) -> FAIRifierState:
         """Read file content (no LLM) - just extract raw text"""
@@ -76,24 +98,12 @@ class FAIRifierWorkflow:
         
         try:
             document_path = state.get("document_path", "")
-            
-            # Read based on file type
-            if document_path.endswith('.pdf'):
-                import fitz  # PyMuPDF
-                doc = fitz.open(document_path)
-                text = ""
-                for page in doc:
-                    text += page.get_text()
-                doc.close()
-                logger.info(f"✅ Extracted {len(text)} characters from PDF")
-            else:
-                # Plain text file
-                with open(document_path, 'r', encoding='utf-8') as f:
-                    text = f.read()
-                logger.info(f"✅ Read {len(text)} characters from text file")
+            text, conversion_info = self._read_document_content(document_path)
+            logger.info(f"✅ Loaded {len(text)} characters from document")
             
             # Store raw content for Orchestrator
             state["document_content"] = text
+            state["document_conversion"] = conversion_info
             
         except Exception as e:
             logger.error(f"❌ Failed to read file: {e}")
@@ -103,6 +113,30 @@ class FAIRifierWorkflow:
             state["document_content"] = ""
         
         return state
+    
+    def _read_document_content(self, document_path: str) -> Tuple[str, Dict[str, Any]]:
+        """Read document content using MinerU when available."""
+        conversion_info: Dict[str, Any] = {}
+        if document_path.endswith(".pdf"):
+            if self.mineru_client:
+                try:
+                    conversion = self.mineru_client.convert_document(document_path)
+                    conversion_info = conversion.to_dict()
+                    logger.info("MinerU conversion successful: %s", conversion.markdown_path)
+                    return conversion.markdown_text, conversion_info
+                except MinerUConversionError as exc:
+                    logger.warning("MinerU conversion failed (%s). Falling back to PyMuPDF.", exc)
+            import fitz  # PyMuPDF
+            doc = fitz.open(document_path)
+            text = ""
+            for page in doc:
+                text += page.get_text()
+            doc.close()
+            return text, conversion_info
+        
+        with open(document_path, "r", encoding="utf-8") as file:
+            text = file.read()
+        return text, conversion_info
     
     async def _orchestrate_node(self, state: FAIRifierState) -> FAIRifierState:
         """Orchestrator node"""
@@ -132,6 +166,7 @@ class FAIRifierWorkflow:
         initial_state = {
             "document_path": document_path,
             "document_content": "",
+            "document_conversion": {},
             "document_info": {},
             "retrieved_knowledge": [],
             "metadata_fields": [],
