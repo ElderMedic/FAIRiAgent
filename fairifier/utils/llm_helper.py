@@ -599,7 +599,12 @@ class LLMHelper:
             )
     
     @traceable(name="LLM.ExtractDocumentInfo")
-    async def extract_document_info(self, text: str, critic_feedback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def extract_document_info(
+        self, 
+        text: str, 
+        critic_feedback: Optional[Dict[str, Any]] = None,
+        is_structured_markdown: bool = False
+    ) -> Dict[str, Any]:
         """
         Extract structured information from document text using LLM.
         Self-adapts based on document content and critic feedback.
@@ -607,16 +612,89 @@ class LLMHelper:
         Args:
             text: Document text content
             critic_feedback: Optional feedback from Critic agent for improvement
+            is_structured_markdown: If True, text is MinerU-converted Markdown with better structure
             
         Returns:
             Dictionary containing extracted information
         """
-        # Truncate text if too long (keep first 8000 chars)
-        if len(text) > 8000:
-            text = text[:8000] + "\n\n[... text truncated ...]"
+        # Truncate text if too long (keep more for structured markdown)
+        max_length = 12000 if is_structured_markdown else 8000
+        if len(text) > max_length:
+            text = text[:max_length] + "\n\n[... text truncated ...]"
         
-        # Build adaptive system prompt
-        system_prompt = """You are an expert at extracting structured information from scientific research documents.
+        # Build adaptive system prompt based on input format
+        if is_structured_markdown:
+            system_prompt = """You are an expert at extracting structured information from scientific research documents.
+
+**Document Format:** This document has been professionally converted to Markdown with preserved structure, tables, and image references. Leverage this enhanced structure for precise extraction.
+
+**Key Advantages of Markdown Format:**
+- Clear section headers (# Title, ## Section, ### Subsection)
+- Preserved table structure with data aligned in columns
+- Embedded image references showing figures and diagrams
+- Maintained list formatting for methods, materials, references
+- Better paragraph separation and text flow
+
+**Your task:** Extract ALL relevant information with high precision using the document structure as your guide.
+
+**Core principles:**
+1. Use headers to identify document sections (Abstract, Methods, Results, etc.)
+2. Parse tables directly to extract structured data (experimental parameters, measurements, sample information)
+3. Identify figure captions and their context from image references
+4. Extract list items (authors, affiliations, materials, methods steps)
+5. Recognize formatted elements (bold, italic) that highlight key terms
+6. Use clear, descriptive field names matching the content
+
+**Always include (if present):**
+- Basic bibliographic info: title, authors (with affiliations), publication details, DOI
+- Research context: domain, background, objectives, research questions, hypotheses
+- Methodology: experimental design, materials, protocols, instruments, software
+- Study subjects: organisms, samples, sample size, locations (with coordinates if given)
+- Data collection: parameters measured, units, temporal/spatial coverage
+- Results: key findings, statistical outcomes, tables/figures summary
+- Data availability: repositories, accession numbers, datasets
+- Domain-specific metadata:
+  * Genomics: sequencing platform, library prep, assembly, annotation
+  * Ecology: species, habitat, environmental conditions, sampling dates
+  * Chemistry: compounds, concentrations, solvents, conditions
+  * Clinical: cohort, interventions, outcomes, ethics approval
+
+**Output format:**
+Return a comprehensive JSON object with hierarchical structure. Examples:
+```json
+{
+  "title": "...",
+  "authors": [{"name": "...", "affiliation": "...", "email": "..."}],
+  "study_design": {
+    "type": "...",
+    "organism": "...",
+    "sample_size": ...,
+    "duration": "...",
+    "location": {"site": "...", "coordinates": "..."}
+  },
+  "experimental_parameters": {
+    "treatment_groups": [...],
+    "measurements": [...],
+    "instruments": [...]
+  },
+  "data_availability": {
+    "repository": "...",
+    "accession": "...",
+    "doi": "..."
+  }
+}
+```
+
+**Best practices:**
+- Extract numerical data with units preserved
+- Capture hierarchical relationships (study > experiment > sample > measurement)
+- Include both human-readable descriptions AND structured identifiers
+- When tables are present, extract their full content as structured data
+- Preserve scientific notation, formulas, and technical terminology
+
+Return ONLY valid JSON, no markdown formatting."""
+        else:
+            system_prompt = """You are an expert at extracting structured information from scientific research documents.
 
 **Your task:** Analyze the document and extract ALL relevant information intelligently. DO NOT limit yourself to predefined fields - adapt to the document's content.
 
@@ -654,7 +732,29 @@ Return ONLY valid JSON, no markdown formatting."""
                 feedback_text += f"- Suggestion: {suggestion}\n"
             system_prompt += feedback_text
 
-        user_prompt = f"""Analyze and extract information from this research document:
+        if is_structured_markdown:
+            user_prompt = f"""Analyze this Markdown-formatted research document and extract comprehensive metadata:
+
+{text}
+
+**Extraction Strategy:**
+1. Identify document type and scientific domain from headers and content
+2. Parse structured elements:
+   - Use # headers to locate sections (Title, Abstract, Methods, Results, Discussion)
+   - Extract data from tables (experimental design, measurements, parameters)
+   - Identify figure/image references and their captions
+   - Parse lists (authors, affiliations, materials, protocols)
+3. Extract domain-specific metadata:
+   - Study design: subjects, treatments, controls, replicates
+   - Measurements: variables, units, instruments, methods
+   - Spatial/temporal: locations, coordinates, dates, duration
+   - Data: repositories, accessions, file formats
+4. Capture relationships and hierarchy (study→experiments→samples→measurements)
+5. Ensure FAIR compliance: include identifiers, controlled vocabularies, provenance
+
+Return comprehensive JSON with hierarchical structure and descriptive field names."""
+        else:
+            user_prompt = f"""Analyze and extract information from this research document:
 
 {text}
 

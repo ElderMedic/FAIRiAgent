@@ -84,8 +84,23 @@ class DocumentParserAgent(BaseAgent):
                     self.log_execution(state, "🔄 Retrying with Critic feedback...")
                     self.log_execution(state, f"   Feedback: {critic_feedback.get('feedback')}")
                 
-                self.log_execution(state, "🤖 Using LLM for intelligent, adaptive extraction...")
-                doc_info_dict = await self.llm_helper.extract_document_info(text, critic_feedback)
+                # Detect if we have MinerU-converted content (Markdown with better structure)
+                conversion_info = state.get("document_conversion", {})
+                is_mineru_content = bool(conversion_info.get("markdown_path"))
+                
+                if is_mineru_content:
+                    self.log_execution(
+                        state, 
+                        "🪄 Using LLM with optimized prompting for MinerU Markdown (enhanced structure extraction)..."
+                    )
+                else:
+                    self.log_execution(state, "🤖 Using LLM for intelligent, adaptive extraction...")
+                
+                doc_info_dict = await self.llm_helper.extract_document_info(
+                    text, 
+                    critic_feedback,
+                    is_structured_markdown=is_mineru_content
+                )
                 
                 # Remove raw_text if LLM included it (to avoid passing large text to subsequent agents)
                 if "raw_text" in doc_info_dict:
