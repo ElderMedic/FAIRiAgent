@@ -165,13 +165,15 @@ class DocumentParserAgent(BaseAgent):
             
             # Log extracted info
             doc_info = state["document_info"]
+            authors = doc_info.get('authors', [])
+            keywords = doc_info.get('keywords', [])
             self.log_execution(
                 state, 
                 f"✅ Parsing completed!\n"
                 f"   - Title: {bool(doc_info.get('title'))}\n"
                 f"   - Abstract: {bool(doc_info.get('abstract'))}\n"
-                f"   - Authors: {len(doc_info.get('authors', []))}\n"
-                f"   - Keywords: {len(doc_info.get('keywords', []))}\n"
+                f"   - Authors: {len(authors) if authors else 0}\n"
+                f"   - Keywords: {len(keywords) if keywords else 0}\n"
                 f"   - Location: {doc_info.get('location', 'N/A')}\n"
                 f"   - Coordinates: {doc_info.get('coordinates', 'N/A')}\n"
                 f"   - Confidence: {confidence:.2%}"
