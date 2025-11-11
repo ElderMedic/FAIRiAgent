@@ -164,7 +164,9 @@ class MinerUClient:
         if completed.stderr:
             logger.debug("MinerU stderr: %s", completed.stderr.strip())
 
-        markdown_files = list(out_dir.glob("*.md"))
+        # MinerU creates output in: {out_dir}/{docname}/vlm/{docname}.md
+        # Search recursively for .md files
+        markdown_files = list(out_dir.glob("**/*.md"))
         if not markdown_files:
             message = (
                 "MinerU output directory "
@@ -172,7 +174,10 @@ class MinerUClient:
             )
             raise MinerUConversionError(message)
 
+        # Use the first markdown file found (typically there's only one)
         markdown_path = markdown_files[0]
+        logger.info(f"Found MinerU Markdown at: {markdown_path}")
+        
         try:
             markdown_text = markdown_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -181,7 +186,8 @@ class MinerUClient:
                 errors="ignore",
             )
 
-        images_dir = out_dir / "images"
+        # Images are in the same directory as the markdown file
+        images_dir = markdown_path.parent / "images"
         if not images_dir.exists():
             images_dir = None
 
