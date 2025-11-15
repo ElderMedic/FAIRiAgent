@@ -107,11 +107,13 @@ cat output_test_*/llm_responses.json | jq '.[0]'
 
 你会看到完整的执行流程：
 ```
-FAIRifierWorkflow
-├─ Orchestrator
-│  ├─ DocumentParser → Critic → ✅ ACCEPT
-│  ├─ KnowledgeRetriever → Critic → ✅ ACCEPT  
-│  └─ JSONGenerator → Critic → ✅ ACCEPT
+FAIRifierLangGraphApp
+├─ read_file
+├─ parse_document → Critic → ✅ ACCEPT
+├─ plan_workflow （生成指导指令）
+├─ retrieve_knowledge → Critic → ✅ ACCEPT
+├─ generate_json → Critic → ✅ ACCEPT
+└─ finalize
 ```
 
 ---

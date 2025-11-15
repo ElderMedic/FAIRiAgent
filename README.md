@@ -30,11 +30,11 @@ The system uses a LangGraph-based multi-agent workflow:
 Document → Parse → Plan → Retrieve Knowledge → Generate JSON → Evaluate → Output
 ```
 
-**Agents:**
+**Agents & Nodes:**
 1. **Document Parser**: Extracts structured information from documents
-2. **Orchestrator**: Plans workflow strategy based on document content
-3. **Knowledge Retriever**: Enriches metadata with FAIR-DS and local knowledge
-4. **JSON Generator**: Creates FAIR-DS compatible metadata
+2. **Planner Node**: Summarizes document type/domain并下发 special instructions
+3. **Knowledge Retriever**: Enriches metadata with FAIR-DS and local knowledge（遵循 Planner 指令）
+4. **JSON Generator**: Creates FAIR-DS compatible metadata（带有 Planner/ Critic 反馈）
 5. **Critic**: Evaluates quality and provides feedback for retry/escalation
 
 **Workflow Features:**
@@ -390,10 +390,7 @@ See [LangGraph Studio Setup](docs/guides/LANGGRAPH_STUDIO_SETUP.md) and [LangSmi
   - [Quick Start (中文)](docs/guides/QUICKSTART_CN.md) – 最简运行步骤
   - [Test Guide](docs/guides/TEST_GUIDE.md) – 环境验证与测试流程
 - **Development Notes**
-  - [System Ready Checklist](docs/development/SYSTEM_READY.md) – 全面特性验证
-  - [Workflow Summary](docs/development/WORKFLOW_SUMMARY.md) – 当前工作流说明
   - [FAIR-DS API Exploration](docs/development/FAIRDS_API_EXPLORATION.md) – API 结构调研
-  - [Implementation Notes](docs/development/README_IMPLEMENTATION.md) – 历史实现记录
 - **Web UI**
   - [Web UI Guide](fairifier/apps/README.md) – Streamlit UI features and usage
 

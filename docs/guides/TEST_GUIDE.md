@@ -294,23 +294,19 @@ https://smith.langchain.com/
 ### 3. 查看 Traces
 你会看到完整的执行链：
 ```
-FAIRifierWorkflow
-├─ OrchestratorAgent
-│  ├─ DocumentParser
-│  │  └─ LLM.ExtractDocumentInfo
-│  ├─ Critic
-│  │  └─ Critic.EvaluateDocumentParsing
-│  ├─ KnowledgeRetriever
-│  │  ├─ LLM.DetermineRelevantLevels
-│  │  ├─ LLM.SelectPackages
-│  │  └─ LLM.SelectFields
-│  ├─ Critic
-│  │  └─ Critic.EvaluateKnowledgeRetrieval
-│  ├─ JSONGenerator
-│  │  ├─ LLM.SelectRelevantFields
-│  │  └─ LLM.GenerateMetadata
-│  └─ Critic
-│     └─ Critic.EvaluateJSONGeneration
+FAIRifierLangGraphApp
+├─ ReadFile
+├─ DocumentParser → LLM.ExtractDocumentInfo
+├─ Critic.EvaluateDocumentParsing
+├─ PlanWorkflow（输出 special_instructions）
+├─ KnowledgeRetriever
+│  ├─ LLM.SelectPackages
+│  └─ LLM.SelectFieldsByISASheet
+├─ Critic.EvaluateKnowledgeRetrieval
+├─ JSONGenerator
+│  ├─ LLM.SelectRelevantFields
+│  └─ LLM.GenerateMetadata
+└─ Critic.EvaluateJSONGeneration
 ```
 
 ### 4. 深入分析
