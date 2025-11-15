@@ -216,3 +216,9 @@ __marimo__/
 # examples
 examples/
 
+# Ignore Cursor editor user settings and extension files
+.cursor/
+.cursor-settings.json
+# Ignore any backup or temp files Cursor may generate
+.cursor-backup/
+.cursor-temp/
