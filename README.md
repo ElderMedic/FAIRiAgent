@@ -376,15 +376,26 @@ langgraph dev
 # Visualize and debug the workflow graph
 ```
 
-See [LangGraph Studio Setup](LANGGRAPH_STUDIO_SETUP.md) and [LangSmith Testing Guide](docs/LANGSMITH_TESTING_GUIDE.md) for detailed instructions.
+See [LangGraph Studio Setup](docs/guides/LANGGRAPH_STUDIO_SETUP.md) and [LangSmith Testing Guide](docs/LANGSMITH_TESTING_GUIDE.md) for detailed instructions.
 
 ## 📚 Documentation
 
-- [LangGraph Studio Setup](LANGGRAPH_STUDIO_SETUP.md) - Setup guide for LangGraph Studio
-- [LLM Integration Guide](docs/LLM_INTEGRATION_GUIDE.md) - LLM provider configuration and usage
-- [LangSmith Testing Guide](docs/LANGSMITH_TESTING_GUIDE.md) - Testing and debugging guide
-- [Design Document](docs/DESIGN.md) - System design and architecture
-- [Web UI Guide](fairifier/apps/README.md) - Streamlit UI features and usage
+- **Core**
+  - [Project Summary](docs/PROJECT_SUMMARY.md) – End-to-end overview
+  - [Design Document](docs/DESIGN.md) – System design and architecture
+  - [LLM Integration Guide](docs/LLM_INTEGRATION_GUIDE.md) – Provider configuration
+  - [LangSmith Testing Guide](docs/LANGSMITH_TESTING_GUIDE.md) – Testing and debugging
+- **Guides**
+  - [LangGraph Studio Setup](docs/guides/LANGGRAPH_STUDIO_SETUP.md) – Local LangGraph + Studio
+  - [Quick Start (中文)](docs/guides/QUICKSTART_CN.md) – 最简运行步骤
+  - [Test Guide](docs/guides/TEST_GUIDE.md) – 环境验证与测试流程
+- **Development Notes**
+  - [System Ready Checklist](docs/development/SYSTEM_READY.md) – 全面特性验证
+  - [Workflow Summary](docs/development/WORKFLOW_SUMMARY.md) – 当前工作流说明
+  - [FAIR-DS API Exploration](docs/development/FAIRDS_API_EXPLORATION.md) – API 结构调研
+  - [Implementation Notes](docs/development/README_IMPLEMENTATION.md) – 历史实现记录
+- **Web UI**
+  - [Web UI Guide](fairifier/apps/README.md) – Streamlit UI features and usage
 
 ## 🤝 Contributing
 
