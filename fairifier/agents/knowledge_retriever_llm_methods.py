@@ -17,7 +17,8 @@ async def llm_select_relevant_packages(
     llm_helper,
     doc_info: Dict[str, Any],
     all_packages: List[Dict[str, Any]],
-    critic_feedback: Optional[Dict[str, Any]] = None
+    critic_feedback: Optional[Dict[str, Any]] = None,
+    planner_instruction: Optional[str] = None,
 ) -> List[str]:
     """
     LLM determines which FAIR-DS packages are relevant for this document.
@@ -74,8 +75,9 @@ async def llm_select_relevant_packages(
 1. Match packages to the research domain and sample type
 2. Select domain-specific packages based on actual API data above
 3. Select method-specific packages if applicable
-4. Usually 1-3 packages is optimal (avoid over-selection)
-5. ONLY select from the packages listed above - these are real and current
+4. Select at least 1 package. Choose as many as needed to fully cover the document's metadata requirements
+5. There is no upper limit - use your judgment to determine the optimal number of packages
+6. ONLY select from the packages listed above - these are real and current
 
 **Think step by step:**
 1. What is the research domain? (genomics, ecology, plant science, etc.)
@@ -89,7 +91,7 @@ Return JSON:
   "reasoning": "why these specific packages from the API are relevant"
 }}
 
-Select 1-3 most relevant packages from the available packages."""
+Select at least 1 package. Choose as many as needed - there is no upper limit."""
 
     if critic_feedback:
         feedback_text = "\n\n**Address critic feedback:**\n"
@@ -98,6 +100,9 @@ Select 1-3 most relevant packages from the available packages."""
         for suggestion in critic_feedback.get('suggestions', []):
             feedback_text += f"- {suggestion}\n"
         system_prompt += feedback_text
+    
+    if planner_instruction:
+        system_prompt += f"\n\n**Planner guidance:**\n- {planner_instruction}\n"
 
     user_prompt = f"""Document information:
 {json.dumps(doc_info, indent=2, ensure_ascii=False)}
@@ -175,29 +180,28 @@ Select the relevant packages for this document. Return JSON."""
         return selected_package_names
         
     except Exception as e:
-        logger.warning(f"Error in LLM package selection (unexpected exception): {e}")
+        logger.error(f"Error in LLM package selection: {e}")
         logger.error(f"Exception details: {type(e).__name__}")
-        # Return top 3 packages from API as fallback
-        default_packages = [pkg["name"] for pkg in all_packages[:3]]
-        logger.warning(f"Using default packages from API (fallback): {default_packages}")
-        return default_packages
+        raise  # Re-raise to trigger retry mechanism
 
 
 async def llm_select_fields_from_package(
     llm_helper,
     doc_info: Dict[str, Any],
+    isa_sheet: str,
     package_name: str,
     mandatory_fields: List[Dict[str, Any]],
     optional_fields: List[Dict[str, Any]],
     critic_feedback: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
     """
-    LLM selects relevant optional fields from a package.
+    LLM selects relevant optional fields from a package for a specific ISA sheet.
     Mandatory fields are always included.
     
     Args:
         llm_helper: LLM helper instance
         doc_info: Document information
+        isa_sheet: ISA sheet level (investigation, study, assay, sample, observationunit)
         package_name: Name of the package
         mandatory_fields: Mandatory fields (always included)
         optional_fields: Optional fields to choose from
@@ -220,33 +224,47 @@ async def llm_select_fields_from_package(
         for f in optional_sample
     ]
     
+    # ISA sheet descriptions
+    isa_descriptions = {
+        "investigation": "Project/investigation-level metadata (e.g., investigation title, description, personnel, organization, funding)",
+        "study": "Study-level metadata (e.g., study title, description, experimental design, objectives)",
+        "assay": "Assay-level metadata (e.g., assay type, protocol, measurement technology, facility)",
+        "sample": "Sample-level metadata (e.g., sample description, collection method, biological material, geographic location)",
+        "observationunit": "ObservationUnit-level metadata (e.g., sampling sites, environmental context, observation units)"
+    }
+    
+    isa_description = isa_descriptions.get(isa_sheet.lower(), f"Metadata for {isa_sheet} level")
+    
     system_prompt = f"""You are an expert at selecting relevant metadata fields.
 
+**ISA Sheet Level:** {isa_sheet.upper()}
+**ISA Level Description:** {isa_description}
 **Package:** {package_name}
 **Total optional fields available:** {len(optional_fields)}
 **Mandatory fields:** {len(mandatory_fields)} (automatically included)
 
-**Your task:** Select 5-15 most relevant OPTIONAL fields for this document.
+**Your task:** Select at least 5 relevant OPTIONAL fields for the {isa_sheet} level based on document content.
 
 **Selection criteria:**
-1. Field is relevant to the document's content
+1. Field is relevant to the document's content at the {isa_sheet} level
 2. Information for this field is likely present in the document
-3. Field adds value for FAIR data principles
-4. Balance between general and specific fields
+3. Field adds value for FAIR data principles (findability, accessibility, interoperability, reusability)
+4. Balance between general and specific fields appropriate for {isa_sheet} level
 
 **Think step by step:**
 1. What is the document about?
-2. Which fields match the document's domain and content?
-3. Which fields can actually be filled from this document?
-4. What fields are most important for findability and reusability?
+2. What {isa_sheet}-level information is present in the document?
+3. Which fields match the document's domain and content at this ISA level?
+4. Which fields can actually be filled from this document?
+5. What fields are most important for findability and reusability at the {isa_sheet} level?
 
 Return JSON:
 {{
   "selected_fields": ["field_label1", "field_label2", ...],
-  "reasoning": "explanation"
+  "reasoning": "explanation focusing on {isa_sheet} level relevance"
 }}
 
-Select 5-15 fields. Be selective - quality over quantity."""
+Select at least 5 fields. Choose as many as needed based on document content and metadata requirements. There is no upper limit - use your judgment to ensure comprehensive coverage for the {isa_sheet} level."""
 
     if critic_feedback:
         feedback_text = "\n\n**Improve based on feedback:**\n"
@@ -265,7 +283,7 @@ Mandatory fields (auto-included):
 Optional fields to choose from:
 {json.dumps(optional_summary, indent=2)}
 
-Select 5-15 most relevant optional fields. Return JSON."""
+Select at least 5 relevant optional fields for the {isa_sheet} level. There is no upper limit - choose as many as needed. Return JSON."""
 
     messages = [
         SystemMessage(content=system_prompt),
@@ -303,397 +321,3 @@ Select 5-15 most relevant optional fields. Return JSON."""
     logger.info(f"LLM selected {len(selected_optional)} optional fields from {package_name}")
     
     return selected_optional
-
-
-async def llm_select_optional_fields_by_isa_sheet(
-    llm_helper,
-    doc_info: Dict[str, Any],
-    isa_sheet: str,
-    mandatory_fields: List[Dict[str, Any]],
-    optional_fields: List[Dict[str, Any]],
-    critic_feedback: Optional[Dict[str, Any]] = None
-) -> List[Dict[str, Any]]:
-    """
-    LLM selects relevant optional fields from a specific ISA sheet.
-    All mandatory fields for this ISA sheet are already included.
-    
-    Args:
-        llm_helper: LLM helper instance
-        doc_info: Document information
-        isa_sheet: ISA sheet name (investigation, study, assay, sample, observationunit)
-        mandatory_fields: Mandatory fields for this ISA sheet (already included)
-        optional_fields: Optional fields for this ISA sheet to choose from
-        critic_feedback: Optional feedback
-        
-    Returns:
-        List of selected optional field dictionaries for this ISA sheet
-    """
-    # Show ALL optional fields - no sampling (complete information required)
-    optional_sample = optional_fields
-    logger.info(
-        f"Showing ALL {len(optional_fields)} optional fields for {isa_sheet} "
-        f"ISA sheet to LLM (no sampling)"
-    )
-    
-    # Prepare summaries (ALL fields - no truncation)
-    mandatory_summary = [
-        {"label": f.get("label"), "package": f.get("packageName")}
-        for f in mandatory_fields  # ALL mandatory fields for this ISA sheet
-    ]
-    
-    optional_summary = [
-        {
-            "label": f.get("label"),
-            "definition": f.get("definition", ""),  # Full definition - no truncation
-            "package": f.get("packageName")
-        }
-        for f in optional_sample  # ALL optional fields for this ISA sheet
-    ]
-    
-    # ISA sheet descriptions
-    isa_sheet_descriptions = {
-        "investigation": "Investigation-level metadata (project/investigation info)",
-        "study": "Study-level metadata (experimental design and research questions)",
-        "assay": "Assay-level metadata (measurement types and technologies)",
-        "sample": "Sample-level metadata (biological material and samples)",
-        "observationunit": "ObservationUnit-level metadata (sampling sites and environmental context)"
-    }
-    
-    isa_description = isa_sheet_descriptions.get(isa_sheet, f"{isa_sheet} metadata")
-    
-    system_prompt = f"""You are an expert at selecting relevant metadata fields for FAIR data.
-
-**Context:**
-- ISA Sheet: {isa_sheet.upper()} - {isa_description}
-- Total mandatory fields for {isa_sheet}: {len(mandatory_fields)} (already included)
-- Total optional fields for {isa_sheet}: {len(optional_fields)} available (ALL fields shown below - complete information)
-- Document domain: {doc_info.get('research_domain', 'unknown')}
-
-**Your task:** Select relevant OPTIONAL fields for this ISA sheet ({isa_sheet}) based on the document content.
-
-**Selection criteria:**
-1. Field is relevant to the document's research domain and the {isa_sheet} level
-2. Information for this field is likely present in the document
-3. Field adds value for FAIR data principles (findability, accessibility, etc.)
-4. Balance between general and specific fields for {isa_sheet} level
-
-**Think step by step:**
-1. What is this research about?
-2. Which optional fields at {isa_sheet} level match the research type?
-3. Which fields can actually be filled from this document?
-4. What metadata is most valuable for data reuse at {isa_sheet} level?
-
-Return JSON:
-{{
-  "selected_fields": ["field_label1", "field_label2", ...],
-  "reasoning": "explanation"
-}}
-
-Select 5-15 fields for {isa_sheet} level. Be selective - quality over quantity."""
-
-    if critic_feedback:
-        feedback_text = "\n\n**Address critic feedback:**\n"
-        for suggestion in critic_feedback.get('suggestions', []):
-            feedback_text += f"- {suggestion}\n"
-        system_prompt += feedback_text
-
-    user_prompt = f"""Document information:
-{json.dumps(doc_info, indent=2, ensure_ascii=False)}  # Complete document info - no truncation
-
-ISA Sheet: {isa_sheet.upper()}
-
-Mandatory fields for {isa_sheet} (auto-included):
-{json.dumps(mandatory_summary, indent=2)}
-
-Optional fields for {isa_sheet} to choose from:
-{json.dumps(optional_summary, indent=2)}
-
-Select 5-15 most relevant optional fields for {isa_sheet} level. Return JSON."""
-
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_prompt)
-    ]
-    
-    try:
-        logger.info(f"Calling LLM to select optional fields for {isa_sheet} ISA sheet...")
-        response = await llm_helper._call_llm(messages, operation_name="Extract Package Terms")
-        
-        # Defensive checks
-        if response is None:
-            logger.warning(f"LLM returned None response for {isa_sheet} optional field selection")
-            target_count = max(len(mandatory_fields), len(optional_fields) // 4)
-            default_optional = optional_fields[:target_count]
-            logger.warning(f"Using {len(default_optional)} optional fields from API (fallback)")
-            return default_optional
-        
-        content = getattr(response, 'content', None)
-        
-        # Check if response is empty or None
-        if not content or (isinstance(content, str) and not content.strip()):
-            logger.warning(
-                f"LLM returned empty response for {isa_sheet} optional field selection "
-                f"(content={repr(content)})"
-            )
-            target_count = max(len(mandatory_fields), len(optional_fields) // 4)
-            default_optional = optional_fields[:target_count]
-            logger.warning(f"Using {len(default_optional)} optional fields from API (fallback)")
-            return default_optional
-        
-        # Parse response
-        try:
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            
-            result = json.loads(content)
-        except json.JSONDecodeError as e:
-            logger.warning(
-                f"Failed to parse LLM optional field selection response for {isa_sheet} "
-                f"(JSON error): {e}"
-            )
-            logger.error(f"Response content: {content[:500]}")
-            target_count = max(len(mandatory_fields), len(optional_fields) // 4)
-            default_optional = optional_fields[:target_count]
-            logger.warning(f"Using {len(default_optional)} optional fields from API (fallback)")
-            return default_optional
-        
-        selected_items = result.get("selected_fields", [])
-        
-        # Extract labels
-        selected_labels = set()
-        for item in selected_items:
-            if isinstance(item, str):
-                selected_labels.add(item)
-            elif isinstance(item, dict):
-                selected_labels.add(
-                    item.get("label") or item.get("field_name") or item.get("name")
-                )
-        
-        # Match back to full field objects
-        selected_optional = []
-        matched_labels = set()
-        for field in optional_fields:
-            field_label = field.get("label")
-            if field_label in selected_labels:
-                selected_optional.append(field)
-                matched_labels.add(field_label)
-        
-        # Check if any selected labels were not matched
-        unmatched_labels = selected_labels - matched_labels
-        if unmatched_labels:
-            logger.warning(
-                f"LLM selected {len(unmatched_labels)} field labels for {isa_sheet} "
-                f"that were not found in the full optional fields list: "
-                f"{list(unmatched_labels)[:5]}"
-            )
-        
-        # If nothing selected, use API data
-        if not selected_optional:
-            logger.warning(
-                f"LLM selected no optional fields for {isa_sheet}, using API data"
-            )
-            target_count = max(len(mandatory_fields), len(optional_fields) // 4)
-            selected_optional = optional_fields[:target_count]
-            logger.info(f"Using {len(selected_optional)} optional fields from API")
-        
-        logger.info(
-            f"LLM selected {len(selected_optional)} optional fields for {isa_sheet} "
-            f"from {len(optional_fields)} available "
-            f"(matched {len(matched_labels)}/{len(selected_labels)} requested labels)"
-        )
-        logger.info(f"Reasoning: {result.get('reasoning', '')[:200]}")
-        
-        return selected_optional
-        
-    except Exception as e:
-        logger.warning(
-            f"Error in LLM optional field selection for {isa_sheet} "
-            f"(unexpected exception): {e}"
-        )
-        logger.error(f"Exception details: {type(e).__name__}")
-        target_count = max(len(mandatory_fields), len(optional_fields) // 4)
-        default_optional = optional_fields[:target_count]
-        logger.warning(f"Using {len(default_optional)} optional fields from API (fallback)")
-        return default_optional
-
-
-async def llm_select_optional_fields(
-    llm_helper,
-    doc_info: Dict[str, Any],
-    mandatory_fields: List[Dict[str, Any]],
-    optional_fields: List[Dict[str, Any]],
-    critic_feedback: Optional[Dict[str, Any]] = None
-) -> List[Dict[str, Any]]:
-    """
-    LLM selects relevant optional fields from all collected optional fields.
-    All mandatory fields are already included.
-    
-    Args:
-        llm_helper: LLM helper instance
-        doc_info: Document information
-        mandatory_fields: Mandatory fields (already included)
-        optional_fields: Optional fields to choose from
-        critic_feedback: Optional feedback
-        
-    Returns:
-        List of selected optional field dictionaries
-    """
-    # Show ALL optional fields - no sampling (complete information required)
-    optional_sample = optional_fields
-    logger.info(f"Showing ALL {len(optional_fields)} optional fields to LLM (no sampling)")
-    
-    # Prepare summaries (ALL fields - no truncation)
-    mandatory_summary = [
-        {"label": f.get("label"), "package": f.get("packageName")}
-        for f in mandatory_fields  # ALL mandatory fields
-    ]
-    
-    optional_summary = [
-        {
-            "label": f.get("label"),
-            "definition": f.get("definition", ""),  # Full definition - no truncation
-            "package": f.get("packageName")
-        }
-        for f in optional_sample  # ALL optional fields
-    ]
-    
-    system_prompt = f"""You are an expert at selecting relevant metadata fields.
-
-**Context:**
-- Total mandatory fields: {len(mandatory_fields)} (already included)
-- Total optional fields: {len(optional_fields)} available (ALL fields shown below - complete information)
-- Document domain: {doc_info.get('research_domain', 'unknown')}
-
-**Your task:** Select relevant OPTIONAL fields for this document (at least 10-20 fields).
-
-**Selection criteria:**
-1. Field is relevant to the document's research domain
-2. Information for this field is likely present in the document
-3. Field adds value for FAIR data principles (findability, accessibility, etc.)
-4. Balance between general and specific fields
-
-**Think step by step:**
-1. What is this research about?
-2. Which optional fields match the research type?
-3. Which fields can actually be filled from this document?
-4. What metadata is most valuable for data reuse?
-
-Return JSON:
-{{
-  "selected_fields": ["field_label1", "field_label2", ...],
-  "reasoning": "explanation"
-}}
-
-Select 10-20 fields. Be selective - quality over quantity."""
-
-    if critic_feedback:
-        feedback_text = "\n\n**Address critic feedback:**\n"
-        for suggestion in critic_feedback.get('suggestions', []):
-            feedback_text += f"- {suggestion}\n"
-        system_prompt += feedback_text
-
-    user_prompt = f"""Document information:
-{json.dumps(doc_info, indent=2, ensure_ascii=False)}  # Complete document info - no truncation
-
-Mandatory fields (auto-included):
-{json.dumps(mandatory_summary, indent=2)}
-
-Optional fields to choose from:
-{json.dumps(optional_summary, indent=2)}
-
-Select 10-20 most relevant optional fields. Return JSON."""
-
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_prompt)
-    ]
-    
-    try:
-        logger.info("Calling LLM to select optional fields...")
-        response = await llm_helper._call_llm(messages, operation_name="Extract Package Terms")
-        
-        # Defensive checks
-        if response is None:
-            logger.warning("LLM returned None response for optional field selection")
-            target_count = max(len(mandatory_fields), len(optional_fields) // 4)
-            default_optional = optional_fields[:target_count]
-            logger.warning(f"Using {len(default_optional)} optional fields from API (fallback)")
-            return default_optional
-        
-        content = getattr(response, 'content', None)
-        
-        # Check if response is empty or None
-        if not content or (isinstance(content, str) and not content.strip()):
-            logger.warning(f"LLM returned empty response for optional field selection (content={repr(content)})")
-            # Use API data directly: select enough fields to balance with mandatory
-            # Calculate percentage: try to get similar number as mandatory fields
-            target_count = max(len(mandatory_fields), len(optional_fields) // 4)
-            default_optional = optional_fields[:target_count]
-            logger.warning(f"Using {len(default_optional)} optional fields from API (fallback)")
-            return default_optional
-        
-        # Parse response
-        try:
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            
-            result = json.loads(content)
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse LLM optional field selection response (JSON error): {e}")
-            logger.error(f"Response content: {content[:500]}")
-            # Use API data directly as fallback
-            target_count = max(len(mandatory_fields), len(optional_fields) // 4)
-            default_optional = optional_fields[:target_count]
-            logger.warning(f"Using {len(default_optional)} optional fields from API (fallback)")
-            return default_optional
-        
-        selected_items = result.get("selected_fields", [])
-        
-        # Extract labels
-        selected_labels = set()
-        for item in selected_items:
-            if isinstance(item, str):
-                selected_labels.add(item)
-            elif isinstance(item, dict):
-                selected_labels.add(item.get("label") or item.get("field_name") or item.get("name"))
-        
-        # Match back to full field objects
-        selected_optional = []
-        matched_labels = set()
-        for field in optional_fields:
-            field_label = field.get("label")
-            if field_label in selected_labels:
-                selected_optional.append(field)
-                matched_labels.add(field_label)
-        
-        # Check if any selected labels were not matched
-        unmatched_labels = selected_labels - matched_labels
-        if unmatched_labels:
-            logger.warning(f"LLM selected {len(unmatched_labels)} field labels that were not found in the full optional fields list: {list(unmatched_labels)[:5]}")
-        
-        # If nothing selected, use API data
-        if not selected_optional:
-            logger.warning("LLM selected no optional fields, using API data")
-            target_count = max(len(mandatory_fields), len(optional_fields) // 4)
-            selected_optional = optional_fields[:target_count]
-            logger.info(f"Using {len(selected_optional)} optional fields from API")
-        
-        logger.info(f"LLM selected {len(selected_optional)} optional fields from {len(optional_fields)} available "
-                   f"(matched {len(matched_labels)}/{len(selected_labels)} requested labels)")
-        logger.info(f"Reasoning: {result.get('reasoning', '')[:200]}")
-        
-        return selected_optional
-        
-    except Exception as e:
-        logger.warning(f"Error in LLM optional field selection (unexpected exception): {e}")
-        logger.error(f"Exception details: {type(e).__name__}")
-        # Use API data directly: adaptive count based on mandatory fields
-        target_count = max(len(mandatory_fields), len(optional_fields) // 4)
-        default_optional = optional_fields[:target_count]
-        logger.warning(f"Using {len(default_optional)} optional fields from API (fallback)")
-        return default_optional
-

@@ -21,6 +21,8 @@ FAIRiAgent is a CLI-first multi-agent framework that automatically extracts info
 - 💬 **Chat-like Streaming**: Real-time LLM response streaming with chat bubble interface
 - ⚙️ **Configuration Management**: Save and manage runtime configurations
 - 📋 **Runtime Config Export**: Automatic export of input, .env, and runtime configurations
+- 🧑‍⚖️ **LLM-as-Judge Critic**: Rubric-driven auditing with actionable guidance per agent
+- 📈 **Confidence Aggregator**: Blends critic scores, structural coverage, and validation health into a single metric
 
 ## 🏗️ Architecture
 
@@ -35,13 +37,32 @@ Document → Parse → Plan → Retrieve Knowledge → Generate JSON → Evaluat
 2. **Planner Node**: Summarizes document type/domain并下发 special instructions
 3. **Knowledge Retriever**: Enriches metadata with FAIR-DS and local knowledge（遵循 Planner 指令）
 4. **JSON Generator**: Creates FAIR-DS compatible metadata（带有 Planner/ Critic 反馈）
-5. **Critic**: Evaluates quality and provides feedback for retry/escalation
+5. **Critic**: Uses LLM-as-Judge rubric (see `docs/development/critic_rubric.yaml`) to score outputs and emit improvement ops
 
 **Workflow Features:**
 - 🔄 **Retry Logic**: Automatic retry with feedback from Critic agent
 - 🎯 **Conditional Routing**: Dynamic workflow based on evaluation results
 - 📊 **Execution Summary**: Track steps, retries, and outcomes
 - 💾 **State Persistence**: LangGraph checkpointer for state management
+
+## 🧑‍⚖️ LLM-as-Judge Critic & Confidence
+
+- Rubric location: `docs/development/critic_rubric.yaml` （可自定义维度与阈值）
+- 关键配置（均可通过 `.env` 覆盖）：
+  - `FAIRIFIER_CRITIC_RUBRIC_PATH`
+  - `FAIRIFIER_CONF_WEIGHT_CRITIC`, `FAIRIFIER_CONF_WEIGHT_STRUCTURAL`, `FAIRIFIER_CONF_WEIGHT_VALIDATION`
+  - `FAIRIFIER_STRUCTURAL_COVERAGE_TARGET`, `FAIRIFIER_EVIDENCE_COVERAGE_TARGET`, `FAIRIFIER_VALIDATION_PASS_TARGET`
+- Critic 输出结构：
+  ```json
+  {
+    "score": 0.82,
+    "decision": "ACCEPT|RETRY|ESCALATE",
+    "issues": [...],
+    "improvement_ops": [...],
+    "critique": "short narrative"
+  }
+  ```
+- `fairifier/services/confidence_aggregator.py` 将 critic 分数、字段覆盖率、证据率与验证结果融合为单一置信度，CLI 在 `processing_log.jsonl` 与标准输出中都会展示 `critic/structural/validation/overall` 四个分量。
 
 ## 🚀 Quick Start
 

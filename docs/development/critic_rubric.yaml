@@ -1,0 +1,101 @@
+version: 1
+default_prompt: |
+  You are an impartial FAIR metadata auditor (LLM-as-Judge). Evaluate the
+  provided agent output using the rubric below. Always reason step by step,
+  reference concrete evidence from the supplied context, and return structured
+  JSON with:
+    {
+      "score": 0.0-1.0,
+      "decision": "accept" | "revise" | "escalate",
+      "issues": ["problem description", ...],
+      "improvement_ops": ["actionable instruction", ...],
+      "evidence": ["quote or pointer", ...],
+      "critique": "short narrative paragraph"
+    }
+  - Use ACCEPT only when the output is complete, faithful, and ready for
+    downstream consumption.
+  - Use REVISE when the output is promising but requires another automated pass.
+  - Use ESCALATE when the output is unusable, unsafe, or missing critical
+    information; human review is required.
+
+dimensions:
+  accuracy:
+    description: "Are statements correct, precise, and verifiable from the source?"
+  coverage:
+    description: "Does the output include all required elements and sufficient breadth?"
+  faithfulness:
+    description: "Is every claim traceable to source evidence without hallucination?"
+  actionability:
+    description: "Are improvement suggestions concrete, scoped, and testable?"
+
+nodes:
+  document_parser:
+    accept_threshold: 0.70
+    revise_min: 0.40
+    description: "LLM extracted structured info from raw document text or MinerU markdown."
+    criteria:
+      accuracy:
+        checks:
+          - "Extracted information matches document content (verify key facts, numbers, names)."
+          - "Research domain and objectives align with document narrative."
+          - "Document type is correctly identified (paper, proposal, protocol, etc.)."
+      coverage:
+        checks:
+          - "Key information appropriate for the document type is captured."
+          - "For proposals: project info, consortium, objectives, work packages, budget."
+          - "For papers: bibliographic info, methodology, data, results."
+          - "Important metadata called out in planner guidance are surfaced."
+      faithfulness:
+        checks:
+          - "Information is anchored to document content; no invented content."
+          - "Explicitly mark when information is inferred versus directly stated."
+          - "Preserve original terminology and identifiers (PICs, DOIs, grant numbers)."
+      actionability:
+        checks:
+          - "For missing critical information, specify concrete sections to inspect."
+          - "Flag low-quality extraction causes (OCR noise, PDF tables, etc.)."
+
+  knowledge_retriever:
+    accept_threshold: 0.65
+    revise_min: 0.40
+    description: "Agent queries FAIR-DS API and selects relevant packages/fields."
+    criteria:
+      accuracy:
+        checks:
+          - "Selected packages correspond to document scope (investigation/study/assay/sample)."
+          - "Each term keeps its correct definition, ISA sheet, and requirement flag."
+      coverage:
+        checks:
+          - "Mandatory fields for investigation + study layers are always included."
+          - "Optional fields reflect planner instructions (e.g., ethics, DMP, KER)."
+      faithfulness:
+        checks:
+          - "No local heuristics or hallucinated terms; every term exists in FAIR-DS response."
+          - "Return counts (mandatory vs optional) match actual selections."
+      actionability:
+        checks:
+          - "If coverage is low, specify which packages/ISA sheets to re-fetch."
+          - "Suggest concrete filters or keywords to improve FAIR-DS matching."
+
+  json_generator:
+    accept_threshold: 0.70
+    revise_min: 0.45
+    description: "Agent maps document + knowledge items into FAIR-DS compatible metadata fields."
+    criteria:
+      accuracy:
+        checks:
+          - "Field values reflect document facts or justified inferences with evidence."
+          - "Unit/format matches FAIR-DS expectations (dates, identifiers, URIs)."
+      coverage:
+        checks:
+          - "All mandatory investigation/study fields populated; optional fields match planner focus."
+          - "Evidence and confidence exist for each field; provenance is recorded."
+      faithfulness:
+        checks:
+          - "Values do not contradict document info or retrieved terms."
+          - "Evidence snippets are real excerpts or references."
+      actionability:
+        checks:
+          - "For weak fields, recommend exact sections or terms to re-extract."
+          - "Highlight structural gaps (e.g., missing secondment table, ethics statement)."
+

@@ -18,13 +18,16 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from ..models import FAIRifierState, ProcessingStatus
+from ..agents.base import BaseAgent
 from ..agents.document_parser import DocumentParserAgent
 from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
 from ..agents.json_generator import JSONGeneratorAgent
 from ..agents.critic import CriticAgent
 from ..config import config
 from ..utils.llm_helper import get_llm_helper
+from ..utils.report_generator import WorkflowReportGenerator
 from ..services.mineru_client import MinerUClient, MinerUConversionError
+from ..services.confidence_aggregator import aggregate_confidence
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +38,17 @@ class FAIRifierLangGraphApp:
     def __init__(self):
         """Initialize the LangGraph app with all agents."""
         # Initialize agents
-        self.document_parser = DocumentParserAgent(use_llm=True)
-        self.knowledge_retriever = KnowledgeRetrieverAgent(use_llm=True)
-        self.json_generator = JSONGeneratorAgent(use_llm=True)
+        self.document_parser = DocumentParserAgent()
+        self.knowledge_retriever = KnowledgeRetrieverAgent()
+        self.json_generator = JSONGeneratorAgent()
         self.critic = CriticAgent()
         self.llm_helper = get_llm_helper()
         self.mineru_client = self._initialize_mineru_client()
+        
+        # Initialize retry counters (like old Orchestrator)
+        self.global_retry_count = 0
+        self.max_global_retries = config.max_global_retries
+        self.max_step_retries = config.max_step_retries
         
         # Initialize checkpointer
         self.checkpointer = MemorySaver()
@@ -70,6 +78,129 @@ class FAIRifierLangGraphApp:
             logger.warning("Failed to initialize MinerU client: %s", exc)
         return None
     
+    async def _execute_agent_with_retry(
+        self,
+        state: FAIRifierState,
+        agent: BaseAgent,
+        agent_name: str,
+        check_output_fn
+    ) -> FAIRifierState:
+        """
+        Execute an agent with internal retry logic (like old Orchestrator).
+        
+        Args:
+            state: Current workflow state
+            agent: Agent instance to execute
+            agent_name: Name for logging
+            check_output_fn: Function to check if agent produced usable output
+            
+        Returns:
+            Updated state after execution (with or without retries)
+        """
+        if "execution_history" not in state:
+            state["execution_history"] = []
+        if "context" not in state:
+            state["context"] = {}
+        
+        # Internal retry loop
+        for attempt in range(1, self.max_step_retries + 2):  # +2 = initial + max_retries
+            # Check global retry limit
+            if self.global_retry_count >= self.max_global_retries:
+                logger.warning(f"⚠️ Global retry limit ({self.max_global_retries}) reached")
+                if check_output_fn(state):
+                    logger.warning(f"   But {agent_name} has usable output - accepting")
+                    state["needs_human_review"] = True
+                    break
+                else:
+                    logger.error(f"   And {agent_name} has no usable output - failing")
+                    state["errors"] = state.get("errors", []) + [f"{agent_name} failed: global retry limit reached"]
+                    break
+            
+            # Log attempt
+            if attempt == 1:
+                logger.info(f"▶️  Executing {agent_name}")
+            else:
+                logger.info(f"🔄 Retry {attempt-1}/{self.max_step_retries} for {agent_name}")
+                self.global_retry_count += 1
+            
+            # Set retry context for agent
+            state["context"]["retry_count"] = attempt - 1
+            
+            # Create execution record
+            execution_record = {
+                "agent_name": agent_name,
+                "attempt": attempt,
+                "start_time": datetime.now().isoformat(),
+                "end_time": None,
+                "success": False,
+                "critic_evaluation": None
+            }
+            
+            try:
+                # Execute agent
+                state = await agent.execute(state)
+                execution_record["success"] = True
+                execution_record["end_time"] = datetime.now().isoformat()
+                
+            except Exception as e:
+                logger.error(f"❌ {agent_name} error: {str(e)}")
+                execution_record["success"] = False
+                execution_record["end_time"] = datetime.now().isoformat()
+                execution_record["error"] = str(e)
+                state["execution_history"].append(execution_record)
+                
+                if attempt <= self.max_step_retries:
+                    continue  # Retry on error
+                else:
+                    break  # Max retries reached
+            
+            # Add execution record
+            state["execution_history"].append(execution_record)
+            
+            # Call Critic
+            logger.info(f"🔍 Critic evaluating {agent_name}...")
+            state = await self.critic.execute(state)
+            
+            # Get Critic decision
+            last_execution = state["execution_history"][-1]
+            critic_eval = last_execution.get("critic_evaluation", {})
+            decision = critic_eval.get("decision", "ACCEPT")
+            score = critic_eval.get("score", 0.0)
+            
+            logger.info(f"📊 Critic: {decision} (score: {score:.2f}, attempt: {attempt}/{self.max_step_retries + 1})")
+            
+            if decision == "ACCEPT":
+                logger.info(f"✅ {agent_name} completed successfully (score {score:.2f} >= accept threshold)")
+                break  # Success
+            elif attempt > self.max_step_retries:
+                # Max retries reached - check if we have usable output
+                if check_output_fn(state):
+                    logger.warning(
+                        f"⚠️ Max retries reached ({attempt-1}/{self.max_step_retries}) "
+                        f"but {agent_name} has usable output - accepting with review flag\n"
+                        f"  Last Critic decision: {decision} (score: {score:.2f})\n"
+                        f"  Note: Workflow continues because output is usable, but needs human review"
+                    )
+                    state["needs_human_review"] = True
+                    break
+                else:
+                    logger.error(
+                        f"❌ Max retries reached ({attempt-1}/{self.max_step_retries}) "
+                        f"with no usable output from {agent_name}\n"
+                        f"  Last Critic decision: {decision} (score: {score:.2f})\n"
+                        f"  Workflow will continue but may fail at finalization"
+                    )
+                    break
+            else:
+                # RETRY or ESCALATE but still have retries left
+                logger.info(
+                    f"🔄 {agent_name} needs improvement (decision: {decision}, score: {score:.2f}), "
+                    f"retrying... (attempt {attempt}/{self.max_step_retries + 1})"
+                )
+                state = await self.critic.provide_feedback_to_agent(agent_name, critic_eval, state)
+        
+        return state
+    
     def get_graph_without_checkpointer(self):
         """Get a compiled graph without checkpointer for LangGraph Studio."""
         # Build graph structure without checkpointer
@@ -78,75 +209,88 @@ class FAIRifierLangGraphApp:
         return workflow.compile()
     
     def _build_graph_structure(self) -> StateGraph:
-        """Build the LangGraph workflow structure (uncompiled)."""
+        """Build LangGraph workflow with Orchestrator-style coordination."""
         workflow = StateGraph(FAIRifierState)
         
-        # Add nodes
+        # Simplified workflow: Read file, then Orchestrator handles everything
         workflow.add_node("read_file", self._read_file_node)
-        workflow.add_node("plan_workflow", self._plan_workflow_node)
-        workflow.add_node("parse_document", self._parse_document_node)
-        workflow.add_node("evaluate_parsing", self._evaluate_parsing_node)
-        workflow.add_node("retrieve_knowledge", self._retrieve_knowledge_node)
-        workflow.add_node("evaluate_retrieval", self._evaluate_retrieval_node)
-        workflow.add_node("generate_json", self._generate_json_node)
-        workflow.add_node("evaluate_generation", self._evaluate_generation_node)
+        workflow.add_node("orchestrate", self._orchestrate_all_agents_node)
         workflow.add_node("finalize", self._finalize_node)
         
         # Set entry point
         workflow.set_entry_point("read_file")
         
-        # Define edges
-        workflow.add_edge("read_file", "parse_document")
-        
-        # After parsing, plan workflow based on parsed content
-        workflow.add_edge("parse_document", "plan_workflow")
-        
-        # After planning, evaluate parsing results
-        workflow.add_edge("plan_workflow", "evaluate_parsing")
-        
-        # After evaluation, route based on parsing evaluation decision
-        workflow.add_conditional_edges(
-            "evaluate_parsing",
-            self._route_after_parsing,
-            {
-                "accept": "retrieve_knowledge",
-                "retry": "parse_document",
-                "escalate": "finalize"
-            }
-        )
-        
-        # After retrieval, always evaluate
-        workflow.add_edge("retrieve_knowledge", "evaluate_retrieval")
-        
-        # Conditional routing after retrieval evaluation
-        workflow.add_conditional_edges(
-            "evaluate_retrieval",
-            self._route_after_retrieval,
-            {
-                "accept": "generate_json",
-                "retry": "retrieve_knowledge",
-                "escalate": "finalize"
-            }
-        )
-        
-        # After generation, always evaluate
-        workflow.add_edge("generate_json", "evaluate_generation")
-        
-        # Conditional routing after generation evaluation
-        workflow.add_conditional_edges(
-            "evaluate_generation",
-            self._route_after_generation,
-            {
-                "accept": "finalize",
-                "retry": "generate_json",
-                "escalate": "finalize"
-            }
-        )
-        
-        # Finalize always goes to END
+        # Simple linear flow
+        workflow.add_edge("read_file", "orchestrate")
+        workflow.add_edge("orchestrate", "finalize")
         workflow.add_edge("finalize", END)
         
         return workflow  # Return uncompiled StateGraph
+    
+    @traceable(name="Orchestrate", tags=["workflow", "orchestration"])
+    async def _orchestrate_all_agents_node(self, state: FAIRifierState) -> FAIRifierState:
+        """
+        Orchestrate all agents with Critic-in-the-loop (like old OrchestratorAgent).
+        
+        This node coordinates:
+        1. DocumentParser → Critic → (retry if needed)
+        2. Planner (based on parsed info)
+        3. KnowledgeRetriever → Critic → (retry if needed)
+        4. JSONGenerator → Critic → (retry if needed)
+        
+        Benefits:
+        - Global coordination and visibility
+        - Unified retry management
+        - Can adapt strategy based on intermediate results
+        """
+        logger.info("🎯 Orchestrator coordinating all agents")
+        
+        # Reset global retry counter for this run
+        self.global_retry_count = 0
+        
+        # Step 1: Parse Document
+        logger.info("\n" + "="*70)
+        logger.info("📋 Step 1: DocumentParser")
+        logger.info("="*70)
+        state = await self._execute_agent_with_retry(
+            state, self.document_parser, "DocumentParser",
+            lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3
+        )
+        
+        # Step 2: Plan workflow based on parsed info
+        logger.info("\n" + "="*70)
+        logger.info("🧠 Step 2: Planning workflow strategy")
+        logger.info("="*70)
+        state = await self._plan_workflow_internal(state)
+        
+        # Step 3: Retrieve Knowledge
+        logger.info("\n" + "="*70)
+        logger.info("🔍 Step 3: KnowledgeRetriever")
+        logger.info("="*70)
+        state = await self._execute_agent_with_retry(
+            state, self.knowledge_retriever, "KnowledgeRetriever",
+            lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
+        )
+        
+        # Step 4: Generate JSON
+        logger.info("\n" + "="*70)
+        logger.info("📝 Step 4: JSONGenerator")
+        logger.info("="*70)
+        state = await self._execute_agent_with_retry(
+            state, self.json_generator, "JSONGenerator",
+            lambda s: s.get("metadata_fields", []) and len(s["metadata_fields"]) > 0
+        )
+        
+        logger.info("\n" + "="*70)
+        logger.info(f"✅ Orchestration complete (global retries used: {self.global_retry_count}/{self.max_global_retries})")
+        logger.info("="*70)
+        
+        return state
+    
+    async def _plan_workflow_internal(self, state: FAIRifierState) -> FAIRifierState:
+        """Internal planning (part of orchestration)."""
+        # This is the same as the old _plan_workflow_node logic
+        return await self._plan_workflow_node(state)
     
     @traceable(name="ReadFile", tags=["workflow", "io"])
     async def _read_file_node(self, state: FAIRifierState) -> FAIRifierState:
@@ -294,6 +438,9 @@ Return JSON in the following format:
             plan = json.loads(content)
             state["execution_plan"] = plan
             state["reasoning_chain"].append(f"Plan: {plan.get('reasoning', '')}")
+            state["agent_guidance"] = plan.get("special_instructions", {})
+            if state.get("agent_guidance"):
+                logger.info(f"🧭 Planner guidance: {state['agent_guidance']}")
             
             logger.info(f"✅ Workflow plan created: {plan.get('strategy', 'standard')}")
             logger.info(f"   Document type: {plan.get('document_type')}")
@@ -308,6 +455,7 @@ Return JSON in the following format:
                 "strategy": "standard",
                 "reasoning": f"Planning failed: {str(e)}"
             }
+            state["agent_guidance"] = {}
             if "errors" not in state:
                 state["errors"] = []
             state["errors"].append(f"Planning error: {str(e)}")
@@ -315,8 +463,21 @@ Return JSON in the following format:
         return state
     
     @traceable(name="ParseDocument", tags=["agent", "parsing"])
+    async def _parse_document_with_retry_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Parse document with internal retry logic."""
+        logger.info("📋 Parsing document (with retry)")
+        
+        def check_output(s):
+            doc_info = s.get("document_info", {})
+            return doc_info and len(doc_info) > 3
+        
+        return await self._execute_agent_with_retry(
+            state, self.document_parser, "DocumentParser", check_output
+        )
+    
+    @traceable(name="ParseDocument_OLD", tags=["agent", "parsing"])
     async def _parse_document_node(self, state: FAIRifierState) -> FAIRifierState:
-        """Parse document and extract structured information."""
+        """Parse document and extract structured information. [OLD - kept for reference]"""
         logger.info("📋 Parsing document")
         
         # Initialize execution history if needed
@@ -334,13 +495,14 @@ Return JSON in the following format:
         }
         
         try:
-            # Update retry count
+            # Initialize context and get current retry count
             if "context" not in state:
                 state["context"] = {}
+            
+            # Don't increment here - let the evaluate node handle retry logic
+            # Just track the current attempt number
             retry_count = state["context"].get("parse_retry_count", 0)
-            state["context"]["parse_retry_count"] = retry_count + 1
-            # Also set generic retry_count for agents that expect it
-            state["context"]["retry_count"] = state["context"]["parse_retry_count"]
+            state["context"]["retry_count"] = retry_count  # Set for agent feedback
             
             # Execute document parser
             state = await self.document_parser.execute(state)
@@ -381,24 +543,33 @@ Return JSON in the following format:
                 state["context"] = {}
             retry_count = state["context"].get("parse_retry_count", 0)
             
-            if decision == "RETRY" and retry_count < config.max_step_retries:
+            # Handle retry logic: RETRY or ESCALATE both trigger retry if under limit
+            if decision in ["RETRY", "ESCALATE"] and retry_count < config.max_step_retries:
+                # Increment retry count for this step
+                state["context"]["parse_retry_count"] = retry_count + 1
+                state["context"]["retry_count"] = retry_count + 1
+                
+                logger.info(f"🔄 Preparing retry {retry_count + 1}/{config.max_step_retries} for DocumentParser")
+                
                 # Prepare feedback for retry
-                # Note: provide_feedback_to_agent increments retry_count, but we're using parse_retry_count
-                # So we'll sync them after the call
                 state = await self.critic.provide_feedback_to_agent(
                     "DocumentParser",
                     critic_eval,
                     state
                 )
-                # Sync the retry counts
-                state["context"]["parse_retry_count"] = state["context"].get("retry_count", 0)
-            elif decision == "ESCALATE" or retry_count >= config.max_step_retries:
+            elif retry_count >= config.max_step_retries:
+                # Max retries reached, mark for review but continue
+                logger.warning(f"⚠️ Max retries ({config.max_step_retries}) reached for DocumentParser")
                 state["needs_human_review"] = True
         
         return state
     
     def _route_after_parsing(self, state: FAIRifierState) -> Literal["accept", "retry", "escalate"]:
-        """Route after parsing evaluation based on Critic decision."""
+        """Route after parsing evaluation based on Critic decision.
+        
+        Strategy: If max retries reached, continue with current output instead of escalating.
+        Only escalate if the output is completely unusable (empty document_info).
+        """
         execution_history = state.get("execution_history", [])
         if not execution_history:
             return "accept"
@@ -410,21 +581,47 @@ Return JSON in the following format:
         # Initialize context if needed
         if "context" not in state:
             state["context"] = {}
+        
+        # Get current retry count (this is the count AFTER the current attempt)
         retry_count = state["context"].get("parse_retry_count", 0)
         
-        logger.info(f"📊 Routing decision: {decision} (retry count: {retry_count})")
+        logger.info(f"📊 Routing decision: {decision} (attempt: {retry_count}/{config.max_step_retries})")
         
         if decision == "ACCEPT":
             return "accept"
-        elif decision == "RETRY" and retry_count < config.max_step_retries:
+        elif (decision == "RETRY" or decision == "ESCALATE") and retry_count < config.max_step_retries:
+            # Still have retries left - retry even on ESCALATE
+            logger.info(f"🔄 Retry available ({retry_count}/{config.max_step_retries}) - retrying")
             return "retry"
         else:
-            # Max retries reached or ESCALATE
-            return "escalate"
+            # Max retries reached: check if we have usable output
+            doc_info = state.get("document_info", {})
+            if doc_info and len(doc_info) > 3:
+                # We have some extracted info, continue with it
+                logger.warning(f"⚠️ Max retries reached but have {len(doc_info)} fields - continuing workflow")
+                state["needs_human_review"] = True
+                return "accept"  # Continue to next step
+            else:
+                # No usable output, must escalate
+                logger.error("❌ No usable document info extracted - escalating")
+                return "escalate"
     
     @traceable(name="RetrieveKnowledge", tags=["agent", "knowledge"])
+    async def _retrieve_knowledge_with_retry_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Retrieve knowledge with internal retry logic."""
+        logger.info("🔍 Retrieving knowledge (with retry)")
+        
+        def check_output(s):
+            knowledge = s.get("retrieved_knowledge", [])
+            return knowledge and len(knowledge) > 0
+        
+        return await self._execute_agent_with_retry(
+            state, self.knowledge_retriever, "KnowledgeRetriever", check_output
+        )
+    
+    @traceable(name="RetrieveKnowledge_OLD", tags=["agent", "knowledge"])
     async def _retrieve_knowledge_node(self, state: FAIRifierState) -> FAIRifierState:
-        """Retrieve knowledge from FAIR-DS API."""
+        """Retrieve knowledge from FAIR-DS API. [OLD - kept for reference]"""
         logger.info("🔍 Retrieving knowledge")
         
         if "execution_history" not in state:
@@ -485,22 +682,33 @@ Return JSON in the following format:
                 state["context"] = {}
             retry_count = state["context"].get("retrieve_retry_count", 0)
             
-            if decision == "RETRY" and retry_count < config.max_step_retries:
+            # Handle retry logic: RETRY or ESCALATE both trigger retry if under limit
+            if decision in ["RETRY", "ESCALATE"] and retry_count < config.max_step_retries:
+                # Increment retry count for this step
+                state["context"]["retrieve_retry_count"] = retry_count + 1
+                state["context"]["retry_count"] = retry_count + 1
+                
+                logger.info(f"🔄 Preparing retry {retry_count + 1}/{config.max_step_retries} for KnowledgeRetriever")
+                
                 # Prepare feedback for retry
                 state = await self.critic.provide_feedback_to_agent(
                     "KnowledgeRetriever",
                     critic_eval,
                     state
                 )
-                # Sync the retry counts
-                state["context"]["retrieve_retry_count"] = state["context"].get("retry_count", 0)
-            elif decision == "ESCALATE" or retry_count >= config.max_step_retries:
+            elif retry_count >= config.max_step_retries:
+                # Max retries reached, mark for review but continue
+                logger.warning(f"⚠️ Max retries ({config.max_step_retries}) reached for KnowledgeRetriever")
                 state["needs_human_review"] = True
         
         return state
     
     def _route_after_retrieval(self, state: FAIRifierState) -> Literal["accept", "retry", "escalate"]:
-        """Route after retrieval evaluation based on Critic decision."""
+        """Route after retrieval evaluation based on Critic decision.
+        
+        Strategy: If max retries reached, continue with current output instead of escalating.
+        Only escalate if we have no knowledge at all.
+        """
         execution_history = state.get("execution_history", [])
         if not execution_history:
             return "accept"
@@ -514,18 +722,43 @@ Return JSON in the following format:
             state["context"] = {}
         retry_count = state["context"].get("retrieve_retry_count", 0)
         
-        logger.info(f"📊 Routing decision: {decision} (retry count: {retry_count})")
+        logger.info(f"📊 Routing decision: {decision} (attempt: {retry_count}/{config.max_step_retries})")
         
         if decision == "ACCEPT":
             return "accept"
-        elif decision == "RETRY" and retry_count < config.max_step_retries:
+        elif (decision == "RETRY" or decision == "ESCALATE") and retry_count < config.max_step_retries:
+            # Still have retries left - retry even on ESCALATE
+            logger.info(f"🔄 Retry available ({retry_count}/{config.max_step_retries}) - retrying")
             return "retry"
         else:
-            return "escalate"
+            # Max retries reached: check if we have usable output
+            knowledge = state.get("retrieved_knowledge", [])
+            if knowledge and len(knowledge) > 0:
+                # We have some knowledge, continue with it
+                logger.warning(f"⚠️ Max retries reached but have {len(knowledge)} knowledge items - continuing workflow")
+                state["needs_human_review"] = True
+                return "accept"  # Continue to next step
+            else:
+                # No knowledge retrieved, must escalate
+                logger.error("❌ No knowledge retrieved - escalating")
+                return "escalate"
     
     @traceable(name="GenerateJSON", tags=["agent", "generation"])
+    async def _generate_json_with_retry_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Generate JSON with internal retry logic."""
+        logger.info("📝 Generating JSON metadata (with retry)")
+        
+        def check_output(s):
+            metadata_fields = s.get("metadata_fields", [])
+            return metadata_fields and len(metadata_fields) > 0
+        
+        return await self._execute_agent_with_retry(
+            state, self.json_generator, "JSONGenerator", check_output
+        )
+    
+    @traceable(name="GenerateJSON_OLD", tags=["agent", "generation"])
     async def _generate_json_node(self, state: FAIRifierState) -> FAIRifierState:
-        """Generate FAIR-DS compatible JSON metadata."""
+        """Generate FAIR-DS compatible JSON metadata. [OLD - kept for reference]"""
         logger.info("📝 Generating JSON metadata")
         
         if "execution_history" not in state:
@@ -586,22 +819,33 @@ Return JSON in the following format:
                 state["context"] = {}
             retry_count = state["context"].get("generate_retry_count", 0)
             
-            if decision == "RETRY" and retry_count < config.max_step_retries:
+            # Handle retry logic: RETRY or ESCALATE both trigger retry if under limit
+            if decision in ["RETRY", "ESCALATE"] and retry_count < config.max_step_retries:
+                # Increment retry count for this step
+                state["context"]["generate_retry_count"] = retry_count + 1
+                state["context"]["retry_count"] = retry_count + 1
+                
+                logger.info(f"🔄 Preparing retry {retry_count + 1}/{config.max_step_retries} for JSONGenerator")
+                
                 # Prepare feedback for retry
                 state = await self.critic.provide_feedback_to_agent(
                     "JSONGenerator",
                     critic_eval,
                     state
                 )
-                # Sync the retry counts
-                state["context"]["generate_retry_count"] = state["context"].get("retry_count", 0)
-            elif decision == "ESCALATE" or retry_count >= config.max_step_retries:
+            elif retry_count >= config.max_step_retries:
+                # Max retries reached, mark for review but continue
+                logger.warning(f"⚠️ Max retries ({config.max_step_retries}) reached for JSONGenerator")
                 state["needs_human_review"] = True
         
         return state
     
     def _route_after_generation(self, state: FAIRifierState) -> Literal["accept", "retry", "escalate"]:
-        """Route after generation evaluation based on Critic decision."""
+        """Route after generation evaluation based on Critic decision.
+        
+        Strategy: Always continue to finalize if we have any metadata fields.
+        This ensures we always produce output even if quality is suboptimal.
+        """
         execution_history = state.get("execution_history", [])
         if not execution_history:
             return "accept"
@@ -615,14 +859,26 @@ Return JSON in the following format:
             state["context"] = {}
         retry_count = state["context"].get("generate_retry_count", 0)
         
-        logger.info(f"📊 Routing decision: {decision} (retry count: {retry_count})")
+        logger.info(f"📊 Routing decision: {decision} (attempt: {retry_count}/{config.max_step_retries})")
         
         if decision == "ACCEPT":
             return "accept"
-        elif decision == "RETRY" and retry_count < config.max_step_retries:
+        elif (decision == "RETRY" or decision == "ESCALATE") and retry_count < config.max_step_retries:
+            # Still have retries left - retry even on ESCALATE
+            logger.info(f"🔄 Retry available ({retry_count}/{config.max_step_retries}) - retrying")
             return "retry"
         else:
-            return "escalate"
+            # Max retries reached: check if we have any metadata
+            metadata_fields = state.get("metadata_fields", [])
+            if metadata_fields and len(metadata_fields) > 0:
+                # We have some metadata, finalize it
+                logger.warning(f"⚠️ Max retries reached but have {len(metadata_fields)} metadata fields - finalizing")
+                state["needs_human_review"] = True
+                return "accept"  # Continue to finalize
+            else:
+                # No metadata generated at all, this is a critical failure
+                logger.error("❌ No metadata fields generated - escalating")
+                return "escalate"
     
     @traceable(name="Finalize", tags=["workflow", "finalization"])
     async def _finalize_node(self, state: FAIRifierState) -> FAIRifierState:
@@ -637,29 +893,86 @@ Return JSON in the following format:
             "successful_steps": sum(1 for e in execution_history if e.get("success")),
             "failed_steps": sum(1 for e in execution_history if not e.get("success")),
             "steps_requiring_retry": sum(1 for e in execution_history if e.get("attempt", 1) > 1),
-            "overall_confidence": state.get("confidence_scores", {}).get("overall", 0.0),
             "needs_human_review": state.get("needs_human_review", False)
         }
         
-        # Calculate average confidence
-        confidence_scores = state.get("confidence_scores", {})
-        if confidence_scores:
-            avg_confidence = sum(confidence_scores.values()) / len(confidence_scores)
-            summary["average_confidence"] = avg_confidence
-            state["confidence_scores"]["overall"] = avg_confidence
+        confidence_snapshot = aggregate_confidence(state, config)
+        state["confidence_scores"] = {
+            "critic": confidence_snapshot.critic,
+            "structural": confidence_snapshot.structural,
+            "validation": confidence_snapshot.validation,
+            "overall": confidence_snapshot.overall,
+        }
+        state["quality_metrics"] = confidence_snapshot.details
+        summary["overall_confidence"] = confidence_snapshot.overall
+        summary["average_confidence"] = confidence_snapshot.overall
+        if confidence_snapshot.overall < config.min_confidence_threshold:
+            state["needs_human_review"] = True
+            summary["needs_human_review"] = True
         
         state["execution_summary"] = summary
         
-        # Set final status
-        if summary["failed_steps"] > 0:
+        # Set final status based on whether we have the critical output
+        metadata_json = state.get("artifacts", {}).get("metadata_json")
+        metadata_fields = state.get("metadata_fields", [])
+        
+        if not metadata_json or not metadata_fields:
+            # Critical output missing - this is a failure
+            state["status"] = ProcessingStatus.FAILED.value
+            logger.error("❌ Workflow FAILED: No metadata_json.json generated")
+            state["errors"] = state.get("errors", []) + ["Critical output missing: metadata_json.json not generated"]
+        elif summary["failed_steps"] > 0:
             state["status"] = ProcessingStatus.REVIEWING.value
+            logger.warning("⚠️ Workflow completed with failures - needs review")
         else:
             state["status"] = ProcessingStatus.COMPLETED.value
+            logger.info("✅ Workflow completed successfully")
         
         state["processing_end"] = datetime.now().isoformat()
         state["workflow_version"] = "langgraph"
         
-        logger.info(f"✅ Workflow completed: {summary}")
+        logger.info(f"📊 Final summary: {summary}")
+        
+        # Store global retry info in state for report
+        state["global_retries_used"] = self.global_retry_count
+        state["max_global_retries"] = self.max_global_retries
+        
+        # Generate comprehensive report
+        try:
+            output_dir = state.get("output_dir")
+            report_generator = WorkflowReportGenerator(output_dir=output_dir)
+            
+            # Find metadata_json.json path if available
+            metadata_json_path = None
+            if output_dir:
+                from pathlib import Path
+                output_path = Path(output_dir)
+                metadata_json_file = output_path / "metadata_json.json"
+                if metadata_json_file.exists():
+                    metadata_json_path = str(metadata_json_file)
+            
+            # Generate report
+            report = report_generator.generate_report(state, metadata_json_path)
+            
+            # Save reports
+            json_path = report_generator.save_report(report, "workflow_report.json")
+            txt_path = report_generator.save_text_report(report, "workflow_report.txt")
+            
+            if json_path:
+                logger.info(f"📄 Workflow report saved: {json_path}")
+            if txt_path:
+                logger.info(f"📄 Text report saved: {txt_path}")
+            
+            # Log report summary
+            text_report = report_generator.generate_text_report(report)
+            logger.info("\n" + text_report)
+            
+            # Store report in state
+            state["workflow_report"] = report
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to generate workflow report: {e}")
+            # Don't fail the workflow if report generation fails
         
         return state
     
@@ -695,6 +1008,7 @@ Return JSON in the following format:
             "processing_start": datetime.now().isoformat(),
             "processing_end": None,
             "errors": [],
+            "agent_guidance": {},
             "context": {
                 "parse_retry_count": 0,
                 "retrieve_retry_count": 0,
@@ -743,7 +1057,10 @@ Return JSON in the following format:
                     config.llm_provider,
                     mineru_status.lower(),
                     f"model:{config.llm_model}",
-                ]
+                ],
+                # Set higher recursion limit to allow multiple retries across all agents
+                # Default is 25, we increase to 50 to support up to ~8 retries per agent
+                "recursion_limit": 50
             }
             result = await self.workflow.ainvoke(initial_state, config=config_dict)
             

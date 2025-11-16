@@ -11,7 +11,7 @@ from datetime import datetime
 
 import click
 
-from .graph.workflow import FAIRifierWorkflow
+from .graph.langgraph_app import FAIRifierLangGraphApp
 from .config import config
 from .utils.json_logger import get_logger
 from .utils.llm_helper import get_llm_helper, save_llm_responses
@@ -159,8 +159,32 @@ async def _run_workflow(
     if langsmith_project:
         os.environ["LANGCHAIN_PROJECT"] = langsmith_project
     
+    # Set up log file redirection
+    log_file = output_path / "full_output.log"
+    log_handle = open(log_file, 'w', encoding='utf-8', buffering=1)  # Line buffered
+    
+    # Create a tee-like handler that writes to both console and file
+    class TeeHandler(logging.Handler):
+        def __init__(self, file_handle):
+            super().__init__()
+            self.file_handle = file_handle
+        
+        def emit(self, record):
+            try:
+                msg = self.format(record)
+                self.file_handle.write(msg + '\n')
+                self.file_handle.flush()
+            except Exception:
+                self.handleError(record)
+    
+    # Add file handler to root logger
+    tee_handler = TeeHandler(log_handle)
+    tee_handler.setFormatter(console_formatter)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(tee_handler)
+    
     try:
-        workflow = FAIRifierWorkflow()
+        workflow = FAIRifierLangGraphApp()
         
         json_logger.log_processing_start(document_path, project_id)
         click.echo(f"🔄 Starting processing (Project ID: {project_id})\n")
@@ -193,6 +217,12 @@ async def _run_workflow(
         # Display status
         click.echo(f"\n📈 Status: {status.upper()}")
         click.echo(f"⏱️  Duration: {duration:.2f} seconds")
+        
+        # Check for critical output
+        has_metadata_json = "metadata_json" in artifacts and artifacts["metadata_json"]
+        if not has_metadata_json:
+            click.echo("\n❌ CRITICAL: metadata_json.json was not generated!", err=True)
+            click.echo("   The workflow did not complete successfully.", err=True)
         
         if needs_review:
             click.echo("⚠️  Human review recommended")
@@ -263,14 +293,28 @@ async def _run_workflow(
         )
         
         click.echo("\n" + "=" * 70)
-        click.echo("✨ Processing complete!")
-        click.echo(f"📁 Output saved to: {output_path}")
-        click.echo("=" * 70)
+        
+        # Check if workflow actually succeeded
+        if status == "failed":
+            click.echo("❌ Processing FAILED!")
+            click.echo(f"📁 Partial output saved to: {output_path}")
+            click.echo(f"📝 Full log saved to: {log_file}")
+            click.echo("=" * 70)
+            sys.exit(1)
+        else:
+            click.echo("✨ Processing complete!")
+            click.echo(f"📁 Output saved to: {output_path}")
+            click.echo(f"📝 Full log saved to: {log_file}")
+            click.echo("=" * 70)
         
     except Exception as e:
         click.echo(f"\n❌ Error: {str(e)}", err=True)
         json_logger.error("workflow_failed", error=str(e), project_id=project_id)
         sys.exit(1)
+    finally:
+        # Clean up log handler and close file
+        root_logger.removeHandler(tee_handler)
+        log_handle.close()
 
 
 @cli.command()

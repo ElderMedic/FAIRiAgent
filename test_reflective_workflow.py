@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Test script for the reflective workflow with Orchestrator and Critic agents.
+Test script for the LangGraph workflow with Critic-in-the-loop evaluation.
 
 This demonstrates the self-reflective architecture where:
-1. Orchestrator controls the overall workflow
+1. LangGraph nodes (DocumentParser → KnowledgeRetriever → JSONGenerator) run sequentially
 2. Critic evaluates each step's output
 3. Based on Critic feedback, steps may be retried with improvements
-4. Feedback is passed back to agents for refinement
+4. Planner guidance is propagated to downstream agents
 """
 
 import asyncio
@@ -18,7 +18,7 @@ from datetime import datetime
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fairifier.graph.workflow import FAIRifierWorkflow
+from fairifier.graph.langgraph_app import FAIRifierLangGraphApp
 from fairifier.config import config
 
 # Enable LangSmith tracing
@@ -28,10 +28,10 @@ os.environ["LANGCHAIN_PROJECT"] = "fairifier-reflective-test"
 
 
 async def test_reflective_workflow():
-    """Test the reflective workflow with Orchestrator and Critic."""
+    """Test the LangGraph workflow with Critic feedback."""
     
     print("=" * 80)
-    print("🧪 Testing Reflective Workflow (Orchestrator + Critic)")
+    print("🧪 Testing LangGraph Workflow (Planner + Critic)")
     print("=" * 80)
     print()
     
@@ -58,7 +58,7 @@ async def test_reflective_workflow():
     
     try:
         # Initialize workflow
-        workflow = FAIRifierWorkflow()
+        workflow = FAIRifierLangGraphApp()
         
         # Run workflow
         print("▶️  Initializing workflow...")

@@ -14,11 +14,9 @@ from ..utils.llm_helper import get_llm_helper
 class JSONGeneratorAgent(BaseAgent):
     """Agent for generating FAIR-DS compatible JSON metadata."""
     
-    def __init__(self, use_llm: bool = True):
+    def __init__(self):
         super().__init__("JSONGenerator")
-        self.use_llm = use_llm
-        if use_llm:
-            self.llm_helper = get_llm_helper()
+        self.llm_helper = get_llm_helper()
         
     @traceable(name="JSONGenerator", tags=["agent", "generation"])
     async def execute(self, state: FAIRifierState) -> FAIRifierState:
@@ -35,28 +33,36 @@ class JSONGeneratorAgent(BaseAgent):
                 f"📊 Input: {len(knowledge_items)} knowledge terms from retrieval"
             )
             
-            # Generate metadata fields with LLM value extraction
-            if self.use_llm:
-                # Get critic feedback if this is a retry
-                feedback = self.get_context_feedback(state)
-                critic_feedback = feedback.get("critic_feedback")
-                
-                if critic_feedback:
-                    self.log_execution(state, "🔄 Retrying metadata generation with Critic feedback...")
-                
-                self.log_execution(state, "🤖 Using LLM for intelligent, adaptive metadata generation...")
-                metadata_fields = await self._generate_with_llm(
-                    doc_info, knowledge_items, document_text, critic_feedback
-                )
-                self.log_execution(
-                    state, 
-                    f"✅ LLM generated {len(metadata_fields)} fields with values"
-                )
-            else:
-                self.log_execution(state, "⚠️  Using rule-based generation (no LLM)")
-                metadata_fields = self._generate_fairds_fields(
-                    doc_info, knowledge_items
-                )
+            # Get critic feedback if this is a retry
+            feedback = self.get_context_feedback(state)
+            critic_feedback = feedback.get("critic_feedback")
+            planner_instruction = feedback.get("planner_instruction")
+            guidance_history = feedback.get("guidance_history") or []
+            
+            if critic_feedback:
+                self.log_execution(state, "🔄 Retrying metadata generation with Critic feedback...")
+                critique = critic_feedback.get("critique")
+                if critique:
+                    self.log_execution(state, f"   Critique: {critique}")
+                for idx, suggestion in enumerate(critic_feedback.get("suggestions", []), 1):
+                    self.log_execution(state, f"   🔧 Suggestion {idx}: {suggestion}")
+            if planner_instruction:
+                self.log_execution(state, f"🧭 Planner guidance: {planner_instruction}")
+            if guidance_history:
+                self.log_execution(state, f"🧾 Historical guidance: {guidance_history}")
+            
+            self.log_execution(
+                state, 
+                f"🤖 Using LLM to generate values for all {len(knowledge_items)} fields "
+                f"from KnowledgeRetriever (already filtered for relevance)"
+            )
+            metadata_fields = await self._generate_with_llm(
+                doc_info, knowledge_items, document_text, critic_feedback, planner_instruction
+            )
+            self.log_execution(
+                state, 
+                f"✅ LLM generated {len(metadata_fields)} fields with values"
+            )
             
             # Store fields in state
             state["metadata_fields"] = [
@@ -116,16 +122,24 @@ class JSONGeneratorAgent(BaseAgent):
         doc_info: Dict[str, Any],
         knowledge_items: List[Dict[str, Any]],
         document_text: str,
-        critic_feedback: Optional[Dict[str, Any]] = None
+        critic_feedback: Optional[Dict[str, Any]] = None,
+        planner_instruction: Optional[str] = None
     ) -> List[MetadataField]:
-        """Generate metadata fields with LLM-based value extraction (adaptive)."""
-        # Convert knowledge_items to format expected by select_relevant_metadata_fields
+        """
+        Generate metadata fields with LLM-based value extraction.
+        
+        Note: knowledge_items are already intelligently selected by KnowledgeRetriever
+        based on document relevance. We use ALL of them to maximize metadata coverage
+        while maintaining relevance.
+        """
+        # Convert knowledge_items to format expected by generate_complete_metadata
         # knowledge_items has structure: [{"term": "...", "definition": "...", "metadata": {...}}, ...]
-        available_fields = []
+        # These are already filtered for relevance by KnowledgeRetriever, so we use all of them
+        selected_fields = []
         for item in knowledge_items:
             term = item.get('term', '')
             metadata = item.get('metadata', {})
-            available_fields.append({
+            selected_fields.append({
                 "name": term,  # Use term as name
                 "description": item.get('definition', ''),
                 "required": metadata.get('required', False),
@@ -134,18 +148,15 @@ class JSONGeneratorAgent(BaseAgent):
                 "metadata": metadata  # Preserve full metadata
             })
         
-        # Step 1: Select relevant fields intelligently
-        self.logger.info("Step 1: Selecting relevant metadata fields based on document content...")
-        selected_fields = await self.llm_helper.select_relevant_metadata_fields(
-            doc_info, available_fields, critic_feedback
+        self.logger.info(
+            f"Using all {len(selected_fields)} fields from KnowledgeRetriever "
+            f"(already filtered for relevance - no additional selection needed)"
         )
         
-        self.logger.info(f"Selected {len(selected_fields)} relevant fields")
-        
-        # Step 2: Generate values for selected fields
-        self.logger.info("Step 2: Generating metadata values for selected fields...")
+        # Generate values for all selected fields
+        self.logger.info("Generating metadata values for all selected fields...")
         mapped_fields = await self.llm_helper.generate_complete_metadata(
-            doc_info, selected_fields, document_text, critic_feedback
+            doc_info, selected_fields, document_text, critic_feedback, planner_instruction
         )
         
         # Build lookup for knowledge items (to get FAIR-DS metadata)
@@ -160,7 +171,7 @@ class JSONGeneratorAgent(BaseAgent):
             if normalized and normalized != term:
                 knowledge_lookup[normalized] = item
         
-        # Also build lookup from selected_fields to preserve original field names
+        # Build lookup from selected_fields to preserve original field names
         selected_fields_lookup = {f.get('name', '').lower().strip(): f for f in selected_fields}
         
         # Convert to MetadataField objects with REAL FAIR-DS metadata
@@ -227,268 +238,6 @@ class JSONGeneratorAgent(BaseAgent):
             fields.append(field)
         
         return fields
-    
-    def _generate_fairds_fields(
-        self, 
-        doc_info: Dict[str, Any], 
-        knowledge_items: List[Dict[str, Any]]
-    ) -> List[MetadataField]:
-        """Generate metadata fields in FAIR-DS format (fallback without LLM)."""
-        fields = []
-        
-        # Core fields from document
-        core_fields = self._extract_core_fields(doc_info)
-        fields.extend(core_fields)
-        
-        # Fields from knowledge retrieval
-        knowledge_fields = self._extract_knowledge_fields(knowledge_items, doc_info)
-        fields.extend(knowledge_fields)
-        
-        # Deduplicate
-        fields = self._deduplicate_fields(fields)
-        
-        return fields
-    
-    def _extract_core_fields(self, doc_info: Dict[str, Any]) -> List[MetadataField]:
-        """Extract core fields from document information."""
-        fields = []
-        
-        # Title
-        if doc_info.get("title"):
-            fields.append(MetadataField(
-                field_name="title",
-                value=doc_info["title"],
-                evidence="Extracted from document title",
-                confidence=0.95,
-                origin="document_parser",
-                package_source="FAIR-DS",
-                status="confirmed",
-                data_type="string",
-                required=True,
-                description="Title of the research study or dataset"
-            ))
-        
-        # Description (from abstract)
-        if doc_info.get("abstract"):
-            fields.append(MetadataField(
-                field_name="description",
-                value=doc_info["abstract"],
-                evidence="Extracted from document abstract",
-                confidence=0.95,
-                origin="document_parser",
-                package_source="FAIR-DS",
-                status="confirmed",
-                data_type="string",
-                required=True,
-                description="Detailed description of the dataset"
-            ))
-        
-        # Creator (authors)
-        if doc_info.get("authors"):
-            authors_str = "; ".join(doc_info["authors"])
-            fields.append(MetadataField(
-                field_name="creator",
-                value=authors_str,
-                evidence=f"Extracted from document authors",
-                confidence=0.95,
-                origin="document_parser",
-                package_source="FAIR-DS",
-                status="confirmed",
-                data_type="string",
-                required=True,
-                description="Creator(s) of the dataset"
-            ))
-        
-        # Keywords
-        if doc_info.get("keywords"):
-            keywords_str = ", ".join(doc_info["keywords"])
-            fields.append(MetadataField(
-                field_name="keywords",
-                value=keywords_str,
-                evidence="Extracted from document keywords",
-                confidence=0.90,
-                origin="document_parser",
-                package_source="FAIR-DS",
-                status="confirmed",
-                data_type="string",
-                required=False,
-                description="Keywords describing the dataset"
-            ))
-        
-        # Geographic location
-        if doc_info.get("location"):
-            fields.append(MetadataField(
-                field_name="geographic_location",
-                value=doc_info["location"],
-                evidence="Extracted from document content",
-                confidence=0.85,
-                origin="document_parser",
-                package_source="FAIR-DS",
-                status="confirmed",
-                data_type="string",
-                required=False,
-                description="Geographic location where data was collected"
-            ))
-        
-        # Coordinates
-        if doc_info.get("coordinates"):
-            fields.append(MetadataField(
-                field_name="coordinates",
-                value=doc_info["coordinates"],
-                evidence="Extracted from document content",
-                confidence=0.90,
-                origin="document_parser",
-                package_source="FAIR-DS",
-                status="confirmed",
-                data_type="string",
-                required=False,
-                description="Latitude and longitude coordinates"
-            ))
-        
-        # Collection date
-        if doc_info.get("collection_date"):
-            fields.append(MetadataField(
-                field_name="temporal_coverage",
-                value=doc_info["collection_date"],
-                evidence="Extracted from document content",
-                confidence=0.85,
-                origin="document_parser",
-                package_source="FAIR-DS",
-                status="confirmed",
-                data_type="string",
-                required=False,
-                description="Time period of data collection"
-            ))
-        
-        # Environmental parameters
-        if doc_info.get("environmental_parameters"):
-            env_params = doc_info["environmental_parameters"]
-            for param_name, param_value in env_params.items():
-                fields.append(MetadataField(
-                    field_name=param_name,
-                    value=str(param_value),
-                    evidence=f"Extracted environmental parameter from document",
-                    confidence=0.80,
-                    origin="document_parser",
-                    package_source="FAIR-DS",
-                    status="provisional",
-                    data_type="string",
-                    required=False,
-                    description=f"Environmental parameter: {param_name}"
-                ))
-        
-        # Instruments
-        if doc_info.get("instruments"):
-            instruments_str = ", ".join(doc_info["instruments"])
-            fields.append(MetadataField(
-                field_name="instrument",
-                value=instruments_str,
-                evidence="Extracted from document content",
-                confidence=0.85,
-                origin="document_parser",
-                package_source="FAIR-DS",
-                status="confirmed",
-                data_type="string",
-                required=False,
-                description="Instruments and equipment used"
-            ))
-        
-        # Methodology
-        if doc_info.get("methodology"):
-            fields.append(MetadataField(
-                field_name="methodology",
-                value=doc_info["methodology"],
-                evidence="Extracted from document content",
-                confidence=0.80,
-                origin="document_parser",
-                package_source="FAIR-DS",
-                status="confirmed",
-                data_type="string",
-                required=False,
-                description="Methods and procedures used"
-            ))
-        
-        return fields
-    
-    def _extract_knowledge_fields(
-        self, 
-        knowledge_items: List[Dict[str, Any]], 
-        doc_info: Dict[str, Any]
-    ) -> List[MetadataField]:
-        """Extract fields from retrieved knowledge."""
-        fields = []
-        
-        for item in knowledge_items:
-            term = item.get("term", "")
-            definition = item.get("definition", "")
-            source = item.get("source", "unknown")
-            confidence = item.get("confidence", 0.5)
-            
-            # Map knowledge items to metadata fields
-            field_name = self._map_term_to_field(term)
-            if field_name:
-                fields.append(MetadataField(
-                    field_name=field_name,
-                    value=term,
-                    evidence=f"Retrieved from {source}: {definition}",  # Full definition - no truncation
-                    confidence=confidence,
-                    origin="knowledge_retriever",
-                    package_source=source if source in ["MIMAG", "MISAG", "MIUVIG"] else "local",
-                    status="provisional",
-                    data_type="string",
-                    required=False,
-                    description=definition
-                ))
-        
-        return fields
-    
-    def _infer_investigation_type(self, domain: str) -> str:
-        """Infer investigation type from research domain."""
-        domain_lower = domain.lower()
-        
-        if any(term in domain_lower for term in ["metagenom", "microbiome", "16s"]):
-            return "metagenome"
-        elif any(term in domain_lower for term in ["genom", "dna", "sequenc"]):
-            return "genome"
-        elif any(term in domain_lower for term in ["transcriptom", "rna"]):
-            return "transcriptome"
-        else:
-            return "other"
-    
-    def _map_term_to_field(self, term: str) -> str:
-        """Map a knowledge term to a metadata field name."""
-        term_lower = term.lower()
-        
-        # Simple mapping - in production, use ontology mapping
-        if any(word in term_lower for word in ["soil", "terrestrial", "ground"]):
-            return "env_material"
-        elif any(word in term_lower for word in ["biome", "ecosystem"]):
-            return "env_biome"
-        elif any(word in term_lower for word in ["location", "site", "geographic"]):
-            return "geo_loc_name"
-        elif any(word in term_lower for word in ["latitude", "longitude", "coordinate"]):
-            return "lat_lon"
-        elif any(word in term_lower for word in ["date", "time", "when"]):
-            return "collection_date"
-        elif any(word in term_lower for word in ["method", "protocol", "procedure"]):
-            return "samp_collect_method"
-        else:
-            # Use term as field name (sanitized)
-            return term_lower.replace(" ", "_").replace("-", "_")[:50]
-    
-    def _deduplicate_fields(self, fields: List[MetadataField]) -> List[MetadataField]:
-        """Remove duplicate fields, keeping the one with highest confidence."""
-        field_dict = {}
-        
-        for field in fields:
-            if field.field_name not in field_dict:
-                field_dict[field.field_name] = field
-            else:
-                # Keep field with higher confidence
-                if field.confidence > field_dict[field.field_name].confidence:
-                    field_dict[field.field_name] = field
-        
-        return list(field_dict.values())
     
     def _field_to_dict(self, field: MetadataField) -> Dict[str, Any]:
         """Convert MetadataField to dictionary for FAIR-DS format."""
@@ -606,6 +355,9 @@ class JSONGeneratorAgent(BaseAgent):
         Group metadata fields by ISA sheet based on REAL 'isa_sheet' attribute from FAIR-DS.
         
         NO hardcoded mappings - uses only what FAIR-DS API provides.
+        
+        Deduplicates fields: For each ISA sheet, keeps only one field per field_name.
+        If duplicates exist, keeps the one with highest confidence.
         """
         
         grouped = {
@@ -615,6 +367,9 @@ class JSONGeneratorAgent(BaseAgent):
             "sample": [],
             "observationunit": []
         }
+        
+        # Track seen fields per ISA sheet: {isa_sheet: {field_name: (field_dict, confidence)}}
+        seen_fields = {sheet: {} for sheet in grouped.keys()}
         
         for field in fields:
             # Use the actual 'isa_sheet' attribute from FAIR-DS metadata
@@ -631,8 +386,24 @@ class JSONGeneratorAgent(BaseAgent):
             if not isa_sheet or isa_sheet not in grouped:
                 isa_sheet = "study"
             
-            # Convert field to dict and add to appropriate group
-            grouped[isa_sheet].append(self._field_to_dict(field))
+            # Convert field to dict
+            field_dict = self._field_to_dict(field)
+            field_name = field_dict.get("field_name", "").lower().strip()
+            confidence = field_dict.get("confidence", 0.0)
+            
+            # Deduplicate: keep only the field with highest confidence for each field_name
+            if field_name in seen_fields[isa_sheet]:
+                existing_confidence = seen_fields[isa_sheet][field_name][1]
+                if confidence > existing_confidence:
+                    # Replace with higher confidence field
+                    seen_fields[isa_sheet][field_name] = (field_dict, confidence)
+            else:
+                # First occurrence of this field_name in this ISA sheet
+                seen_fields[isa_sheet][field_name] = (field_dict, confidence)
+        
+        # Build final grouped structure from deduplicated fields
+        for isa_sheet, field_dicts in seen_fields.items():
+            grouped[isa_sheet] = [fd[0] for fd in field_dicts.values()]
         
         return grouped
     

@@ -19,11 +19,9 @@ logger = logging.getLogger(__name__)
 class KnowledgeRetrieverAgent(BaseAgent):
     """Agent for retrieving knowledge from FAIR Data Station."""
     
-    def __init__(self, use_llm: bool = True):
+    def __init__(self):
         super().__init__("KnowledgeRetriever")
-        self.use_llm = use_llm
-        if use_llm:
-            self.llm_helper = get_llm_helper()
+        self.llm_helper = get_llm_helper()
         
         # Initialize FAIR-DS client if configured
         self.fair_ds_client = None
@@ -50,11 +48,31 @@ class KnowledgeRetrieverAgent(BaseAgent):
         
     @traceable(name="KnowledgeRetriever", tags=["agent", "knowledge"])
     async def execute(self, state: FAIRifierState) -> FAIRifierState:
-        """Retrieve relevant knowledge from FAIR Data Station."""
-        self.log_execution(state, "🔍 Starting knowledge retrieval from FAIR-DS")
+        """
+        Retrieve relevant knowledge from FAIR Data Station using LLM-driven ReAct pattern.
+        
+        ReAct Loop:
+        1. REASON: LLM analyzes document and decides what metadata packages/terms to query
+        2. ACT: Execute FAIR-DS API queries based on LLM's decision
+        3. OBSERVE: Review retrieved results
+        4. REASON: LLM evaluates if information is sufficient or needs more queries
+        5. Repeat if needed
+        
+        The agent autonomously decides:
+        - Which packages to query
+        - Which ISA sheets to focus on
+        - How many optional fields to select per sheet
+        - Whether retrieved information is sufficient
+        """
+        self.log_execution(state, "🔍 Starting knowledge retrieval (LLM-driven ReAct)")
         
         try:
             doc_info = state.get("document_info", {})
+            self.log_execution(state, f"📥 Received document_info with {len(doc_info)} fields")
+            if doc_info:
+                self.log_execution(state, f"   Keys: {list(doc_info.keys())[:10]}...")
+            else:
+                self.log_execution(state, "⚠️  WARNING: document_info is empty!", "warning")
             knowledge_items = []
             
             # Fetch from FAIR-DS API (strict mode - no local fallback)
@@ -107,27 +125,35 @@ class KnowledgeRetrieverAgent(BaseAgent):
             # Get critic feedback if this is a retry
             feedback = self.get_context_feedback(state)
             critic_feedback = feedback.get("critic_feedback")
+            planner_instruction = feedback.get("planner_instruction")
+            guidance_history = feedback.get("guidance_history") or []
             
             if critic_feedback:
                 self.log_execution(state, "🔄 Retrying with Critic feedback...")
-                for suggestion in critic_feedback.get("suggestions", []):  # ALL suggestions - no truncation
-                    self.log_execution(state, f"   💡 {suggestion}")
+                critique = critic_feedback.get("critique")
+                if critique:
+                    self.log_execution(state, f"   Critique: {critique}")
+                for idx, suggestion in enumerate(critic_feedback.get("suggestions", []), 1):
+                    self.log_execution(state, f"   💡 Suggestion {idx}: {suggestion}")
+            if guidance_history:
+                self.log_execution(state, f"🧾 Historical guidance: {guidance_history}")
+            
+            if planner_instruction:
+                self.log_execution(state, f"🧭 Planner guidance: {planner_instruction}")
             
             self.log_execution(state, "🤖 Phase 1: LLM selecting relevant metadata packages...")
             
             # Phase 1: LLM selects relevant packages based on research type
             self.log_execution(state, "   Calling LLM to select relevant packages...")
-            try:
-                selected_package_names = await llm_methods.llm_select_relevant_packages(
-                    self.llm_helper, doc_info, all_packages, critic_feedback
-                )
-                self.log_execution(state, f"✅ LLM selected packages: {selected_package_names}")
-            except Exception as e:
-                logger.error(f"Error in llm_select_relevant_packages: {e}", exc_info=True)
-                self.log_execution(state, f"❌ LLM package selection failed: {e}", "error")
-                # Use top 3 packages as fallback
-                selected_package_names = [pkg["name"] for pkg in all_packages[:3]]
-                self.log_execution(state, f"   Using default packages: {selected_package_names}")
+            # Phase 1: LLM selects packages (no fallback - must succeed or retry)
+            selected_package_names = await llm_methods.llm_select_relevant_packages(
+                self.llm_helper,
+                doc_info,
+                all_packages,
+                critic_feedback,
+                planner_instruction=planner_instruction
+            )
+            self.log_execution(state, f"✅ LLM selected packages: {selected_package_names}")
             
             # Phase 2: Get all fields from selected packages, grouped by ISA sheet
             self.log_execution(state, "📦 Phase 2: Collecting fields from selected packages (by ISA sheet)...")
@@ -209,7 +235,7 @@ class KnowledgeRetrieverAgent(BaseAgent):
                                     f"{optional_count} optional"
                                 )
             
-            # Phase 3: LLM selects relevant optional fields for each ISA sheet
+            # Phase 3: Use LLM to intelligently select optional fields for each ISA sheet
             self.log_execution(state, "🤖 Phase 3: LLM selecting relevant optional fields (by ISA sheet)...")
             
             # Collect all mandatory fields (from all ISA sheets)
@@ -217,32 +243,34 @@ class KnowledgeRetrieverAgent(BaseAgent):
             for sheet in isa_sheets:
                 all_mandatory_fields.extend(fields_by_isa_sheet[sheet]["mandatory"])
             
-            # Select optional fields for each ISA sheet separately
-            final_selected_fields = list(all_mandatory_fields)  # Start with all mandatory
+            # Start with all mandatory fields
+            final_selected_fields = list(all_mandatory_fields)
             
+            # Use LLM to select optional fields for each ISA sheet
             for sheet in isa_sheets:
                 optional_fields_for_sheet = fields_by_isa_sheet[sheet]["optional"]
                 if optional_fields_for_sheet:
                     self.log_execution(
                         state,
-                        f"   Selecting optional fields for {sheet} ({len(optional_fields_for_sheet)} available)..."
+                        f"   LLM selecting optional fields for {sheet} ({len(optional_fields_for_sheet)} available)..."
                     )
                     
-                    # Select optional fields for this ISA sheet
-                    selected_optional_for_sheet = await llm_methods.llm_select_optional_fields_by_isa_sheet(
+                    # Use LLM to intelligently select optional fields (no fallback)
+                    selected_optional = await llm_methods.llm_select_fields_from_package(
                         self.llm_helper,
                         doc_info,
-                        sheet,
+                        sheet,  # ISA sheet level (investigation, study, assay, sample, observationunit)
+                        f"{sheet}_fields",  # Package name for logging
                         fields_by_isa_sheet[sheet]["mandatory"],
                         optional_fields_for_sheet,
                         critic_feedback
                     )
                     
-                    final_selected_fields.extend(selected_optional_for_sheet)
+                    final_selected_fields.extend(selected_optional)
                     
                     self.log_execution(
                         state,
-                        f"   ✅ {sheet}: selected {len(selected_optional_for_sheet)} optional fields"
+                        f"   ✅ {sheet}: LLM selected {len(selected_optional)} optional fields"
                     )
             
             # Log final statistics
@@ -329,92 +357,6 @@ class KnowledgeRetrieverAgent(BaseAgent):
         
         return state
     
-    def _simple_field_selection(
-        self, 
-        doc_info: Dict[str, Any], 
-        all_terms: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """Simple keyword-based field selection fallback."""
-        selected = []
-        
-        # Extract keywords from document
-        keywords = set()
-        if doc_info.get('keywords'):
-            keywords.update([k.lower() for k in doc_info['keywords']])
-        if doc_info.get('research_domain'):
-            keywords.add(doc_info['research_domain'].lower())
-        
-        # Common core fields to always include
-        core_field_names = {
-            'title', 'description', 'creator', 'date', 'identifier',
-            'location', 'geographic', 'temporal', 'sample', 'method'
-        }
-        
-        for term in all_terms:
-            term_name = term.get('name', '').lower()
-            term_desc = term.get('description', '').lower()
-            
-            # Include if matches core fields
-            if any(core in term_name for core in core_field_names):
-                selected.append(term)
-                continue
-            
-            # Include if matches document keywords
-            if keywords:
-                if any(kw in term_name or kw in term_desc for kw in keywords):
-                    selected.append(term)
-                    if len(selected) >= 20:
-                        break
-        
-        return selected[:20]  # Limit to 20 fields
-    
-    def _keyword_based_selection(
-        self, 
-        doc_info: Dict[str, Any], 
-        all_terms: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """
-        Basic keyword-based field selection when LLM is not available.
-        Only uses FAIR-DS terms, no local fallback.
-        """
-        selected = []
-        
-        # Extract keywords from document
-        keywords = set()
-        if doc_info.get('keywords'):
-            keywords.update([k.lower() for k in doc_info['keywords']])
-        if doc_info.get('research_domain'):
-            keywords.add(doc_info['research_domain'].lower())
-        
-        # Identify core investigation-level fields (always include)
-        investigation_terms = [t for t in all_terms if t.get('isa_level') == 'investigation']
-        selected.extend(investigation_terms[:10])  # Include first 10 investigation fields
-        
-        # Add study-level fields if mentioned in keywords
-        study_terms = [t for t in all_terms if t.get('isa_level') == 'study']
-        for term in study_terms:
-            term_name = term.get('name', '').lower()
-            term_desc = term.get('description', '').lower()
-            
-            if keywords and any(kw in term_name or kw in term_desc for kw in keywords):
-                selected.append(term)
-                if len(selected) >= 20:
-                    break
-        
-        # Add relevant assay-level fields based on research domain
-        if len(selected) < 20:
-            assay_terms = [t for t in all_terms if t.get('isa_level') == 'assay']
-            for term in assay_terms:
-                term_name = term.get('name', '').lower()
-                term_desc = term.get('description', '').lower()
-                
-                if keywords and any(kw in term_name or kw in term_desc for kw in keywords):
-                    selected.append(term)
-                    if len(selected) >= 20:
-                        break
-        
-        return selected[:25]  # Limit to 25 fields
-    
     def _calculate_retrieval_confidence(
         self, 
         knowledge_items: List[KnowledgeItem], 
@@ -437,211 +379,3 @@ class KnowledgeRetrieverAgent(BaseAgent):
         api_bonus = 0.2 if self.fair_ds_client else 0.0
         
         return min(base_score + confidence_bonus + api_bonus, 1.0)
-    
-    async def _llm_determine_relevant_levels(
-        self, 
-        doc_info: Dict[str, Any],
-        structure: Dict[str, Any],
-        critic_feedback: Optional[Dict[str, Any]] = None
-    ) -> List[str]:
-        """Phase 1: LLM determines which ISA levels are relevant for this document."""
-        
-        prompt = f"""Analyze this research document and determine which ISA metadata levels are relevant:
-
-Document Summary:
-- Title: {doc_info.get('title', 'N/A')}
-- Research Domain: {doc_info.get('research_domain', 'N/A')}
-- Keywords: {', '.join(doc_info.get('keywords', [])[:10])}
-- Methodology: {doc_info.get('methodology', 'N/A')[:200]}
-- Has Location: {bool(doc_info.get('location'))}
-- Has Environmental Data: {bool(doc_info.get('environmental_parameters'))}
-
-ISA Hierarchy Levels Available:
-1. investigation - High-level project/investigation metadata
-2. study - Study design and research questions
-3. assay - Measurement types and technologies used
-4. sample - Biological samples (if applicable)
-5. observation_unit - Sampling sites and environmental context
-
-Return a JSON array of relevant level names:
-{{"relevant_levels": ["investigation", "study", ...]}}
-
-Consider:
-- All documents need "investigation" and "study" 
-- "assay" if measurements/technologies mentioned
-- "sample" if biological samples mentioned
-- "observation_unit" if location/environmental data present
-
-Return ONLY JSON."""
-
-        try:
-            from langchain_core.messages import HumanMessage
-            response = await self.llm_helper.llm.ainvoke([HumanMessage(content=prompt)])
-            result = self.llm_helper._parse_json_response(response.content)
-            return result.get("relevant_levels", ["investigation", "study", "assay", "observation_unit"])
-        except:
-            # Default: all levels
-            return ["investigation", "study", "assay", "sample", "observation_unit"]
-    
-    async def _llm_select_packages_by_level(
-        self,
-        doc_info: Dict[str, Any],
-        structure: Dict[str, Any],
-        relevant_levels: List[str]
-    ) -> Dict[str, List[str]]:
-        """Phase 2: LLM selects appropriate packages for each relevant level."""
-        
-        selected = {}
-        
-        for level in relevant_levels:
-            level_packages = structure.get(level, {}).get('packages', [])
-            
-            if not level_packages:
-                continue
-            
-            # Build package list for LLM
-            pkg_list = []
-            for pkg in level_packages:
-                pkg_list.append({
-                    "name": pkg.get("name"),
-                    "label": pkg.get("label"),
-                    "description": pkg.get("description"),
-                    "required_fields": pkg.get("required_fields", [])[:5]  # Show first 5
-                })
-            
-            prompt = f"""Select relevant metadata packages for the {level.upper()} level:
-
-Document: {doc_info.get('title', 'N/A')}
-Research Domain: {doc_info.get('research_domain', 'N/A')}
-
-Available Packages:
-{json.dumps(pkg_list, indent=2)}
-
-Return JSON array of package names to include:
-{{"selected_packages": ["package_name_1", "package_name_2", ...]}}
-
-Return ONLY JSON."""
-
-            try:
-                from langchain_core.messages import HumanMessage
-                response = await self.llm_helper._call_llm([HumanMessage(content=prompt)], operation_name="Knowledge Retriever - Extract Terms")
-                result = self.llm_helper._parse_json_response(response.content)
-                selected[level] = result.get("selected_packages", [pkg["name"] for pkg in pkg_list])
-            except:
-                # Default: use all available packages
-                selected[level] = [pkg.get("name") for pkg in level_packages]
-        
-        return selected
-    
-    async def _llm_select_terms_from_packages(
-        self,
-        doc_info: Dict[str, Any],
-        structure: Dict[str, Any],
-        selected_packages: Dict[str, List[str]]
-    ) -> List[Dict[str, Any]]:
-        """Phase 3: LLM selects specific terms from selected packages.
-        
-        IMPORTANT: All mandatory terms are automatically included.
-        LLM only selects from optional terms.
-        """
-        
-        all_selected_terms = []
-        
-        for level, package_names in selected_packages.items():
-            level_terms = structure.get(level, {}).get('terms', [])
-            
-            # Filter terms by selected packages
-            relevant_terms_for_level = []
-            for term in level_terms:
-                # Include term if it's in one of the selected packages or is core
-                if term.get('package') in package_names or 'core' in term.get('package', ''):
-                    relevant_terms_for_level.append(term)
-            
-            if not relevant_terms_for_level:
-                continue
-            
-            # Separate mandatory and optional terms
-            mandatory_terms = []
-            optional_terms = []
-            for term in relevant_terms_for_level:
-                if term.get("required", False):
-                    mandatory_terms.append(term)
-                else:
-                    optional_terms.append(term)
-            
-            # Always include all mandatory terms
-            all_selected_terms.extend(mandatory_terms)
-            
-            if not optional_terms:
-                # No optional terms to select
-                continue
-            
-            # Use LLM to select relevant optional terms for this level
-            optional_terms_list = []
-            for term in optional_terms[:30]:  # Limit to first 30 for prompt size
-                optional_terms_list.append({
-                    "name": term.get("name"),
-                    "label": term.get("label"),
-                    "description": term.get("description"),
-                    "required": False  # All are optional
-                })
-            
-            # Prepare mandatory terms summary for context
-            mandatory_summary = [
-                {
-                    "name": term.get("name"),
-                    "label": term.get("label"),
-                    "description": term.get("description")
-                }
-                for term in mandatory_terms[:10]  # Show first 10 mandatory terms
-            ]
-            
-            prompt = f"""Select OPTIONAL terms relevant to this document for {level.upper()} level:
-
-Document Info:
-- Title: {doc_info.get('title', 'N/A')[:100]}
-- Domain: {doc_info.get('research_domain', 'N/A')}
-- Keywords: {', '.join(doc_info.get('keywords', [])[:5])}
-- Location: {doc_info.get('location', 'N/A')}
-- Has Environmental Data: {bool(doc_info.get('environmental_parameters'))}
-
-**IMPORTANT:**
-- Mandatory terms ({len(mandatory_terms)} terms) are ALREADY INCLUDED and do not need to be selected
-- You only need to select from OPTIONAL terms below
-
-Mandatory Terms (already included - for reference only):
-{json.dumps(mandatory_summary, indent=2)[:1000]}
-
-Available OPTIONAL Terms ({level}):
-{json.dumps(optional_terms_list, indent=2)[:2000]}
-
-**Your task:** Select 5-15 most relevant OPTIONAL terms that can be populated from the document.
-
-Return JSON array of term names:
-{{"selected_terms": ["term_1", "term_2", ...]}}
-
-Return ONLY JSON."""
-
-            try:
-                from langchain_core.messages import HumanMessage
-                response = await self.llm_helper._call_llm([HumanMessage(content=prompt)], operation_name="Knowledge Retriever - Extract Terms")
-                result = self.llm_helper._parse_json_response(response.content)
-                selected_term_names = result.get("selected_terms", [])
-                
-                # Find full term objects for selected optional terms
-                for term in optional_terms:
-                    if term.get("name") in selected_term_names:
-                        all_selected_terms.append(term)
-                
-                self.log_info(
-                    f"✅ {level}: {len(mandatory_terms)} mandatory + "
-                    f"{len([t for t in optional_terms if t.get('name') in selected_term_names])} optional terms"
-                )
-                        
-            except Exception as e:
-                self.log_info(f"⚠️  LLM term selection failed for {level}: {e}, using mandatory terms only")
-                # At least keep all mandatory terms
-                # Optionally add some optional terms as fallback
-                all_selected_terms.extend(optional_terms[:5])  # Take first 5 optional as fallback
-        
-        return all_selected_terms

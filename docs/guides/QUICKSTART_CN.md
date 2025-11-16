@@ -77,9 +77,23 @@ python -m fairifier.cli process examples/inputs/test_document.txt --verbose
 ### CLI 输出
 你会看到实时的进度输出，包括：
 - ✅ 每个步骤的执行状态
-- 🔍 Critic 的评估结果
-- 📊 置信度分数
+- 🔍 Critic/LLM-as-Judge 的评估结果
+- 📊 置信度分数（critic / structural / validation / overall）
 - 💾 生成的文件列表
+
+示例片段：
+```
+🎯 Confidence Scores:
+  ✅ critic: 0.78
+  ⚠️ structural: 0.62
+  ✅ validation: 1.00
+  ⚠️ overall: 0.76
+
+quality_metrics:
+  field_completion_ratio: 0.80
+  evidence_coverage_ratio: 0.70
+  avg_field_confidence: 0.83
+```
 
 ### 查看生成的文件
 ```bash

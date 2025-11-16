@@ -8,7 +8,10 @@ quality standards, need improvement, or should be accepted.
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+
+import yaml
 from langsmith import traceable
 
 from .base import BaseAgent
@@ -17,6 +20,67 @@ from ..config import config
 from ..utils.llm_helper import get_llm_helper
 
 logger = logging.getLogger(__name__)
+
+
+def safe_json_parse(raw: str) -> Optional[Dict[str, Any]]:
+    """Parse JSON content with support for fenced code blocks and various formats."""
+    if not raw:
+        return None
+    
+    snippet = raw.strip()
+    
+    # Strategy 1: Remove markdown code fences
+    if "```json" in snippet:
+        snippet = snippet.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in snippet:
+        # Handle generic code blocks
+        parts = snippet.split("```")
+        if len(parts) >= 3:
+            snippet = parts[1].strip()
+        elif snippet.startswith("```") and snippet.endswith("```"):
+            snippet = snippet[3:-3].strip()
+    
+    # Strategy 2: Direct parse
+    try:
+        return json.loads(snippet)
+    except json.JSONDecodeError:
+        pass
+    
+    # Strategy 3: Extract first complete JSON object
+    start = snippet.find("{")
+    if start != -1:
+        brace_count = 0
+        in_string = False
+        escape_next = False
+        
+        for i in range(start, len(snippet)):
+            char = snippet[i]
+            
+            if escape_next:
+                escape_next = False
+                continue
+            
+            if char == '\\':
+                escape_next = True
+                continue
+            
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            
+            if not in_string:
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        try:
+                            return json.loads(snippet[start:i+1])
+                        except json.JSONDecodeError:
+                            pass
+                        break
+    
+    return None
 
 
 class CriticAgent(BaseAgent):
@@ -35,16 +99,20 @@ class CriticAgent(BaseAgent):
     def __init__(self):
         super().__init__("Critic")
         self.llm_helper = get_llm_helper()
-        # Get retry limit from config (can be overridden by env vars)
         self.max_retries_per_step = config.max_step_retries
-        
-        logger.info("✅ Critic Agent initialized with LLM (required mode - no fallback)")
+        self.rubric = self._load_rubric(config.critic_rubric_path)
+        self.node_key_map = {
+            "DocumentParser": "document_parser",
+            "KnowledgeRetriever": "knowledge_retriever",
+            "JSONGenerator": "json_generator",
+        }
+        logger.info("✅ Critic Agent initialized with LLM-as-Judge rubric")
     
     @traceable(name="Critic", tags=["agent", "evaluation"])
     async def execute(self, state: FAIRifierState) -> FAIRifierState:
         """
         Execute critic evaluation on the current state.
-        This is called by Orchestrator after each agent step.
+        This is called by the workflow after each agent step.
         """
         self.log_execution(state, "🔍 Critic evaluation started")
         
@@ -60,21 +128,7 @@ class CriticAgent(BaseAgent):
             
             self.log_execution(state, f"📝 Evaluating output from: {agent_name}")
             
-            # Evaluate based on agent type
-            if agent_name == "DocumentParser":
-                evaluation = await self._evaluate_document_parsing(state)
-            elif agent_name == "KnowledgeRetriever":
-                evaluation = await self._evaluate_knowledge_retrieval(state)
-            elif agent_name == "JSONGenerator":
-                evaluation = await self._evaluate_json_generation(state)
-            else:
-                evaluation = {
-                    "decision": "ACCEPT",
-                    "confidence": 0.5,
-                    "feedback": "Unknown agent type, accepting by default",
-                    "issues": [],
-                    "suggestions": []
-                }
+            evaluation = await self._evaluate_agent_output(agent_name, state)
             
             # Store evaluation result
             last_execution["critic_evaluation"] = evaluation
@@ -85,14 +139,8 @@ class CriticAgent(BaseAgent):
                 state["errors"] = []
             state["errors"].append(f"Critic evaluation error: {str(e)}")
             
-            # Provide fallback evaluation
-            evaluation = {
-                "decision": "ACCEPT",  # Accept to continue workflow when critic fails
-                "confidence": 0.3,
-                "feedback": f"Critic evaluation failed: {str(e)}. Accepting with low confidence.",
-                "issues": [f"Critic failure: {str(e)}"],
-                "suggestions": ["Manual review recommended due to critic evaluation failure"]
-            }
+            # Provide fallback evaluation (escalate to human review)
+            evaluation = self._fallback_evaluation(str(e))
             
             # Store fallback evaluation
             execution_history = state.get("execution_history", [])
@@ -101,206 +149,37 @@ class CriticAgent(BaseAgent):
                 last_execution["critic_evaluation"] = evaluation
         
         # Log result
-        decision = evaluation.get("decision", "ACCEPT")
-        confidence = evaluation.get("confidence", 0.5)
-        feedback = evaluation.get("feedback", "")
+        decision = evaluation.get("decision", "ESCALATE")
+        score = evaluation.get("score", 0.0)
+        critique = evaluation.get("critique", "")
         issues = evaluation.get("issues", [])
-        suggestions = evaluation.get("suggestions", [])
+        improvement_ops = evaluation.get("improvement_ops", [])
         
         self.log_execution(
             state,
-            f"✅ Critic decision: {decision} (confidence: {confidence:.2f})\n"
-            f"   Feedback: {feedback[:100] if feedback else 'N/A'}\n"
-            f"   Issues: {len(issues)}\n"
-            f"   Suggestions: {len(suggestions)}"
+            f"✅ Critic decision: {decision} (score: {score:.2f})\n"
+            f"   Critique: {critique[:160] if critique else 'N/A'}\n"
+            f"   Issues: {len(issues)} | Improvements: {len(improvement_ops)}"
         )
         
         return state
     
-    @traceable(name="Critic.EvaluateDocumentParsing")
-    async def _evaluate_document_parsing(self, state: FAIRifierState) -> Dict[str, Any]:
-        """
-        Evaluate document parsing output quality using LLM reasoning.
+    async def _evaluate_agent_output(self, agent_name: str, state: FAIRifierState) -> Dict[str, Any]:
+        """Route agent evaluation using rubric-driven judging."""
+        node_key = self.node_key_map.get(agent_name)
+        if not node_key:
+            return self._fallback_evaluation(f"Unknown agent {agent_name}")
         
-        The Critic uses LLM to intelligently assess whether the extracted information
-        is complete, accurate, and sufficient for metadata generation.
-        """
-        doc_info = state.get("document_info", {})
-        retry_count = state.get("context", {}).get("retry_count", 0)
+        if node_key == "document_parser":
+            context = self._build_parsing_context(state)
+        elif node_key == "knowledge_retriever":
+            context = self._build_retrieval_context(state)
+        elif node_key == "json_generator":
+            context = self._build_generation_context(state)
+        else:
+            context = "No context available."
         
-        # Prepare content with complete doc_info for LLM evaluation
-        evaluation_content = f"""**Extracted Document Information:**
-{json.dumps(doc_info, indent=2, ensure_ascii=False)}
-
-**Retry Info:** Attempt {retry_count + 1}/{self.max_retries_per_step}"""
-
-        # Call LLM for evaluation (required - no fallback)
-        result = await self.llm_helper.evaluate_quality(
-            content=evaluation_content,
-            criteria=[
-                "Complete title and abstract",
-                "Author information present",
-                "Keywords or research domain identified",
-                "Sufficient context for metadata generation"
-            ],
-            context=f"Retry count: {retry_count}/{self.max_retries_per_step}"
-        )
-        
-        # Ensure required fields
-        if "decision" not in result:
-            threshold = config.critic_accept_threshold_document_parser
-            result["decision"] = "ACCEPT" if result.get("overall_score", 0) >= threshold else "RETRY"
-        if "confidence" not in result:
-            result["confidence"] = result.get("overall_score", 0.5)
-        if "feedback" not in result:
-            result["feedback"] = "Evaluation complete"
-        if "issues" not in result:
-            result["issues"] = result.get("failed_criteria", [])
-        if "suggestions" not in result:
-            result["suggestions"] = result.get("suggestions", [])
-        
-        return result
-    
-    @traceable(name="Critic.EvaluateKnowledgeRetrieval")
-    async def _evaluate_knowledge_retrieval(self, state: FAIRifierState) -> Dict[str, Any]:
-        """
-        Evaluate knowledge retrieval output quality using LLM reasoning.
-        
-        The Critic uses LLM to assess whether the retrieved FAIR-DS terms
-        are relevant and sufficient for the document.
-        """
-        retrieved_knowledge = state.get("retrieved_knowledge", [])
-        doc_info = state.get("document_info", {})
-        retry_count = state.get("context", {}).get("retry_count", 0)
-        
-        # Prepare summary for LLM
-        packages_found = set()
-        for item in retrieved_knowledge:
-            metadata = item.get("metadata", {})
-            if metadata and metadata.get("package"):
-                packages_found.add(metadata["package"])
-        
-        knowledge_summary = {
-            "total_terms": len(retrieved_knowledge),
-            "packages": list(packages_found),
-            "all_terms": [
-                {"term": item.get("term"), "package": item.get("metadata", {}).get("package")}
-                for item in retrieved_knowledge  # ALL terms - no sampling
-            ]
-        }
-        
-        # Prepare content with complete doc_info + retrieval results (no truncation)
-        evaluation_content = f"""**Complete Document Info:**
-{json.dumps(doc_info, indent=2, ensure_ascii=False)}  # Complete info - no truncation
-
-**Retrieved FAIR-DS Knowledge:**
-{json.dumps(knowledge_summary, indent=2)}
-
-**Retry Info:** Attempt {retry_count + 1}/{self.max_retries_per_step}"""
-
-        # Call LLM for evaluation (required - no fallback)
-        result = await self.llm_helper.evaluate_quality(
-            content=evaluation_content,
-            criteria=[
-                "Retrieved terms are relevant to document domain",
-                "Sufficient quantity of terms (15-30)",
-                "Appropriate FAIR-DS packages identified",
-                "All terms have definitions"
-            ],
-            context=f"Document domain: {doc_info.get('research_domain')}; Retry: {retry_count}/{self.max_retries_per_step}"
-        )
-        
-        # Ensure required fields
-        if "decision" not in result:
-            threshold = config.critic_accept_threshold_knowledge_retriever
-            result["decision"] = "ACCEPT" if result.get("overall_score", 0) >= threshold else "RETRY"
-        if "confidence" not in result:
-            result["confidence"] = result.get("overall_score", 0.5)
-        
-        result["retrieved_count"] = len(retrieved_knowledge)
-        result["packages_found"] = list(packages_found)
-        
-        return result
-    
-    @traceable(name="Critic.EvaluateJSONGeneration")
-    async def _evaluate_json_generation(self, state: FAIRifierState) -> Dict[str, Any]:
-        """
-        Evaluate JSON metadata generation quality using LLM reasoning.
-        
-        The Critic uses LLM to intelligently assess the quality, completeness,
-        and appropriateness of generated metadata.
-        """
-        metadata_fields = state.get("metadata_fields", [])
-        doc_info = state.get("document_info", {})
-        retry_count = state.get("context", {}).get("retry_count", 0)
-        
-        if not metadata_fields or len(metadata_fields) == 0:
-            return {
-                "decision": "RETRY",
-                "confidence": 0.0,
-                "feedback": "No metadata generated. Please retry.",
-                "issues": ["No metadata fields generated"],
-                "suggestions": ["Generate metadata fields based on document info and FAIR-DS knowledge"]
-            }
-        
-        # Prepare summary for LLM (ALL fields - no sampling)
-        fields_summary = []
-        total_confidence = 0
-        fields_with_evidence = 0
-        
-        for field in metadata_fields:  # ALL fields - no sampling
-            fields_summary.append({
-                "name": field.get("field_name"),
-                "value": str(field.get("value", "")),  # Full value - no truncation
-                "has_evidence": bool(field.get("evidence")),
-                "confidence": field.get("confidence", 0)
-            })
-            total_confidence += field.get("confidence", 0)
-            if field.get("evidence"):
-                fields_with_evidence += 1
-        
-        avg_confidence = total_confidence / len(metadata_fields) if metadata_fields else 0
-        evidence_coverage = fields_with_evidence / len(metadata_fields) if metadata_fields else 0
-        
-        # Prepare content with complete doc_info + generated metadata (no truncation)
-        evaluation_content = f"""**Complete Document Info:**
-{json.dumps(doc_info, indent=2, ensure_ascii=False)}  # Complete info - no truncation
-
-**Generated Metadata:**
-- Total fields: {len(metadata_fields)}
-- Average confidence: {avg_confidence:.2f}
-- Evidence coverage: {evidence_coverage:.1%}
-
-**Sample Fields:**
-{json.dumps(fields_summary, indent=2)}
-
-**Retry Info:** Attempt {retry_count + 1}/{self.max_retries_per_step}"""
-
-        # Call LLM for evaluation (required - no fallback)
-        result = await self.llm_helper.evaluate_quality(
-            content=evaluation_content,
-            criteria=[
-                "Core metadata fields are present",
-                "Field values are appropriate and accurate",
-                "Evidence/provenance is clear for fields",
-                "Confidence scores are realistic",
-                "Sufficient coverage of research aspects"
-            ],
-            context=f"Total fields: {len(metadata_fields)}; Avg confidence: {avg_confidence:.2f}; Retry: {retry_count}/{self.max_retries_per_step}"
-        )
-        
-        # Ensure required fields
-        if "decision" not in result:
-            threshold = config.critic_accept_threshold_json_generator
-            result["decision"] = "ACCEPT" if result.get("overall_score", 0) >= threshold else "RETRY"
-        if "confidence" not in result:
-            result["confidence"] = result.get("overall_score", 0.5)
-        
-        result["field_count"] = len(metadata_fields)
-        result["avg_confidence"] = avg_confidence
-        result["evidence_coverage"] = evidence_coverage
-        
-        return result
+        return await self._judge_with_rubric(node_key, context)
     
     @traceable(name="Critic.EvaluateValidation")
     async def _evaluate_validation(self, state: FAIRifierState) -> Dict[str, Any]:
@@ -366,22 +245,28 @@ class CriticAgent(BaseAgent):
         """
         Prepare state with critic feedback for agent to retry.
         Updates context with specific feedback and suggestions.
+        
+        Note: Retry count is managed by the evaluate nodes, not here.
         """
         if "context" not in state:
             state["context"] = {}
         
-        # Increment retry count
-        state["context"]["retry_count"] = state["context"].get("retry_count", 0) + 1
+        # Don't increment retry_count here - it's managed by evaluate nodes
         
         # Store critic feedback (use .get() for safe access)
         state["context"]["critic_feedback"] = {
             "decision": evaluation.get("decision", "ACCEPT"),
-            "confidence": evaluation.get("confidence", 0.5),
-            "feedback": evaluation.get("feedback", ""),
+            "score": evaluation.get("score", 0.0),
+            "critique": evaluation.get("critique", ""),
             "issues": evaluation.get("issues", []),
-            "suggestions": evaluation.get("suggestions", []),
+            "suggestions": evaluation.get("improvement_ops", []),
             "timestamp": datetime.now().isoformat()
         }
+        history = state["context"].setdefault("critic_guidance_history", {})
+        history.setdefault(agent_name, [])
+        for op in evaluation.get("improvement_ops", []):
+            if op not in history[agent_name]:
+                history[agent_name].append(op)
         
         # Store previous attempt for comparison
         if agent_name == "DocumentParser":
@@ -397,4 +282,182 @@ class CriticAgent(BaseAgent):
         )
         
         return state
+
+    # ---------- Helper methods ----------
+
+    def _load_rubric(self, rubric_path: Path) -> Dict[str, Any]:
+        try:
+            with open(rubric_path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f)
+        except FileNotFoundError:
+            logger.error("Critic rubric not found at %s", rubric_path)
+        except Exception as exc:
+            logger.error("Failed to load critic rubric: %s", exc)
+        return {}
+
+    def _fallback_evaluation(self, reason: str) -> Dict[str, Any]:
+        return {
+            "decision": "ESCALATE",
+            "score": 0.0,
+            "critique": f"Critic failure: {reason}",
+            "issues": [reason],
+            "improvement_ops": ["Human review required due to critic failure."]
+        }
+
+    def _build_parsing_context(self, state: FAIRifierState) -> str:
+        doc_info = state.get("document_info", {})
+        retry_count = state.get("context", {}).get("retry_count", 0)
+        planner_guidance = state.get("agent_guidance", {}).get("DocumentParser")
+        return (
+            f"**Parsed Document Info (attempt {retry_count + 1}/{self.max_retries_per_step}):**\n"
+            f"{json.dumps(doc_info, indent=2, ensure_ascii=False)}\n\n"
+            f"**Planner guidance:** {planner_guidance or 'N/A'}"
+        )
+
+    def _build_retrieval_context(self, state: FAIRifierState) -> str:
+        doc_info = state.get("document_info", {})
+        retrieved = state.get("retrieved_knowledge", [])
+        planner_guidance = state.get("agent_guidance", {}).get("KnowledgeRetriever")
+        packages_found = sorted(
+            {
+                item.get("metadata", {}).get("package")
+                for item in retrieved
+                if item.get("metadata", {}).get("package")
+            }
+        )
+        # Get domain from either research_domain or scientific_domain
+        domain = doc_info.get("research_domain") or doc_info.get("scientific_domain")
+        
+        # Build clear summary with agent output prominently displayed
+        summary = {
+            "agent_output_status": "present" if retrieved else "missing",
+            "document_domain": domain,
+            "document_type": doc_info.get("document_type"),
+            "planner_guidance": planner_guidance,
+            "retrieval_results": {
+                "total_terms_retrieved": len(retrieved),
+                "packages_selected": packages_found,
+                "terms_by_isa_sheet": self._group_terms_by_sheet(retrieved),
+                "sample_terms": retrieved[:5] if retrieved else []  # Show first 5 as examples
+            },
+            "complete_terms_list": retrieved  # Full list for detailed inspection
+        }
+        return json.dumps(summary, indent=2, ensure_ascii=False)
+    
+    def _group_terms_by_sheet(self, terms):
+        """Group terms by ISA sheet for clearer presentation."""
+        by_sheet = {}
+        for term in terms:
+            sheet = term.get("metadata", {}).get("isa_sheet", "unknown")
+            if sheet not in by_sheet:
+                by_sheet[sheet] = []
+            by_sheet[sheet].append(term.get("term"))
+        return {k: len(v) for k, v in by_sheet.items()}
+
+    def _build_generation_context(self, state: FAIRifierState) -> str:
+        doc_info = state.get("document_info", {})
+        metadata_fields = state.get("metadata_fields", [])
+        planner_guidance = state.get("agent_guidance", {}).get("JSONGenerator")
+        evidence_coverage = 0
+        if metadata_fields:
+            evidence_coverage = (
+                sum(1 for f in metadata_fields if f.get("evidence")) / len(metadata_fields)
+            )
+        summary = {
+            "document_overview": doc_info,
+            "planner_guidance": planner_guidance,
+            "field_count": len(metadata_fields),
+            "evidence_coverage": evidence_coverage,
+            "fields": metadata_fields,
+        }
+        return json.dumps(summary, indent=2, ensure_ascii=False)
+
+    async def _judge_with_rubric(self, node_key: str, evaluation_content: str) -> Dict[str, Any]:
+        node_rules = (self.rubric.get("nodes") or {}).get(node_key)
+        if not node_rules:
+            return self._fallback_evaluation(f"No rubric defined for {node_key}")
+        
+        system_prompt = self.rubric.get(
+            "default_prompt",
+            "You are an impartial reviewer who returns JSON verdicts."
+        )
+        criteria = node_rules.get("criteria", {})
+        criteria_text = []
+        for dim, detail in criteria.items():
+            checks = detail.get("checks", [])
+            bullet = "\n".join([f"    - {chk}" for chk in checks]) if checks else "    - (no checks provided)"
+            criteria_text.append(f"- {dim.title()}:\n{bullet}")
+        rubric_block = "\n".join(criteria_text) if criteria_text else "N/A"
+        
+        accept_threshold = node_rules.get("accept_threshold", 0.8)
+        revise_min = node_rules.get("revise_min", 0.5)
+        
+        prompt = (
+            f"{system_prompt}\n\n"
+            f"# Node: {node_key}\n"
+            f"Goal: {node_rules.get('description', '')}\n\n"
+            f"## Evaluation Context\n{evaluation_content}\n\n"
+            f"## Rubric\n{rubric_block}\n\n"
+            "Use the JSON schema described in the system instructions."
+        )
+        
+        from langchain_core.messages import HumanMessage
+        response = await self.llm_helper._call_llm(
+            [HumanMessage(content=prompt)],
+            operation_name=f"Critic.{node_key}"
+        )
+        content = getattr(response, "content", "") if response else ""
+        
+        # Debug: Log response for troubleshooting
+        logger.debug(f"Critic LLM response length: {len(content)} chars")
+        logger.debug(f"Critic LLM response preview: {content[:500]}")
+        
+        parsed = safe_json_parse(content)
+        if not parsed:
+            logger.error(f"Failed to parse Critic response. Content preview: {content[:1000]}")
+            return self._fallback_evaluation("Unable to parse critic JSON response")
+        
+        score = float(parsed.get("score", 0.0) or 0.0)
+        
+        # ALWAYS use score-based decision (ignore LLM's decision field)
+        # This ensures consistent behavior based on rubric thresholds
+        # Decision thresholds (from critic_rubric.yaml):
+        # - ACCEPT: score >= accept_threshold
+        # - RETRY (revise): revise_min <= score < accept_threshold
+        # - ESCALATE: score < revise_min
+        if score >= accept_threshold:
+            decision = "accept"
+        elif score >= revise_min:
+            decision = "revise"
+        else:
+            decision = "escalate"
+        
+        mapped_decision = {
+            "accept": "ACCEPT",
+            "revise": "RETRY",
+            "escalate": "ESCALATE"
+        }[decision]
+        
+        # Log decision with clear threshold information
+        from ..config import config
+        rubric_file = str(config.critic_rubric_path)
+        logger.info(
+            f"Critic decision for {node_key}: {mapped_decision}\n"
+            f"  Score: {score:.2f}\n"
+            f"  Thresholds (from {rubric_file}):\n"
+            f"    - ACCEPT if score >= {accept_threshold:.2f}\n"
+            f"    - RETRY if {revise_min:.2f} <= score < {accept_threshold:.2f}\n"
+            f"    - ESCALATE if score < {revise_min:.2f}\n"
+            f"  → Decision: {mapped_decision} (score {score:.2f} is in range for {decision})"
+        )
+        
+        return {
+            "decision": mapped_decision,
+            "score": score,
+            "issues": parsed.get("issues", []),
+            "improvement_ops": parsed.get("improvement_ops", []),
+            "evidence": parsed.get("evidence", []),
+            "critique": parsed.get("critique", "")
+        }
+
 

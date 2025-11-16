@@ -137,10 +137,25 @@ def _parse_json_with_fallback(content: str) -> Optional[Dict[str, Any]]:
     Returns:
         Parsed JSON dict or None if all strategies fail
     """
+    original_content = content
+    
+    # Pre-process: Remove markdown code fences if present
+    if "```json" in content:
+        logger.debug("Removing ```json code fence")
+        content = content.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif content.strip().startswith("```") and content.strip().endswith("```"):
+        logger.debug("Removing generic ``` code fence")
+        content = content.strip()[3:-3].strip()
+    
+    logger.debug(f"After fence removal: {len(content)} chars, starts with: {content[:50]}")
+    
     # Strategy 1: Direct parse
     try:
-        return json.loads(content)
-    except json.JSONDecodeError:
+        result = json.loads(content)
+        logger.debug(f"✅ Strategy 1 (direct parse) succeeded")
+        return result
+    except json.JSONDecodeError as e:
+        logger.debug(f"Strategy 1 failed: {e}")
         pass
     
     # Strategy 2: Fix common issues and parse
@@ -268,8 +283,8 @@ class LLMHelper:
             agent_name = "📝 JSON Generator"
         elif "Critic" in operation_name or "evaluate" in operation_name.lower() or "critic" in operation_name.lower():
             agent_name = "🎯 Critic"
-        elif "Orchestrator" in operation_name or "plan" in operation_name.lower() or "workflow" in operation_name.lower():
-            agent_name = "🎼 Orchestrator"
+        elif "orchestrator" in operation_name.lower() or "plan" in operation_name.lower() or "workflow" in operation_name.lower():
+            agent_name = "🎼 Planner"
         
         # Auto-detect Streamlit chat container if stream_to_streamlit is None
         chat_container = None
@@ -607,7 +622,8 @@ class LLMHelper:
         self, 
         text: str, 
         critic_feedback: Optional[Dict[str, Any]] = None,
-        is_structured_markdown: bool = False
+        is_structured_markdown: bool = False,
+        planner_instruction: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Extract structured information from document text using LLM.
@@ -697,102 +713,145 @@ class LLMHelper:
         
         # Build adaptive system prompt based on input format
         if is_structured_markdown:
-            system_prompt = """You are an expert at extracting structured information from scientific research documents.
+            system_prompt = """You are an expert at extracting structured information from ANY research-related document.
 
 **Document Format:** This document has been professionally converted to Markdown with preserved structure, tables, and image references. Leverage this enhanced structure for precise extraction.
 
-**Key Advantages of Markdown Format:**
-- Clear section headers (# Title, ## Section, ### Subsection)
-- Preserved table structure with data aligned in columns
-- Embedded image references showing figures and diagrams
-- Maintained list formatting for methods, materials, references
-- Better paragraph separation and text flow
+**IMPORTANT - Document Type Flexibility:**
+This could be ANY type of research document:
+- Research papers, preprints, technical reports
+- Project proposals, grant applications (e.g., Horizon Europe, NSF)
+- Data management plans (DMP)
+- Protocol documents, standard operating procedures (SOP)
+- Meeting minutes, workshop reports
+- Datasets documentation, README files
+- Institutional reports, white papers
 
-**Your task:** Extract ALL relevant information with high precision using the document structure as your guide.
+**Your task:** 
+1. FIRST identify what type of document this is
+2. THEN extract ALL relevant information appropriate for that document type
+3. DO NOT force a paper structure (title/abstract/authors) if it doesn't fit
+4. Adapt your extraction strategy to the actual content
 
 **Core principles:**
-1. Use headers to identify document sections (Abstract, Methods, Results, etc.)
-2. Parse tables directly to extract structured data (experimental parameters, measurements, sample information)
+1. Use headers to understand document structure and content organization
+2. Parse tables directly to extract structured data (budgets, timelines, parameters, etc.)
 3. Identify figure captions and their context from image references
-4. Extract list items (authors, affiliations, materials, methods steps)
-5. Recognize formatted elements (bold, italic) that highlight key terms
-6. Use clear, descriptive field names matching the content
+4. Extract list items (partners, work packages, deliverables, methods, etc.)
+5. Use clear, descriptive field names that match the actual content
+6. Create hierarchical structures where appropriate
 
-**Always include (if present):**
-- Basic bibliographic info: title, authors (with affiliations), publication details, DOI
-- Research context: domain, background, objectives, research questions, hypotheses
-- Methodology: experimental design, materials, protocols, instruments, software
-- Study subjects: organisms, samples, sample size, locations (with coordinates if given)
-- Data collection: parameters measured, units, temporal/spatial coverage
-- Results: key findings, statistical outcomes, tables/figures summary
-- Data availability: repositories, accession numbers, datasets
-- Domain-specific metadata:
-  * Genomics: sequencing platform, library prep, assembly, annotation
-  * Ecology: species, habitat, environmental conditions, sampling dates
-  * Chemistry: compounds, concentrations, solvents, conditions
-  * Clinical: cohort, interventions, outcomes, ethics approval
+**Adapt extraction to document type:**
+
+For **Project Proposals/Grants**:
+- Project info: acronym, title, funding program, duration, budget
+- Consortium: partners, roles, expertise, infrastructure
+- Objectives: goals, work packages, deliverables, milestones
+- Methodology: approach, innovation, expected impact
+- Management: coordination, ethics, data management plan
+
+For **Research Papers**:
+- Bibliographic: title, authors, affiliations, DOI, journal
+- Research: domain, objectives, hypotheses, methodology
+- Data: samples, measurements, instruments, datasets
+- Results: findings, statistics, conclusions
+
+For **Data Management Plans**:
+- Data types, formats, volumes, repositories
+- Access policies, licenses, preservation strategy
+- Metadata standards, quality assurance
+- Responsibilities, resources, timeline
+
+For **Protocols/SOPs**:
+- Purpose, scope, materials, equipment
+- Step-by-step procedures, parameters, controls
+- Safety considerations, quality checks
+- References, version history
 
 **Output format:**
-Return a comprehensive JSON object with hierarchical structure. Examples:
+Return a comprehensive JSON object with field names that reflect the ACTUAL content.
+DO NOT use generic "title/abstract/authors" if the document doesn't have them.
+
+Example for a project proposal:
 ```json
 {
+  "document_type": "project_proposal",
+  "project_acronym": "...",
+  "funding_programme": "...",
+  "consortium": [...],
+  "objectives": [...],
+  "work_packages": [...],
+  "budget": {...}
+}
+```
+
+Example for a research paper:
+```json
+{
+  "document_type": "research_paper",
   "title": "...",
-  "authors": [{"name": "...", "affiliation": "...", "email": "..."}],
-  "study_design": {
-    "type": "...",
-    "organism": "...",
-    "sample_size": ...,
-    "duration": "...",
-    "location": {"site": "...", "coordinates": "..."}
-  },
-  "experimental_parameters": {
-    "treatment_groups": [...],
-    "measurements": [...],
-    "instruments": [...]
-  },
-  "data_availability": {
-    "repository": "...",
-    "accession": "...",
-    "doi": "..."
-  }
+  "authors": [...],
+  "methodology": {...},
+  "results": {...}
 }
 ```
 
 **Best practices:**
 - Extract numerical data with units preserved
-- Capture hierarchical relationships (study > experiment > sample > measurement)
-- Include both human-readable descriptions AND structured identifiers
+- Capture hierarchical relationships naturally present in the document
+- Include both human-readable descriptions AND structured identifiers (PICs, DOIs, ORCIDs, etc.)
 - When tables are present, extract their full content as structured data
 - Preserve scientific notation, formulas, and technical terminology
+- Use descriptive field names that make sense for the content
 
 Return ONLY valid JSON, no markdown formatting."""
         else:
-            system_prompt = """You are an expert at extracting structured information from scientific research documents.
+            system_prompt = """You are an expert at extracting structured information from ANY research-related document.
 
-**Your task:** Analyze the document and extract ALL relevant information intelligently. DO NOT limit yourself to predefined fields - adapt to the document's content.
+**CRITICAL - Document Type Flexibility:**
+This could be ANY type of research document:
+- Research papers, preprints, technical reports
+- Project proposals, grant applications (Horizon Europe, NSF, etc.)
+- Data management plans (DMP)
+- Protocol documents, SOPs
+- Meeting reports, workshop summaries
+- Dataset documentation, README files
+- Institutional reports, white papers
+
+**Your task:** 
+1. FIRST identify what type of document this is
+2. THEN extract ALL relevant information appropriate for that document type
+3. DO NOT force a paper structure (title/abstract/authors) if it doesn't fit
+4. Adapt your extraction strategy to the actual content
 
 **Core principles:**
-1. Read and understand the document type and domain
+1. Understand the document type and purpose
 2. Identify what information is actually present and relevant
-3. Extract information in appropriate categories
-4. Use clear, descriptive field names that match the content
-5. Be flexible - different documents contain different information
+3. Use clear, descriptive field names that match the content
+4. Create hierarchical structures where appropriate
+5. Be flexible - different documents need different extraction strategies
 
-**Always include (if present):**
-- Basic bibliographic info (title, authors, publication details)
-- Research context (domain, objectives, questions)
-- Methodology and approach
-- Data and samples (what, where, when, how)
-- Results and findings
-- Any domain-specific details (sequences, chemicals, coordinates, etc.)
+**Adapt extraction to document type:**
+
+For **Project Proposals/Grants**: Extract project info, consortium, objectives, work packages, budget, management, ethics, data plans
+
+For **Research Papers**: Extract bibliographic info, research context, methodology, data, results, conclusions
+
+For **Data Management Plans**: Extract data types, repositories, access policies, metadata standards, responsibilities
+
+For **Protocols/SOPs**: Extract purpose, materials, procedures, parameters, safety, quality controls
 
 **Output format:**
-Return a JSON object with descriptive field names. For example:
-- Instead of just "location", use specific names like "sampling_location", "study_site", "geographic_region"
-- For environmental data, create nested structures: "environmental_conditions": {"temperature": "...", "pH": "..."}
-- Group related information logically
+Return a JSON object with field names that reflect the ACTUAL content.
+DO NOT use generic "title/abstract/authors" if the document doesn't have them.
+Use descriptive, specific field names (e.g., "project_acronym", "funding_programme", "consortium", "work_packages" for proposals).
 
-**Adapt to document content:** If it's a genomics study, extract sequencing details. If it's field ecology, extract environmental parameters. If it's a methods paper, focus on protocols.
+**Best practices:**
+- Include a "document_type" field to indicate what kind of document this is
+- Extract numerical data with units preserved
+- Capture hierarchical relationships naturally present in the document
+- Include both human-readable descriptions AND structured identifiers
+- Use descriptive field names that make sense for the content
 
 Return ONLY valid JSON, no markdown formatting."""
 
@@ -804,6 +863,9 @@ Return ONLY valid JSON, no markdown formatting."""
             for suggestion in critic_feedback.get('suggestions', []):
                 feedback_text += f"- Suggestion: {suggestion}\n"
             system_prompt += feedback_text
+        
+        if planner_instruction:
+            system_prompt += f"\n\n**Planner guidance:**\n- {planner_instruction}\n"
 
         if is_structured_markdown:
             user_prompt = f"""Analyze this Markdown-formatted research document and extract comprehensive metadata:
@@ -856,28 +918,28 @@ Extract all relevant information and return as JSON with clear, descriptive fiel
             })
             
             # Parse JSON response using improved parser
+            logger.debug(f"Attempting to parse LLM response ({len(content)} chars)")
+            logger.debug(f"Response starts with: {content[:100]}")
+            logger.debug(f"Response ends with: {content[-100:]}")
+            
             doc_info = _parse_json_with_fallback(content)
             
             if doc_info:
-                logger.info(f"Extracted document info with {len(doc_info)} fields")
+                logger.info(f"✅ Extracted document info with {len(doc_info)} fields")
                 return doc_info
             else:
-                # All parsing strategies failed
-                logger.error(f"Failed to parse LLM response as JSON after all fallback strategies")
+                # All parsing strategies failed - this is a critical error
+                logger.error(f"❌ Failed to parse LLM response as JSON after all fallback strategies")
                 logger.error(f"Response content (first 2000 chars): {content[:2000]}")
                 logger.error(f"Response length: {len(content)} chars")
+                logger.error(f"Has ```json: {'```json' in content}")
+                logger.error(f"Has backticks: {'```' in content}")
                 
-                # Return minimal structure
-                return {
-                    "title": "",
-                    "abstract": "",
-                    "authors": [],
-                    "keywords": [],
-                    "research_domain": None
-                }
+                # Raise error to trigger retry mechanism
+                raise ValueError(f"Failed to parse LLM response as JSON. Response length: {len(content)} chars")
         except Exception as e:
             logger.error(f"Error during document info extraction: {e}")
-            raise
+            raise  # Re-raise to trigger retry
     
     @traceable(name="LLM.GenerateMetadataValue")
     async def generate_metadata_value(
@@ -968,7 +1030,8 @@ Return JSON with value, evidence, and confidence."""
         self,
         document_info: Dict[str, Any],
         available_fields: List[Dict[str, Any]],
-        critic_feedback: Optional[Dict[str, Any]] = None
+        critic_feedback: Optional[Dict[str, Any]] = None,
+        planner_instruction: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Intelligently select relevant metadata fields based on document content.
@@ -982,13 +1045,9 @@ Return JSON with value, evidence, and confidence."""
         Returns:
             List of selected field dictionaries with rationale
         """
-        # Prepare document summary
-        doc_summary = {
-            "title": document_info.get("title", "")[:200],
-            "domain": document_info.get("research_domain", ""),
-            "keywords": document_info.get("keywords", [])[:10],
-            "type": document_info.get("document_type", "unknown")
-        }
+        # Use complete document_info instead of extracting specific fields
+        # This is more flexible and works with any document type
+        doc_summary = document_info
         
         # Group fields by ISA sheet to ensure balanced selection across ISA levels
         isa_sheets = ["investigation", "study", "assay", "sample", "observationunit"]
@@ -1059,9 +1118,12 @@ Return JSON with:
             for suggestion in critic_feedback.get('suggestions', []):
                 feedback_text += f"- {suggestion}\n"
             system_prompt += feedback_text
+        
+        if planner_instruction:
+            system_prompt += f"\n\n**Planner guidance:**\n- {planner_instruction}\n"
 
-        user_prompt = f"""Document summary:
-{json.dumps(doc_summary, indent=2)}
+        user_prompt = f"""Complete document information:
+{json.dumps(doc_summary, indent=2, ensure_ascii=False)}
 
 Available metadata fields by ISA sheet:
 {json.dumps(fields_summary_by_isa, indent=2)}
@@ -1105,8 +1167,7 @@ Select the most appropriate 20-30 metadata fields for this document, ensuring re
             
         except Exception as e:
             logger.error(f"Error selecting relevant fields: {e}")
-            # Fallback: return first 20 fields
-            return available_fields[:20]
+            raise  # Re-raise to trigger retry mechanism
     
     @traceable(name="LLM.GenerateMetadataJSON")
     async def generate_complete_metadata(
@@ -1114,7 +1175,8 @@ Select the most appropriate 20-30 metadata fields for this document, ensuring re
         document_info: Dict[str, Any],
         selected_fields: List[Dict[str, Any]],
         document_text: str,
-        critic_feedback: Optional[Dict[str, Any]] = None
+        critic_feedback: Optional[Dict[str, Any]] = None,
+        planner_instruction: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Generate complete metadata for all selected fields.
@@ -1173,6 +1235,9 @@ Return JSON array of metadata objects."""
             for suggestion in critic_feedback.get('suggestions', []):
                 feedback_text += f"- {suggestion}\n"
             system_prompt += feedback_text
+        
+        if planner_instruction:
+            system_prompt += f"\n\n**Planner guidance:**\n- {planner_instruction}\n"
 
         # Prepare field descriptions
         field_descriptions = []
@@ -1211,11 +1276,12 @@ Fields by ISA hierarchy:
 **CRITICAL REQUIREMENTS:**
 1. You MUST return a JSON array with EXACTLY {len(selected_fields)} fields - one for each field in the list above
 2. Use the EXACT field_name from the list above. Do not modify or abbreviate field names
-3. **Investigation-level fields** ({field_counts.get('investigation', 0)} fields): Must generate values from document title, abstract, or research context
-4. **Study-level fields** ({field_counts.get('study', 0)} fields): Must generate values from document title, abstract, methods, or results
-5. **Assay-level fields** ({field_counts.get('assay', 0)} fields): Must generate values from methods section
-6. **Sample-level fields** ({field_counts.get('sample', 0)} fields): Must generate values from methods or results
-7. **ObservationUnit-level fields** ({field_counts.get('observationunit', 0)} fields): Must generate values from methods or environmental context
+3. **DO NOT DUPLICATE field_name values** - each field_name must appear exactly once in your response
+4. **Investigation-level fields** ({field_counts.get('investigation', 0)} fields): Must generate values from document title, abstract, or research context
+5. **Study-level fields** ({field_counts.get('study', 0)} fields): Must generate values from document title, abstract, methods, or results
+6. **Assay-level fields** ({field_counts.get('assay', 0)} fields): Must generate values from methods section
+7. **Sample-level fields** ({field_counts.get('sample', 0)} fields): Must generate values from methods or results
+8. **ObservationUnit-level fields** ({field_counts.get('observationunit', 0)} fields): Must generate values from methods or environmental context
 
 **For fields where information is not explicitly stated:**
 - Investigation/Study fields: Derive from document title, abstract, or research context (e.g., investigation title = document title, study title = document title)
@@ -1272,28 +1338,10 @@ Return JSON array with EXACTLY {len(selected_fields)} fields:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM response as JSON: {e}")
             logger.error(f"Response content: {content[:500]}")
-            # Return basic structure
-            return [
-                {
-                    "field_name": f.get("name", ""),
-                    "value": "",
-                    "evidence": f"JSON parsing error: {str(e)}",
-                    "confidence": 0.0
-                }
-                for f in selected_fields[:10]
-            ]
+            raise ValueError(f"JSON parsing error: {e}")  # Trigger retry
         except Exception as e:
             logger.error(f"Error generating metadata: {e}")
-            # Return basic structure
-            return [
-                {
-                    "field_name": f.get("name", ""),
-                    "value": "",
-                    "evidence": f"Error during generation: {str(e)}",
-                    "confidence": 0.0
-                }
-                for f in selected_fields[:10]
-            ]
+            raise  # Re-raise to trigger retry mechanism
     
     @traceable(name="LLM.EvaluateQuality")
     async def evaluate_quality(

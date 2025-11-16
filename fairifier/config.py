@@ -92,13 +92,22 @@ class FAIRifierConfig:
     min_confidence_threshold: float = 0.75
     auto_approve_threshold: float = 0.90
     
-    # Critic decision thresholds
+    # Critic rubric + decision thresholds
+    critic_rubric_path: Path = project_root / "docs" / "development" / "critic_rubric.yaml"
     critic_accept_threshold_document_parser: float = 0.75  # ACCEPT threshold for DocumentParser
     critic_accept_threshold_knowledge_retriever: float = 0.7  # ACCEPT threshold for KnowledgeRetriever
     critic_accept_threshold_json_generator: float = 0.75  # ACCEPT threshold for JSONGenerator
     critic_accept_threshold_general: float = 0.7  # General ACCEPT threshold for LLM evaluation
     critic_retry_min_threshold: float = 0.4  # Minimum score for RETRY (below this is ESCALATE)
     critic_retry_max_threshold: float = 0.69  # Maximum score for RETRY (above this is ACCEPT)
+    
+    # Confidence aggregation
+    confidence_weight_critic: float = 0.5
+    confidence_weight_structural: float = 0.3
+    confidence_weight_validation: float = 0.2
+    structural_coverage_target: float = 0.75
+    evidence_coverage_target: float = 0.7
+    validation_pass_target: float = 0.8
     
     # FAIR standards
     required_fields_coverage: float = 0.8  # Minimum required field coverage
@@ -228,6 +237,10 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("FAIRIFIER_MAX_GLOBAL_RETRIES"):
         config_instance.max_global_retries = int(os.getenv("FAIRIFIER_MAX_GLOBAL_RETRIES"))
     
+    # Critic rubric path
+    if os.getenv("FAIRIFIER_CRITIC_RUBRIC_PATH"):
+        config_instance.critic_rubric_path = Path(os.getenv("FAIRIFIER_CRITIC_RUBRIC_PATH"))
+    
     # Critic decision thresholds
     if os.getenv("FAIRIFIER_CRITIC_ACCEPT_THRESHOLD_DOCUMENT_PARSER"):
         config_instance.critic_accept_threshold_document_parser = float(
@@ -258,6 +271,20 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.critic_retry_max_threshold = float(
             os.getenv("FAIRIFIER_CRITIC_RETRY_MAX_THRESHOLD")
         )
+    
+    # Confidence aggregation weights
+    if os.getenv("FAIRIFIER_CONF_WEIGHT_CRITIC"):
+        config_instance.confidence_weight_critic = float(os.getenv("FAIRIFIER_CONF_WEIGHT_CRITIC"))
+    if os.getenv("FAIRIFIER_CONF_WEIGHT_STRUCTURAL"):
+        config_instance.confidence_weight_structural = float(os.getenv("FAIRIFIER_CONF_WEIGHT_STRUCTURAL"))
+    if os.getenv("FAIRIFIER_CONF_WEIGHT_VALIDATION"):
+        config_instance.confidence_weight_validation = float(os.getenv("FAIRIFIER_CONF_WEIGHT_VALIDATION"))
+    if os.getenv("FAIRIFIER_STRUCTURAL_COVERAGE_TARGET"):
+        config_instance.structural_coverage_target = float(os.getenv("FAIRIFIER_STRUCTURAL_COVERAGE_TARGET"))
+    if os.getenv("FAIRIFIER_EVIDENCE_COVERAGE_TARGET"):
+        config_instance.evidence_coverage_target = float(os.getenv("FAIRIFIER_EVIDENCE_COVERAGE_TARGET"))
+    if os.getenv("FAIRIFIER_VALIDATION_PASS_TARGET"):
+        config_instance.validation_pass_target = float(os.getenv("FAIRIFIER_VALIDATION_PASS_TARGET"))
     
     # MinerU document conversion
     if os.getenv("MINERU_ENABLED"):

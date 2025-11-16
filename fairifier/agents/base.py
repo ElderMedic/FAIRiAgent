@@ -29,12 +29,20 @@ class BaseAgent(ABC):
         This allows agents to adapt based on reflective feedback
         """
         context = state.get("context", {})
-        
+        planner_guidance = state.get("agent_guidance", {})
+        critic_feedback = context.get("critic_feedback")
+        if critic_feedback:
+            critic_feedback = critic_feedback.copy()
+            history = context.get("critic_guidance_history", {}).get(self.name, [])
+            if history:
+                critic_feedback["history"] = history
         feedback = {
-            "critic_feedback": context.get("critic_feedback", None),
+            "critic_feedback": critic_feedback,
             "human_feedback": context.get("human_feedback", None),
             "previous_attempt": context.get("previous_attempt", None),
-            "retry_count": context.get("retry_count", 0)
+            "retry_count": context.get("retry_count", 0),
+            "planner_instruction": planner_guidance.get(self.name),
+            "guidance_history": context.get("critic_guidance_history", {}).get(self.name, [])
         }
         
         return feedback

@@ -226,7 +226,7 @@ python -m fairifier.cli process examples/inputs/my_test_doc.txt \
 ...
 
 🔍 Calling Critic to evaluate KnowledgeRetriever output...
-📊 Critic Decision: ACCEPT (confidence: 0.85)
+📊 Critic Decision: ACCEPT (score: 0.85)
 ✅ KnowledgeRetriever completed successfully
 
 [继续显示其他步骤...]
@@ -236,11 +236,15 @@ python -m fairifier.cli process examples/inputs/my_test_doc.txt \
 ======================================================================
 
 🎯 Confidence Scores:
-  ✅ document_parsing: 92%
-  ✅ knowledge_retrieval: 85%
-  ✅ json_generation: 88%
-  ✅ validation: 90%
-  ✅ overall: 89%
+  ✅ critic: 0.88
+  ✅ structural: 0.81
+  ✅ validation: 1.00
+  ✅ overall: 0.90
+
+📋 quality_metrics:
+  - field_completion_ratio: 0.92
+  - evidence_coverage_ratio: 0.85
+  - avg_field_confidence: 0.88
 
 📈 Status: COMPLETED
 ⏱️  Duration: 45.23 seconds
@@ -346,7 +350,8 @@ cat output_*/workflow_results.json | jq '.execution_history[] | {
   agent: .agent_name,
   attempt: .attempt,
   decision: .critic_evaluation.decision,
-  confidence: .critic_evaluation.confidence
+  score: .critic_evaluation.score,
+  improvements: .critic_evaluation.improvement_ops
 }'
 ```
 

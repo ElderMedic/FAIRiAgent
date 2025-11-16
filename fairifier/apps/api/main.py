@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from ...graph.workflow import FAIRifierWorkflow
+from ...graph.langgraph_app import FAIRifierLangGraphApp
 from ...config import config
 
 # Configure logging
@@ -36,7 +36,7 @@ app.add_middleware(
 )
 
 # Global workflow instance
-workflow = FAIRifierWorkflow()
+workflow = FAIRifierLangGraphApp()
 
 # In-memory storage for demo (replace with database in production)
 projects: Dict[str, Dict[str, Any]] = {}
