@@ -85,7 +85,14 @@ async def llm_select_relevant_packages(
 3. What methods are used? (sequencing, phenotyping, etc.)
 4. Which packages from the list above best match these characteristics?
 
-Return JSON:
+**OUTPUT FORMAT - CRITICAL:**
+Return ONLY valid JSON. Do NOT include:
+- Markdown code blocks (no ```json or ```)
+- Explanatory text before or after the JSON
+- Comments or notes
+- Any other content
+
+Return ONLY the raw JSON object in this format:
 {{
   "selected_packages": ["package1", "package2", ...],
   "reasoning": "why these specific packages from the API are relevant"
@@ -110,7 +117,14 @@ Select at least 1 package. Choose as many as needed - there is no upper limit.""
 Available FAIR-DS packages:
 {json.dumps(pkg_summary, indent=2)}
 
-Select the relevant packages for this document. Return JSON."""
+Select the relevant packages for this document.
+
+**OUTPUT FORMAT - CRITICAL:**
+Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
+- DO NOT include explanatory text before or after the JSON
+- DO NOT include comments or notes
+- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
+- Return ONLY the JSON content, nothing else."""
 
     messages = [
         SystemMessage(content=system_prompt),
@@ -258,7 +272,14 @@ async def llm_select_fields_from_package(
 4. Which fields can actually be filled from this document?
 5. What fields are most important for findability and reusability at the {isa_sheet} level?
 
-Return JSON:
+**OUTPUT FORMAT - CRITICAL:**
+Return ONLY valid JSON. Do NOT include:
+- Markdown code blocks (no ```json or ```)
+- Explanatory text before or after the JSON
+- Comments or notes
+- Any other content
+
+Return ONLY the raw JSON object in this format:
 {{
   "selected_fields": ["field_label1", "field_label2", ...],
   "reasoning": "explanation focusing on {isa_sheet} level relevance"
@@ -283,7 +304,14 @@ Mandatory fields (auto-included):
 Optional fields to choose from:
 {json.dumps(optional_summary, indent=2)}
 
-Select at least 5 relevant optional fields for the {isa_sheet} level. There is no upper limit - choose as many as needed. Return JSON."""
+Select at least 5 relevant optional fields for the {isa_sheet} level. There is no upper limit - choose as many as needed.
+
+**OUTPUT FORMAT - CRITICAL:**
+Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
+- DO NOT include explanatory text before or after the JSON
+- DO NOT include comments or notes
+- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
+- Return ONLY the JSON content, nothing else."""
 
     messages = [
         SystemMessage(content=system_prompt),

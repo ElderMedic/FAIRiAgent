@@ -514,24 +514,153 @@ class LLMHelper:
                 except Exception as e:
                     logger.warning(f"Ollama streaming failed: {e}, falling back to regular call")
                     result = await self.llm.ainvoke(messages)
+                    
+                    # Check if result is valid
+                    if not result:
+                        logger.error(f"❌ Ollama returned None result for {operation_name}")
+                        raise ValueError(f"Ollama returned None result")
+                    
+                    # Try multiple ways to get content (same as non-streaming path)
+                    content = None
+                    if hasattr(result, 'content'):
+                        content = result.content
+                    
+                    if not content or len(str(content).strip()) == 0:
+                        # Try response_metadata
+                        if hasattr(result, 'response_metadata'):
+                            metadata = result.response_metadata
+                            if isinstance(metadata, dict):
+                                for key in ['content', 'text', 'message', 'response']:
+                                    if key in metadata and metadata[key]:
+                                        content = metadata[key]
+                                        logger.info(f"Found content in response_metadata['{key}']: {len(str(content))} chars")
+                                        break
+                        
+                        # Try direct attribute access
+                        if not content:
+                            for attr in ['text', 'message', 'response', 'output']:
+                                if hasattr(result, attr):
+                                    attr_value = getattr(result, attr)
+                                    if attr_value and len(str(attr_value).strip()) > 0:
+                                        content = attr_value
+                                        logger.info(f"Found content in result.{attr}: {len(str(content))} chars")
+                                        break
+                    
+                    if not content or len(str(content).strip()) == 0:
+                        logger.error(f"❌ Ollama returned empty content for {operation_name}")
+                        logger.error(f"Result object: {result}, Type: {type(result)}")
+                        if hasattr(result, 'response_metadata'):
+                            logger.error(f"Response metadata: {result.response_metadata}")
+                        raise ValueError(f"Ollama returned empty content")
+                    
+                    # If we found content from alternative source, update result.content
+                    if content and (not hasattr(result, 'content') or not result.content):
+                        logger.info(f"Updating result.content with content from alternative source")
+                        result.content = content
+                    
                     # Add to Streamlit display
                     try:
                         from fairifier.apps.ui.streamlit_app import add_llm_response
-                        content = result.content if hasattr(result, 'content') else str(result)
                         add_llm_response(operation_name, prompt_preview, content)
                     except (ImportError, AttributeError):
                         pass
                     return result
             else:
-                result = await self.llm.ainvoke(messages)
-                # Add to Streamlit display
                 try:
-                    from fairifier.apps.ui.streamlit_app import add_llm_response
-                    content = result.content if hasattr(result, 'content') else str(result)
-                    add_llm_response(operation_name, prompt_preview, content)
-                except (ImportError, AttributeError):
-                    pass
-                return result
+                    result = await self.llm.ainvoke(messages)
+                    
+                    # Check if result is valid
+                    if not result:
+                        logger.error(f"❌ Ollama returned None result for {operation_name}")
+                        logger.error(f"Provider: {self.provider}, Model: {self.model}, Base URL: {config.llm_base_url}")
+                        raise ValueError(f"Ollama returned None result")
+                    
+                    # Debug: Log full result structure for ollama
+                    logger.debug(f"Ollama result type: {type(result)}")
+                    logger.debug(f"Ollama result attributes: {dir(result) if result else 'None'}")
+                    if hasattr(result, 'response_metadata'):
+                        logger.debug(f"Ollama response_metadata: {result.response_metadata}")
+                    
+                    # Try multiple ways to get content
+                    content = None
+                    if hasattr(result, 'content'):
+                        content = result.content
+                        logger.debug(f"Got content from result.content: {len(str(content)) if content else 0} chars")
+                    
+                    # If content is empty, try other attributes
+                    if not content or len(str(content).strip()) == 0:
+                        # Try response_metadata - ollama might store content here when truncated
+                        if hasattr(result, 'response_metadata'):
+                            metadata = result.response_metadata
+                            logger.debug(f"Checking response_metadata: {metadata}")
+                            # Some ollama responses might have content in metadata
+                            if isinstance(metadata, dict):
+                                # Check for common ollama metadata keys
+                                for key in ['content', 'text', 'message', 'response', 'model_response', 'generated_text']:
+                                    if key in metadata and metadata[key]:
+                                        content = metadata[key]
+                                        logger.info(f"Found content in response_metadata['{key}']: {len(str(content))} chars")
+                                        break
+                                
+                                # Check nested structures (ollama sometimes nests content)
+                                if not content:
+                                    for key in ['message', 'response', 'data']:
+                                        if key in metadata and isinstance(metadata[key], dict):
+                                            nested = metadata[key]
+                                            for nested_key in ['content', 'text', 'message', 'response']:
+                                                if nested_key in nested and nested[nested_key]:
+                                                    content = nested[nested_key]
+                                                    logger.info(f"Found content in response_metadata['{key}']['{nested_key}']: {len(str(content))} chars")
+                                                    break
+                                            if content:
+                                                break
+                        
+                        # Try direct attribute access
+                        if not content:
+                            for attr in ['text', 'message', 'response', 'output', 'generated_text']:
+                                if hasattr(result, attr):
+                                    attr_value = getattr(result, attr)
+                                    if attr_value and len(str(attr_value).strip()) > 0:
+                                        content = attr_value
+                                        logger.info(f"Found content in result.{attr}: {len(str(content))} chars")
+                                        break
+                        
+                        # Last resort: check if result has a __dict__ with content
+                        if not content and hasattr(result, '__dict__'):
+                            result_dict = result.__dict__
+                            for key in ['content', 'text', 'message', 'response', 'output', 'generated_text']:
+                                if key in result_dict and result_dict[key]:
+                                    content = result_dict[key]
+                                    logger.info(f"Found content in result.__dict__['{key}']: {len(str(content))} chars")
+                                    break
+                    
+                    # Final check
+                    if not content or len(str(content).strip()) == 0:
+                        logger.error(f"❌ Ollama returned empty content for {operation_name}")
+                        logger.error(f"Result object: {result}")
+                        logger.error(f"Result type: {type(result)}")
+                        logger.error(f"Result attributes: {dir(result) if result else 'None'}")
+                        if hasattr(result, 'response_metadata'):
+                            logger.error(f"Response metadata: {result.response_metadata}")
+                        logger.error(f"Provider: {self.provider}, Model: {self.model}, Base URL: {config.llm_base_url}")
+                        raise ValueError(f"Ollama returned empty content")
+                    
+                    # If we found content from alternative source, update result.content
+                    if content and (not hasattr(result, 'content') or not result.content):
+                        logger.info(f"Updating result.content with content from alternative source")
+                        result.content = content
+                    
+                    # Add to Streamlit display
+                    try:
+                        from fairifier.apps.ui.streamlit_app import add_llm_response
+                        add_llm_response(operation_name, prompt_preview, content)
+                    except (ImportError, AttributeError):
+                        pass
+                    return result
+                except Exception as e:
+                    logger.error(f"❌ Ollama call failed for {operation_name}: {e}")
+                    logger.error(f"Provider: {self.provider}, Model: {self.model}, Base URL: {config.llm_base_url}")
+                    raise
         else:
             # For other providers (anthropic), no special handling needed
             result = await self.llm.ainvoke(messages)
@@ -804,7 +933,12 @@ Example for a research paper:
 - Preserve scientific notation, formulas, and technical terminology
 - Use descriptive field names that make sense for the content
 
-Return ONLY valid JSON, no markdown formatting."""
+**OUTPUT FORMAT - CRITICAL:**
+Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
+- DO NOT include explanatory text before or after the JSON
+- DO NOT include comments or notes
+- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
+- Return ONLY the JSON content, nothing else."""
         else:
             system_prompt = """You are an expert at extracting structured information from ANY research-related document.
 
@@ -853,7 +987,12 @@ Use descriptive, specific field names (e.g., "project_acronym", "funding_program
 - Include both human-readable descriptions AND structured identifiers
 - Use descriptive field names that make sense for the content
 
-Return ONLY valid JSON, no markdown formatting."""
+**OUTPUT FORMAT - CRITICAL:**
+Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
+- DO NOT include explanatory text before or after the JSON
+- DO NOT include comments or notes
+- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
+- Return ONLY the JSON content, nothing else."""
 
         # Add critic feedback if available
         if critic_feedback:
@@ -908,7 +1047,15 @@ Extract all relevant information and return as JSON with clear, descriptive fiel
         
         try:
             response = await self._call_llm(messages, operation_name="Extract Document Info")
-            content = response.content
+            content = getattr(response, 'content', None) if response else None
+            
+            # Check if response is empty
+            if not content or len(str(content).strip()) == 0:
+                error_msg = f"LLM returned empty response. Provider: {self.provider}, Model: {self.model}"
+                logger.error(f"❌ {error_msg}")
+                logger.error(f"Response object: {response}")
+                logger.error(f"Response type: {type(response)}")
+                raise ValueError(error_msg)
             
             # Store interaction for debugging
             self.llm_responses.append({
@@ -964,12 +1111,17 @@ Extract all relevant information and return as JSON with clear, descriptive fiel
         system_prompt = """You are an expert at generating FAIR metadata values from research documents.
 Given a field description and document information, generate an appropriate value.
 
-Return JSON with:
+**OUTPUT FORMAT - CRITICAL:**
+Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
+- DO NOT include explanatory text before or after the JSON
+- DO NOT include comments or notes
+- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
+- Return ONLY the JSON object with these fields:
 - value: The generated value
 - evidence: Brief explanation of where/how you determined this value
 - confidence: Float 0-1 indicating your confidence
 
-Return ONLY valid JSON."""
+Return ONLY the JSON content, nothing else."""
 
         user_prompt = f"""Generate a value for this metadata field:
 
@@ -990,7 +1142,13 @@ Return JSON with value, evidence, and confidence."""
         
         try:
             response = await self._call_llm(messages, operation_name="Generate Metadata Value")
-            content = response.content
+            content = getattr(response, 'content', None) if response else None
+            
+            # Check if response is empty
+            if not content or len(str(content).strip()) == 0:
+                error_msg = f"LLM returned empty response. Provider: {self.provider}, Model: {self.model}"
+                logger.error(f"❌ {error_msg}")
+                raise ValueError(error_msg)
             
             # Store interaction
             self.llm_responses.append({
@@ -1103,7 +1261,12 @@ Return JSON with value, evidence, and confidence."""
 - Balance between general and specific fields
 - **Balance across ISA hierarchy levels** - don't focus only on one ISA sheet
 
-Return JSON with:
+**OUTPUT FORMAT - CRITICAL:**
+Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
+- DO NOT include explanatory text before or after the JSON
+- DO NOT include comments or notes
+- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
+- Return ONLY the JSON object in this format:
 {
   "selected_fields": [
     {"field_name": "...", "reason": "why this field is relevant"}
@@ -1133,7 +1296,14 @@ Field counts per ISA sheet:
 
 **IMPORTANT**: Select fields from MULTIPLE ISA sheets to ensure balanced coverage. Don't focus only on one ISA level.
 
-Select the most appropriate 20-30 metadata fields for this document, ensuring representation across ISA hierarchy levels. Return JSON."""
+Select the most appropriate 20-30 metadata fields for this document, ensuring representation across ISA hierarchy levels.
+
+**OUTPUT FORMAT - CRITICAL:**
+Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
+- DO NOT include explanatory text before or after the JSON
+- DO NOT include comments or notes
+- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
+- Return ONLY the JSON content, nothing else."""
 
         messages = [
             SystemMessage(content=system_prompt),
@@ -1142,7 +1312,13 @@ Select the most appropriate 20-30 metadata fields for this document, ensuring re
         
         try:
             response = await self._call_llm(messages, operation_name="Select Relevant Fields")
-            content = response.content
+            content = getattr(response, 'content', None) if response else None
+            
+            # Check if response is empty
+            if not content or len(str(content).strip()) == 0:
+                error_msg = f"LLM returned empty response. Provider: {self.provider}, Model: {self.model}"
+                logger.error(f"❌ {error_msg}")
+                raise ValueError(error_msg)
             
             self.llm_responses.append({
                 "operation": "select_relevant_fields",
@@ -1226,7 +1402,12 @@ Select the most appropriate 20-30 metadata fields for this document, ensuring re
 - For investigation/study fields: If not explicitly stated, derive from document title, abstract, or research context
 - For fields with limited information, use "not specified" as the value but still include the field
 
-Return JSON array of metadata objects."""
+**OUTPUT FORMAT - CRITICAL:**
+Return ONLY valid JSON array. Prefer raw JSON without markdown code blocks.
+- DO NOT include explanatory text before or after the JSON
+- DO NOT include comments or notes (no // comments in JSON)
+- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
+- Return ONLY the JSON array content, nothing else."""
 
         if critic_feedback:
             feedback_text = f"\n\n**Address these issues:**\n"
@@ -1287,15 +1468,20 @@ Fields by ISA hierarchy:
 - Investigation/Study fields: Derive from document title, abstract, or research context (e.g., investigation title = document title, study title = document title)
 - Other fields: Use "not specified" as value but STILL include the field in your response
 
-Return JSON array with EXACTLY {len(selected_fields)} fields:
+**OUTPUT FORMAT - CRITICAL:**
+Return ONLY valid JSON array. Prefer raw JSON without markdown code blocks.
+- DO NOT include explanatory text before or after the JSON
+- DO NOT include comments or notes (no // comments in JSON)
+- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
+- Return ONLY the JSON array with EXACTLY {len(selected_fields)} fields:
 [
   {{
-    "field_name": "...",  // MUST match exactly one of the field_name values above
-    "value": "...",  // Actual value or "not specified" if unavailable
-    "evidence": "...",  // Where/how you determined this value
-    "confidence": 0.X  // Float 0.0-1.0
+    "field_name": "...",
+    "value": "...",
+    "evidence": "...",
+    "confidence": 0.X
   }},
-  ...  // MUST include ALL {len(selected_fields)} fields
+  ...
 ]"""
 
         messages = [
@@ -1305,7 +1491,13 @@ Return JSON array with EXACTLY {len(selected_fields)} fields:
         
         try:
             response = await self._call_llm(messages, operation_name="Generate Complete Metadata")
-            content = response.content
+            content = getattr(response, 'content', None) if response else None
+            
+            # Check if response is empty
+            if not content or len(str(content).strip()) == 0:
+                error_msg = f"LLM returned empty response. Provider: {self.provider}, Model: {self.model}"
+                logger.error(f"❌ {error_msg}")
+                raise ValueError(error_msg)
             
             self.llm_responses.append({
                 "operation": "generate_metadata",
@@ -1399,7 +1591,12 @@ Return JSON with:
 
 IMPORTANT: Always include 'issues' and 'suggestions' as arrays (can be empty).
 
-Return ONLY valid JSON."""
+**OUTPUT FORMAT - CRITICAL:**
+Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
+- DO NOT include explanatory text before or after the JSON
+- DO NOT include comments or notes
+- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
+- Return ONLY the JSON content, nothing else."""
 
         criteria_text = "\n".join(f"- {c}" for c in criteria)
         
