@@ -1,0 +1,80 @@
+{
+  "_comment": "Ground Truth Template for FAIRiAgent Evaluation",
+  "_instructions": "This is a template showing the required structure. Fill in actual values from your papers.",
+  
+  "documents": [
+    {
+      "document_id": "paper_001",
+      "document_path": "evaluation/datasets/raw/paper_001.pdf",
+      "metadata": {
+        "domain": "metagenomics",
+        "experiment_type": "soil_microbiome",
+        "annotation_date": "2025-11-21",
+        "annotator": "your_name_or_id",
+        "annotation_time_minutes": 120,
+        "notes": "Any notes about this paper or annotation process"
+      },
+      "ground_truth_fields": [
+        {
+          "field_name": "investigation title",
+          "expected_value": "Actual title from the paper",
+          "isa_sheet": "investigation",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "acceptable_variations": [
+            "Alternative phrasing 1",
+            "Alternative phrasing 2"
+          ],
+          "evidence_location": "Page 1, Title section",
+          "notes": "Any field-specific notes"
+        },
+        {
+          "field_name": "investigation description",
+          "expected_value": "Brief description of the investigation",
+          "isa_sheet": "investigation",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "acceptable_variations": [],
+          "evidence_location": "Page 1, Abstract",
+          "notes": ""
+        },
+        {
+          "field_name": "study title",
+          "expected_value": "Title of the specific study",
+          "isa_sheet": "study",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "acceptable_variations": [],
+          "evidence_location": "Page 2, Methods section",
+          "notes": ""
+        },
+        {
+          "field_name": "project name",
+          "expected_value": "Name of the project if mentioned",
+          "isa_sheet": "sample",
+          "package_source": "default",
+          "is_required": false,
+          "is_recommended": true,
+          "acceptable_variations": [],
+          "evidence_location": "Page 1, Acknowledgments",
+          "notes": "May be in funding section"
+        }
+      ],
+      "ground_truth_stats": {
+        "total_required_fields": 25,
+        "total_recommended_fields": 40,
+        "total_optional_fields": 50,
+        "annotated_required": 25,
+        "annotated_recommended": 30,
+        "annotated_optional": 10
+      }
+    }
+  ],
+  "annotation_schema_version": "1.0",
+  "created_date": "2025-11-21",
+  "last_modified": "2025-11-21"
+}
+
