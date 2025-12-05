@@ -259,4 +259,10 @@ evaluation/*.log
 !evaluation/analysis/visualizations/
 !evaluation/analysis/README.md
 !evaluation/analysis/run_analysis.py
-!evaluation/analysis/check_failed_runs.py
+!evaluation/analysis/config.py
+!evaluation/analysis/baseline_comparison.py
+
+# Archive directories (keep structure but ignore large files)
+evaluation/archive/runs/
+evaluation/archive/logs/
+.archive/

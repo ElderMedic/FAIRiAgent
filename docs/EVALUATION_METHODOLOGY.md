@@ -16,7 +16,15 @@ The core workflow implements a **Plan-Execute-Critique-Refine** loop:
 4.  **Reflective Critic Loop (Self-Correction):**
     *   An internal "Critic" agent evaluates the generated output against a strict rubric.
     *   **Criteria:** Schema compliance, data type validity, and confidence thresholds.
-    *   **Action:** If confidence is below threshold (e.g., < 0.75), the agent triggers a retry with specific feedback for improvement.
+    *   **Decision Types:**
+        *   **ACCEPT:** Score ≥ accept_threshold → Output is acceptable, proceed to next step
+        *   **RETRY:** revise_min ≤ score < accept_threshold → Output needs improvement, retry with feedback
+        *   **ESCALATE:** Score < revise_min → Critical issues detected, requires human review
+    *   **Retry Priority Logic:**
+        1. **User Configuration Priority:** The `max_step_retries` setting (configured in environment) has the highest priority. If retries are available, they will be used regardless of whether Critic returns RETRY or ESCALATE.
+        2. **Critic Decision Respect:** After max retries are exhausted, the workflow respects Critic's ESCALATE decision more strictly, but may still continue if usable output exists (flagged for human review).
+        3. **Output Quality Fallback:** If max retries are reached but usable output exists, the workflow continues with a `needs_human_review` flag set.
+    *   **Action:** The agent automatically retries with specific feedback when retries are available, ensuring maximum utilization of user-configured retry limits.
 
 ## 2. Experimental Setup (Materials)
 

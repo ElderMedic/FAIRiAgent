@@ -21,6 +21,8 @@ from ..visualizations import (
     WorkflowReliabilityVisualizer,
     FailureAnalysisVisualizer
 )
+from ..baseline_comparison import load_agentic_data, load_baseline_data
+from ..visualizations.baseline_comparison import BaselineComparisonVisualizer
 
 
 class ReportGenerator:
@@ -52,9 +54,16 @@ class ReportGenerator:
         for dir_path in [self.figures_dir, self.tables_dir, self.data_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
         
-        # Initialize data loader
+        # Initialize data loader with filters
+        from evaluation.analysis.config import EXCLUDED_MODELS, EXCLUDED_DOCUMENTS
         self.loader = EvaluationDataLoader(self.runs_dir)
-        self.loader.load_all(pattern)
+        self.excluded_models = EXCLUDED_MODELS
+        self.excluded_documents = EXCLUDED_DOCUMENTS
+        self.loader.load_all(
+            pattern=pattern,
+            exclude_models=EXCLUDED_MODELS,
+            exclude_docs=EXCLUDED_DOCUMENTS
+        )
         
         # Load dataframes
         self.model_df = self.loader.get_model_dataframe()
@@ -73,6 +82,18 @@ class ReportGenerator:
         self.model_viz = ModelComparisonVisualizer(self.figures_dir)
         self.reliability_viz = WorkflowReliabilityVisualizer(self.figures_dir)
         self.failure_viz = FailureAnalysisVisualizer(self.figures_dir)
+        self.baseline_viz = BaselineComparisonVisualizer(self.figures_dir)
+        
+        # Load baseline comparison data (if available)
+        self.agentic_data = None
+        self.baseline_data = None
+        try:
+            self.agentic_data = load_agentic_data(self.runs_dir)
+            self.baseline_data = load_baseline_data(self.runs_dir)
+            if self.baseline_data:
+                print(f"  ✅ Found {len(self.baseline_data)} baseline configuration(s)")
+        except Exception as e:
+            print(f"  ⚠️  Could not load baseline data: {e}")
     
     def generate_all(self):
         """Generate all analyses and visualizations."""
@@ -93,6 +114,13 @@ class ReportGenerator:
         self._generate_model_visualizations()
         self._generate_reliability_visualizations()
         self._generate_failure_visualizations()
+        
+        # Generate baseline comparisons (if available)
+        if self.baseline_data:
+            print(f"\n{'='*80}")
+            print("📊 Generating Baseline Comparisons")
+            print(f"{'='*80}\n")
+            self._generate_baseline_comparisons()
         
         # Generate tables
         print(f"\n{'='*80}")
@@ -139,6 +167,17 @@ class ReportGenerator:
         self.failure_viz.plot_failure_by_agent(self.reliability_df)
         self.failure_viz.plot_failure_by_document(self.reliability_df)
         self.failure_viz.plot_failure_by_model(self.reliability_df)
+    
+    def _generate_baseline_comparisons(self):
+        """Generate baseline vs agentic comparison visualizations."""
+        if not self.agentic_data or not self.baseline_data:
+            return
+        
+        print("  📊 Baseline Comparison Visualizations:")
+        
+        self.baseline_viz.create_overall_comparison(self.agentic_data, self.baseline_data)
+        self.baseline_viz.create_comparison_by_document(self.agentic_data, self.baseline_data)
+        self.baseline_viz.create_fields_by_document(self.agentic_data, self.baseline_data)
     
     def _generate_tables(self):
         """Generate LaTeX and CSV tables."""

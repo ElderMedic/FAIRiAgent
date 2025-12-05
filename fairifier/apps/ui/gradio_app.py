@@ -26,6 +26,44 @@ logger = logging.getLogger(__name__)
 # Global workflow instance (cached)
 _workflow_instance = None
 
+# Global log buffer for Gradio output
+_gradio_log_buffer = []
+_gradio_log_lock = asyncio.Lock()
+
+
+class GradioLogHandler(logging.Handler):
+    """Custom logging handler that captures logs for Gradio display."""
+    def __init__(self):
+        super().__init__()
+        self.log_buffer = []
+        self.max_buffer_size = 500  # Keep last 500 lines
+    
+    def emit(self, record):
+        """Emit a log record to buffer."""
+        try:
+            msg = self.format(record)
+            self.log_buffer.append(msg)
+            # Keep only last N lines
+            if len(self.log_buffer) > self.max_buffer_size:
+                self.log_buffer = self.log_buffer[-self.max_buffer_size:]
+            # Also add to global buffer
+            global _gradio_log_buffer
+            _gradio_log_buffer.append(msg)
+            if len(_gradio_log_buffer) > self.max_buffer_size:
+                _gradio_log_buffer = _gradio_log_buffer[-self.max_buffer_size:]
+        except Exception:
+            self.handleError(record)
+    
+    def get_logs(self):
+        """Get all logs as string."""
+        return '\n'.join(self.log_buffer)
+    
+    def clear(self):
+        """Clear log buffer."""
+        self.log_buffer = []
+        global _gradio_log_buffer
+        _gradio_log_buffer = []
+
 
 def get_workflow():
     """Get cached workflow instance."""
@@ -174,14 +212,35 @@ async def process_document_stream(
         output_text += "---\n\n## 📊 Real-time Execution Monitor\n\n"
         yield output_text
 
+        # 设置日志捕获
+        log_handler = GradioLogHandler()
+        log_handler.setFormatter(logging.Formatter('%(asctime)s | %(name)s | %(levelname)s | %(message)s', datefmt='%H:%M:%S'))
+        
+        # 添加到根日志记录器
+        root_logger = logging.getLogger()
+        # 移除现有的 GradioLogHandler 以避免重复
+        for handler in root_logger.handlers[:]:
+            if isinstance(handler, GradioLogHandler):
+                root_logger.removeHandler(handler)
+        root_logger.addHandler(log_handler)
+        root_logger.setLevel(logging.INFO)
+        
+        # 清除之前的日志
+        log_handler.clear()
+
         # 真正运行 workflow 并监控每个步骤
         try:
             workflow = get_workflow()
             start_time = datetime.now()
             step_count = 0
+            last_log_count = 0
 
             # 使用 LangGraph 的 stream 功能获取中间状态
-            stream_config = {"recursion_limit": 50}
+            # 必须提供 thread_id 以支持 checkpointer
+            stream_config = {
+                "configurable": {"thread_id": project_id},
+                "recursion_limit": 50
+            }
 
             async for event in workflow.workflow.astream(
                 {
@@ -202,6 +261,18 @@ async def process_document_stream(
             ):
                 step_count += 1
                 elapsed = (datetime.now() - start_time).total_seconds()
+
+                # 检查是否有新的日志（在解析事件之前）
+                current_logs = log_handler.get_logs()
+                if current_logs:
+                    log_lines = current_logs.split('\n')
+                    if len(log_lines) > last_log_count:
+                        new_logs = '\n'.join(log_lines[last_log_count:])
+                        if new_logs.strip():
+                            output_text += "### 📋 Recent Logs\n"
+                            output_text += "```\n" + new_logs + "\n```\n\n"
+                            last_log_count = len(log_lines)
+                            yield output_text  # 实时更新日志
 
                 # 解析事件
                 if isinstance(event, tuple) and len(event) >= 2:
@@ -313,10 +384,19 @@ async def process_document_stream(
                                 output_text += f" (Critic: {conf['critic']:.1%})"
                             output_text += "\n\n"
 
+                    # 检查是否有新的日志
+                    current_logs = log_handler.get_logs()
+                    if current_logs and len(current_logs.split('\n')) > last_log_count:
+                        new_logs = '\n'.join(current_logs.split('\n')[last_log_count:])
+                        if new_logs.strip():
+                            output_text += "### 📋 Recent Logs\n"
+                            output_text += "```\n" + new_logs + "\n```\n\n"
+                            last_log_count = len(current_logs.split('\n'))
+                    
                     output_text += "---\n\n"
                     yield output_text
 
-            # 完成
+            # 完成 - 显示所有日志
             total_time = (datetime.now() - start_time).total_seconds()
             progress(1.0, desc="✅ Complete!")
 
@@ -324,18 +404,52 @@ async def process_document_stream(
             output_text += f"⏱️ **Total Time**: {total_time:.1f}s\n"
             output_text += f"📊 **Total Steps**: {step_count}\n"
             output_text += f"📁 **Output**: `{output_path}`\n\n"
+            
+            # 显示所有日志
+            all_logs = log_handler.get_logs()
+            if all_logs:
+                output_text += "### 📋 Complete Processing Logs\n"
+                output_text += "```\n" + all_logs + "\n```\n\n"
 
             yield output_text
+            
+            # 清理日志处理器
+            root_logger.removeHandler(log_handler)
 
         except Exception as e:
             logger.error(f"Workflow execution failed: {e}", exc_info=True)
             output_text += f"\n## ❌ Execution Error\n\n"
             output_text += f"```python\n{type(e).__name__}: {str(e)}\n```\n\n"
+            
+            # 显示错误日志
+            all_logs = log_handler.get_logs()
+            if all_logs:
+                output_text += "### 📋 Error Logs\n"
+                output_text += "```\n" + all_logs + "\n```\n\n"
+            
             yield output_text
+            
+            # 清理日志处理器
+            root_logger.removeHandler(log_handler)
             
     except Exception as e:
         logger.error(f"Processing failed: {e}")
-        yield f"❌ **Error:** {str(e)}"
+        error_msg = f"❌ **Error:** {str(e)}\n\n"
+        
+        # 尝试获取日志
+        try:
+            root_logger = logging.getLogger()
+            for handler in root_logger.handlers:
+                if isinstance(handler, GradioLogHandler):
+                    logs = handler.get_logs()
+                    if logs:
+                        error_msg += "### 📋 Error Logs\n```\n" + logs + "\n```\n"
+                    root_logger.removeHandler(handler)
+                    break
+        except:
+            pass
+        
+        yield error_msg
 
 
 async def process_document_full(
@@ -573,10 +687,31 @@ def create_gradio_interface():
                 example_base = Path(__file__).parent.parent.parent.parent / "examples" / "inputs"
                 example_files = []
                 
-                for name in ["earthworm_4n_paper_bioRxiv.pdf", "BIOREM_appendix2.pdf"]:
-                    path = example_base / name
-                    if path.exists():
-                        example_files.append([str(path), name.replace(".pdf", "").replace("_", " ")])
+                # 定义示例文件及其可能的路径
+                example_configs = [
+                    {
+                        "name": "earthworm_4n_paper_bioRxiv.pdf",
+                        "display": "Earthworm 4n Paper",
+                        "paths": [
+                            example_base / "earthworm_4n_paper_bioRxiv.pdf",
+                            example_base.parent.parent / "evaluation" / "datasets" / "raw" / "earthworm" / "earthworm_4n_paper_bioRxiv.pdf"
+                        ]
+                    },
+                    {
+                        "name": "aec8570_CombinedPDF_v1.pdf",
+                        "display": "Biosensor Paper",
+                        "paths": [
+                            example_base / "aec8570_CombinedPDF_v1.pdf",
+                            example_base.parent.parent / "evaluation" / "datasets" / "raw" / "biosensor" / "aec8570_CombinedPDF_v1.pdf"
+                        ]
+                    }
+                ]
+                
+                for example_config in example_configs:
+                    for path in example_config["paths"]:
+                        if path.exists():
+                            example_files.append([str(path), example_config["display"]])
+                            break
                 
                 if example_files:
                     gr.Examples(
@@ -653,7 +788,8 @@ def create_gradio_interface():
                 
                 show_json_btn.click(
                     fn=lambda: gr.update(visible=True),
-                    outputs=result_json
+                    outputs=result_json,
+                    queue=False  # 快速 UI 更新不需要队列
                 )
             
             # ========== Tab 3: Execution History ==========
@@ -692,7 +828,8 @@ def create_gradio_interface():
                 show_metadata_json_btn = gr.Button("📋 Show Metadata JSON")
                 show_metadata_json_btn.click(
                     fn=lambda: gr.update(visible=True),
-                    outputs=metadata_json_output
+                    outputs=metadata_json_output,
+                    queue=False  # 快速 UI 更新不需要队列
                 )
             
             # ========== Tab 6: Download Artifacts ==========
@@ -768,6 +905,7 @@ def create_gradio_interface():
         # ========== 事件绑定 ==========
 
         # 流式处理 - 只更新进度显示（传入配置参数）
+        # 使用 show_progress 显示进度条，使用 concurrency_limit 限制并发
         process_btn.click(
             fn=process_document_stream,
             inputs=[
@@ -777,7 +915,10 @@ def create_gradio_interface():
                 mineru_enabled_input, langsmith_key_input
             ],
             outputs=[stream_output],
-            api_name="process_stream"
+            api_name="process_stream",
+            show_progress="full",  # 显示完整进度条
+            concurrency_limit=1,  # 限制同时只能处理一个文档
+            concurrency_id="document_processing"  # 共享队列
         ).then(
             # 处理完成后，获取完整结果并更新所有标签页
             fn=process_document_full,
@@ -787,9 +928,10 @@ def create_gradio_interface():
                 llm_temp_input, llm_tokens_input,
                 mineru_enabled_input, langsmith_key_input
             ],
-            outputs=[result_state, status_display, output_dir_state]
+            outputs=[result_state, status_display, output_dir_state],
+            concurrency_id="document_processing"  # 共享队列
         ).then(
-            # 更新结果摘要
+            # 更新结果摘要（快速操作，不需要队列）
             fn=lambda r: (
                 r if r else None,
                 r.get("confidence_scores", {}).get("critic", 0.0) if r else 0.0,
@@ -812,27 +954,32 @@ def create_gradio_interface():
                 exec_success,
                 exec_failed,
                 exec_retry,
-            ]
+            ],
+            queue=False  # 快速 UI 更新不需要队列
         ).then(
-            # 更新执行历史
+            # 更新执行历史（快速操作）
             fn=format_execution_history,
             inputs=[result_state],
-            outputs=[history_output]
+            outputs=[history_output],
+            queue=False
         ).then(
-            # 更新置信度详情
+            # 更新置信度详情（快速操作）
             fn=format_confidence_details,
             inputs=[result_state],
-            outputs=[confidence_output]
+            outputs=[confidence_output],
+            queue=False
         ).then(
-            # 更新元数据字段
+            # 更新元数据字段（快速操作）
             fn=format_metadata_fields,
             inputs=[result_state],
-            outputs=[metadata_output, metadata_json_output]
+            outputs=[metadata_output, metadata_json_output],
+            queue=False
         ).then(
-            # 更新输出目录
+            # 更新输出目录（快速操作）
             fn=lambda d: d,
             inputs=[output_dir_state],
-            outputs=[output_dir_display]
+            outputs=[output_dir_display],
+            queue=False
         )
     
     return demo
@@ -855,6 +1002,14 @@ def main():
     # 创建界面
     demo = create_gradio_interface()
     
+    # 配置队列（根据 Gradio 最佳实践）
+    # max_size: 最大队列大小，防止用户等待时间过长
+    # default_concurrency_limit: 默认并发限制，控制资源使用
+    demo.queue(
+        max_size=5,  # 最多排队 5 个请求
+        default_concurrency_limit=1  # 同时只处理 1 个文档（因为处理很耗时）
+    )
+    
     # 启动服务
     logger.info("🚀 Starting Gradio UI...")
     logger.info(f"📊 LLM: {config.llm_provider}/{config.llm_model}")
@@ -865,6 +1020,7 @@ def main():
         server_port=7860,
         share=False,
         show_error=True,  # 显示错误信息
+        max_threads=40,  # 增加线程池大小以支持更多并发
         footer_links=["api", "gradio", "settings"],  # Gradio 6: 替代 show_api
     )
 

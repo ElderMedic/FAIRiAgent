@@ -1,167 +1,156 @@
-# FAIRiAgent Evaluation Analysis Framework
+# Evaluation Analysis Framework
 
-Comprehensive data analysis and visualization framework for evaluation results. Designed to easily incorporate new evaluation runs.
+Comprehensive, reusable analysis framework for FAIRiAgent evaluation results.
 
-## Directory Structure
+## Architecture
+
+The analysis framework is designed to be:
+- **Generic**: Automatically discovers models and documents
+- **Extensible**: Easy to add new metrics and visualizations
+- **Maintainable**: Clear separation of concerns
+
+### Directory Structure
 
 ```
 evaluation/analysis/
-├── data_loaders/          # Data loading and aggregation
-│   ├── __init__.py
-│   └── evaluation_loader.py
-├── analyzers/             # Data analysis modules
-│   ├── __init__.py
-│   ├── model_performance.py
-│   ├── workflow_reliability.py
-│   └── failure_patterns.py
-├── visualizations/        # Visualization generators
-│   ├── __init__.py
-│   ├── model_comparison.py
-│   ├── workflow_reliability.py
-│   └── failure_analysis.py
-├── reports/               # Report generation
-│   ├── __init__.py
-│   └── report_generator.py
-├── run_analysis.py        # Main analysis script
-├── README.md              # This file
-└── output/                # Generated outputs (created automatically)
-    ├── figures/           # Publication-ready figures (PNG + PDF)
-    ├── tables/             # LaTeX and CSV tables
-    └── data/               # Processed data (CSV)
+├── __init__.py
+├── config.py                    # Configuration (exclusions, mappings)
+├── baseline_comparison.py        # Baseline data loading and processing
+├── run_analysis.py              # Main entry point
+├── data_loaders/
+│   └── evaluation_loader.py    # Discovers and loads evaluation results
+├── analyzers/
+│   ├── model_performance.py     # Model performance metrics
+│   ├── workflow_reliability.py  # Workflow reliability analysis
+│   └── failure_patterns.py      # Failure pattern analysis
+├── visualizations/
+│   ├── model_comparison.py      # Model comparison charts
+│   ├── workflow_reliability.py  # Reliability visualizations
+│   ├── failure_analysis.py      # Failure analysis charts
+│   └── baseline_comparison.py   # Baseline vs agentic comparisons
+└── reports/
+    └── report_generator.py      # Orchestrates all analysis
 ```
 
-## Quick Start
+## Usage
 
-### Run Complete Analysis
+### Basic Usage
 
 ```bash
-# Analyze all evaluation runs
+# Run full analysis
 python evaluation/analysis/run_analysis.py
-
-# Analyze specific runs (e.g., only Qwen models)
-python evaluation/analysis/run_analysis.py --pattern "qwen_*"
 
 # Custom output directory
-python evaluation/analysis/run_analysis.py --output-dir evaluation/analysis/my_report
+python evaluation/analysis/run_analysis.py --output-dir results/
+
+# Filter specific runs
+python evaluation/analysis/run_analysis.py --pattern "qwen_*"
 ```
 
-### Output Files
+### Configuration
 
-After running analysis, you'll find:
+Edit `evaluation/analysis/config.py` to:
+- Exclude specific models or documents
+- Map model name variants to canonical names
+- Configure display names and colors
+- Normalize document IDs
 
-**Figures** (`output/figures/`):
-- `model_comparison_heatmap.pdf` - Model performance across metrics
-- `model_rankings.pdf` - Model rankings by aggregate score
-- `model_rankings_completeness.pdf` - Rankings by completeness
-- `model_rankings_correctness.pdf` - Rankings by correctness
-- `metric_correlation.pdf` - Correlation matrix between metrics
-- `document_performance.pdf` - Performance breakdown by document
-- `retry_rates.pdf` - Workflow retry rates by model
-- `agent_retry_patterns.pdf` - Retry patterns by agent
-- `completion_rates.pdf` - Workflow completion rates
-- `failure_by_agent.pdf` - Failure counts by agent
-- `failure_by_document.pdf` - Failure rates by document
-- `failure_by_model.pdf` - Failure patterns by model
+### Adding New Models
 
-**Tables** (`output/tables/`):
-- `model_rankings.csv/.tex` - Model performance rankings
-- `reliability_summary.csv/.tex` - Workflow reliability summary
-- `agent_reliability.csv/.tex` - Agent-level reliability metrics
-- `failure_by_agent.csv/.tex` - Failure statistics by agent
+The framework automatically discovers new models. Just:
+1. Add new runs to `evaluation/runs/`
+2. Run analysis - new models will be included automatically
+3. Optionally add display name/color in `config.py`
 
-**Data** (`output/data/`):
-- `model_performance.csv` - Model-level performance data
-- `document_performance.csv` - Document-level performance data
-- `workflow_reliability.csv` - Workflow reliability data
+### Adding New Documents
 
-**Summary** (`output/`):
-- `analysis_summary.json` - Complete analysis summary
+Similarly, new documents are auto-discovered:
+1. Add new document runs
+2. Run analysis - new documents will be included
+3. Optionally normalize document IDs in `config.py` if needed
 
-## Adding New Runs
+## Output Structure
 
-The framework automatically discovers all `evaluation_results.json` files in the `evaluation/runs/` directory. To add new runs:
-
-1. **Run evaluation** on new models/documents
-2. **Re-run analysis** - the framework will automatically include new results:
-
-```bash
-python evaluation/analysis/run_analysis.py
+```
+evaluation/analysis/output/
+├── figures/          # All visualization PNG files
+├── tables/           # CSV and LaTeX tables
+├── data/             # Processed data (CSV)
+└── analysis_summary.json  # Summary statistics
 ```
 
-No manual configuration needed - all runs are automatically discovered and included!
+## Key Features
 
-## Custom Analysis
+### Automatic Discovery
+- Discovers all models from run directories
+- Discovers all documents from evaluation results
+- Merges runs from same model (handles reruns automatically)
 
-### Using Individual Components
+### Baseline Comparison
+- Automatically detects baseline runs (directories starting with `baseline_`)
+- Compares baseline vs agentic workflows
+- Generates per-document and overall comparisons
+
+### Model Name Normalization
+- Merges variant names (e.g., `gpt5` + `openai_gpt5` → `GPT-5`)
+- Configurable via `MODEL_MERGE_MAP` in `config.py`
+
+### Document ID Normalization
+- Handles different document IDs between baseline and agentic
+- Configurable via `DOC_ID_MAP` in `config.py`
+
+## Extending the Framework
+
+### Adding New Metrics
+
+1. Add metric calculation to appropriate analyzer in `analyzers/`
+2. Update `ReportGenerator` to include new metric
+3. Add visualization if needed in `visualizations/`
+
+### Adding New Visualizations
+
+1. Create new visualization class in `visualizations/`
+2. Add to `ReportGenerator._generate_*_visualizations()`
+3. Export from `visualizations/__init__.py`
+
+## Configuration Reference
+
+### Exclusion Lists
 
 ```python
-from pathlib import Path
-from evaluation.analysis import (
-    EvaluationDataLoader,
-    ModelPerformanceAnalyzer,
-    ModelComparisonVisualizer
-)
-
-# Load data
-loader = EvaluationDataLoader(Path('evaluation/runs'))
-loader.load_all()
-
-# Get dataframes
-model_df = loader.get_model_dataframe()
-doc_df = loader.get_document_level_dataframe()
-
-# Analyze
-analyzer = ModelPerformanceAnalyzer(model_df)
-rankings = analyzer.get_model_rankings()
-correlations = analyzer.get_metric_correlations()
-
-# Visualize
-viz = ModelComparisonVisualizer(Path('output/figures'))
-viz.plot_model_comparison_heatmap(model_df)
+EXCLUDED_MODELS = ['opus', 'anthropic_opus']  # Models to skip
+EXCLUDED_DOCUMENTS = ['biorem']  # Documents to skip
+EXCLUDED_DIRECTORIES = ['archive']  # Directories to skip
 ```
 
-## Analysis Features
+### Model Configuration
 
-### 1. Model Performance Analysis
-- Model rankings across multiple metrics
-- Statistical comparisons between models
-- Metric correlations
-- Document-level performance breakdown
+```python
+MODEL_MERGE_MAP = {
+    'openai_gpt5': 'gpt5',  # Merge variants
+    'anthropic_sonnet': 'sonnet',
+}
 
-### 2. Workflow Reliability Analysis
-- Completion rates by model
-- Retry patterns and frequencies
-- Agent-level reliability metrics
-- Human review requirements
+MODEL_DISPLAY_NAMES = {
+    'gpt5': 'GPT-5',  # Human-readable names
+}
 
-### 3. Failure Pattern Analysis
-- Failure counts by agent
-- Failure rates by document
-- Failure patterns by model
-- Error type distribution
-
-## Publication-Ready Outputs
-
-All figures are generated in both PNG (for quick viewing) and PDF (for publication) formats:
-- High resolution (300 DPI)
-- Publication-quality styling
-- Clear labels and legends
-- Consistent color schemes
-
-All tables are generated in both CSV (for data analysis) and LaTeX (for manuscript inclusion) formats.
-
-## Dependencies
-
-```bash
-pip install pandas matplotlib seaborn scipy numpy
+MODEL_COLORS = {
+    'gpt5': '#27ae60',  # Visualization colors
+}
 ```
 
-(Already included in FAIRiAgent environment)
+### Document Configuration
 
+```python
+DOC_ID_MAP = {
+    'aec8570': 'biosensor',  # Normalize document IDs
+}
+```
 
+## Notes
 
-
-
-
-
-
+- The framework automatically handles reruns by merging data from same model
+- Baseline runs are detected by directory name prefix (`baseline_*`)
+- All exclusions and mappings are configurable in `config.py`
+- The framework is designed to work with any number of models/documents

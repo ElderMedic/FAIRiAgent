@@ -82,8 +82,16 @@ Grounds the agent's generation in established scientific standards.
 ### 🤖 FAIRiAgent Core Workflow (Red & Blue)
 The "brain" of the system, implementing a reflective agentic loop.
 *   **Metadata Generator Agent:** The primary LLM (e.g., GPT-4o, Claude Sonnet) that extracts metadata fields using the parsed text and retrieved knowledge.
-*   **Critic Agent:** A secondary agent persona that acts as a quality gatekeeper. It evaluates the generated JSON against the schema and assigns confidence scores.
-*   **Feedback Loop:** If the Critic's confidence is low (< 0.75) or validation fails, it generates specific feedback, prompting the Generator to re-evaluate and correct its output. This mimics a human "peer review" process.
+*   **Critic Agent:** A secondary agent persona that acts as a quality gatekeeper. It evaluates the generated JSON against the schema and assigns confidence scores (0.0-1.0).
+*   **Critic Decision Logic:**
+    *   **ACCEPT:** Score ≥ accept_threshold (typically 0.65-0.70) → Proceed to next step
+    *   **RETRY:** revise_min ≤ score < accept_threshold (typically 0.40-0.65) → Retry with feedback
+    *   **ESCALATE:** Score < revise_min (typically < 0.40) → Critical issues, requires attention
+*   **Retry Mechanism (Priority Order):**
+    1. **User-configured `max_step_retries`** (HIGHEST PRIORITY) - Ensures user-defined retry limits are always respected
+    2. **Critic Decision** - If retries available, RETRY/ESCALATE decisions trigger retry attempts
+    3. **Output Quality Check** - After max retries, workflow continues if usable output exists (flagged for human review)
+*   **Feedback Loop:** The Critic generates specific, actionable feedback that guides the Generator to improve its output. All LLM interactions (including Critic evaluations) are automatically logged to `llm_responses.json` for debugging and analysis.
 
 ### 💾 Standardized Output (Purple)
 *   **Finalizer:** Converts the validated JSON into domain-specific formats like **ISA-Tab** (Investigation-Study-Assay) for direct repository submission.

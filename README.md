@@ -146,7 +146,7 @@ LANGSMITH_PROJECT=fairifier-testing
 FAIRiAgent generates (in `output/<project_id>/`):
 1. **`metadata_json.json`** - FAIR-DS compatible metadata
 2. **`processing_log.jsonl`** - JSON line logs
-3. **`llm_responses.json`** - All LLM API interactions
+3. **`llm_responses.json`** - All LLM API interactions (automatically logged, including Critic evaluations)
 4. **`runtime_config.json`** - Complete runtime configuration including:
    - Input document path
    - Environment variables (.env)

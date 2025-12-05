@@ -36,9 +36,6 @@ echo "========================================================================"
 # 创建输出目录
 mkdir -p "$BASE_OUTPUT_DIR"
 
-# 清理旧的临时文件（如果存在）
-rm -f /tmp/ground_truth_*_${TIMESTAMP}_*.json
-
 # 补跑函数 - 支持指定文档和运行次数
 run_evaluation() {
     local MODEL_NAME=$1
@@ -50,8 +47,7 @@ run_evaluation() {
     echo "=== 补跑 $MODEL_NAME/$DOCUMENT ($REPEAT_COUNT 次) ==="
     
     # 创建临时 ground truth，只包含指定的文档
-    # 使用时间戳和 PID 确保唯一性
-    TEMP_GT=$(mktemp /tmp/ground_truth_${MODEL_NAME}_${DOCUMENT}_${TIMESTAMP}_$$_XXXXXX.json)
+    TEMP_GT=$(mktemp /tmp/ground_truth_${MODEL_NAME}_${DOCUMENT}_XXXXXX.json)
     python3 << PYTHON_EOF
 import json
 from pathlib import Path
@@ -83,11 +79,7 @@ PYTHON_EOF
         --repeats "$REPEAT_COUNT"
     
     local STATUS=$?
-    
-    # 清理临时文件
-    if [ -f "$TEMP_GT" ]; then
-        rm -f "$TEMP_GT"
-    fi
+    rm -f "$TEMP_GT"
     
     if [ $STATUS -eq 0 ]; then
         echo "✅ $MODEL_NAME/$DOCUMENT 补跑完成"
@@ -96,14 +88,6 @@ PYTHON_EOF
         return 1
     fi
 }
-
-# 设置退出时清理临时文件的 trap
-cleanup_temp_files() {
-    echo ""
-    echo "🧹 清理临时文件..."
-    rm -f /tmp/ground_truth_*_${TIMESTAMP}_*.json
-}
-trap cleanup_temp_files EXIT INT TERM
 
 # 根据统计结果，需要补跑的情况：
 # 1. GPT-5/biosensor: 7 次 (缺失: 1, 3, 5, 7, 8, 9, 10)
@@ -227,10 +211,11 @@ echo "📝 下一步："
 echo "  1. 检查补跑结果："
 echo "     ls -la $BASE_OUTPUT_DIR"
 echo ""
-echo "  2. 将补跑结果合并到主目录（需要处理 run_idx 映射）："
-echo "     python evaluation/scripts/merge_rerun_to_main.py --rerun-dir $BASE_OUTPUT_DIR"
+echo "  2. 将补跑结果合并到主目录（需要手动处理 run_idx 映射）："
+echo "     python evaluation/scripts/merge_rerun_results.py --rerun-dir $BASE_OUTPUT_DIR"
 echo ""
 echo "  3. 重新运行分析："
 echo "     python evaluation/analysis/run_analysis.py"
 echo "========================================================================"
+
 

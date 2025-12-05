@@ -1,6 +1,6 @@
 # FAIRiAgent Evaluation Framework
 
-Standalone evaluation system for assessing FAIRiAgent's metadata extraction quality, comparing LLM models, and generating publication-ready results.
+Comprehensive evaluation system for assessing FAIRiAgent's metadata extraction quality, comparing LLM models, and generating publication-ready results.
 
 ## Quick Start
 
@@ -37,189 +37,139 @@ python scripts/prepare_ground_truth.py annotate \
 # Merge all annotations into single ground truth file
 python scripts/prepare_ground_truth.py merge \
   --input-dir datasets/annotated/ \
-  --output datasets/annotated/ground_truth_v1.json
+  --output datasets/annotated/ground_truth_filtered.json
 
 # Validate ground truth format
 python scripts/prepare_ground_truth.py validate \
-  --ground-truth datasets/annotated/ground_truth_v1.json
+  --ground-truth datasets/annotated/ground_truth_filtered.json
 ```
 
 ### 3. Run Batch Evaluation
 
 ```bash
 # Run FAIRiAgent on all papers with all model configs
-# Automatically tracked in LangSmith
 python scripts/run_batch_evaluation.py \
   --env-file config/env.evaluation \
   --model-configs config/model_configs/*.env \
-  --ground-truth datasets/annotated/ground_truth_v1.json \
-  --output-dir runs/run_$(date +%Y%m%d) \
-  --workers 2
+  --ground-truth datasets/annotated/ground_truth_filtered.json \
+  --output-dir runs/batch_$(date +%Y%m%d_%H%M%S) \
+  --repeats 10 \
+  --workers 5 \
+  --exclude-documents biorem
 ```
 
-### 4. Evaluate Outputs
+### 4. Run Analysis
 
 ```bash
-# Compute all metrics, correlations, LLM-judge scores
-python scripts/evaluate_outputs.py \
-  --env-file config/env.evaluation \
-  --run-dir runs/run_$(date +%Y%m%d) \
-  --ground-truth datasets/annotated/ground_truth_v1.json
+# Generate comprehensive analysis reports, visualizations, and tables
+python analysis/run_analysis.py \
+  --runs-dir runs \
+  --output-dir analysis/output
 ```
 
-### 5. Generate Report & Visualizations
-
-```bash
-# Generate publication-ready materials
-python scripts/generate_report.py \
-  --results-dir runs/run_$(date +%Y%m%d)/results \
-  --output-dir runs/run_$(date +%Y%m%d)/manuscript_materials \
-  --langsmith-project fairifier-evaluation
-```
+Results will be saved to `analysis/output/`:
+- **Figures**: `figures/*.png` - All visualizations
+- **Tables**: `tables/*.csv`, `tables/*.tex` - LaTeX-ready tables
+- **Data**: `data/*.csv` - Processed data for further analysis
+- **Summary**: `analysis_summary.json` - Complete analysis summary
 
 ## Directory Structure
 
 ```
 evaluation/
-├── datasets/
-│   ├── raw/                    # Your PDF papers
-│   └── annotated/              # Ground truth annotations
-├── runs/                       # Evaluation runs
-│   └── {run_id}/
-│       ├── outputs/            # FAIRiAgent outputs per document
-│       └── results/            # Evaluation results
-├── scripts/                    # Automation scripts
-├── evaluators/                 # Evaluation modules
-├── visualizations/             # Plotting scripts
-├── config/                     # Configuration files
-└── README.md                   # This file
+├── analysis/              # Analysis framework
+│   ├── analyzers/         # Analysis logic
+│   ├── data_loaders/      # Data loading and aggregation
+│   ├── reports/           # Report generation
+│   ├── visualizations/    # Plotting and visualization
+│   ├── output/            # Generated results
+│   └── run_analysis.py    # Main analysis entry point
+├── config/                # Configuration files
+│   ├── env.evaluation     # Main evaluation config
+│   └── model_configs/     # Model-specific configs
+├── datasets/              # Ground truth and raw data
+│   ├── annotated/         # Ground truth JSON files
+│   └── raw/               # Original PDF papers
+├── evaluators/            # Evaluation metrics
+├── runs/                  # Evaluation run outputs
+│   ├── archive/           # Archived old runs
+│   └── {model_name}/      # Current runs by model
+│       └── {document}/    # Runs by document
+│           └── run_X/     # Individual run directories
+├── scripts/               # Utility scripts
+│   ├── run_batch_evaluation.py    # Main batch runner
+│   ├── run_baseline_batch.py     # Baseline evaluation
+│   ├── evaluate_outputs.py        # Evaluation orchestrator
+│   ├── rerun_failed.sh            # Rerun missing runs
+│   ├── merge_rerun_to_main.py     # Merge rerun results
+│   └── cleanup_incomplete_runs.py # Cleanup script
+└── archive/               # Archived files
+    ├── docs/              # Old documentation
+    ├── scripts/           # Old/one-time scripts
+    ├── logs/              # Old log files
+    └── runs/              # Old run directories
 ```
 
-## What You Need to Provide
+## Key Scripts
 
-### Required
-- ✅ 20-50 PDF papers in `datasets/raw/`
-- ✅ Ground truth annotations (tool-assisted)
-- ✅ LangSmith API key
-- ✅ LLM API keys (Anthropic, OpenAI, or Ollama setup)
+### Batch Evaluation
+- **`run_batch_evaluation.py`**: Main script for running evaluations on multiple documents with multiple models
+- **`run_baseline_batch.py`**: Run baseline (single-prompt) evaluations
 
-### Provided by System
-- ✅ Ground truth annotation tools
-- ✅ All evaluation metrics
-- ✅ LangSmith tracking
-- ✅ Visualizations and reports
-- ✅ Statistical analysis
+### Analysis
+- **`analysis/run_analysis.py`**: Generate comprehensive analysis reports with visualizations and tables
 
-## Ground Truth Annotation Standards
-
-When annotating papers, follow these guidelines:
-
-1. **Required Fields**: Annotate ALL required fields (investigation title, study description, etc.)
-2. **Recommended Fields**: Annotate where present in document
-3. **Optional Fields**: Annotate if time permits (improves evaluation)
-4. **Variations**: Include acceptable phrasings for each field
-5. **Evidence**: Note where in document the information appears
-
-See `datasets/annotated/ground_truth_template.json` for structure.
+### Utilities
+- **`rerun_failed.sh`**: Rerun missing or failed runs to complete evaluation sets
+- **`merge_rerun_to_main.py`**: Merge rerun results into main runs directory
+- **`cleanup_incomplete_runs.py`**: Remove incomplete/timeout runs
+- **`reorganize_runs.py`**: Reorganize runs into clean directory structure
 
 ## Evaluation Metrics
 
-### Quality Metrics
-- **Completeness**: Field coverage (overall, required, by ISA sheet)
-- **Correctness**: Exact match, semantic match, F1 scores
-- **Schema Compliance**: JSON structure, required fields, data types
-- **Ontology Alignment**: Term usage, validity, appropriateness
+The framework evaluates:
+- **Completeness**: How many fields are extracted vs. ground truth
+- **Correctness**: Precision, recall, and F1-score of extracted fields
+- **LLM Judge Score**: Internal quality assessment from critic agent
+- **Workflow Reliability**: Completion rates, retry rates, failure patterns
+- **Runtime**: Time taken for extraction
 
-### Internal Metric Validation
-- Correlation: Critic score vs correctness
-- Correlation: Confidence vs correctness
-- Correlation: Overall confidence vs quality
+## Analysis Outputs
 
-### Efficiency Metrics
-- Runtime per document
-- Token usage per model
-- Cost per template
-- Retry patterns
+### Visualizations
+- Model comparison heatmaps and rankings
+- Baseline vs. agentic workflow comparisons
+- Workflow reliability metrics
+- Failure pattern analysis
+- Document-specific performance
 
-## LangSmith Integration
+### Tables
+- Model rankings (CSV and LaTeX)
+- Reliability summaries
+- Agent-specific metrics
+- Failure statistics
 
-All evaluation runs are automatically tracked in LangSmith:
+### Data Files
+- Model-level performance metrics
+- Document-level performance metrics
+- Workflow reliability data
 
-- Each model gets separate project: `fairifier-eval-{provider}-{model}`
-- Filter by `document_id` to compare models on one paper
-- Filter by `model_config` to see one model across all papers
-- Access token counts, latency, error rates directly
+## Configuration
 
-Visit https://smith.langchain.com/ after running evaluations.
+### Excluded Models/Documents
+Edit `analysis/config.py` to exclude specific models or documents from analysis:
+- `EXCLUDED_MODELS`: Models to exclude (e.g., ['opus'])
+- `EXCLUDED_DOCUMENTS`: Documents to exclude (e.g., ['biorem'])
 
-## Output Files
+### Model Display Names
+Customize model names in visualizations via `MODEL_DISPLAY_NAMES` in `analysis/config.py`.
 
-After running full evaluation, you'll have:
+## Notes
 
-```
-runs/run_20251121/
-├── outputs/                    # All FAIRiAgent outputs
-│   ├── anthropic_claude_sonnet_4/
-│   │   └── paper_001/
-│   │       ├── metadata_json.json
-│   │       ├── workflow_report.json
-│   │       └── processing_log.jsonl
-│   └── openai_gpt_4o/
-│       └── paper_001/
-│           └── ...
-├── results/
-│   ├── evaluation_results.json     # All metrics
-│   ├── model_comparison.json       # Model vs model
-│   └── correlations.json           # Internal metric validation
-└── manuscript_materials/
-    ├── figures/                    # PNG + PDF plots
-    │   ├── model_comparison_heatmap.pdf
-    │   ├── confidence_calibration.pdf
-    │   └── ...
-    ├── tables/                     # LaTeX tables
-    │   ├── model_comparison.tex
-    │   └── metrics_summary.tex
-    ├── evaluation_summary.md       # Manuscript-ready text
-    └── evaluation_report.json      # Complete raw data
-```
-
-## Troubleshooting
-
-### Ground Truth Validation Errors
-```bash
-# Check format
-python scripts/prepare_ground_truth.py validate \
-  --ground-truth datasets/annotated/ground_truth_v1.json
-```
-
-### LangSmith Connection Issues
-- Verify `LANGSMITH_API_KEY` in `config/env.evaluation`
-- Check https://smith.langchain.com/ for active projects
-
-### Model Configuration Issues
-- Ensure API keys are correct in `config/model_configs/*.env`
-- For Ollama: Check `http://localhost:11434` is accessible
-
-### Evaluation Fails on Specific Papers
-- Check FAIRiAgent logs in `runs/{run_id}/outputs/{model}/{paper}/processing_log.jsonl`
-- Review LangSmith trace for that specific run
-
-## Dependencies
-
-All dependencies should already be installed if you have FAIRiAgent working. Additional requirements:
-
-```bash
-pip install pandas matplotlib seaborn scikit-learn scipy jsonschema
-```
-
-## Support
-
-For issues with:
-- **FAIRiAgent core**: See main project README
-- **Evaluation framework**: Check this README and configuration templates
-- **LangSmith**: Visit https://docs.smith.langchain.com/
-
-## Citation
-
-If using this evaluation framework, please cite the FAIRiAgent project and mention the evaluation methodology in your manuscript.
-
+- All runs are organized by model and document: `runs/{model_name}/{document_id}/run_X/`
+- Each run directory contains:
+  - `metadata_json.json`: Extracted metadata
+  - `eval_result.json`: Evaluation results
+  - `cli_output.txt`: CLI execution log
+- Analysis automatically discovers and aggregates all runs
+- Baseline comparisons are included when baseline runs are available

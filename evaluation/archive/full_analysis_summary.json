@@ -1,0 +1,198 @@
+{
+  "generated_at": "2025-12-05T17:02:08.370740",
+  "n_agentic_models": 8,
+  "n_baseline_models": 1,
+  "excluded_models": [
+    "opus",
+    "anthropic_opus"
+  ],
+  "excluded_documents": [
+    "biorem"
+  ],
+  "model_rankings": [
+    {
+      "model": "qwen_max",
+      "display_name": "Qwen Max",
+      "score": 0.46243117632280706,
+      "fields": 62.421052631578945,
+      "critic": 0.7860833333333332,
+      "runtime": 416.06341663157895,
+      "n_runs": 19,
+      "color": "#3498db"
+    },
+    {
+      "model": "gpt4.1",
+      "display_name": "GPT-4.1",
+      "score": 0.4274383183066666,
+      "fields": 51.8,
+      "critic": 0.7530666666666666,
+      "runtime": 498.4417418,
+      "n_runs": 10,
+      "color": "#2ecc71"
+    },
+    {
+      "model": "gpt5",
+      "display_name": "GPT-5",
+      "score": 0.36450330371201806,
+      "fields": 69.61111111111111,
+      "critic": 0.6340280612244896,
+      "runtime": 619.5673816666666,
+      "n_runs": 18,
+      "color": "#27ae60"
+    },
+    {
+      "model": "sonnet",
+      "display_name": "Claude Sonnet 3.5",
+      "score": 0.3577976881,
+      "fields": 73.91666666666667,
+      "critic": 0.6246041666666667,
+      "runtime": 645.0115595000001,
+      "n_runs": 24,
+      "color": "#e74c3c"
+    },
+    {
+      "model": "haiku",
+      "display_name": "Claude Haiku 3.5",
+      "score": 0.342678034962585,
+      "fields": 82.83333333333333,
+      "critic": 0.5730612244897958,
+      "runtime": 639.8156075,
+      "n_runs": 18,
+      "color": "#e67e22"
+    },
+    {
+      "model": "qwen_flash",
+      "display_name": "Qwen Flash",
+      "score": 0.3060592591904763,
+      "fields": 81.33333333333333,
+      "critic": 0.3973095238095239,
+      "runtime": 467.656085,
+      "n_runs": 3,
+      "color": "#8e44ad"
+    },
+    {
+      "model": "qwen_plus",
+      "display_name": "Qwen Plus",
+      "score": 0.29916148010476196,
+      "fields": 66.14285714285714,
+      "critic": 0.4821958333333335,
+      "runtime": 633.941409,
+      "n_runs": 7,
+      "color": "#9b59b6"
+    },
+    {
+      "model": "o3",
+      "display_name": "O3",
+      "score": 0.23014444260025138,
+      "fields": 50.68181818181818,
+      "critic": 0.42084447004608294,
+      "runtime": 817.6712725454545,
+      "n_runs": 22,
+      "color": "#16a085"
+    },
+    {
+      "model": "baseline_openai_gpt4o",
+      "display_name": "Baseline (GPT-4o)",
+      "score": 0.22417086848,
+      "fields": 54.5,
+      "critic": 0,
+      "runtime": 15.395657600000002,
+      "n_runs": 20,
+      "is_baseline": true,
+      "color": "#95a5a6"
+    }
+  ],
+  "agentic_summary": {
+    "sonnet": {
+      "n_runs": 24,
+      "avg_fields": 73.91666666666667,
+      "avg_runtime": 645.0115595000001,
+      "avg_critic_score": 0.6246041666666667,
+      "documents": [
+        "earthworm",
+        "biosensor"
+      ]
+    },
+    "haiku": {
+      "n_runs": 18,
+      "avg_fields": 82.83333333333333,
+      "avg_runtime": 639.8156075,
+      "avg_critic_score": 0.5730612244897958,
+      "documents": [
+        "earthworm",
+        "biosensor"
+      ]
+    },
+    "qwen_max": {
+      "n_runs": 19,
+      "avg_fields": 62.421052631578945,
+      "avg_runtime": 416.06341663157895,
+      "avg_critic_score": 0.7860833333333332,
+      "documents": [
+        "earthworm",
+        "biosensor"
+      ]
+    },
+    "qwen_flash": {
+      "n_runs": 3,
+      "avg_fields": 81.33333333333333,
+      "avg_runtime": 467.656085,
+      "avg_critic_score": 0.3973095238095239,
+      "documents": [
+        "earthworm",
+        "biosensor"
+      ]
+    },
+    "o3": {
+      "n_runs": 22,
+      "avg_fields": 50.68181818181818,
+      "avg_runtime": 817.6712725454545,
+      "avg_critic_score": 0.42084447004608294,
+      "documents": [
+        "earthworm",
+        "biosensor"
+      ]
+    },
+    "gpt4.1": {
+      "n_runs": 10,
+      "avg_fields": 51.8,
+      "avg_runtime": 498.4417418,
+      "avg_critic_score": 0.7530666666666666,
+      "documents": [
+        "earthworm",
+        "biosensor"
+      ]
+    },
+    "gpt5": {
+      "n_runs": 18,
+      "avg_fields": 69.61111111111111,
+      "avg_runtime": 619.5673816666666,
+      "avg_critic_score": 0.6340280612244896,
+      "documents": [
+        "earthworm",
+        "biosensor"
+      ]
+    },
+    "qwen_plus": {
+      "n_runs": 7,
+      "avg_fields": 66.14285714285714,
+      "avg_runtime": 633.941409,
+      "avg_critic_score": 0.4821958333333335,
+      "documents": [
+        "earthworm",
+        "biosensor"
+      ]
+    }
+  },
+  "baseline_summary": {
+    "baseline_openai_gpt4o": {
+      "n_runs": 20,
+      "avg_fields": 54.5,
+      "avg_runtime": 15.395657600000002,
+      "documents": [
+        "earthworm",
+        "biosensor"
+      ]
+    }
+  }
+}

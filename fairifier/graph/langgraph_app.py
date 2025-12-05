@@ -567,8 +567,14 @@ Return JSON in the following format:
     def _route_after_parsing(self, state: FAIRifierState) -> Literal["accept", "retry", "escalate"]:
         """Route after parsing evaluation based on Critic decision.
         
-        Strategy: If max retries reached, continue with current output instead of escalating.
-        Only escalate if the output is completely unusable (empty document_info).
+        Priority order:
+        1. User-configured max_step_retries (HIGHEST PRIORITY)
+        2. Critic decision (ACCEPT > RETRY > ESCALATE)
+        3. Output quality check (if max retries exhausted)
+        
+        Strategy:
+        - If retries available (retry_count < max_step_retries): Use retry for RETRY/ESCALATE
+        - If max retries reached: Respect Critic decision, but check for usable output
         """
         execution_history = state.get("execution_history", [])
         if not execution_history:
@@ -577,6 +583,7 @@ Return JSON in the following format:
         last_execution = execution_history[-1]
         critic_eval = last_execution.get("critic_evaluation", {})
         decision = critic_eval.get("decision", "ACCEPT")
+        score = critic_eval.get("score", 0.0)
         
         # Initialize context if needed
         if "context" not in state:
@@ -585,25 +592,75 @@ Return JSON in the following format:
         # Get current retry count (this is the count AFTER the current attempt)
         retry_count = state["context"].get("parse_retry_count", 0)
         
-        logger.info(f"📊 Routing decision: {decision} (attempt: {retry_count}/{config.max_step_retries})")
+        logger.info(
+            f"📊 Routing decision: {decision} (score: {score:.2f}, "
+            f"retry_count: {retry_count}/{config.max_step_retries})"
+        )
         
         if decision == "ACCEPT":
+            logger.info(f"✅ Critic decision ACCEPT - proceeding to next step")
             return "accept"
-        elif (decision == "RETRY" or decision == "ESCALATE") and retry_count < config.max_step_retries:
-            # Still have retries left - retry even on ESCALATE
-            logger.info(f"🔄 Retry available ({retry_count}/{config.max_step_retries}) - retrying")
-            return "retry"
-        else:
-            # Max retries reached: check if we have usable output
+        
+        # PRIORITY 1: Check if retries are still available (user-configured limit)
+        if retry_count < config.max_step_retries:
+            # We have retries left - use them regardless of RETRY/ESCALATE
+            if decision in ["RETRY", "ESCALATE"]:
+                logger.info(
+                    f"🔄 Retries available ({retry_count + 1}/{config.max_step_retries}) - "
+                    f"retrying despite Critic decision {decision} (score: {score:.2f}). "
+                    f"Note: User-configured max_step_retries takes priority."
+                )
+                return "retry"
+            else:
+                # Unknown decision but have retries - default to retry
+                logger.warning(
+                    f"⚠️ Unknown decision '{decision}' but retries available - retrying"
+                )
+                return "retry"
+        
+        # PRIORITY 2: Max retries reached - now respect Critic decision
+        if decision == "RETRY":
+            # Critic said RETRY but max retries reached
             doc_info = state.get("document_info", {})
             if doc_info and len(doc_info) > 3:
-                # We have some extracted info, continue with it
-                logger.warning(f"⚠️ Max retries reached but have {len(doc_info)} fields - continuing workflow")
+                logger.warning(
+                    f"⚠️ Max retries reached ({config.max_step_retries}) but Critic decision was RETRY "
+                    f"(score: {score:.2f}). Have {len(doc_info)} fields - continuing with human review flag."
+                )
                 state["needs_human_review"] = True
-                return "accept"  # Continue to next step
+                return "accept"
             else:
-                # No usable output, must escalate
-                logger.error("❌ No usable document info extracted - escalating")
+                logger.error(
+                    f"❌ Max retries reached, Critic decision RETRY (score: {score:.2f}), "
+                    f"but no usable document info - escalating"
+                )
+                return "escalate"
+        elif decision == "ESCALATE":
+            # Critic said ESCALATE and max retries reached
+            doc_info = state.get("document_info", {})
+            if doc_info and len(doc_info) > 3:
+                logger.warning(
+                    f"⚠️ Max retries reached ({config.max_step_retries}) and Critic decision ESCALATE "
+                    f"(score: {score:.2f}). Have {len(doc_info)} fields - continuing with human review flag. "
+                    f"Note: Overriding ESCALATE because we have usable output."
+                )
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(
+                    f"❌ Max retries reached and Critic decision ESCALATE (score: {score:.2f}) "
+                    f"with no usable document info - escalating"
+                )
+                return "escalate"
+        else:
+            # Unknown decision, default to accept if we have output
+            doc_info = state.get("document_info", {})
+            if doc_info and len(doc_info) > 3:
+                logger.warning(f"⚠️ Unknown decision '{decision}' but have {len(doc_info)} fields - continuing")
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(f"❌ Unknown decision '{decision}' and no usable document info - escalating")
                 return "escalate"
     
     @traceable(name="RetrieveKnowledge", tags=["agent", "knowledge"])
@@ -706,8 +763,14 @@ Return JSON in the following format:
     def _route_after_retrieval(self, state: FAIRifierState) -> Literal["accept", "retry", "escalate"]:
         """Route after retrieval evaluation based on Critic decision.
         
-        Strategy: If max retries reached, continue with current output instead of escalating.
-        Only escalate if we have no knowledge at all.
+        Priority order:
+        1. User-configured max_step_retries (HIGHEST PRIORITY)
+        2. Critic decision (ACCEPT > RETRY > ESCALATE)
+        3. Output quality check (if max retries exhausted)
+        
+        Strategy:
+        - If retries available (retry_count < max_step_retries): Use retry for RETRY/ESCALATE
+        - If max retries reached: Respect Critic decision, but check for usable output
         """
         execution_history = state.get("execution_history", [])
         if not execution_history:
@@ -716,31 +779,82 @@ Return JSON in the following format:
         last_execution = execution_history[-1]
         critic_eval = last_execution.get("critic_evaluation", {})
         decision = critic_eval.get("decision", "ACCEPT")
+        score = critic_eval.get("score", 0.0)
         
         # Initialize context if needed
         if "context" not in state:
             state["context"] = {}
         retry_count = state["context"].get("retrieve_retry_count", 0)
         
-        logger.info(f"📊 Routing decision: {decision} (attempt: {retry_count}/{config.max_step_retries})")
+        logger.info(
+            f"📊 Routing decision: {decision} (score: {score:.2f}, "
+            f"retry_count: {retry_count}/{config.max_step_retries})"
+        )
         
         if decision == "ACCEPT":
+            logger.info(f"✅ Critic decision ACCEPT - proceeding to next step")
             return "accept"
-        elif (decision == "RETRY" or decision == "ESCALATE") and retry_count < config.max_step_retries:
-            # Still have retries left - retry even on ESCALATE
-            logger.info(f"🔄 Retry available ({retry_count}/{config.max_step_retries}) - retrying")
-            return "retry"
-        else:
-            # Max retries reached: check if we have usable output
+        
+        # PRIORITY 1: Check if retries are still available (user-configured limit)
+        if retry_count < config.max_step_retries:
+            # We have retries left - use them regardless of RETRY/ESCALATE
+            if decision in ["RETRY", "ESCALATE"]:
+                logger.info(
+                    f"🔄 Retries available ({retry_count + 1}/{config.max_step_retries}) - "
+                    f"retrying despite Critic decision {decision} (score: {score:.2f}). "
+                    f"Note: User-configured max_step_retries takes priority."
+                )
+                return "retry"
+            else:
+                # Unknown decision but have retries - default to retry
+                logger.warning(
+                    f"⚠️ Unknown decision '{decision}' but retries available - retrying"
+                )
+                return "retry"
+        
+        # PRIORITY 2: Max retries reached - now respect Critic decision
+        if decision == "RETRY":
+            # Critic said RETRY but max retries reached
             knowledge = state.get("retrieved_knowledge", [])
             if knowledge and len(knowledge) > 0:
-                # We have some knowledge, continue with it
-                logger.warning(f"⚠️ Max retries reached but have {len(knowledge)} knowledge items - continuing workflow")
+                logger.warning(
+                    f"⚠️ Max retries reached ({config.max_step_retries}) but Critic decision was RETRY "
+                    f"(score: {score:.2f}). Have {len(knowledge)} knowledge items - continuing with human review flag."
+                )
                 state["needs_human_review"] = True
-                return "accept"  # Continue to next step
+                return "accept"
             else:
-                # No knowledge retrieved, must escalate
-                logger.error("❌ No knowledge retrieved - escalating")
+                logger.error(
+                    f"❌ Max retries reached, Critic decision RETRY (score: {score:.2f}), "
+                    f"but no knowledge retrieved - escalating"
+                )
+                return "escalate"
+        elif decision == "ESCALATE":
+            # Critic said ESCALATE and max retries reached
+            knowledge = state.get("retrieved_knowledge", [])
+            if knowledge and len(knowledge) > 0:
+                logger.warning(
+                    f"⚠️ Max retries reached ({config.max_step_retries}) and Critic decision ESCALATE "
+                    f"(score: {score:.2f}). Have {len(knowledge)} knowledge items - continuing with human review flag. "
+                    f"Note: Overriding ESCALATE because we have usable output."
+                )
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(
+                    f"❌ Max retries reached and Critic decision ESCALATE (score: {score:.2f}) "
+                    f"with no knowledge retrieved - escalating"
+                )
+                return "escalate"
+        else:
+            # Unknown decision, default to accept if we have output
+            knowledge = state.get("retrieved_knowledge", [])
+            if knowledge and len(knowledge) > 0:
+                logger.warning(f"⚠️ Unknown decision '{decision}' but have {len(knowledge)} knowledge items - continuing")
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(f"❌ Unknown decision '{decision}' and no knowledge - escalating")
                 return "escalate"
     
     @traceable(name="GenerateJSON", tags=["agent", "generation"])
@@ -843,8 +957,14 @@ Return JSON in the following format:
     def _route_after_generation(self, state: FAIRifierState) -> Literal["accept", "retry", "escalate"]:
         """Route after generation evaluation based on Critic decision.
         
-        Strategy: Always continue to finalize if we have any metadata fields.
-        This ensures we always produce output even if quality is suboptimal.
+        Priority order:
+        1. User-configured max_step_retries (HIGHEST PRIORITY)
+        2. Critic decision (ACCEPT > RETRY > ESCALATE)
+        3. Output quality check (if max retries exhausted)
+        
+        Strategy:
+        - If retries available (retry_count < max_step_retries): Use retry for RETRY/ESCALATE
+        - If max retries reached: Respect Critic decision, but check for usable output
         """
         execution_history = state.get("execution_history", [])
         if not execution_history:
@@ -853,31 +973,84 @@ Return JSON in the following format:
         last_execution = execution_history[-1]
         critic_eval = last_execution.get("critic_evaluation", {})
         decision = critic_eval.get("decision", "ACCEPT")
+        score = critic_eval.get("score", 0.0)
         
         # Initialize context if needed
         if "context" not in state:
             state["context"] = {}
         retry_count = state["context"].get("generate_retry_count", 0)
         
-        logger.info(f"📊 Routing decision: {decision} (attempt: {retry_count}/{config.max_step_retries})")
+        logger.info(
+            f"📊 Routing decision: {decision} (score: {score:.2f}, "
+            f"retry_count: {retry_count}/{config.max_step_retries})"
+        )
         
         if decision == "ACCEPT":
+            logger.info(f"✅ Critic decision ACCEPT - proceeding to finalize")
             return "accept"
-        elif (decision == "RETRY" or decision == "ESCALATE") and retry_count < config.max_step_retries:
-            # Still have retries left - retry even on ESCALATE
-            logger.info(f"🔄 Retry available ({retry_count}/{config.max_step_retries}) - retrying")
-            return "retry"
-        else:
-            # Max retries reached: check if we have any metadata
+        
+        # PRIORITY 1: Check if retries are still available (user-configured limit)
+        if retry_count < config.max_step_retries:
+            # We have retries left - use them regardless of RETRY/ESCALATE
+            if decision in ["RETRY", "ESCALATE"]:
+                logger.info(
+                    f"🔄 Retries available ({retry_count + 1}/{config.max_step_retries}) - "
+                    f"retrying despite Critic decision {decision} (score: {score:.2f}). "
+                    f"Note: User-configured max_step_retries takes priority."
+                )
+                return "retry"
+            else:
+                # Unknown decision but have retries - default to retry
+                logger.warning(
+                    f"⚠️ Unknown decision '{decision}' but retries available - retrying"
+                )
+                return "retry"
+        
+        # PRIORITY 2: Max retries reached - now respect Critic decision
+        if decision == "RETRY":
+            # Critic said RETRY but max retries reached
             metadata_fields = state.get("metadata_fields", [])
             if metadata_fields and len(metadata_fields) > 0:
-                # We have some metadata, finalize it
-                logger.warning(f"⚠️ Max retries reached but have {len(metadata_fields)} metadata fields - finalizing")
+                logger.warning(
+                    f"⚠️ Max retries reached ({config.max_step_retries}) but Critic decision was RETRY "
+                    f"(score: {score:.2f}). Have {len(metadata_fields)} metadata fields - "
+                    f"finalizing with human review flag."
+                )
                 state["needs_human_review"] = True
-                return "accept"  # Continue to finalize
+                return "accept"
             else:
-                # No metadata generated at all, this is a critical failure
-                logger.error("❌ No metadata fields generated - escalating")
+                logger.error(
+                    f"❌ Max retries reached, Critic decision RETRY (score: {score:.2f}), "
+                    f"but no metadata fields generated - escalating"
+                )
+                return "escalate"
+        elif decision == "ESCALATE":
+            # Critic said ESCALATE and max retries reached
+            metadata_fields = state.get("metadata_fields", [])
+            if metadata_fields and len(metadata_fields) > 0:
+                logger.warning(
+                    f"⚠️ Max retries reached ({config.max_step_retries}) and Critic decision ESCALATE "
+                    f"(score: {score:.2f}). Have {len(metadata_fields)} metadata fields - "
+                    f"finalizing with human review flag. "
+                    f"Note: Overriding ESCALATE because we have usable output."
+                )
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(
+                    f"❌ Max retries reached and Critic decision ESCALATE (score: {score:.2f}) "
+                    f"with no metadata fields generated - escalating"
+                )
+                return "escalate"
+        else:
+            # Unknown decision, default to accept if we have output
+            metadata_fields = state.get("metadata_fields", [])
+            if metadata_fields and len(metadata_fields) > 0:
+                logger.warning(f"⚠️ Unknown decision '{decision}' but have {len(metadata_fields)} metadata fields - finalizing")
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(f"❌ Unknown decision '{decision}' and no metadata fields - escalating")
                 return "escalate"
     
     @traceable(name="Finalize", tags=["workflow", "finalization"])

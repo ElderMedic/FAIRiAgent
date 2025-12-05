@@ -254,7 +254,7 @@ python -m fairifier.cli process examples/inputs/my_test_doc.txt \
   ✓ processing_log.jsonl (8.3 KB)
   ✓ llm_responses.json (25.1 KB)
 
-💡 Tip: Check llm_responses.json to see LLM's thinking process
+💡 Tip: Check llm_responses.json to see LLM's thinking process. All LLM calls (including Critic evaluations) are automatically logged.
 
 ======================================================================
 ✨ Processing complete!
@@ -336,11 +336,17 @@ grep "Critic" run.log  # 查找 Critic 评估
 
 ### 2. 查看 LLM 响应
 ```bash
-# 查看所有 LLM 交互
-cat output_*/llm_responses.json | jq '.[] | {operation, response: .response[0:200]}'
+# 查看所有 LLM 交互（现在包括所有 LLM 调用，包括 Critic 评估）
+cat output_*/llm_responses.json | jq '.[] | {operation, prompt_length, timestamp, response: .response[0:200]}'
 
 # 查看特定操作
 cat output_*/llm_responses.json | jq '.[] | select(.operation == "extract_document_info")'
+
+# 查看 Critic 评估
+cat output_*/llm_responses.json | jq '.[] | select(.operation | startswith("critic."))'
+
+# 查看所有操作类型
+cat output_*/llm_responses.json | jq '[.[] | .operation] | unique'
 ```
 
 ### 3. 检查执行历史
@@ -490,6 +496,53 @@ python -m fairifier.cli process examples/inputs/methods_test.txt --verbose
 3. ✅ 生成的 `metadata_json.json` 包含 15-25 个字段
 4. ✅ 所有字段都有 `evidence` 和 `confidence`
 5. ✅ LangSmith 显示完整的 trace
+
+---
+
+## 🔄 重试机制和决策优先级
+
+### Critic 决策类型
+
+工作流中的 Critic Agent 会评估每个步骤的输出质量，并做出以下决策：
+
+- **ACCEPT**: 分数 ≥ accept_threshold (通常 0.65-0.70) → 继续下一步
+- **RETRY**: revise_min ≤ 分数 < accept_threshold (通常 0.40-0.65) → 需要改进，重试
+- **ESCALATE**: 分数 < revise_min (通常 < 0.40) → 检测到严重问题，需要人工审查
+
+### 重试优先级逻辑
+
+工作流遵循以下优先级顺序（从高到低）：
+
+1. **用户配置的 `max_step_retries`** (最高优先级)
+   - 如果还有重试机会（retry_count < max_step_retries），无论 Critic 返回 RETRY 还是 ESCALATE，都会使用重试
+   - 这确保了用户在环境变量中设置的最大重试次数总是被尊重
+
+2. **Critic 决策**
+   - 达到最大重试次数后，工作流会更严格地尊重 Critic 的 ESCALATE 决策
+   - 但如果存在可用输出，工作流仍可能继续（标记为需要人工审查）
+
+3. **输出质量检查**
+   - 如果达到最大重试次数但存在可用输出，工作流会继续并设置 `needs_human_review` 标志
+
+### 查看重试和决策信息
+
+```bash
+# 查看执行历史中的 Critic 决策
+cat output_*/workflow_results.json | jq '.execution_history[] | {
+  agent: .agent_name,
+  attempt: .attempt,
+  decision: .critic_evaluation.decision,
+  score: .critic_evaluation.score,
+  needs_review: .needs_human_review
+}'
+
+# 查看所有 Critic 评估（从 llm_responses.json）
+cat output_*/llm_responses.json | jq '.[] | select(.operation | startswith("critic.")) | {
+  operation,
+  timestamp,
+  response_length: (.response | length)
+}'
+```
 
 ---
 

@@ -31,22 +31,30 @@ class EvaluationDataLoader:
         self.evaluation_results: Dict[str, Dict[str, Any]] = {}
         self.metadata: Dict[str, Dict[str, Any]] = {}
         
-    def discover_runs(self, pattern: Optional[str] = None, exclude_dirs: Optional[List[str]] = None) -> List[Path]:
+    def discover_runs(self, pattern: Optional[str] = None, exclude_dirs: Optional[List[str]] = None, 
+                     exclude_models: Optional[List[str]] = None, exclude_docs: Optional[List[str]] = None) -> List[Path]:
         """
         Discover all evaluation result files.
+        
+        Supports both:
+        1. Old structure: results/evaluation_results.json (batch aggregated results)
+        2. New structure: model_name/document/run_X/eval_result.json (individual run results)
         
         Args:
             pattern: Optional pattern to filter runs (e.g., "qwen_*", "openai_*")
             exclude_dirs: Optional list of directory names to exclude (e.g., ["archive"])
+            exclude_models: Optional list of model names to exclude (e.g., ["opus"])
+            exclude_docs: Optional list of document IDs to exclude (e.g., ["biorem"])
             
         Returns:
-            List of paths to evaluation_results.json files
+            List of paths to evaluation result files
         """
         results_files = []
         exclude_dirs = exclude_dirs or ['archive']  # Default exclude archive
+        exclude_models = exclude_models or ['opus', 'anthropic_opus']  # Default exclude opus
+        exclude_docs = exclude_docs or ['biorem']  # Default exclude biorem
         
-        # Search for evaluation_results.json ONLY in results/ subdirectories
-        # This avoids loading status log files that have the same name
+        # First, try to find batch aggregated results (old structure)
         for results_file in self.runs_dir.rglob('results/evaluation_results.json'):
             run_path_str = str(results_file.relative_to(self.runs_dir))
             
@@ -59,6 +67,26 @@ class EvaluationDataLoader:
             if skip:
                 continue
             
+            # Skip excluded models
+            for excluded_model in exclude_models:
+                if excluded_model.lower() in run_path_str.lower():
+                    skip = True
+                    break
+            if skip:
+                continue
+            
+            # Skip excluded documents (check evaluation_results.json content)
+            try:
+                with open(results_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                doc_ids = data.get('evaluation_metadata', {}).get('document_ids', [])
+                if any(doc_id in exclude_docs for doc_id in doc_ids):
+                    skip = True
+            except:
+                pass
+            if skip:
+                continue
+            
             # Skip if pattern doesn't match
             if pattern:
                 if pattern not in run_path_str:
@@ -66,41 +94,130 @@ class EvaluationDataLoader:
             
             results_files.append(results_file)
         
+        # If no batch results found, look for individual eval_result.json files (new structure)
+        if not results_files:
+            for eval_file in self.runs_dir.rglob('eval_result.json'):
+                run_path_str = str(eval_file.relative_to(self.runs_dir))
+                
+                # Skip if in excluded directory (archive, baseline, rerun, results)
+                skip = False
+                for exclude_dir in exclude_dirs + ['baseline_', 'rerun_', 'results']:
+                    if exclude_dir in run_path_str:
+                        skip = True
+                        break
+                if skip:
+                    continue
+                
+                # Skip if not in a run_X directory (to avoid loading status files)
+                if '/run_' not in run_path_str:
+                    continue
+                
+                # Skip excluded models
+                for excluded_model in exclude_models:
+                    if excluded_model.lower() in run_path_str.lower():
+                        skip = True
+                        break
+                if skip:
+                    continue
+                
+                # Skip excluded documents
+                try:
+                    with open(eval_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    doc_id = data.get('document_id', '')
+                    if doc_id in exclude_docs:
+                        skip = True
+                except:
+                    pass
+                if skip:
+                    continue
+                
+                # Skip if pattern doesn't match
+                if pattern:
+                    if pattern not in run_path_str:
+                        continue
+                
+                results_files.append(eval_file)
+        
         return sorted(results_files)
     
-    def load_all(self, pattern: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    def load_all(self, pattern: Optional[str] = None,
+                exclude_models: Optional[List[str]] = None,
+                exclude_docs: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
         """
         Load all evaluation results.
         
         Args:
             pattern: Optional pattern to filter runs
+            exclude_models: Optional list of model names to exclude
+            exclude_docs: Optional list of document IDs to exclude
             
         Returns:
             Dict mapping run_id to evaluation results
         """
-        results_files = self.discover_runs(pattern)
+        results_files = self.discover_runs(
+            pattern=pattern,
+            exclude_models=exclude_models,
+            exclude_docs=exclude_docs
+        )
         
         for results_file in results_files:
             try:
                 with open(results_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
-                # Generate run identifier from path
-                # e.g., "qwen_parallel_20251121_131718/qwen_max"
-                rel_path = results_file.relative_to(self.runs_dir)
-                run_id = str(rel_path.parent)
-                
-                self.evaluation_results[run_id] = data
-                
-                # Extract metadata
-                eval_metadata = data.get('evaluation_metadata', {})
-                self.metadata[run_id] = {
-                    'run_id': run_id,
-                    'start_time': eval_metadata.get('start_time'),
-                    'end_time': eval_metadata.get('end_time'),
-                    'ground_truth': eval_metadata.get('ground_truth'),
-                    'n_documents': eval_metadata.get('n_documents', 0)
-                }
+                # Check if this is a batch aggregated result (old structure) or individual run (new structure)
+                if 'evaluation_metadata' in data:
+                    # Old structure: batch aggregated results
+                    rel_path = results_file.relative_to(self.runs_dir)
+                    run_id = str(rel_path.parent)
+                    self.evaluation_results[run_id] = data
+                    
+                    # Extract metadata
+                    eval_metadata = data.get('evaluation_metadata', {})
+                    self.metadata[run_id] = {
+                        'run_id': run_id,
+                        'start_time': eval_metadata.get('start_time'),
+                        'end_time': eval_metadata.get('end_time'),
+                        'ground_truth': eval_metadata.get('ground_truth'),
+                        'n_documents': eval_metadata.get('n_documents', 0)
+                    }
+                else:
+                    # New structure: individual eval_result.json
+                    # We need to aggregate these by model-document
+                    # For now, create a synthetic run_id from the path
+                    rel_path = results_file.relative_to(self.runs_dir)
+                    # Extract model and document from path: model_name/document/run_X/eval_result.json
+                    parts = rel_path.parts
+                    if len(parts) >= 3:
+                        model_name = parts[0]
+                        document = parts[1]
+                        run_idx = parts[2] if len(parts) > 2 else 'unknown'
+                        
+                        # Create a synthetic run_id for aggregation
+                        run_id = f"{model_name}_{document}"
+                        
+                        # Initialize or append to aggregated results
+                        if run_id not in self.evaluation_results:
+                            # Initialize aggregated structure
+                            self.evaluation_results[run_id] = {
+                                'evaluation_metadata': {
+                                    'start_time': data.get('timestamp'),
+                                    'ground_truth': 'evaluation/datasets/annotated/ground_truth_filtered.json',
+                                    'n_documents': 1
+                                },
+                                'per_model_results': {}
+                            }
+                            self.metadata[run_id] = {
+                                'run_id': run_id,
+                                'start_time': data.get('timestamp'),
+                                'n_documents': 1
+                            }
+                        
+                        # Note: Individual eval_result.json files don't have the full structure
+                        # needed for the DataFrame generation. We'll need to handle this differently.
+                        # For now, skip individual files and rely on baseline_comparison.py for those.
+                        continue
                 
             except Exception as e:
                 print(f"⚠️  Failed to load {results_file}: {e}")
