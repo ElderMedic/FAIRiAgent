@@ -21,6 +21,10 @@ uvicorn>=0.24.0
 python-multipart>=0.0.6
 click>=8.1.0
 
+# Web UI
+streamlit>=1.30.0
+gradio>=4.0.0
+
 # Data handling
 pydantic>=2.5.0
 pyyaml>=6.0.1

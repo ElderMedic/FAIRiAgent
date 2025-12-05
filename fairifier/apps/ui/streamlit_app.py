@@ -1,16 +1,12 @@
 """Streamlit app for FAIRifier human-in-the-loop interface."""
 
-import json
 import tempfile
 import os
 from pathlib import Path
 import asyncio
 from datetime import datetime
 import logging
-import io
-from contextlib import redirect_stdout, redirect_stderr
-from queue import Queue
-import threading
+import json
 
 # Add parent directories to path
 import sys
@@ -348,9 +344,9 @@ def upload_and_process_page():
 def process_document(uploaded_file, project_name):
     """Process the uploaded document with real-time output display."""
     import streamlit as st
+    from fairifier.config import apply_env_overrides, config
     
     # Apply configuration from session state before processing
-    from fairifier.config import apply_env_overrides, config
     apply_env_overrides(config)
     
     # Reset LLMHelper to ensure it uses the latest config
@@ -440,11 +436,10 @@ def process_document(uploaded_file, project_name):
         from fairifier.config import config
         output_path = config.output_path / project_id
         output_path.mkdir(parents=True, exist_ok=True)
-        
         # Save runtime configuration
         from fairifier.utils.config_saver import save_runtime_config
         config_file = save_runtime_config(tmp_path, project_id, output_path)
-        logger.info(f"💾 Saved runtime configuration to {config_file}")
+        logging.info(f"💾 Saved runtime configuration to {config_file}")
         
         # Run LangGraph workflow
         app = FAIRifierLangGraphApp()
@@ -539,9 +534,9 @@ def process_document(uploaded_file, project_name):
 def process_document_from_path(file_path, project_name):
     """Process a document from file path (for example files) with real-time output display."""
     import streamlit as st
+    from fairifier.config import apply_env_overrides, config
     
     # Apply configuration from session state before processing
-    from fairifier.config import apply_env_overrides, config
     apply_env_overrides(config)
     
     # Reset LLMHelper to ensure it uses the latest config
@@ -619,13 +614,10 @@ def process_document_from_path(file_path, project_name):
         from fairifier.config import config
         output_path = config.output_path / project_id
         output_path.mkdir(parents=True, exist_ok=True)
-        
         # Save runtime configuration
         from fairifier.utils.config_saver import save_runtime_config
-        import logging
-        logger = logging.getLogger(__name__)
         config_file = save_runtime_config(file_path, project_id, output_path)
-        logger.info(f"💾 Saved runtime configuration to {config_file}")
+        logging.info(f"💾 Saved runtime configuration to {config_file}")
         
         # Set LangSmith project for this run
         langsmith_project = st.session_state.get("langsmith_project", "fairifier-streamlit")
@@ -732,7 +724,7 @@ def setup_langsmith_from_session():
         st.session_state["langsmith_enabled"] = False
 
 def display_results(result):
-    """Display processing results."""
+    """Display processing results with enhanced visualizations."""
     import streamlit as st
     
     st.success("✅ Processing completed!")
@@ -740,6 +732,35 @@ def display_results(result):
     # Overall status
     status = result.get("status", "unknown")
     st.metric("Status", status.upper() if status else "UNKNOWN")
+    
+    # Create tabs for different views
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 Summary", 
+        "🔍 Execution History", 
+        "🎯 Confidence Details",
+        "📋 Metadata Fields",
+        "📦 Artifacts"
+    ])
+    
+    with tab1:
+        display_summary_tab(result)
+    
+    with tab2:
+        display_execution_history_tab(result)
+    
+    with tab3:
+        display_confidence_tab(result)
+    
+    with tab4:
+        display_metadata_tab(result)
+    
+    with tab5:
+        display_artifacts_tab(result)
+
+
+def display_summary_tab(result):
+    """Display summary information."""
+    import streamlit as st
     
     # Execution summary
     execution_summary = result.get("execution_summary", {})
@@ -754,176 +775,72 @@ def display_results(result):
         with col3:
             st.metric("Failed", execution_summary.get("failed_steps", 0))
         with col4:
-            st.metric("Retries", execution_summary.get("steps_requiring_retry", 0))
-    
-    # Confidence scores
-    confidence_scores = result.get("confidence_scores", {})
-    if confidence_scores:
-        st.subheader("🎯 Confidence Scores")
-        cols = st.columns(len(confidence_scores))
-        
-        for i, (component, score) in enumerate(confidence_scores.items()):
-            with cols[i % len(cols)]:
-                color = "normal" if score > 0.8 else "inverse" if score < 0.6 else "off"
-                st.metric(component.replace("_", " ").title(), f"{score:.2f}", delta_color=color)
-    
+            retries = execution_summary.get("steps_requiring_retry", 0)
+            global_retries = result.get("global_retries_used", 0)
+            st.metric("Retries", f"{retries} / {global_retries}")
     # Document info
     doc_info = result.get("document_info", {})
     if doc_info:
-        st.subheader("📋 Extracted Information")
+        st.subheader("📄 Document Information")
         col1, col2 = st.columns(2)
         
         with col1:
             title = doc_info.get("title", "N/A")
             st.write("**Title:**", str(title) if title else "N/A")
             authors = doc_info.get("authors", [])
-            st.write("**Authors:**", len(authors) if isinstance(authors, list) else "N/A")
-            keywords = doc_info.get("keywords", [])
-            st.write("**Keywords:**", len(keywords) if isinstance(keywords, list) else "N/A")
+            if isinstance(authors, list) and len(authors) > 0:
+                st.write("**Authors:**", ", ".join(authors[:3]) + (f" (+ {len(authors)-3} more)" if len(authors) > 3 else ""))
+            else:
+                st.write("**Authors:**", "N/A")
         
         with col2:
             research_domain = doc_info.get("research_domain", "N/A")
             st.write("**Research Domain:**", str(research_domain) if research_domain else "N/A")
-            methodology = doc_info.get("methodology", "N/A")
-            if methodology and isinstance(methodology, str) and len(methodology) > 100:
-                methodology_display = methodology[:100] + "..."
-            elif methodology and isinstance(methodology, str):
-                methodology_display = methodology
+            keywords = doc_info.get("keywords", [])
+            if isinstance(keywords, list) and len(keywords) > 0:
+                st.write("**Keywords:**", ", ".join(keywords[:5]) + (f" (+ {len(keywords)-5} more)" if len(keywords) > 5 else ""))
             else:
-                methodology_display = str(methodology) if methodology else "N/A"
-            st.write("**Methodology:**", methodology_display)
+                st.write("**Keywords:**", "N/A")
     
-    # Metadata fields - handle both dict and list formats
-    metadata_fields = result.get("metadata_fields", [])
-    if metadata_fields:
-        st.subheader("🏷️ Generated Metadata Fields")
-        
-        # Convert to list if it's a dict
-        if isinstance(metadata_fields, dict):
-            metadata_fields = list(metadata_fields.values())
-        
-        # Handle different field formats
-        required_fields = []
-        optional_fields = []
-        
-        for field in metadata_fields:
-            # Handle both dict with 'required' key and dict with 'field_name' key
-            if isinstance(field, dict):
-                field_name = field.get("field_name") or field.get("name", "Unknown")
-                is_required = field.get("required", False)
-                field_data = {
-                    "name": field_name,
-                    "data_type": field.get("data_type", "string"),
-                    "description": field.get("description", ""),
-                    "value": field.get("value", ""),
-                    "confidence": field.get("confidence", 0.0),
-                    "required": is_required
-                }
-                
-                if is_required:
-                    required_fields.append(field_data)
-                else:
-                    optional_fields.append(field_data)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Required Fields", len(required_fields))
-        with col2:
-            st.metric("Optional Fields", len(optional_fields))
-        
-        # Display fields in expandable sections
-        if required_fields:
-            with st.expander("Required Fields", expanded=True):
-                for field in required_fields:
-                    st.write(f"**{field['name']}** ({field['data_type']})")
-                    if field.get('description'):
-                        st.write(field['description'])
-                    if field.get('value'):
-                        st.code(field['value'])
-                    st.write(f"Confidence: {field.get('confidence', 0.0):.2f}")
-                    st.write("---")
-        
-        if optional_fields:
-            with st.expander("Optional Fields"):
-                for field in optional_fields[:20]:  # Show first 20
-                    st.write(f"**{field['name']}** ({field['data_type']})")
-                    if field.get('description'):
-                        st.write(field['description'])
-                    if field.get('value'):
-                        st.code(field['value'])
-                    st.write(f"Confidence: {field.get('confidence', 0.0):.2f}")
-                    st.write("---")
-    
-    # Validation results
-    validation = result.get("validation_results", {})
-    if validation:
-        st.subheader("✅ Validation Results")
-        
+    # MinerU conversion info
+    conversion_info = result.get("document_conversion", {})
+    if conversion_info:
+        st.subheader("📑 Document Conversion (MinerU)")
         col1, col2, col3 = st.columns(3)
-        with col1:
-            is_valid = validation.get("is_valid", False)
-            st.metric("Valid", "Yes" if is_valid else "No")
-        with col2:
-            score = validation.get("score", 0)
-            st.metric("Quality Score", f"{score:.2f}")
-        with col3:
-            error_count = len(validation.get("errors", []))
-            st.metric("Errors", error_count)
         
-        if validation.get("errors"):
-            with st.expander("Validation Errors"):
-                for error in validation["errors"]:
-                    st.error(error)
+        with col1:
+            if conversion_info.get("markdown_path"):
+                st.metric("Status", "✅ Success")
+            else:
+                st.metric("Status", "⚠️ Fallback")
+        
+        with col2:
+            if conversion_info.get("images_dir"):
+                st.metric("Images Extracted", "Yes")
+            else:
+                st.metric("Images Extracted", "No")
+        
+        with col3:
+            if conversion_info.get("output_dir"):
+                st.metric("Output Dir", "Available")
+                with st.expander("View Conversion Details"):
+                    st.json(conversion_info)
     
     # Human review flag
     needs_review = result.get("needs_human_review", False)
     if needs_review:
         st.warning("🔍 This result requires human review before use")
     
-    # Download artifacts - show metadata JSON
-    artifacts = result.get("artifacts", {})
-    if artifacts:
-        st.subheader("📦 Download Artifacts")
+    # Confidence scores summary
+    confidence_scores = result.get("confidence_scores", {})
+    if confidence_scores:
+        st.subheader("🎯 Confidence Scores (Quick View)")
+        cols = st.columns(len(confidence_scores))
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Metadata JSON (FAIR-DS compatible)
-            if "metadata_json" in artifacts:
-                metadata_json_str = artifacts["metadata_json"]
-                if isinstance(metadata_json_str, str):
-                    st.download_button(
-                        "📄 Metadata JSON",
-                        metadata_json_str,
-                        file_name="metadata.json",
-                        mime="application/json"
-                    )
-                else:
-                    # If it's a dict, convert to JSON string
-                    st.download_button(
-                        "📄 Metadata JSON",
-                        json.dumps(metadata_json_str, indent=2),
-                        file_name="metadata.json",
-                        mime="application/json"
-                    )
-        
-        with col2:
-            # Show JSON in expandable section
-            if "metadata_json" in artifacts:
-                with st.expander("📋 View Metadata JSON"):
-                    if isinstance(artifacts["metadata_json"], str):
-                        st.json(json.loads(artifacts["metadata_json"]))
-                    else:
-                        st.json(artifacts["metadata_json"])
-        
-        # Processing log
-        if "processing_log" in artifacts:
-            st.download_button(
-                "📝 Processing Log",
-                artifacts["processing_log"],
-                file_name="processing_log.jsonl",
-                mime="text/plain"
-            )
+        for i, (component, score) in enumerate(confidence_scores.items()):
+            with cols[i % len(cols)]:
+                color = "normal" if score > 0.8 else "inverse" if score < 0.6 else "off"
+                st.metric(component.replace("_", " ").title(), f"{score:.2%}", delta_color=color)
 
 def review_results_page():
     import streamlit as st
@@ -1014,6 +931,8 @@ def review_results_page():
 def configuration_page():
     """Configuration page for .env parameters."""
     import streamlit as st
+    from fairifier.config import config
+    
     st.header("⚙️ Configuration")
     st.markdown("Configure environment parameters for FAIRifier")
     
@@ -1239,6 +1158,460 @@ FAIR_DS_API_URL={fair_ds_api_url}
         st.info(f"📊 Project: `{langsmith_project}`")
     else:
         st.warning("⚠️ LangSmith tracing is disabled. Enable it above to track runs in LangSmith.")
+
+def display_execution_history_tab(result):
+    """Display execution history timeline with Critic evaluations."""
+    import streamlit as st
+    import pandas as pd
+    from datetime import datetime as dt
+    
+    execution_history = result.get("execution_history", [])
+    
+    if not execution_history:
+        st.info("No execution history available")
+        return
+    
+    st.subheader("🔍 Execution History & Critic Evaluations")
+    
+    # Create timeline visualization
+    timeline_data = []
+    for i, exec_record in enumerate(execution_history):
+        agent_name = exec_record.get("agent_name", "Unknown")
+        attempt = exec_record.get("attempt", 1)
+        success = exec_record.get("success", False)
+        start_time = exec_record.get("start_time", "")
+        end_time = exec_record.get("end_time", "")
+        
+        # Calculate duration if both times available
+        duration = ""
+        if start_time and end_time:
+            try:
+                start_dt = dt.fromisoformat(start_time.replace('Z', '+00:00'))
+                end_dt = dt.fromisoformat(end_time.replace('Z', '+00:00'))
+                duration_sec = (end_dt - start_dt).total_seconds()
+                duration = f"{duration_sec:.2f}s"
+            except:
+                pass
+        
+        # Get critic evaluation
+        critic_eval = exec_record.get("critic_evaluation", {})
+        decision = critic_eval.get("decision", "N/A")
+        score = critic_eval.get("score", 0.0)
+        
+        timeline_data.append({
+            "Step": i + 1,
+            "Agent": agent_name,
+            "Attempt": attempt,
+            "Success": "✅" if success else "❌",
+            "Duration": duration,
+            "Critic Decision": decision,
+            "Critic Score": f"{score:.2f}" if score else "N/A"
+        })
+    
+    # Display as table
+    df = pd.DataFrame(timeline_data)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    # Detailed view for each step
+    st.subheader("📝 Detailed Execution Records")
+    for i, exec_record in enumerate(execution_history):
+        agent_name = exec_record.get("agent_name", "Unknown")
+        attempt = exec_record.get("attempt", 1)
+        success = exec_record.get("success", False)
+        
+        # Status icon
+        status_icon = "✅" if success else "❌"
+        retry_badge = f" (Attempt {attempt})" if attempt > 1 else ""
+        
+        with st.expander(f"{status_icon} Step {i+1}: {agent_name}{retry_badge}"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Agent:**", agent_name)
+                st.write("**Attempt:**", attempt)
+                st.write("**Success:**", "Yes" if success else "No")
+                
+                if exec_record.get("error"):
+                    st.error(f"**Error:** {exec_record['error']}")
+            
+            with col2:
+                st.write("**Start Time:**", exec_record.get("start_time", "N/A"))
+                st.write("**End Time:**", exec_record.get("end_time", "N/A"))
+            
+            # Critic evaluation details
+            critic_eval = exec_record.get("critic_evaluation", {})
+            if critic_eval:
+                st.markdown("---")
+                st.markdown("**🔍 Critic Evaluation:**")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    decision = critic_eval.get("decision", "N/A")
+                    decision_color = {
+                        "ACCEPT": "green",
+                        "RETRY": "orange", 
+                        "ESCALATE": "red"
+                    }.get(decision, "gray")
+                    st.markdown(f"**Decision:** :{decision_color}[{decision}]")
+                
+                with col2:
+                    score = critic_eval.get("score", 0.0)
+                    st.metric("Quality Score", f"{score:.2f}")
+                
+                with col3:
+                    confidence = critic_eval.get("confidence", 0.0)
+                    st.metric("Confidence", f"{confidence:.2f}")
+                
+                # Detailed critique
+                if critic_eval.get("strengths"):
+                    st.success(f"**Strengths:** {', '.join(critic_eval['strengths'])}")
+                
+                if critic_eval.get("weaknesses"):
+                    st.warning(f"**Weaknesses:** {', '.join(critic_eval['weaknesses'])}")
+                
+                if critic_eval.get("suggestions"):
+                    st.info(f"**Suggestions:** {', '.join(critic_eval['suggestions'])}")
+                
+                # Rubric scores
+                rubric_scores = critic_eval.get("rubric_scores", {})
+                if rubric_scores:
+                    st.markdown("**Rubric Scores:**")
+                    score_cols = st.columns(len(rubric_scores))
+                    for idx, (criterion, value) in enumerate(rubric_scores.items()):
+                        with score_cols[idx]:
+                            st.metric(criterion.replace("_", " ").title(), f"{value:.2f}")
+
+
+def display_confidence_tab(result):
+    """Display multi-dimensional confidence scores."""
+    import streamlit as st
+    
+    st.subheader("🎯 Multi-Dimensional Confidence Scores")
+    
+    confidence_scores = result.get("confidence_scores", {})
+    quality_metrics = result.get("quality_metrics", {})
+    
+    if not confidence_scores:
+        st.info("No confidence scores available")
+        return
+    
+    # Overall confidence
+    overall_conf = confidence_scores.get("overall", 0.0)
+    st.metric("Overall Confidence", f"{overall_conf:.2%}", 
+              help="Weighted average of all confidence dimensions")
+    
+    # Individual confidence dimensions
+    st.markdown("---")
+    st.markdown("### Confidence Breakdown")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        critic_conf = confidence_scores.get("critic", 0.0)
+        st.metric("Critic Confidence", f"{critic_conf:.2%}",
+                  help="Confidence from Critic Agent evaluations")
+        
+        if quality_metrics.get("critic"):
+            with st.expander("Critic Details"):
+                critic_details = quality_metrics["critic"]
+                st.json(critic_details)
+    
+    with col2:
+        structural_conf = confidence_scores.get("structural", 0.0)
+        st.metric("Structural Confidence", f"{structural_conf:.2%}",
+                  help="Based on field coverage and evidence presence")
+        
+        if quality_metrics.get("structural"):
+            with st.expander("Structural Details"):
+                structural_details = quality_metrics["structural"]
+                st.write(f"**Field Coverage:** {structural_details.get('field_coverage', 0):.2%}")
+                st.write(f"**Evidence Coverage:** {structural_details.get('evidence_coverage', 0):.2%}")
+                st.write(f"**Package Coverage:** {structural_details.get('package_coverage', 0):.2%}")
+    
+    with col3:
+        validation_conf = confidence_scores.get("validation", 0.0)
+        st.metric("Validation Confidence", f"{validation_conf:.2%}",
+                  help="Based on schema validation and format compliance")
+        
+        if quality_metrics.get("validation"):
+            with st.expander("Validation Details"):
+                validation_details = quality_metrics["validation"]
+                st.json(validation_details)
+    
+    # Confidence weights visualization
+    st.markdown("---")
+    st.markdown("### Confidence Weights")
+    
+    from fairifier.config import config
+    
+    weights_data = {
+        "Critic": config.confidence_weight_critic,
+        "Structural": config.confidence_weight_structural,
+        "Validation": config.confidence_weight_validation
+    }
+    
+    col1, col2, col3 = st.columns(3)
+    for idx, (name, weight) in enumerate(weights_data.items()):
+        with [col1, col2, col3][idx]:
+            st.metric(f"{name} Weight", f"{weight:.2f}")
+    
+    # Quality metrics details
+    if quality_metrics:
+        st.markdown("---")
+        st.markdown("### Quality Metrics Details")
+        
+        with st.expander("View All Quality Metrics"):
+            st.json(quality_metrics)
+
+
+def display_metadata_tab(result):
+    """Display metadata fields organized by ISA sheet."""
+    import streamlit as st
+    
+    st.subheader("🏷️ Generated Metadata Fields")
+    
+    metadata_fields = result.get("metadata_fields", [])
+    
+    if not metadata_fields:
+        st.info("No metadata fields available")
+        return
+    
+    # Convert to list if dict
+    if isinstance(metadata_fields, dict):
+        metadata_fields = list(metadata_fields.values())
+    
+    # Group by ISA sheet
+    from collections import defaultdict
+    fields_by_sheet = defaultdict(list)
+    fields_without_sheet = []
+    
+    for field in metadata_fields:
+        if not isinstance(field, dict):
+            continue
+        
+        isa_sheet = field.get("isa_sheet")
+        if isa_sheet:
+            fields_by_sheet[isa_sheet].append(field)
+        else:
+            fields_without_sheet.append(field)
+    
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Fields", len(metadata_fields))
+    
+    with col2:
+        required_count = sum(1 for f in metadata_fields if isinstance(f, dict) and f.get("required", False))
+        st.metric("Required Fields", required_count)
+    
+    with col3:
+        st.metric("ISA Sheets", len(fields_by_sheet))
+    
+    with col4:
+        avg_confidence = sum(f.get("confidence", 0) for f in metadata_fields if isinstance(f, dict)) / len(metadata_fields) if metadata_fields else 0
+        st.metric("Avg Confidence", f"{avg_confidence:.2%}")
+    
+    # Display by ISA sheet
+    st.markdown("---")
+    st.markdown("### Fields by ISA Sheet")
+    
+    sheet_order = ["investigation", "study", "assay", "sample", "observationunit"]
+    
+    for sheet_name in sheet_order:
+        if sheet_name not in fields_by_sheet:
+            continue
+        
+        sheet_fields = fields_by_sheet[sheet_name]
+        
+        with st.expander(f"📋 {sheet_name.upper()} ({len(sheet_fields)} fields)", expanded=(sheet_name == "investigation")):
+            display_field_list(sheet_fields)
+    
+    # Fields without ISA sheet
+    if fields_without_sheet:
+        with st.expander(f"📋 UNASSIGNED ({len(fields_without_sheet)} fields)"):
+            display_field_list(fields_without_sheet)
+    
+    # Download metadata as JSON
+    st.markdown("---")
+    import json
+    metadata_json = json.dumps({"metadata_fields": metadata_fields}, indent=2)
+    st.download_button(
+        "📥 Download Metadata Fields (JSON)",
+        metadata_json,
+        file_name="metadata_fields.json",
+        mime="application/json"
+    )
+
+
+def display_field_list(fields):
+    """Display a list of metadata fields."""
+    import streamlit as st
+    
+    for field in fields:
+        field_name = field.get("field_name") or field.get("name", "Unknown")
+        is_required = field.get("required", False)
+        confidence = field.get("confidence", 0.0)
+        value = field.get("value", "")
+        evidence = field.get("evidence", "")
+        package = field.get("package_source", "")
+        
+        # Field header
+        required_badge = "🔴 Required" if is_required else "⚪ Optional"
+        package_badge = f"📦 {package}" if package else ""
+        
+        st.markdown(f"**{field_name}** {required_badge} {package_badge}")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            if field.get("description"):
+                st.caption(field["description"])
+            
+            if value:
+                st.code(value, language="text")
+            else:
+                st.caption("_No value extracted_")
+        
+        with col2:
+            st.metric("Confidence", f"{confidence:.2%}")
+            
+            if field.get("data_type"):
+                st.caption(f"Type: `{field['data_type']}`")
+        
+        if evidence:
+            with st.expander("📖 Evidence"):
+                st.text(evidence[:500] + ("..." if len(evidence) > 500 else ""))
+        
+        st.markdown("---")
+
+
+def display_artifacts_tab(result):
+    """Display and download artifacts."""
+    import streamlit as st
+    import json
+    
+    st.subheader("📦 Generated Artifacts")
+    
+    artifacts = result.get("artifacts", {})
+    
+    if not artifacts:
+        st.info("No artifacts available")
+        return
+    
+    # Metadata JSON (FAIR-DS compatible)
+    if "metadata_json" in artifacts:
+        st.markdown("### 📄 Metadata JSON (FAIR-DS Compatible)")
+        
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            metadata_json_str = artifacts["metadata_json"]
+            if isinstance(metadata_json_str, str):
+                st.download_button(
+                    "📥 Download JSON",
+                    metadata_json_str,
+                    file_name="metadata_fairds.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+            else:
+                st.download_button(
+                    "📥 Download JSON",
+                    json.dumps(metadata_json_str, indent=2),
+                    file_name="metadata_fairds.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+        
+        with col2:
+            st.info("FAIR-DS compatible JSON format for direct submission to data repositories")
+        
+        # Preview
+        with st.expander("👁️ Preview Metadata JSON"):
+            if isinstance(artifacts["metadata_json"], str):
+                try:
+                    st.json(json.loads(artifacts["metadata_json"]))
+                except:
+                    st.code(artifacts["metadata_json"], language="json")
+            else:
+                st.json(artifacts["metadata_json"])
+    
+    # Validation Report
+    if "validation_report" in artifacts:
+        st.markdown("---")
+        st.markdown("### ✅ Validation Report")
+        
+        validation_report = artifacts["validation_report"]
+        
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            st.download_button(
+                "📥 Download Report",
+                validation_report,
+                file_name="validation_report.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
+        
+        with col2:
+            st.info("Quality assessment and validation results")
+        
+        with st.expander("👁️ View Validation Report"):
+            st.text(validation_report)
+    
+    # Processing Log
+    if "processing_log" in artifacts:
+        st.markdown("---")
+        st.markdown("### 📝 Processing Log")
+        
+        processing_log = artifacts["processing_log"]
+        
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            st.download_button(
+                "📥 Download Log",
+                processing_log,
+                file_name="processing_log.jsonl",
+                mime="text/plain",
+                use_container_width=True
+            )
+        
+        with col2:
+            st.info("Detailed execution log in JSONL format")
+    
+    # Workflow Report
+    workflow_report = result.get("workflow_report")
+    if workflow_report:
+        st.markdown("---")
+        st.markdown("### 📊 Workflow Report")
+        
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            st.download_button(
+                "📥 Download Report (JSON)",
+                json.dumps(workflow_report, indent=2),
+                file_name="workflow_report.json",
+                mime="application/json",
+                use_container_width=True
+            )
+        
+        with col2:
+            st.info("Comprehensive workflow execution report with metrics")
+        
+        with st.expander("👁️ View Workflow Report"):
+            st.json(workflow_report)
+    
+    # Output directory info
+    output_path = result.get("output_dir") or st.session_state.get("output_path")
+    if output_path:
+        st.markdown("---")
+        st.info(f"💾 **Output Directory:** `{output_path}`")
+        st.caption("All artifacts have been saved to this directory")
+
 
 def about_page():
     import streamlit as st

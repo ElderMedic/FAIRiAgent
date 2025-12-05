@@ -8,6 +8,7 @@ Provides a unified interface for working with different LLM providers
 import json
 import logging
 import re
+from datetime import datetime
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
@@ -35,6 +36,61 @@ from ..config import config
 logger = logging.getLogger(__name__)
 
 
+def _extract_json_from_markdown(content: str) -> str:
+    """Extract JSON content from markdown code blocks.
+    
+    Handles cases where JSON content might contain ``` markers in strings
+    by finding the LAST closing ``` marker instead of the first.
+    
+    Args:
+        content: Content that may contain markdown code fences
+        
+    Returns:
+        Extracted JSON string without markdown fences
+    """
+    if "```json" in content:
+        # Find the start after ```json
+        start_idx = content.find("```json")
+        if start_idx >= 0:
+            # Start after ```json (7 chars) and any whitespace
+            json_start = start_idx + 7
+            # Skip leading whitespace/newlines
+            while json_start < len(content) and content[json_start] in ['\n', '\r', ' ', '\t']:
+                json_start += 1
+            
+            # Find the LAST ``` marker (from the end) to handle cases where JSON contains ``` in strings
+            end_idx = content.rfind("```")
+            if end_idx > json_start:
+                return content[json_start:end_idx].strip()
+            else:
+                # Fallback: if no closing ``` found, try to extract from start to end
+                return content[json_start:].strip()
+    elif "```" in content:
+        # Similar logic for generic code blocks
+        start_idx = content.find("```")
+        if start_idx >= 0:
+            # Find the language identifier (if any) - skip until newline
+            json_start = content.find("\n", start_idx)
+            if json_start < 0:
+                json_start = start_idx + 3  # Skip ```
+            else:
+                json_start += 1  # Skip the newline
+            
+            # Skip leading whitespace
+            while json_start < len(content) and content[json_start] in ['\n', '\r', ' ', '\t']:
+                json_start += 1
+            
+            # Find the LAST ``` marker
+            end_idx = content.rfind("```")
+            if end_idx > json_start:
+                return content[json_start:end_idx].strip()
+            else:
+                return content[json_start:].strip()
+    
+    # No markdown fences found, return as-is
+    return content.strip()
+
+
 def _fix_json_string(content: str) -> str:
     """Fix common JSON formatting issues.
     
@@ -45,10 +101,7 @@ def _fix_json_string(content: str) -> str:
         Fixed JSON string
     """
     # Remove markdown code blocks if present
-    if "```json" in content:
-        content = content.split("```json")[1].split("```")[0].strip()
-    elif "```" in content:
-        content = content.split("```")[1].split("```")[0].strip()
+    content = _extract_json_from_markdown(content)
     
     # Find JSON object start
     json_start = content.find('{')
@@ -56,6 +109,48 @@ def _fix_json_string(content: str) -> str:
         return content
     
     content = content[json_start:]
+    
+    # Fix common JSON syntax errors:
+    # 1. Unquoted string values: "key": value" -> "key": "value"
+    # Pattern: ": number_or_text" where text is not quoted
+    # This is tricky - we need to be careful not to break valid JSON
+    
+    # Fix pattern: "key": number text" -> "key": "number text"
+    # Match: ": followed by optional whitespace, then number, then text, then closing quote
+    import re
+    # Pattern to find unquoted string values after numbers or text
+    # Look for: ": 8 per sampling day" or ": value text"
+    # But be careful - this should only match when there's text after a number that's not quoted
+    def fix_unquoted_string_value(match):
+        key_part = match.group(1)  # The "key": part
+        value_part = match.group(2)  # The value part
+        # If value doesn't start with quote and contains text, quote it
+        value_stripped = value_part.strip()
+        if not value_stripped.startswith('"') and not value_stripped.startswith('[') and not value_stripped.startswith('{'):
+            # Check if it's a number followed by text (like "8 per sampling day")
+            # Or just unquoted text
+            if ' ' in value_stripped or any(c.isalpha() for c in value_stripped):
+                # This looks like an unquoted string, quote it
+                return f'{key_part} "{value_stripped}"'
+        return match.group(0)
+    
+    # More targeted fix: look for pattern ": number text" where text is not quoted
+    # Pattern: ": 8 per sampling day" -> ": "8 per sampling day"
+    content = re.sub(
+        r'("([^"]+)":\s*)(\d+)\s+([a-zA-Z][^",}\]]+)"',
+        r'\1"\3 \4"',
+        content
+    )
+    
+    # Fix pattern: ": text" where text starts with letter and is not quoted
+    # But be careful - only fix if it's clearly a string value (contains spaces or special chars)
+    # This is more aggressive - only apply if we detect it's likely a string
+    # Pattern: ": value" where value is not quoted and contains spaces
+    content = re.sub(
+        r'("([^"]+)":\s*)([a-zA-Z][^",}\]]+\s+[^",}\]]+)"',
+        lambda m: f'{m.group(1)}"{m.group(3)}"',
+        content
+    )
     
     # Try to find the last complete JSON object
     # Count braces to find where the main object ends
@@ -137,17 +232,13 @@ def _parse_json_with_fallback(content: str) -> Optional[Dict[str, Any]]:
     Returns:
         Parsed JSON dict or None if all strategies fail
     """
-    original_content = content
-    
     # Pre-process: Remove markdown code fences if present
-    if "```json" in content:
-        logger.debug("Removing ```json code fence")
-        content = content.split("```json", 1)[1].split("```", 1)[0].strip()
-    elif content.strip().startswith("```") and content.strip().endswith("```"):
-        logger.debug("Removing generic ``` code fence")
-        content = content.strip()[3:-3].strip()
-    
-    logger.debug(f"After fence removal: {len(content)} chars, starts with: {content[:50]}")
+    original_length = len(content)
+    content = _extract_json_from_markdown(content)
+    logger.debug(
+        f"After fence removal: {original_length} -> {len(content)} chars, "
+        f"starts with: {content[:50]}"
+    )
     
     # Strategy 1: Direct parse
     try:
@@ -161,9 +252,15 @@ def _parse_json_with_fallback(content: str) -> Optional[Dict[str, Any]]:
     # Strategy 2: Fix common issues and parse
     try:
         fixed_content = _fix_json_string(content)
-        return json.loads(fixed_content)
+        # Try to parse the fixed content
+        result = json.loads(fixed_content)
+        logger.debug(f"✅ Strategy 2 (fixed JSON) succeeded")
+        return result
     except json.JSONDecodeError as e:
-        logger.debug(f"Fixed JSON still failed: {e}")
+        logger.debug(f"Strategy 2 (fixed JSON) failed: {e}")
+        # Log the error position for debugging
+        if hasattr(e, 'pos'):
+            logger.debug(f"JSON error at position {e.pos}: {fixed_content[max(0, e.pos-100):e.pos+100]}")
     
     # Strategy 3: Extract first complete JSON object
     try:
@@ -251,6 +348,48 @@ class LLMHelper:
         self.model = config.llm_model
         self.llm = self._initialize_llm()
         self.llm_responses = []  # Store all LLM interactions for debugging
+    
+    def _log_llm_response(self, result, messages, operation_name: str):
+        """Helper method to log LLM response to llm_responses list.
+        
+        Args:
+            result: The LLM response object
+            messages: The input messages sent to LLM
+            operation_name: Name of the operation
+        """
+        try:
+            # Extract content from result
+            content = None
+            if hasattr(result, 'content'):
+                content = result.content
+            elif hasattr(result, '__str__'):
+                content = str(result)
+            
+            if content is None:
+                logger.warning(f"Could not extract content from LLM result for {operation_name}")
+                return
+            
+            # Calculate prompt length
+            prompt_length = 0
+            for msg in messages:
+                if hasattr(msg, 'content') and msg.content:
+                    prompt_length += len(str(msg.content))
+            
+            # Normalize operation name for consistency
+            normalized_operation = operation_name.lower().replace(" ", "_").replace(".", "_")
+            
+            # Append to llm_responses
+            self.llm_responses.append({
+                "operation": normalized_operation,
+                "prompt_length": prompt_length,
+                "response": content,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            logger.debug(f"Logged LLM response for operation: {normalized_operation} ({len(content)} chars)")
+        except Exception as e:
+            # Don't fail the entire operation if logging fails
+            logger.warning(f"Failed to log LLM response for {operation_name}: {e}")
     
     async def _call_llm(self, messages, stream_to_streamlit=None, operation_name="LLM Call"):
         """Helper method to call LLM with proper parameters.
@@ -352,6 +491,9 @@ class LLMHelper:
                     # Create a response-like object
                     result = AIMessage(content=full_text)
                     
+                    # Log LLM response
+                    self._log_llm_response(result, messages, operation_name)
+                    
                     # Add to Streamlit display if available
                     try:
                         from fairifier.apps.ui.streamlit_app import add_llm_response
@@ -368,6 +510,10 @@ class LLMHelper:
                             extra_body={"enable_thinking": True if enable_thinking else False}
                         )
                         result = await llm_with_params.ainvoke(messages)
+                        
+                        # Log LLM response
+                        self._log_llm_response(result, messages, operation_name)
+                        
                         # Add to Streamlit display
                         try:
                             from fairifier.apps.ui.streamlit_app import add_llm_response
@@ -379,6 +525,10 @@ class LLMHelper:
                     except Exception as e2:
                         logger.warning(f"Non-streaming failed: {e2}, falling back to regular call")
                         result = await self.llm.ainvoke(messages)
+                        
+                        # Log LLM response
+                        self._log_llm_response(result, messages, operation_name)
+                        
                         # Add to Streamlit display
                         try:
                             from fairifier.apps.ui.streamlit_app import add_llm_response
@@ -395,6 +545,10 @@ class LLMHelper:
                         extra_body={"enable_thinking": False}
                     )
                     result = await llm_with_params.ainvoke(messages)
+                    
+                    # Log LLM response
+                    self._log_llm_response(result, messages, operation_name)
+                    
                     # Add to Streamlit display
                     try:
                         from fairifier.apps.ui.streamlit_app import add_llm_response
@@ -406,6 +560,10 @@ class LLMHelper:
                 except Exception as e:
                     logger.warning(f"Failed to set enable_thinking=False via extra_body: {e}, using regular call")
                     result = await self.llm.ainvoke(messages)
+                    
+                    # Log LLM response
+                    self._log_llm_response(result, messages, operation_name)
+                    
                     # Add to Streamlit display
                     try:
                         from fairifier.apps.ui.streamlit_app import add_llm_response
@@ -445,6 +603,10 @@ class LLMHelper:
                             pass
                     
                     result = AIMessage(content=full_text)
+                    
+                    # Log LLM response
+                    self._log_llm_response(result, messages, operation_name)
+                    
                     # Add to Streamlit display
                     try:
                         from fairifier.apps.ui.streamlit_app import add_llm_response
@@ -455,6 +617,10 @@ class LLMHelper:
                 except Exception as e:
                     logger.warning(f"OpenAI streaming failed: {e}, falling back to regular call")
                     result = await self.llm.ainvoke(messages)
+                    
+                    # Log LLM response
+                    self._log_llm_response(result, messages, operation_name)
+                    
                     # Add to Streamlit display
                     try:
                         from fairifier.apps.ui.streamlit_app import add_llm_response
@@ -465,6 +631,10 @@ class LLMHelper:
                     return result
             else:
                 result = await self.llm.ainvoke(messages)
+                
+                # Log LLM response
+                self._log_llm_response(result, messages, operation_name)
+                
                 # Add to Streamlit display
                 try:
                     from fairifier.apps.ui.streamlit_app import add_llm_response
@@ -504,6 +674,10 @@ class LLMHelper:
                             pass
                     
                     result = AIMessage(content=full_text)
+                    
+                    # Log LLM response
+                    self._log_llm_response(result, messages, operation_name)
+                    
                     # Add to Streamlit display
                     try:
                         from fairifier.apps.ui.streamlit_app import add_llm_response
@@ -557,6 +731,9 @@ class LLMHelper:
                     if content and (not hasattr(result, 'content') or not result.content):
                         logger.info(f"Updating result.content with content from alternative source")
                         result.content = content
+                    
+                    # Log LLM response
+                    self._log_llm_response(result, messages, operation_name)
                     
                     # Add to Streamlit display
                     try:
@@ -650,6 +827,9 @@ class LLMHelper:
                         logger.info(f"Updating result.content with content from alternative source")
                         result.content = content
                     
+                    # Log LLM response
+                    self._log_llm_response(result, messages, operation_name)
+                    
                     # Add to Streamlit display
                     try:
                         from fairifier.apps.ui.streamlit_app import add_llm_response
@@ -664,6 +844,9 @@ class LLMHelper:
         else:
             # For other providers (anthropic), no special handling needed
             result = await self.llm.ainvoke(messages)
+            
+            # Log LLM response
+            self._log_llm_response(result, messages, operation_name)
             
             # Add to Streamlit display if available
             try:
@@ -934,11 +1117,20 @@ Example for a research paper:
 - Use descriptive field names that make sense for the content
 
 **OUTPUT FORMAT - CRITICAL:**
-Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
-- DO NOT include explanatory text before or after the JSON
-- DO NOT include comments or notes
-- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
-- Return ONLY the JSON content, nothing else."""
+You MUST wrap your JSON response in markdown code blocks with ```json prefix and ``` suffix.
+Format your response EXACTLY like this:
+```json
+{
+  "your": "json content here"
+}
+```
+
+REQUIREMENTS:
+- ALWAYS start with ```json on its own line
+- ALWAYS end with ``` on its own line
+- DO NOT include any explanatory text before or after the code block
+- DO NOT include comments or notes inside the JSON
+- Return ONLY the markdown code block with JSON content, nothing else."""
         else:
             system_prompt = """You are an expert at extracting structured information from ANY research-related document.
 
@@ -988,11 +1180,20 @@ Use descriptive, specific field names (e.g., "project_acronym", "funding_program
 - Use descriptive field names that make sense for the content
 
 **OUTPUT FORMAT - CRITICAL:**
-Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
-- DO NOT include explanatory text before or after the JSON
-- DO NOT include comments or notes
-- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
-- Return ONLY the JSON content, nothing else."""
+You MUST wrap your JSON response in markdown code blocks with ```json prefix and ``` suffix.
+Format your response EXACTLY like this:
+```json
+{
+  "your": "json content here"
+}
+```
+
+REQUIREMENTS:
+- ALWAYS start with ```json on its own line
+- ALWAYS end with ``` on its own line
+- DO NOT include any explanatory text before or after the code block
+- DO NOT include comments or notes inside the JSON
+- Return ONLY the markdown code block with JSON content, nothing else."""
 
         # Add critic feedback if available
         if critic_feedback:
@@ -1057,12 +1258,7 @@ Extract all relevant information and return as JSON with clear, descriptive fiel
                 logger.error(f"Response type: {type(response)}")
                 raise ValueError(error_msg)
             
-            # Store interaction for debugging
-            self.llm_responses.append({
-                "operation": "extract_document_info",
-                "prompt_length": len(text),
-                "response": content
-            })
+            # Note: LLM response is automatically logged by _call_llm
             
             # Parse JSON response using improved parser
             logger.debug(f"Attempting to parse LLM response ({len(content)} chars)")
@@ -1112,16 +1308,22 @@ Extract all relevant information and return as JSON with clear, descriptive fiel
 Given a field description and document information, generate an appropriate value.
 
 **OUTPUT FORMAT - CRITICAL:**
-Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
-- DO NOT include explanatory text before or after the JSON
-- DO NOT include comments or notes
-- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
-- Return ONLY the JSON object with these fields:
-- value: The generated value
-- evidence: Brief explanation of where/how you determined this value
-- confidence: Float 0-1 indicating your confidence
+You MUST wrap your JSON response in markdown code blocks with ```json prefix and ``` suffix.
+Format your response EXACTLY like this:
+```json
+{
+  "value": "generated value",
+  "evidence": "explanation",
+  "confidence": 0.95
+}
+```
 
-Return ONLY the JSON content, nothing else."""
+REQUIREMENTS:
+- ALWAYS start with ```json on its own line
+- ALWAYS end with ``` on its own line
+- DO NOT include any explanatory text before or after the code block
+- DO NOT include comments or notes inside the JSON
+- Return ONLY the markdown code block with JSON content, nothing else."""
 
         user_prompt = f"""Generate a value for this metadata field:
 
@@ -1150,18 +1352,10 @@ Return JSON with value, evidence, and confidence."""
                 logger.error(f"❌ {error_msg}")
                 raise ValueError(error_msg)
             
-            # Store interaction
-            self.llm_responses.append({
-                "operation": "generate_metadata_value",
-                "field": field_name,
-                "response": content
-            })
+            # Note: LLM response is automatically logged by _call_llm
             
             # Parse JSON
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
+            content = _extract_json_from_markdown(content)
             
             result = json.loads(content)
             
@@ -1262,17 +1456,23 @@ Return JSON with value, evidence, and confidence."""
 - **Balance across ISA hierarchy levels** - don't focus only on one ISA sheet
 
 **OUTPUT FORMAT - CRITICAL:**
-Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
-- DO NOT include explanatory text before or after the JSON
-- DO NOT include comments or notes
-- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
-- Return ONLY the JSON object in this format:
+You MUST wrap your JSON response in markdown code blocks with ```json prefix and ``` suffix.
+Format your response EXACTLY like this:
+```json
 {
   "selected_fields": [
     {"field_name": "...", "reason": "why this field is relevant"}
   ],
   "rationale": "overall selection strategy, including ISA level balance"
-}"""
+}
+```
+
+REQUIREMENTS:
+- ALWAYS start with ```json on its own line
+- ALWAYS end with ``` on its own line
+- DO NOT include any explanatory text before or after the code block
+- DO NOT include comments or notes inside the JSON
+- Return ONLY the markdown code block with JSON content, nothing else."""
 
         if critic_feedback:
             feedback_text = f"\n\n**Improve based on feedback:**\n"
@@ -1299,11 +1499,20 @@ Field counts per ISA sheet:
 Select the most appropriate 20-30 metadata fields for this document, ensuring representation across ISA hierarchy levels.
 
 **OUTPUT FORMAT - CRITICAL:**
-Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
-- DO NOT include explanatory text before or after the JSON
-- DO NOT include comments or notes
-- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
-- Return ONLY the JSON content, nothing else."""
+You MUST wrap your JSON response in markdown code blocks with ```json prefix and ``` suffix.
+Format your response EXACTLY like this:
+```json
+{
+  "your": "json content here"
+}
+```
+
+REQUIREMENTS:
+- ALWAYS start with ```json on its own line
+- ALWAYS end with ``` on its own line
+- DO NOT include any explanatory text before or after the code block
+- DO NOT include comments or notes inside the JSON
+- Return ONLY the markdown code block with JSON content, nothing else."""
 
         messages = [
             SystemMessage(content=system_prompt),
@@ -1320,17 +1529,9 @@ Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
                 logger.error(f"❌ {error_msg}")
                 raise ValueError(error_msg)
             
-            self.llm_responses.append({
-                "operation": "select_relevant_fields",
-                "document": doc_summary,
-                "response": content
-            })
+            # Note: LLM response is automatically logged by _call_llm
             
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            
+            content = _extract_json_from_markdown(content)
             result = json.loads(content)
             selected = result.get("selected_fields", [])
             
@@ -1403,11 +1604,21 @@ Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
 - For fields with limited information, use "not specified" as the value but still include the field
 
 **OUTPUT FORMAT - CRITICAL:**
-Return ONLY valid JSON array. Prefer raw JSON without markdown code blocks.
-- DO NOT include explanatory text before or after the JSON
-- DO NOT include comments or notes (no // comments in JSON)
-- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
-- Return ONLY the JSON array content, nothing else."""
+You MUST wrap your JSON array response in markdown code blocks with ```json prefix and ``` suffix.
+Format your response EXACTLY like this:
+```json
+[
+  "item1",
+  "item2"
+]
+```
+
+REQUIREMENTS:
+- ALWAYS start with ```json on its own line
+- ALWAYS end with ``` on its own line
+- DO NOT include any explanatory text before or after the code block
+- DO NOT include comments or notes inside the JSON (no // comments in JSON)
+- Return ONLY the markdown code block with JSON array content, nothing else."""
 
         if critic_feedback:
             feedback_text = f"\n\n**Address these issues:**\n"
@@ -1499,11 +1710,7 @@ Return ONLY valid JSON array. Prefer raw JSON without markdown code blocks.
                 logger.error(f"❌ {error_msg}")
                 raise ValueError(error_msg)
             
-            self.llm_responses.append({
-                "operation": "generate_metadata",
-                "field_count": len(selected_fields),
-                "response": content
-            })
+            # Note: LLM response is automatically logged by _call_llm
             
             if not content or not content.strip():
                 logger.warning("LLM returned empty response for generate_complete_metadata")
@@ -1517,11 +1724,7 @@ Return ONLY valid JSON array. Prefer raw JSON without markdown code blocks.
                     for f in selected_fields[:10]
                 ]
             
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            
+            content = _extract_json_from_markdown(content)
             metadata = json.loads(content)
             
             logger.info(f"Generated metadata for {len(metadata)} fields")
@@ -1592,11 +1795,20 @@ Return JSON with:
 IMPORTANT: Always include 'issues' and 'suggestions' as arrays (can be empty).
 
 **OUTPUT FORMAT - CRITICAL:**
-Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
-- DO NOT include explanatory text before or after the JSON
-- DO NOT include comments or notes
-- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
-- Return ONLY the JSON content, nothing else."""
+You MUST wrap your JSON response in markdown code blocks with ```json prefix and ``` suffix.
+Format your response EXACTLY like this:
+```json
+{
+  "your": "json content here"
+}
+```
+
+REQUIREMENTS:
+- ALWAYS start with ```json on its own line
+- ALWAYS end with ``` on its own line
+- DO NOT include any explanatory text before or after the code block
+- DO NOT include comments or notes inside the JSON
+- Return ONLY the markdown code block with JSON content, nothing else."""
 
         criteria_text = "\n".join(f"- {c}" for c in criteria)
         
@@ -1625,12 +1837,7 @@ Provide detailed evaluation as JSON with issues and suggestions arrays."""
             response = await self._call_llm(messages, operation_name="Evaluate Quality")
             response_content = getattr(response, 'content', None)
             
-            # Store interaction
-            self.llm_responses.append({
-                "operation": "evaluate_quality",
-                "criteria_count": len(criteria),
-                "response": response_content
-            })
+            # Note: LLM response is automatically logged by _call_llm
             
             # Check if response is empty
             if not response_content or not response_content.strip():

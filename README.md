@@ -17,8 +17,8 @@ FAIRiAgent is a CLI-first multi-agent framework that automatically extracts info
 - 🔧 **Local Provisional Support**: Extend with local terms (source=local, status=provisional)
 - 🎛️ **Multi-Model Support**: Ollama (local) / OpenAI / Qwen / Anthropic
 - 🔍 **LangSmith Integration**: Complete tracing and debugging support (默认启用)
-- 🎨 **Streamlit Web UI**: Interactive web interface with real-time streaming output
-- 💬 **Chat-like Streaming**: Real-time LLM response streaming with chat bubble interface
+- 🎨 **Dual Web UI**: Streamlit（数据分析）和 Gradio（API + 演示）两个完整版本
+- 💬 **Real-time Streaming**: Chat-like interface with live progress updates
 - ⚙️ **Configuration Management**: Save and manage runtime configurations
 - 📋 **Runtime Config Export**: Automatic export of input, .env, and runtime configurations
 - 🧑‍⚖️ **LLM-as-Judge Critic**: Rubric-driven auditing with actionable guidance per agent
@@ -91,12 +91,19 @@ python run_fairifier.py process document.txt --output-dir results/
 python run_fairifier.py config-info
 ```
 
-**Web UI Mode:**
+**Web UI Mode (两个版本可选):**
 ```bash
-# Start Streamlit web interface
-python run_fairifier.py ui
+# 选项 1: Streamlit (数据分析友好)
+./start_streamlit.sh
+# 访问: http://localhost:8501
 
-# Access at http://localhost:8501
+# 选项 2: Gradio (API + 演示友好)
+./start_gradio.sh
+# 访问: http://localhost:7860
+# API 文档: http://localhost:7860/docs
+
+# 详细说明
+cat START_HERE.md
 ```
 
 **LangGraph Studio (Development):**

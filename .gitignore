@@ -222,3 +222,41 @@ examples/
 # Ignore any backup or temp files Cursor may generate
 .cursor-backup/
 .cursor-temp/
+
+# Project-specific ignores
+# Output directories
+output/
+/output/
+
+# Environment files with secrets
+env.anthropic
+env.*
+*.env
+# Allow template and example files
+!*.template
+!*.example
+!env.example
+
+# Grant documents (personal/sensitive)
+grant/
+
+# Evaluation generated outputs
+evaluation/runs/
+evaluation/analysis/output/
+evaluation/analysis/output_*/
+evaluation/datasets/raw/
+evaluation/*.log
+
+# Keep evaluation code and configs, but ignore generated data
+!evaluation/scripts/
+!evaluation/evaluators/
+!evaluation/config/
+!evaluation/datasets/annotated/
+!evaluation/datasets/DATASET_README.md
+!evaluation/analysis/analyzers/
+!evaluation/analysis/data_loaders/
+!evaluation/analysis/reports/
+!evaluation/analysis/visualizations/
+!evaluation/analysis/README.md
+!evaluation/analysis/run_analysis.py
+!evaluation/analysis/check_failed_runs.py
