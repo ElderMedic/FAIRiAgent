@@ -655,7 +655,7 @@ MIT License - Free for academic and research use.
 
 ### 🌟 Made with ❤️ for the FAIR Data Community
 
-[![Star History Chart](https://api.star-history.com/svg?repos=your-org/FAIRiAgent&type=Date)](https://star-history.com/#your-org/FAIRiAgent&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=eldermedic/FAIRiAgent_local&type=Date)](https://star-history.com/#eldermedic/FAIRiAgent_local&Date)
 
 </div>
 
