@@ -1,35 +1,137 @@
-# FAIRiAgent - FAIR Metadata Generation Framework
+<div align="center">
 
-🧬 **CLI-first, JSON-only FAIR metadata generation with FAIR-DS compatibility**
+# 🧬 FAIRiAgent
 
-## 🎯 Overview
+### *FAIR Metadata Generation Framework*
 
-FAIRiAgent is a CLI-first multi-agent framework that automatically extracts information from research documents (PDF/text) and generates **FAIR-DS compatible JSON metadata**. Built with LangGraph and LangChain, it focuses on simplicity, standards compliance, and evidence-based metadata generation.
+**Transform research documents into FAIR-compliant metadata with AI-powered multi-agent intelligence**
+
+[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-green.svg)](https://langchain-ai.github.io/langgraph/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![FAIR-DS](https://img.shields.io/badge/FAIR--DS-Compatible-orange.svg)](https://fairds.systemsbiology.nl/)
+
+[🚀 Quick Start](#-quick-start) • [📖 Documentation](#-documentation) • [🎨 Web UI](#-web-ui-features) • [🤝 Contributing](#-contributing)
+
+---
+
+```
+╔═══════════════════════════════════════════════════════════════╗
+║                                                               ║
+║   ███████╗ █████╗ ██╗██████╗     █████╗  ██████╗ ███████╗    ║
+║   ██╔════╝██╔══██╗██║██╔══██╗    ██╔══██╗██╔════╝ ██╔════╝    ║
+║   █████╗  ███████║██║██████╔╝    ███████║██║  ███╗█████╗      ║
+║   ██╔══╝  ██╔══██║██║██╔══██╗    ██╔══██║██║   ██║██╔══╝      ║
+║   ██║     ██║  ██║██║██║  ██║    ██║  ██║╚██████╔╝███████╗    ║
+║   ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝    ╚═╝  ╚═╝ ╚═════╝ ╚══════╝    ║
+║                                                               ║
+║          Intelligent Agent for FAIR Metadata                  ║
+║                                                               ║
+╚═══════════════════════════════════════════════════════════════╝
+```
+
+**From PDF to FAIR metadata in minutes, not hours** 🚀
+
+</div>
+
+---
+
+## 🎯 What is FAIRiAgent?
+
+FAIRiAgent is a **CLI-first, multi-agent framework** that automatically extracts information from research documents (PDF/text) and generates **FAIR-DS compatible JSON metadata**. Built with LangGraph and LangChain, it transforms unstructured scientific documents into standardized, machine-readable metadata that follows FAIR principles.
+
+### 🌟 Why FAIRiAgent?
+
+- ⚡ **Fast**: Process documents in minutes, not hours
+- 🎯 **Accurate**: Multi-agent architecture with self-correcting critic loops
+- 📊 **Standards-compliant**: FAIR-DS compatible output format
+- 🔍 **Evidence-based**: Every field includes evidence, confidence, and provenance
+- 🧠 **Intelligent**: LLM-as-Judge critic with rubric-driven quality assessment
+- 🎨 **User-friendly**: Dual Web UI (Streamlit + Gradio) for interactive use
+- 🔧 **Flexible**: Support for local models (Ollama) and cloud providers (OpenAI, Qwen, Anthropic)
+
+### 📈 The Problem We Solve
+
+Research metadata generation is **time-consuming** and **error-prone**. Scientists spend hours manually extracting metadata from papers, often missing critical fields or using inconsistent formats. 
+
+<div align="center">
+
+| ❌ **Before FAIRiAgent** | ✅ **With FAIRiAgent** |
+|:---:|:---:|
+| ⏱️ Hours of manual work | ⚡ Minutes of automated processing |
+| ❌ Inconsistent formats | ✅ FAIR-DS compliant output |
+| 🐛 Human errors | 🤖 AI-powered accuracy |
+| 📝 Missing fields | 🔍 Comprehensive extraction |
+
+</div>
+
+**FAIRiAgent automates this process with:**
+
+- 🤖 **Intelligent extraction** from complex PDF layouts
+- 🧠 **Knowledge enrichment** from FAIR Data Station and ontologies  
+- ✅ **Automatic validation** against schema standards
+- 🔄 **Self-correction** through reflective critic loops
+
+---
 
 ## ✨ Key Features
 
+<div align="center">
+
+| 🎯 **Core Capabilities** | 🚀 **Advanced Features** | 🛠️ **Developer Tools** |
+|:---:|:---:|:---:|
+| 🤖 Multi-Agent Architecture | 🧑‍⚖️ LLM-as-Judge Critic | 🔍 LangSmith Integration |
+| 📄 PDF/Text Processing | 📈 Confidence Aggregator | 📝 JSON Line Logging |
+| 🧠 Knowledge Retrieval | 🔄 Self-Correction Loops | ⚙️ Config Management |
+| 🏷️ Evidence-based Fields | 🎨 Dual Web UI | 📋 Runtime Export |
+
+</div>
+
+### 🎯 Core Features
+
 - 🤖 **Multi-Agent Architecture**: Specialized agents for document parsing, knowledge retrieval, and JSON generation
-- 📄 **Document Processing**: Extract metadata from PDF and text documents
+- 📄 **Document Processing**: Extract metadata from PDF and text documents with MinerU integration
 - 🧠 **Knowledge Retrieval**: Integrate with FAIR Data Station and local knowledge base
 - 🏷️ **Evidence-based Fields**: Every field includes evidence, confidence, origin, and package source
 - 📊 **JSON-only Output**: FAIR-DS compatible metadata format (no RDF/RO-Crate)
-- 📝 **JSON Line Logging**: Structured logging for debugging and monitoring
-- 🔧 **Local Provisional Support**: Extend with local terms (source=local, status=provisional)
 - 🎛️ **Multi-Model Support**: Ollama (local) / OpenAI / Qwen / Anthropic
-- 🔍 **LangSmith Integration**: Complete tracing and debugging support (默认启用)
+
+### 🚀 Advanced Features
+
+- 🧑‍⚖️ **LLM-as-Judge Critic**: Rubric-driven auditing with actionable guidance per agent
+- 📈 **Confidence Aggregator**: Blends critic scores, structural coverage, and validation health
+- 🔄 **Self-Correction**: Automatic retry with feedback from Critic agent
 - 🎨 **Dual Web UI**: Streamlit（数据分析）和 Gradio（API + 演示）两个完整版本
 - 💬 **Real-time Streaming**: Chat-like interface with live progress updates
 - ⚙️ **Configuration Management**: Save and manage runtime configurations
 - 📋 **Runtime Config Export**: Automatic export of input, .env, and runtime configurations
-- 🧑‍⚖️ **LLM-as-Judge Critic**: Rubric-driven auditing with actionable guidance per agent
-- 📈 **Confidence Aggregator**: Blends critic scores, structural coverage, and validation health into a single metric
 
 ## 🏗️ Architecture
 
-The system uses a LangGraph-based multi-agent workflow:
+The system uses a **LangGraph-based multi-agent workflow** with intelligent self-correction:
 
+```mermaid
+graph LR
+    A[📄 PDF Document] --> B[🔍 Document Parser]
+    B --> C[📋 Planner]
+    C --> D[🧠 Knowledge Retriever]
+    D --> E[📝 JSON Generator]
+    E --> F[🧑‍⚖️ Critic]
+    F --> G{✅ Quality Check}
+    G -->|Pass| H[📊 FAIR Metadata]
+    G -->|Retry| E
+    G -->|Escalate| I[⚠️ Manual Review]
+    
+    style A fill:#e3f2fd
+    style H fill:#c8e6c9
+    style F fill:#fff9c4
+    style G fill:#ffccbc
 ```
-Document → Parse → Plan → Retrieve Knowledge → Generate JSON → Evaluate → Output
+
+**Workflow Flow:**
+```
+📄 Document → 🔍 Parse → 📋 Plan → 🧠 Retrieve Knowledge 
+    → 📝 Generate JSON → 🧑‍⚖️ Evaluate → ✅ Output
 ```
 
 **Agents & Nodes:**
@@ -37,7 +139,7 @@ Document → Parse → Plan → Retrieve Knowledge → Generate JSON → Evaluat
 2. **Planner Node**: Summarizes document type/domain并下发 special instructions
 3. **Knowledge Retriever**: Enriches metadata with FAIR-DS and local knowledge（遵循 Planner 指令）
 4. **JSON Generator**: Creates FAIR-DS compatible metadata（带有 Planner/ Critic 反馈）
-5. **Critic**: Uses LLM-as-Judge rubric (see `docs/development/critic_rubric.yaml`) to score outputs and emit improvement ops
+5. **Critic**: Uses LLM-as-Judge rubric (see `docs/en/development/critic_rubric.yaml`) to score outputs and emit improvement ops
 
 **Workflow Features:**
 - 🔄 **Retry Logic**: Automatic retry with feedback from Critic agent
@@ -47,7 +149,7 @@ Document → Parse → Plan → Retrieve Knowledge → Generate JSON → Evaluat
 
 ## 🧑‍⚖️ LLM-as-Judge Critic & Confidence
 
-- Rubric location: `docs/development/critic_rubric.yaml` （可自定义维度与阈值）
+- Rubric location: `docs/en/development/critic_rubric.yaml` （可自定义维度与阈值）
 - 关键配置（均可通过 `.env` 覆盖）：
   - `FAIRIFIER_CRITIC_RUBRIC_PATH`
   - `FAIRIFIER_CONF_WEIGHT_CRITIC`, `FAIRIFIER_CONF_WEIGHT_STRUCTURAL`, `FAIRIFIER_CONF_WEIGHT_VALIDATION`
@@ -66,7 +168,24 @@ Document → Parse → Plan → Retrieve Knowledge → Generate JSON → Evaluat
 
 ## 🚀 Quick Start
 
-### Installation
+### ⚡ 30-Second Setup
+
+```bash
+# 1. Clone the repository
+git clone <repository-url>
+cd FAIRiAgent
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Process your first document!
+python run_fairifier.py process examples/inputs/your_document.pdf
+```
+
+### 📦 Installation
+
+<details>
+<summary><b>Click to expand detailed installation steps</b></summary>
 
 ```bash
 # Clone the repository
@@ -75,7 +194,12 @@ cd FAIRiAgent
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Optional: Install Web UI dependencies
+./install_webui_deps.sh
 ```
+
+</details>
 
 ### Basic Usage
 
@@ -92,6 +216,17 @@ python run_fairifier.py config-info
 ```
 
 **Web UI Mode (两个版本可选):**
+
+<div align="center">
+
+| 🎨 **Streamlit UI** | 🚀 **Gradio UI** |
+|:---:|:---:|
+| 数据分析友好 | API + 演示友好 |
+| 实时流式输出 | RESTful API |
+| 配置管理 | 快速原型 |
+
+</div>
+
 ```bash
 # 选项 1: Streamlit (数据分析友好)
 ./start_streamlit.sh
@@ -101,9 +236,6 @@ python run_fairifier.py config-info
 ./start_gradio.sh
 # 访问: http://localhost:7860
 # API 文档: http://localhost:7860/docs
-
-# 详细说明
-cat START_HERE.md
 ```
 
 **LangGraph Studio (Development):**
@@ -159,6 +291,11 @@ FAIRiAgent generates (in `output/<project_id>/`):
 
 ### FAIR-DS Compatible JSON
 
+FAIRiAgent generates structured, evidence-based metadata in FAIR-DS compatible format:
+
+<details>
+<summary><b>📋 Click to see example output structure</b></summary>
+
 ```json
 {
   "fairifier_version": "0.2.0",
@@ -194,6 +331,8 @@ FAIRiAgent generates (in `output/<project_id>/`):
   }
 }
 ```
+
+</details>
 
 ### JSON Line Logging
 
@@ -291,17 +430,32 @@ langgraph.json           # LangGraph Studio config
 
 ## 📈 Quality Metrics
 
-FAIRiAgent provides confidence scoring based on:
+FAIRiAgent provides **multi-dimensional confidence scoring**:
 
-- ✅ **Document extraction quality** (title, abstract, authors)
-- ✅ **Field completion rate** (how many fields have values)
-- ✅ **Research domain identification** accuracy
-- ✅ **Evidence quality** (how well fields are supported)
+<div align="center">
 
-Confidence levels:
-- **> 0.8**: High confidence, ready to use
-- **0.5-0.8**: Good, may need minor review
-- **< 0.5**: Requires manual review
+| Metric | Description | Target |
+|:---:|:---|:---:|
+| 🧑‍⚖️ **Critic Score** | LLM-as-Judge evaluation | > 0.75 |
+| 📊 **Structural Coverage** | Field completion rate | > 0.80 |
+| ✅ **Validation Health** | Schema compliance | 100% |
+| 📈 **Overall Confidence** | Weighted combination | > 0.80 |
+
+</div>
+
+**Confidence Levels:**
+- 🟢 **> 0.8**: High confidence, ready to use
+- 🟡 **0.5-0.8**: Good, may need minor review  
+- 🔴 **< 0.5**: Requires manual review
+
+### 📊 Example Confidence Breakdown
+
+```
+Overall Confidence: 0.85
+├── Critic Score: 0.82 (weight: 0.5)
+├── Structural Coverage: 0.88 (weight: 0.3)
+└── Validation Health: 1.00 (weight: 0.2)
+```
 
 ## 🛠️ Dependencies
 
@@ -357,24 +511,40 @@ python run_fairifier.py ui
 
 Then open http://localhost:8501 in your browser.
 
-## 🧪 Testing
+## 🧪 Testing & Examples
 
-Test with the provided sample documents:
+### 🎯 Quick Test
 
 ```bash
 # Test basic functionality (CLI)
 python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf
 
-# Test with all features
-python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf --fair-ds-url http://localhost:8083
+# Test with all features (FAIR-DS integration)
+python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf \
+  --fair-ds-url http://localhost:8083
 
 # Test web UI
 python run_fairifier.py ui
 # Then use the example file option in the UI
 ```
 
-**Example Files:**
-- `examples/inputs/earthworm_4n_paper_bioRXiv.pdf` - Research paper example
+### 📚 Example Files
+
+- 📄 `examples/inputs/earthworm_4n_paper_bioRXiv.pdf` - Research paper example
+- 📝 More examples in `examples/inputs/` directory
+
+### 🎬 Demo Workflow
+
+```
+1. Upload PDF → 2. Parse Document → 3. Extract Metadata 
+   → 4. Enrich with Knowledge → 5. Generate JSON → 6. Validate & Review
+```
+
+**Expected Output:**
+- ✅ FAIR-DS compatible JSON metadata
+- 📊 Confidence scores for each field
+- 🔍 Evidence traces for all extracted values
+- 📋 Processing logs and LLM interactions
 
 ### LangSmith Integration
 
@@ -404,31 +574,58 @@ langgraph dev
 # Visualize and debug the workflow graph
 ```
 
-See [LangGraph Studio Setup](docs/guides/LANGGRAPH_STUDIO_SETUP.md) and [LangSmith Testing Guide](docs/LANGSMITH_TESTING_GUIDE.md) for detailed instructions.
+See [LangGraph Studio Setup](docs/en/guides/LANGGRAPH_STUDIO_SETUP.md) and [LangSmith Testing Guide](docs/en/LANGSMITH_TESTING_GUIDE.md) for detailed instructions.
 
 ## 📚 Documentation
 
+Detailed documentation is available in the [docs/](docs/README.md) directory.
+
 - **Core**
-  - [Project Summary](docs/PROJECT_SUMMARY.md) – End-to-end overview
-  - [Design Document](docs/DESIGN.md) – System design and architecture
-  - [LLM Integration Guide](docs/LLM_INTEGRATION_GUIDE.md) – Provider configuration
-  - [LangSmith Testing Guide](docs/LANGSMITH_TESTING_GUIDE.md) – Testing and debugging
+  - [Architecture & Flow](docs/en/ARCHITECTURE_AND_FLOW.md) – High-level system architecture
+  - [Evaluation Methodology](docs/en/EVALUATION_METHODOLOGY.md) – Evaluation metrics and baseline
+  - [LLM Integration Guide](docs/en/LLM_INTEGRATION_GUIDE.md) – Provider configuration
+  - [LangSmith Testing Guide](docs/en/LANGSMITH_TESTING_GUIDE.md) – Testing and debugging
 - **Guides**
-  - [LangGraph Studio Setup](docs/guides/LANGGRAPH_STUDIO_SETUP.md) – Local LangGraph + Studio
-  - [Quick Start (中文)](docs/guides/QUICKSTART_CN.md) – 最简运行步骤
-  - [Test Guide](docs/guides/TEST_GUIDE.md) – 环境验证与测试流程
-- **Development Notes**
-  - [FAIR-DS API Exploration](docs/development/FAIRDS_API_EXPLORATION.md) – API 结构调研
+  - [LangGraph Studio Setup](docs/en/guides/LANGGRAPH_STUDIO_SETUP.md) – Local development environment
+  - [Quick Start (中文)](docs/zh/guides/QUICKSTART.md) – 快速开始指南
+  - [Test Guide (中文)](docs/zh/guides/TEST_GUIDE.md) – 测试运行指南
+- **Development**
+  - [FAIR-DS API Exploration](docs/en/development/FAIRDS_API_EXPLORATION.md) – API analysis
+  - [Critic Rubric](docs/en/development/critic_rubric.yaml) – Evaluation criteria
 - **Web UI**
-  - [Web UI Guide](fairifier/apps/README.md) – Streamlit UI features and usage
+  - [Web UI Guide](fairifier/apps/README.md) – Streamlit UI features
+
+For a complete index by language, see [docs/README.md](docs/README.md).
 
 ## 🤝 Contributing
 
+<div align="center">
+
+**We welcome contributions!** 🎉
+
+</div>
+
 This is a research tool designed for:
-- Scientific metadata standardization
-- FAIR data principles implementation
-- Multi-agent system research
-- Agentic RAG development
+- 🔬 Scientific metadata standardization
+- 📊 FAIR data principles implementation
+- 🤖 Multi-agent system research
+- 🧠 Agentic RAG development
+
+### 🛠️ How to Contribute
+
+1. 🍴 Fork the repository
+2. 🌿 Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. 💾 Commit your changes (`git commit -m 'Add amazing feature'`)
+4. 📤 Push to the branch (`git push origin feature/amazing-feature`)
+5. 🔀 Open a Pull Request
+
+### 📝 Areas for Contribution
+
+- 🐛 Bug fixes and improvements
+- 📚 Documentation enhancements
+- 🧪 Test cases and examples
+- 🌐 Additional LLM provider support
+- 🎨 UI/UX improvements
 
 ## 📄 License
 
@@ -436,7 +633,20 @@ MIT License - Free for academic and research use.
 
 ---
 
-**🎯 FAIRiAgent v0.3 - LangGraph-powered, Web UI-enabled, Standards-compliant Metadata Generation**
+<div align="center">
+
+**🎯 FAIRiAgent v0.3**  
+*LangGraph-powered • Web UI-enabled • Standards-compliant*
+
+[⬆ Back to Top](#-fairiagent)
+
+---
+
+### 🌟 Made with ❤️ for the FAIR Data Community
+
+[![Star History Chart](https://api.star-history.com/svg?repos=your-org/FAIRiAgent&type=Date)](https://star-history.com/#your-org/FAIRiAgent&Date)
+
+</div>
 
 ---
 

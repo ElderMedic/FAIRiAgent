@@ -93,7 +93,7 @@ class FAIRifierConfig:
     auto_approve_threshold: float = 0.90
     
     # Critic rubric + decision thresholds
-    critic_rubric_path: Path = project_root / "docs" / "development" / "critic_rubric.yaml"
+    critic_rubric_path: Path = project_root / "docs" / "en" / "development" / "critic_rubric.yaml"
     critic_accept_threshold_document_parser: float = 0.75  # ACCEPT threshold for DocumentParser
     critic_accept_threshold_knowledge_retriever: float = 0.7  # ACCEPT threshold for KnowledgeRetriever
     critic_accept_threshold_json_generator: float = 0.75  # ACCEPT threshold for JSONGenerator
