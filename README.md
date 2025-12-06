@@ -309,7 +309,7 @@ FAIRiAgent generates structured, evidence-based metadata in FAIR-DS compatible f
 
 ```json
 {
-  "fairifier_version": "0.2.0",
+  "fairifier_version": "V1.0.0.20251206_rc",
   "generated_at": "2025-01-27T10:30:00",
   "document_source": "paper.pdf",
   "overall_confidence": 0.85,
@@ -646,7 +646,7 @@ MIT License - Free for academic and research use.
 
 <div align="center">
 
-**🎯 FAIRiAgent v0.3**  
+**🎯 FAIRiAgent V1.0.0.20251206_rc**  
 *LangGraph-powered • Web UI-enabled • Standards-compliant*
 
 [⬆ Back to Top](#-fairiagent)
@@ -661,7 +661,7 @@ MIT License - Free for academic and research use.
 
 ---
 
-## 🔄 Recent Updates (v0.3)
+## 🔄 Recent Updates (V1.0.0.20251206_rc)
 
 - ✅ **LangGraph Integration**: Full LangGraph workflow with state persistence
 - ✅ **Streamlit Web UI**: Interactive web interface with real-time streaming
