@@ -1,117 +1,121 @@
-# LLM集成使用指南
+# LLM Integration Guide
 
-## 概述
+## Overview
 
-FAIRifier项目现已集成大语言模型(LLM)支持，可以使用OpenAI GPT模型或Claude模型来增强各个agent的智能处理能力。
+The FAIRiAgent project integrates Large Language Model (LLM) support, enabling the use of OpenAI GPT models or Anthropic Claude models to enhance the intelligent processing capabilities of each agent.
 
-## 配置设置
+## Configuration
 
-### 1. 环境变量配置
+### 1. Environment Variables
 
-在使用前，需要设置相应的API密钥：
+Before use, set the corresponding API keys in your environment or `.env` file:
 
 ```bash
-# 使用OpenAI (推荐)
+# Use OpenAI (Recommended)
 export OPENAI_API_KEY="your-openai-api-key"
-export FAIRIFIER_LLM_PROVIDER="openai"
-export FAIRIFIER_LLM_MODEL="gpt-4o-mini"  # 或 "gpt-4", "gpt-3.5-turbo"
+export LLM_PROVIDER="openai"
+export FAIRIFIER_LLM_MODEL="gpt-4o-mini"  # or "gpt-4", "gpt-3.5-turbo"
 
-# 或使用Claude
-export CLAUDE_API_KEY="your-claude-api-key"
-export FAIRIFIER_LLM_PROVIDER="claude"
-export FAIRIFIER_LLM_MODEL="claude-3-haiku-20240307"  # 或其他Claude模型
+# Use Claude
+export ANTHROPIC_API_KEY="your-anthropic-api-key"
+export LLM_PROVIDER="anthropic"
+export FAIRIFIER_LLM_MODEL="claude-3-haiku-20240307"  # or other Claude models
+
+# Use Ollama (Local)
+export LLM_PROVIDER="ollama"
+export FAIRIFIER_LLM_BASE_URL="http://localhost:11434"
+export FAIRIFIER_LLM_MODEL="llama3"
 ```
 
-### 2. 配置文件设置
+### 2. Configuration File
 
-也可以直接修改 `fairifier/config.py` 文件：
+You can also modify the `fairifier/config.py` file directly:
 
 ```python
 # LLM Configuration
-llm_provider: str = "openai"  # "openai", "claude", or "ollama"
-llm_model: str = "gpt-4o-mini"  # 模型名称
-openai_api_key: Optional[str] = "your-api-key"
-claude_api_key: Optional[str] = "your-api-key"
+llm_provider: str = "openai"  # "openai", "anthropic", or "ollama"
+llm_model: str = "gpt-4o-mini"  # Model name
+llm_api_key: Optional[str] = "your-api-key"
 ```
 
-## LLM增强功能
+## LLM Enhanced Features
 
 ### 1. DocumentParserAgent
-- **功能增强**: 使用LLM智能解析科学文档，提取结构化信息
-- **改进点**: 
-  - 更准确的标题、摘要、作者提取
-  - 智能识别研究领域和方法论
-  - 自动识别数据集、仪器和变量
+- **Enhancement**: Uses LLM to intelligently parse scientific documents and extract structured information.
+- **Improvements**: 
+  - More accurate extraction of title, abstract, and authors.
+  - Intelligent identification of research domains and methodologies.
+  - Automatic identification of datasets, instruments, and variables.
 
 ### 2. KnowledgeRetrieverAgent
-- **功能增强**: 使用LLM进行智能知识检索和匹配
-- **改进点**:
-  - 智能选择合适的MIxS包
-  - 基于文档内容选择相关的可选字段
-  - 识别相关的本体术语
+- **Enhancement**: Uses LLM for intelligent knowledge retrieval and matching.
+- **Improvements**:
+  - Intelligent selection of appropriate MIxS packages.
+  - Selection of relevant optional fields based on document content.
+  - Identification of relevant ontology terms.
 
-### 3. TemplateGeneratorAgent
-- **功能增强**: 使用LLM生成更智能、更准确的元数据模板
-- **改进点**:
-  - 生成基于研究内容的真实示例值
-  - 智能推断字段的数据类型和必要性
-  - 建议额外的FAIR数据相关字段
+### 3. JSONGeneratorAgent
+- **Enhancement**: Uses LLM to generate smarter, more accurate metadata templates and values.
+- **Improvements**:
+  - Generates realistic example values based on research content.
+  - Intelligently infers data types and necessity of fields.
+  - Suggests additional FAIR data-related fields.
 
-## 使用方法
+## Usage
 
-### 1. 安装依赖
+### 1. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 设置API密钥
+### 2. Set API Keys
 
 ```bash
 export OPENAI_API_KEY="your-openai-api-key"
 ```
 
-### 3. 运行系统
+### 3. Run System
 
 ```bash
-python run_fairifier.py examples/inputs/test_document.txt
+python run_fairifier.py process examples/inputs/test_document.txt
 ```
 
-## 模型选择建议
+## Model Selection Recommendations
 
-### OpenAI模型
-- **gpt-4o-mini**: 推荐，性价比高，处理速度快
-- **gpt-4**: 最高质量，但成本较高
-- **gpt-3.5-turbo**: 成本最低，但质量稍逊
+### OpenAI Models
+- **gpt-4o-mini**: Recommended. High cost-performance ratio, fast processing speed.
+- **gpt-4**: Highest quality, but higher cost.
+- **gpt-3.5-turbo**: Lowest cost, but slightly lower quality.
 
-### Claude模型
-- **claude-3-haiku-20240307**: 快速且经济
-- **claude-3-sonnet-20240229**: 平衡性能和成本
-- **claude-3-opus-20240229**: 最高质量
+### Claude Models
+- **claude-3-haiku**: Fast and economical.
+- **claude-3-sonnet**: Balanced performance and cost.
+- **claude-3-opus**: Highest quality.
 
-## 错误处理
+## Error Handling
 
-系统具有完善的错误处理机制：
+The system has robust error handling mechanisms:
 
-1. **LLM调用失败**: 自动回退到基于规则的处理方法
-2. **JSON解析失败**: 使用正则表达式作为备选方案
-3. **API限制**: 自动重试和速率限制处理
+1. **LLM Call Failure**: Automatically falls back to rule-based processing methods (if available) or retries.
+2. **JSON Parsing Failure**: Uses regex as a fallback solution to extract JSON from LLM responses.
+3. **API Limits**: Automatic retry and rate limit handling.
 
-## 性能优化
+## Performance Optimization
 
-1. **批处理**: 将多个字段批量发送给LLM处理
-2. **文本截断**: 长文档自动截断以避免token限制
-3. **缓存**: 相同输入的结果会被缓存
+1. **Batching**: Multiple fields are batched and sent to LLM for processing.
+2. **Text Truncation**: Long documents are intelligently truncated to avoid token limits while preserving key sections.
+3. **Caching**: Results for the same inputs are cached.
 
-## 成本控制
+## Cost Control
 
-1. **使用gpt-4o-mini**: 推荐用于生产环境
-2. **设置max_tokens限制**: 控制响应长度
-3. **文本预处理**: 去除无关内容减少token使用
+1. **Use gpt-4o-mini**: Recommended for production environments.
+2. **Set max_tokens limit**: Control response length.
+3. **Text Preprocessing**: Remove irrelevant content to reduce token usage.
 
-## 示例输出
+## Example Output
 
-使用LLM后，系统能够生成更准确的元数据：
+With LLM integration, the system generates more accurate metadata:
 
 ```json
 {
@@ -125,26 +129,27 @@ python run_fairifier.py examples/inputs/test_document.txt
 }
 ```
 
-## 故障排除
+## Troubleshooting
 
-### 常见问题
+### Common Issues
 
-1. **API密钥错误**: 检查环境变量设置
-2. **模型不存在**: 确认模型名称正确
-3. **网络连接问题**: 检查网络连接和防火墙设置
-4. **Token限制**: 减少输入文本长度或增加max_tokens
+1. **API Key Error**: Check environment variable settings.
+2. **Model Not Found**: Confirm the model name is correct.
+3. **Network Connection Issues**: Check network connection and firewall settings.
+4. **Token Limits**: Reduce input text length or increase `max_tokens`.
 
-### 日志查看
+### Viewing Logs
 
-系统会记录详细的日志信息：
+The system records detailed log information. Use the `--json-log` flag for structured logging.
 
 ```bash
-# 查看agent执行日志
-tail -f fairifier.log
+# View processing logs
+tail -f processing_log.jsonl
 ```
 
-## 下一步
+## Next Steps
 
-1. 考虑集成更多模型提供商（如Azure OpenAI）
-2. 添加模型性能监控和评估
-3. 实现更细粒度的提示工程优化
+1. Consider integrating more model providers (e.g., Azure OpenAI).
+2. Add model performance monitoring and evaluation.
+3. Implement finer-grained prompt engineering optimizations.
+
