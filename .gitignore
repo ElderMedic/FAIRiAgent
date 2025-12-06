@@ -251,6 +251,11 @@ evaluation/*.log
 !evaluation/scripts/
 !evaluation/evaluators/
 !evaluation/config/
+# But ignore .env files in config directories (they may contain secrets)
+evaluation/config/**/*.env
+evaluation/config/**/*.env.*
+!evaluation/config/**/*.template
+!evaluation/config/**/*.example
 !evaluation/datasets/annotated/
 !evaluation/datasets/DATASET_README.md
 !evaluation/analysis/analyzers/
