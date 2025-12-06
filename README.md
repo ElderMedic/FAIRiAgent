@@ -116,28 +116,33 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 The system uses a **LangGraph-based multi-agent workflow** with intelligent self-correction:
 
 ```mermaid
-graph LR
-    A[📄 PDF Document] --> B[🔍 Document Parser]
-    B --> C[📋 Planner]
-    C --> D[🧠 Knowledge Retriever]
-    D --> E[📝 JSON Generator]
-    E --> F[🧑‍⚖️ Critic]
-    F --> G{✅ Quality Check}
-    G -->|Pass| H[📊 FAIR Metadata]
-    G -->|Retry| E
-    G -->|Escalate| I[⚠️ Manual Review]
-    
+flowchart LR
+    A[PDF Document] --> B[Document Parser]
+    B --> C[Planner]
+    C --> D[Knowledge Retriever]
+    D --> E[JSON Generator]
+
+    %% Critic acts after each agent step
+    B -. Critic (ReAct judge) .-> F(Critic Node)
+    C -. Critic (ReAct judge) .-> F
+    D -. Critic (ReAct judge) .-> F
+    E -. Critic (ReAct judge) .-> F
+
+    F --> G{Quality Check}
+    G -- Accept --> H[FAIR Metadata]
+    G -- Retry --> E
+    G -- Escalate --> I[Manual Review]
+    I -- (or if manual review not implemented) --> H[FAIR Metadata]
+
+    %% Critic oversees the whole agent workflow
+    style F fill:#fff9c4,stroke:#fbc02d,stroke-width:2px
     style A fill:#e3f2fd
     style H fill:#c8e6c9
-    style F fill:#fff9c4
     style G fill:#ffccbc
 ```
 
+
 **Workflow Flow:**
-```
-📄 Document → 🔍 Parse → 📋 Plan → 🧠 Retrieve Knowledge 
-    → 📝 Generate JSON → 🧑‍⚖️ Evaluate → ✅ Output
-```
 
 <div align="center">
 
