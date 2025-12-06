@@ -13,6 +13,8 @@
 
 [🚀 Quick Start](#-quick-start) • [📖 Documentation](#-documentation) • [🎨 Web UI](#-web-ui-features) • [🤝 Contributing](#-contributing)
 
+**[🇨🇳 中文版 / Chinese Version](docs/README.md#-中文-chinese)** | **[🇬🇧 English](README.md)**
+
 ---
 
 <div align="center">
@@ -98,7 +100,7 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 - 🧑‍⚖️ **LLM-as-Judge Critic**: Rubric-driven auditing with actionable guidance per agent
 - 📈 **Confidence Aggregator**: Blends critic scores, structural coverage, and validation health
 - 🔄 **Self-Correction**: Automatic retry with feedback from Critic agent
-- 🎨 **Dual Web UI**: Streamlit（数据分析）和 Gradio（API + 演示）两个完整版本
+- 🎨 **Dual Web UI**: Two complete versions - Streamlit (data analysis friendly) and Gradio (API + demo friendly)
 - 💬 **Real-time Streaming**: Chat-like interface with live progress updates
 - ⚙️ **Configuration Management**: Save and manage runtime configurations
 - 📋 **Runtime Config Export**: Automatic export of input, .env, and runtime configurations
@@ -145,9 +147,9 @@ graph LR
 
 **Agents & Nodes:**
 1. **Document Parser**: Extracts structured information from documents
-2. **Planner Node**: Summarizes document type/domain并下发 special instructions
-3. **Knowledge Retriever**: Enriches metadata with FAIR-DS and local knowledge（遵循 Planner 指令）
-4. **JSON Generator**: Creates FAIR-DS compatible metadata（带有 Planner/ Critic 反馈）
+2. **Planner Node**: Summarizes document type/domain and issues special instructions
+3. **Knowledge Retriever**: Enriches metadata with FAIR-DS and local knowledge (follows Planner instructions)
+4. **JSON Generator**: Creates FAIR-DS compatible metadata (with Planner/Critic feedback)
 5. **Critic**: Uses LLM-as-Judge rubric (see `docs/en/development/critic_rubric.yaml`) to score outputs and emit improvement ops
 
 **Workflow Features:**
@@ -158,12 +160,12 @@ graph LR
 
 ## 🧑‍⚖️ LLM-as-Judge Critic & Confidence
 
-- Rubric location: `docs/en/development/critic_rubric.yaml` （可自定义维度与阈值）
-- 关键配置（均可通过 `.env` 覆盖）：
+- **Rubric location**: `docs/en/development/critic_rubric.yaml` (customizable dimensions and thresholds)
+- **Key configuration** (all can be overridden via `.env`):
   - `FAIRIFIER_CRITIC_RUBRIC_PATH`
   - `FAIRIFIER_CONF_WEIGHT_CRITIC`, `FAIRIFIER_CONF_WEIGHT_STRUCTURAL`, `FAIRIFIER_CONF_WEIGHT_VALIDATION`
   - `FAIRIFIER_STRUCTURAL_COVERAGE_TARGET`, `FAIRIFIER_EVIDENCE_COVERAGE_TARGET`, `FAIRIFIER_VALIDATION_PASS_TARGET`
-- Critic 输出结构：
+- **Critic output structure**:
   ```json
   {
     "score": 0.82,
@@ -173,7 +175,7 @@ graph LR
     "critique": "short narrative"
   }
   ```
-- `fairifier/services/confidence_aggregator.py` 将 critic 分数、字段覆盖率、证据率与验证结果融合为单一置信度，CLI 在 `processing_log.jsonl` 与标准输出中都会展示 `critic/structural/validation/overall` 四个分量。
+- `fairifier/services/confidence_aggregator.py` blends critic scores, field coverage, evidence rates, and validation results into a single confidence metric. The CLI displays four components (`critic/structural/validation/overall`) in both `processing_log.jsonl` and standard output.
 
 ## 🚀 Quick Start
 
@@ -224,27 +226,27 @@ python run_fairifier.py process document.txt --output-dir results/
 python run_fairifier.py config-info
 ```
 
-**Web UI Mode (两个版本可选):**
+**Web UI Mode (Two Options Available):**
 
 <div align="center">
 
 | 🎨 **Streamlit UI** | 🚀 **Gradio UI** |
 |:---:|:---:|
-| 数据分析友好 | API + 演示友好 |
-| 实时流式输出 | RESTful API |
-| 配置管理 | 快速原型 |
+| Data analysis friendly | API + demo friendly |
+| Real-time streaming output | RESTful API |
+| Configuration management | Rapid prototyping |
 
 </div>
 
 ```bash
-# 选项 1: Streamlit (数据分析友好)
+# Option 1: Streamlit (data analysis friendly)
 ./start_streamlit.sh
-# 访问: http://localhost:8501
+# Access: http://localhost:8501
 
-# 选项 2: Gradio (API + 演示友好)
+# Option 2: Gradio (API + demo friendly)
 ./start_gradio.sh
-# 访问: http://localhost:7860
-# API 文档: http://localhost:7860/docs
+# Access: http://localhost:7860
+# API docs: http://localhost:7860/docs
 ```
 
 **LangGraph Studio (Development):**
@@ -596,8 +598,8 @@ Detailed documentation is available in the [docs/](docs/README.md) directory.
   - [LangSmith Testing Guide](docs/en/LANGSMITH_TESTING_GUIDE.md) – Testing and debugging
 - **Guides**
   - [LangGraph Studio Setup](docs/en/guides/LANGGRAPH_STUDIO_SETUP.md) – Local development environment
-  - [Quick Start (中文)](docs/zh/guides/QUICKSTART.md) – 快速开始指南
-  - [Test Guide (中文)](docs/zh/guides/TEST_GUIDE.md) – 测试运行指南
+  - [Quick Start (中文)](docs/zh/guides/QUICKSTART.md) – Quick start guide in Chinese
+  - [Test Guide (中文)](docs/zh/guides/TEST_GUIDE.md) – Test guide in Chinese
 - **Development**
   - [FAIR-DS API Exploration](docs/en/development/FAIRDS_API_EXPLORATION.md) – API analysis
   - [Critic Rubric](docs/en/development/critic_rubric.yaml) – Evaluation criteria
