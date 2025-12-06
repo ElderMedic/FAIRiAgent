@@ -15,28 +15,25 @@
 
 ---
 
-```
-╔═══════════════════════════════════════════════════════════════╗
-║                                                               ║
-║   ███████╗ █████╗ ██╗██████╗     █████╗  ██████╗ ███████╗    ║
-║   ██╔════╝██╔══██╗██║██╔══██╗    ██╔══██╗██╔════╝ ██╔════╝    ║
-║   █████╗  ███████║██║██████╔╝    ███████║██║  ███╗█████╗      ║
-║   ██╔══╝  ██╔══██║██║██╔══██╗    ██╔══██║██║   ██║██╔══╝      ║
-║   ██║     ██║  ██║██║██║  ██║    ██║  ██║╚██████╔╝███████╗    ║
-║   ╚═╝     ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝    ╚═╝  ╚═╝ ╚═════╝ ╚══════╝    ║
-║                                                               ║
-║          Intelligent Agent for FAIR Metadata                  ║
-║                                                               ║
-╚═══════════════════════════════════════════════════════════════╝
-```
+<div align="center">
+
+![FAIRiAgent Banner](docs/figures/wide_greetings.png)
 
 **From PDF to FAIR metadata in minutes, not hours** 🚀
+
+</div>
 
 </div>
 
 ---
 
 ## 🎯 What is FAIRiAgent?
+
+<div align="center">
+
+![FAIRiAgent in Action](docs/figures/manga_fair.png)
+
+</div>
 
 FAIRiAgent is a **CLI-first, multi-agent framework** that automatically extracts information from research documents (PDF/text) and generates **FAIR-DS compatible JSON metadata**. Built with LangGraph and LangChain, it transforms unstructured scientific documents into standardized, machine-readable metadata that follows FAIR principles.
 
@@ -108,6 +105,12 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 
 ## 🏗️ Architecture
 
+<div align="center">
+
+![FAIRiAgent Architecture](docs/figures/biodata_robot_fair.png)
+
+</div>
+
 The system uses a **LangGraph-based multi-agent workflow** with intelligent self-correction:
 
 ```mermaid
@@ -133,6 +136,12 @@ graph LR
 📄 Document → 🔍 Parse → 📋 Plan → 🧠 Retrieve Knowledge 
     → 📝 Generate JSON → 🧑‍⚖️ Evaluate → ✅ Output
 ```
+
+<div align="center">
+
+![Multi-Agent Workflow](docs/figures/robot_fairdata.png)
+
+</div>
 
 **Agents & Nodes:**
 1. **Document Parser**: Extracts structured information from documents
