@@ -193,16 +193,24 @@ class FAIRDataStationClient:
                     response = self._session.get(
                         f"{self._base_url}{endpoint}", timeout=self._timeout
                     )
-                    if response.status_code == 200:
+                        if response.status_code == 200:
                         content_type = response.headers.get('content-type', '')
                         if 'application/json' in content_type:
                             data = response.json()
-                            # FAIR-DS API returns {"total": N, "packages": {...}}
-                            if isinstance(data, dict) and "packages" in data:
-                                # Flatten packages dict to list
-                                packages_dict = data["packages"]
+                            # FAIR-DS API new format: {"total": N, "metadata": {...}}
+                            # Old format: {"total": N, "packages": {...}}
+                            packages_dict = data.get("metadata") or data.get("packages")
+                            if isinstance(packages_dict, dict):
                                 packages = []
-                                for level, level_packages in packages_dict.items():
+                                for level, level_data in packages_dict.items():
+                                    # New format: level_data is {"name": ..., "metadata": [...]}
+                                    if isinstance(level_data, dict) and "metadata" in level_data:
+                                        level_packages = level_data["metadata"]
+                                    # Old format: level_data is directly a list of fields
+                                    elif isinstance(level_data, list):
+                                        level_packages = level_data
+                                    else:
+                                        continue
                                     for pkg in level_packages:
                                         pkg["level"] = level  # Add level info
                                         packages.append(pkg)

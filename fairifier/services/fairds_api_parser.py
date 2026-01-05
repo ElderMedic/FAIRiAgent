@@ -65,26 +65,54 @@ class FAIRDSAPIParser:
         """
         解析 /api/packages 返回的数据
         
-        实际格式：
+        新版 API 格式 (2026+):
         {
           "total": 5,
           "totalMetadataItems": 2689,
+          "metadata": {
+            "investigation": {
+              "name": "investigation",
+              "displayName": "Investigation",
+              "description": "...",
+              "hierarchyOrder": 1,
+              "metadata": [...]  # Fields are here
+            },
+            ...
+          }
+        }
+        
+        旧版 API 格式:
+        {
+          "total": 5,
           "packages": {
-            "investigation": [...],
-            "study": [...],
-            "sample": [...],
-            "assay": [...],
-            "observationunit": [...]
+            "investigation": [...],  # Fields directly in list
+            ...
           }
         }
         """
         packages = {}
         
-        # 标准格式
-        if isinstance(api_response, dict) and "packages" in api_response:
-            packages = api_response["packages"]
-            logger.info(f"✅ Parsed packages from FAIR-DS API:")
-        # 如果直接是 list（fallback）
+        if isinstance(api_response, dict):
+            # New API format: metadata[sheet]["metadata"] contains fields
+            if "metadata" in api_response and isinstance(api_response["metadata"], dict):
+                metadata = api_response["metadata"]
+                # Check if it's the new format (each sheet has 'metadata' key with fields)
+                first_sheet = next(iter(metadata.values()), None) if metadata else None
+                if first_sheet and isinstance(first_sheet, dict) and "metadata" in first_sheet:
+                    # New format: extract fields from metadata[sheet]["metadata"]
+                    for sheet_name, sheet_info in metadata.items():
+                        if isinstance(sheet_info, dict) and "metadata" in sheet_info:
+                            packages[sheet_name.lower()] = sheet_info["metadata"]
+                    logger.info(f"✅ Parsed packages from FAIR-DS API (new format):")
+                else:
+                    # Old format where metadata[sheet] is directly a list of fields
+                    packages = {k.lower(): v for k, v in metadata.items() if isinstance(v, list)}
+                    logger.info(f"✅ Parsed packages from FAIR-DS API (metadata format):")
+            # Old API format: packages[sheet] contains fields directly
+            elif "packages" in api_response:
+                packages = {k.lower(): v for k, v in api_response["packages"].items() if isinstance(v, list)}
+                logger.info(f"✅ Parsed packages from FAIR-DS API (packages format):")
+        # Fallback: if directly a list
         elif isinstance(api_response, list):
             # 按 sheetName 分组
             for item in api_response:

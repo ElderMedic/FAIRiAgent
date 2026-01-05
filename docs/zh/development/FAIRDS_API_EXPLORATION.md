@@ -1,104 +1,191 @@
 # 🔍 FAIR-DS API 探索结果
 
-## 📊 实际 API 结构（基于 [FAIR-DS API 文档](https://docs.fairbydesign.nl/docs/fairdatastation/tutorials/api.html)）
+> **最后更新**: 2026年1月 (FAIR-DS JAR 最新版本)
 
-### API Endpoints
+## 📊 当前 API 结构
 
-#### 1. GET `/api/terms` - 所有术语
-```bash
-curl http://localhost:8083/api/terms
-```
+### 可用端点
 
-**返回结构：**
-```json
-{
-  "total": 892,
-  "terms": {
-    "study title": {
-      "label": "study title",
-      "syntax": "{text}{10,}",
-      "example": "Cultivation and characterization...",
-      "definition": "Title describing the study",
-      "regex": ".*{10,}",
-      "url": "http://schema.org/title",
-      "file": false,
-      "date": false,
-      "dateTime": false
-    },
-    ...
-  }
-}
-```
+| 端点 | 状态 | 返回 |
+|------|------|------|
+| `GET /api/packages` | ✅ 可用 | JSON |
+| `GET /api/terms` | ❌ 已移除 | HTML (Vaadin app) |
+| `POST /api/upload` | ✅ 可用 | 验证结果 |
 
-#### 2. GET `/api/packages` - 分组的术语
+### GET `/api/packages` - 所有元数据 (主要端点)
+
 ```bash
 curl http://localhost:8083/api/packages
 ```
 
-**返回结构：**
+**返回结构 (已更新):**
 ```json
 {
   "total": 5,
-  "packages": {
-    "investigation": [...],  // 17 个字段
-    "study": [...],          // 25 个字段
-    "sample": [...],         // 2411 个字段（最多！）
-    "assay": [...],          // 99 个字段
-    "observationunit": [...]  // 137 个字段
+  "totalMetadataItems": 2689,
+  "metadata": {
+    "investigation": {
+      "name": "investigation",
+      "displayName": "Investigation",
+      "description": "A research investigation representing an overarching research question or hypothesis",
+      "hierarchyOrder": 1,
+      "metadata": [...]
+    },
+    "study": {
+      "name": "study",
+      "displayName": "Study",
+      "description": "A specific study within an investigation...",
+      "hierarchyOrder": 2,
+      "metadata": [...]
+    },
+    "observationunit": {
+      "name": "observationunit",
+      "displayName": "Observation Unit",
+      "description": "The fundamental unit of observation in the study...",
+      "hierarchyOrder": 3,
+      "metadata": [...]
+    },
+    "sample": {
+      "name": "sample",
+      "displayName": "Sample",
+      "description": "A physical specimen or material derived from an observation unit...",
+      "hierarchyOrder": 4,
+      "metadata": [...]
+    },
+    "assay": {
+      "name": "assay",
+      "displayName": "Assay",
+      "description": "An analytical measurement or experimental procedure...",
+      "hierarchyOrder": 5,
+      "metadata": [...]
+    }
   }
 }
 ```
 
-**每个 package 中的字段结构：**
+**与旧版本的主要变化:**
+- `packages` 键更名为 `metadata`
+- 每个 ISA sheet 现在包含: `name`, `displayName`, `description`, `hierarchyOrder`
+- 字段数组从 `metadata[sheet]` 移动到 `metadata[sheet]["metadata"]`
+- 顶层新增 `totalMetadataItems`
+
+**每个 ISA Sheet 中的字段结构:**
 ```json
 {
-  "label": "investigation identifier",
   "definition": "Identifier corresponding to the investigation",
   "sheetName": "Investigation",
   "packageName": "default",
-  "requirement": "MANDATORY",  // 或 OPTIONAL
-  "sessionID": "no_session",
+  "requirement": "MANDATORY",
+  "label": "investigation identifier",
   "term": {
     "label": "investigation identifier",
     "syntax": "{id}{5,25}$",
     "example": "BO3B",
-    "definition": "...",
+    "preferredUnit": "",
+    "definition": "Identifier corresponding to the investigation",
+    "ontology": null,
     "regex": "^[a-zA-Z0-9-_.]*{5,25}$",
+    "file": false,
+    "date": false,
+    "dateTime": false,
     "url": "http://schema.org/identifier"
   }
 }
 ```
 
+### GET `/api/terms` - ⚠️ 不再可用
+
+`/api/terms` 端点现在返回 HTML (Vaadin 网页应用) 而不是 JSON。所有术语信息必须通过 `/api/packages` 获取。
+
 ---
 
-## 📋 实际数据统计
+## 📋 数据统计
 
-| Package | 字段数量 | 用途 |
-|---------|---------|------|
-| **investigation** | 17 | 研究项目级别元数据 |
-| **study** | 25 | 研究级别元数据 |
-| **sample** | 2411 | 样本级别元数据（最详细） |
-| **assay** | 99 | 实验/分析级别元数据 |
-| **observationunit** | 137 | 观察单元级别元数据 |
+| ISA Sheet | 显示名称 | 层级顺序 | 字段数量 |
+|-----------|----------|----------|----------|
+| **investigation** | Investigation | 1 | 17 |
+| **study** | Study | 2 | 25 |
+| **observationunit** | Observation Unit | 3 | 137 |
+| **sample** | Sample | 4 | 2411 |
+| **assay** | Assay | 5 | 99 |
 
-**总计：** 2689 个字段！
+**总计:** 2689 个字段，5 个 ISA sheets
+
+---
+
+## 📦 可用的 Packages (共 59 个)
+
+API 现在包含 59 个唯一的 package 名称:
+
+### 核心 Packages
+- `default` - 包含核心字段的基础包
+- `miappe` - Minimum Information About Plant Phenotyping Experiments
+- `unlock` - UNLOCK 项目特定字段
+
+### 环境 Packages
+- `air`, `water`, `soil`, `sediment`
+- `built environment`
+- `wastewater sludge`
+- `microbial mat biolfilm`
+- `miscellaneous natural or artificial environment`
+- `plant associated`
+
+### 宿主相关 Packages
+- `host associated`
+- `human associated`, `human gut`, `human oral`, `human skin`, `human vaginal`
+- `pig`, `pig_blood`, `pig_faeces`, `pig_health`, `pig_histology`
+- `person`
+
+### 测序技术 Packages
+- `Illumina`, `Nanopore`, `PacBio`, `LS454`
+- `Amplicon demultiplexed`, `Amplicon library`
+- `Genome`
+
+### ENA 检查表
+- `ENA default sample checklist`
+- `ENA prokaryotic pathogen minimal sample checklist`
+- `ENA virus pathogen reporting standard checklist`
+- `ENA binned metagenome`
+- `ENA Marine Microalgae Checklist`
+- `ENA Shellfish Checklist`
+- `ENA Tara Oceans`
+- `ENA Micro B3`
+- 等等...
+
+### GSC (基因组标准联盟) Packages
+- `GSC MIMAGS` - 宏基因组组装基因组
+- `GSC MISAGS` - 单细胞扩增基因组
+- `GSC MIUVIGS` - 未培养病毒基因组
+
+### 专业检查表
+- `COMPARE-ECDC-EFSA pilot food-associated reporting standard`
+- `Crop Plant sample enhanced annotation checklist`
+- `Plant Sample Checklist`
+- `Tree of Life Checklist`
+- `HoloFood Checklist`
+- `Metabolomics`, `Proteomics`
+- 等等...
 
 ---
 
 ## 🎯 关键发现
 
-### 1. 这不是 MIxS 标准
-- ✅ 这是 FAIR Data Station 自己的元数据模式
-- ✅ 基于 **ISA (Investigation-Study-Assay)** 模型
-- ✅ 支持 **MIAPPE** (Minimum Information About Plant Phenotyping Experiments)
-- ✅ 有层次结构：Investigation → Study → Sample/ObservationUnit → Assay
+### 1. 带层级的 ISA 模型
+API 使用 ISA (Investigation-Study-Assay) 模型，具有清晰的层级结构:
+1. **Investigation** (hierarchyOrder: 1) - 项目级别元数据
+2. **Study** (hierarchyOrder: 2) - 研究级别元数据
+3. **ObservationUnit** (hierarchyOrder: 3) - 被观察的实体
+4. **Sample** (hierarchyOrder: 4) - 物理样本元数据
+5. **Assay** (hierarchyOrder: 5) - 实验/测量元数据
 
-### 2. 字段有明确的要求级别
+### 2. 要求级别
+字段有三种要求级别:
 - **MANDATORY**: 必需字段
 - **OPTIONAL**: 可选字段
-- **RECOMMENDED**: 推荐字段（可能）
+- **RECOMMENDED**: 推荐字段
 
-### 3. 每个字段都有验证规则
+### 3. 验证规则
+每个字段在 `term` 对象中包含验证规则:
 - `regex`: 正则表达式验证
 - `syntax`: 语法模式
 - `example`: 示例值
@@ -106,127 +193,75 @@ curl http://localhost:8083/api/packages
 
 ---
 
-## 🔄 更新 KnowledgeRetriever 策略
+## 🔧 代码集成
 
-根据实际 API，我们应该：
+### 解析新 API 结构
 
-### 当前问题：
 ```python
-# 代码假设了 MIxS packages（MIMS, MIMAG等）
-# 但实际 API 返回的是 ISA 模型（investigation, study, sample, assay）
+import requests
+
+response = requests.get("http://localhost:8083/api/packages")
+data = response.json()
+
+# 访问顶层信息
+total_sheets = data["total"]  # 5
+total_fields = data["totalMetadataItems"]  # 2689
+
+# 访问 ISA sheet 信息
+for sheet_name, sheet_info in data["metadata"].items():
+    print(f"Sheet: {sheet_info['displayName']}")
+    print(f"  描述: {sheet_info['description']}")
+    print(f"  层级顺序: {sheet_info['hierarchyOrder']}")
+    print(f"  字段数量: {len(sheet_info['metadata'])}")
+    
+    # 访问字段
+    for field in sheet_info["metadata"]:
+        print(f"    - {field['label']} ({field['requirement']})")
+        print(f"      Package: {field['packageName']}")
+        print(f"      Regex: {field['term']['regex']}")
 ```
 
-### 正确做法：
+### 按 Package 名称提取字段
+
 ```python
-# 1. 获取 packages
-packages_data = fair_ds_client.get_packages()
-# → {"total": 5, "packages": {investigation: [...], study: [...], ...}}
+def get_fields_by_package(data, package_name):
+    """提取属于特定 package 的所有字段"""
+    fields = []
+    for sheet_name, sheet_info in data["metadata"].items():
+        for field in sheet_info["metadata"]:
+            if field["packageName"] == package_name:
+                field["isaSheet"] = sheet_name  # 添加 ISA sheet 信息
+                fields.append(field)
+    return fields
 
-# 2. LLM 分析文档，决定需要哪些 packages
-# "这是一个研究论文，需要 investigation 和 study 层级"
-# "这是一个样本描述，需要 sample 和 observationunit 层级"
-
-# 3. 对于每个相关 package，LLM 选择相关字段
-# 从 investigation 的 17 个字段中选 5-8 个
-# 从 study 的 25 个字段中选 8-12 个
-# 从 sample 的 2411 个字段中选 5-10 个最相关的
-
-# 4. 优先选择 MANDATORY 字段
-```
-
----
-
-## 💡 建议的新逻辑
-
-### Phase 1: 确定相关的 Packages
-```python
-llm_prompt = f"""
-Document type: {doc_type}
-Research domain: {domain}
-
-Available FAIR-DS packages:
-- investigation (17 fields): Project-level metadata
-- study (25 fields): Study-level metadata  
-- sample (2411 fields): Sample-level metadata
-- assay (99 fields): Assay/experiment-level metadata
-- observationunit (137 fields): Observation unit metadata
-
-Which packages are relevant for this document?
-Return: ["investigation", "study", ...]
-"""
-```
-
-### Phase 2: 对每个 Package 选择字段
-```python
-llm_prompt = f"""
-Package: {package_name} ({field_count} fields available)
-
-Mandatory fields: {mandatory_fields}
-Optional fields (sample): {optional_fields[:20]}
-
-Document context: {doc_info}
-
-Select 5-15 most relevant fields for this document.
-Prioritize MANDATORY fields.
-"""
-```
-
-### Phase 3: 生成字段值
-```python
-# 为选定的字段生成值
-for field in selected_fields:
-    value = await llm.generate_value(
-        field_name=field['label'],
-        definition=field['definition'],
-        example=field['term']['example'],
-        regex=field['term']['regex'],
-        document=doc_info
-    )
+# 示例: 获取所有 'miappe' 字段
+miappe_fields = get_fields_by_package(data, "miappe")
 ```
 
 ---
 
-## 🔧 需要修改的代码
+## 📝 迁移说明
 
-### 1. `fairifier/services/fair_data_station.py`
-当前代码可能需要调整以正确解析 API 返回的结构。
+### 从旧 API 到新 API
 
-### 2. `fairifier/agents/knowledge_retriever.py`
-- 移除 MIxS 假设
-- 使用实际的 5 个 packages
-- LLM 根据文档类型选择 packages
-- LLM 从 2411 个 sample fields 中智能选择
+**旧结构:**
+```python
+# 旧: packages[sheet] 是字段列表
+fields = data["packages"]["investigation"]
+```
 
-### 3. Prompts 更新
-- "MIxS packages" → "FAIR-DS packages"
-- "MIMS, MIMAG" → "investigation, study, sample, assay, observationunit"
-- 提到实际的字段数量
+**新结构:**
+```python
+# 新: metadata[sheet]["metadata"] 是字段列表
+fields = data["metadata"]["investigation"]["metadata"]
+```
 
----
+### 主要区别
 
-## 📝 示例 Mandatory 字段
-
-### Investigation 层（必需）:
-- investigation identifier
-- investigation title
-- investigation description
-- firstname, lastname, email, organization
-
-### Study 层（必需）:
-- study identifier
-- study title
-- study description
-
----
-
-## 🎯 下一步
-
-我需要更新代码以：
-1. ✅ 正确解析 FAIR-DS API 的实际返回格式
-2. ✅ 使用真实的 package 名称（investigation, study, sample, assay, observationunit）
-3. ✅ LLM 智能处理 2411 个 sample 字段
-4. ✅ 优先选择 MANDATORY 字段
-5. ✅ 使用字段的 regex 和 example 进行验证
-
-准备好了让我更新代码吗？
-
+| 方面 | 旧 API | 新 API |
+|------|--------|--------|
+| 顶层键 | `packages` | `metadata` |
+| Sheet 结构 | 字段列表 | 包含 `name`, `displayName`, `description`, `hierarchyOrder`, `metadata` 的对象 |
+| 字段位置 | `packages[sheet]` | `metadata[sheet]["metadata"]` |
+| `/api/terms` | 返回 JSON | 返回 HTML (已移除) |
+| 总数键 | 无 | `totalMetadataItems` |

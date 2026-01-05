@@ -1,230 +1,278 @@
 # 🔍 FAIR-DS API Exploration Results
 
-## 📊 Actual API Structure (Based on [FAIR-DS API Documentation](https://docs.fairbydesign.nl/docs/fairdatastation/tutorials/api.html))
+> **Last Updated**: January 2026 (FAIR-DS JAR latest version)
 
-### API Endpoints
+## 📊 Current API Structure
 
-#### 1. GET `/api/terms` - All Terms
-```bash
-curl http://localhost:8083/api/terms
-```
+### Available Endpoints
 
-**Return Structure:**
-```json
-{
-  "total": 892,
-  "terms": {
-    "study title": {
-      "label": "study title",
-      "syntax": "{text}{10,}",
-      "example": "Cultivation and characterization...",
-      "definition": "Title describing the study",
-      "regex": ".*{10,}",
-      "url": "http://schema.org/title",
-      "file": false,
-      "date": false,
-      "dateTime": false
-    },
-    ...
-  }
-}
-```
+| Endpoint | Status | Returns |
+|----------|--------|---------|
+| `GET /api/packages` | ✅ Working | JSON |
+| `GET /api/terms` | ❌ Removed | HTML (Vaadin app) |
+| `POST /api/upload` | ✅ Working | Validation result |
 
-#### 2. GET `/api/packages` - Grouped Terms
+### GET `/api/packages` - All Metadata (Primary Endpoint)
+
 ```bash
 curl http://localhost:8083/api/packages
 ```
 
-**Return Structure:**
+**Return Structure (Updated):**
 ```json
 {
   "total": 5,
-  "packages": {
-    "investigation": [...],  // 17 fields
-    "study": [...],          // 25 fields
-    "sample": [...],         // 2411 fields (Max!)
-    "assay": [...],          // 99 fields
-    "observationunit": [...]  // 137 fields
+  "totalMetadataItems": 2689,
+  "metadata": {
+    "investigation": {
+      "name": "investigation",
+      "displayName": "Investigation",
+      "description": "A research investigation representing an overarching research question or hypothesis",
+      "hierarchyOrder": 1,
+      "metadata": [...]
+    },
+    "study": {
+      "name": "study",
+      "displayName": "Study",
+      "description": "A specific study within an investigation...",
+      "hierarchyOrder": 2,
+      "metadata": [...]
+    },
+    "observationunit": {
+      "name": "observationunit",
+      "displayName": "Observation Unit",
+      "description": "The fundamental unit of observation in the study...",
+      "hierarchyOrder": 3,
+      "metadata": [...]
+    },
+    "sample": {
+      "name": "sample",
+      "displayName": "Sample",
+      "description": "A physical specimen or material derived from an observation unit...",
+      "hierarchyOrder": 4,
+      "metadata": [...]
+    },
+    "assay": {
+      "name": "assay",
+      "displayName": "Assay",
+      "description": "An analytical measurement or experimental procedure...",
+      "hierarchyOrder": 5,
+      "metadata": [...]
+    }
   }
 }
 ```
 
-**Structure of Fields within Each Package:**
+**Key Changes from Previous Version:**
+- `packages` key renamed to `metadata`
+- Each ISA sheet now includes: `name`, `displayName`, `description`, `hierarchyOrder`
+- Fields array moved from `metadata[sheet]` to `metadata[sheet]["metadata"]`
+- Added `totalMetadataItems` at top level
+
+**Structure of Fields within Each ISA Sheet:**
 ```json
 {
-  "label": "investigation identifier",
   "definition": "Identifier corresponding to the investigation",
   "sheetName": "Investigation",
   "packageName": "default",
-  "requirement": "MANDATORY",  // or OPTIONAL
-  "sessionID": "no_session",
+  "requirement": "MANDATORY",
+  "label": "investigation identifier",
   "term": {
     "label": "investigation identifier",
     "syntax": "{id}{5,25}$",
     "example": "BO3B",
-    "definition": "...",
+    "preferredUnit": "",
+    "definition": "Identifier corresponding to the investigation",
+    "ontology": null,
     "regex": "^[a-zA-Z0-9-_.]*{5,25}$",
+    "file": false,
+    "date": false,
+    "dateTime": false,
     "url": "http://schema.org/identifier"
   }
 }
 ```
 
+### GET `/api/terms` - ⚠️ No Longer Available
+
+The `/api/terms` endpoint now returns HTML (Vaadin web app) instead of JSON. All term information must be retrieved via `/api/packages`.
+
 ---
 
 ## 📋 Data Statistics
 
-| Package | Field Count | Purpose |
-|---------|---------|------|
-| **investigation** | 17 | Project-level metadata |
-| **study** | 25 | Study-level metadata |
-| **sample** | 2411 | Sample-level metadata (Most detailed) |
-| **assay** | 99 | Experiment/Assay-level metadata |
-| **observationunit** | 137 | Observation unit metadata |
+| ISA Sheet | Display Name | Hierarchy Order | Field Count |
+|-----------|--------------|-----------------|-------------|
+| **investigation** | Investigation | 1 | 17 |
+| **study** | Study | 2 | 25 |
+| **observationunit** | Observation Unit | 3 | 137 |
+| **sample** | Sample | 4 | 2411 |
+| **assay** | Assay | 5 | 99 |
 
-**Total:** 2689 fields!
+**Total:** 2689 fields across 5 ISA sheets
+
+---
+
+## 📦 Available Packages (59 total)
+
+The API now includes 59 unique package names:
+
+### Core Packages
+- `default` - Base package with core fields
+- `miappe` - Minimum Information About Plant Phenotyping Experiments
+- `unlock` - UNLOCK project specific
+
+### Environmental Packages
+- `air`, `water`, `soil`, `sediment`
+- `built environment`
+- `wastewater sludge`
+- `microbial mat biolfilm`
+- `miscellaneous natural or artificial environment`
+- `plant associated`
+
+### Host-Associated Packages
+- `host associated`
+- `human associated`, `human gut`, `human oral`, `human skin`, `human vaginal`
+- `pig`, `pig_blood`, `pig_faeces`, `pig_health`, `pig_histology`
+- `person`
+
+### Sequencing Technology Packages
+- `Illumina`, `Nanopore`, `PacBio`, `LS454`
+- `Amplicon demultiplexed`, `Amplicon library`
+- `Genome`
+
+### ENA Checklists
+- `ENA default sample checklist`
+- `ENA prokaryotic pathogen minimal sample checklist`
+- `ENA virus pathogen reporting standard checklist`
+- `ENA binned metagenome`
+- `ENA Marine Microalgae Checklist`
+- `ENA Shellfish Checklist`
+- `ENA Tara Oceans`
+- `ENA Micro B3`
+- `ENA sewage checklist`
+- `ENA parasite sample checklist`
+- `ENA mutagenesis by carcinogen treatment checklist`
+- `ENA Influenza virus reporting standard checklist`
+- `ENA Global Microbial Identifier reporting standard checklist GMI_MDM:1.1`
+- `2 ENA Global Microbial Identifier Proficiency Test (GMI PT) checklist`
+
+### GSC (Genomic Standards Consortium) Packages
+- `GSC MIMAGS` - Metagenome-Assembled Genomes
+- `GSC MISAGS` - Single Amplified Genomes
+- `GSC MIUVIGS` - Uncultivated Virus Genomes
+
+### Specialized Checklists
+- `COMPARE-ECDC-EFSA pilot food-associated reporting standard`
+- `COMPARE-ECDC-EFSA pilot human-associated reporting standard`
+- `Crop Plant sample enhanced annotation checklist`
+- `Plant Sample Checklist`
+- `Tree of Life Checklist`
+- `HoloFood Checklist`
+- `PDX Checklist`
+- `UniEuk_EukBank`
+- `MIFE`
+
+### Omics Packages
+- `Metabolomics`
+- `Proteomics`
 
 ---
 
 ## 🎯 Key Findings
 
-### 1. This is NOT the MIxS Standard
-- ✅ This is FAIR Data Station's own metadata schema.
-- ✅ Based on the **ISA (Investigation-Study-Assay)** model.
-- ✅ Supports **MIAPPE** (Minimum Information About Plant Phenotyping Experiments).
-- ✅ Has a hierarchical structure: Investigation → Study → Sample/ObservationUnit → Assay.
+### 1. ISA Model with Hierarchy
+The API uses the ISA (Investigation-Study-Assay) model with clear hierarchy:
+1. **Investigation** (hierarchyOrder: 1) - Project-level metadata
+2. **Study** (hierarchyOrder: 2) - Study-level metadata
+3. **ObservationUnit** (hierarchyOrder: 3) - Entity being observed
+4. **Sample** (hierarchyOrder: 4) - Physical specimen metadata
+5. **Assay** (hierarchyOrder: 5) - Experiment/measurement metadata
 
-### 2. Fields Have Clear Requirement Levels
-- **MANDATORY**: Required fields.
-- **OPTIONAL**: Optional fields.
-- **RECOMMENDED**: Recommended fields.
+### 2. Requirement Levels
+Fields have three requirement levels:
+- **MANDATORY**: Required fields
+- **OPTIONAL**: Optional fields
+- **RECOMMENDED**: Recommended fields
 
-### 3. Each Field Has Validation Rules
-- `regex`: Regular expression validation.
-- `syntax`: Syntax pattern.
-- `example`: Example value.
-- `file/date/dateTime`: Data type markers.
-
----
-
-## 🔄 Updated KnowledgeRetriever Strategy
-
-Based on the actual API, we should:
-
-### Current Issue:
-```python
-# Code assumes MIxS packages (MIMS, MIMAG etc.)
-# But actual API returns ISA model (investigation, study, sample, assay)
-```
-
-### Correct Approach:
-```python
-# 1. Get packages
-packages_data = fair_ds_client.get_packages()
-# → {"total": 5, "packages": {investigation: [...], study: [...], ...}}
-
-# 2. LLM analyzes document to decide which packages are needed
-# "This is a research paper, needs investigation and study levels"
-# "This is a sample description, needs sample and observationunit levels"
-
-# 3. For each relevant package, LLM selects relevant fields
-# Select 5-8 fields from investigation's 17
-# Select 8-12 fields from study's 25
-# Select 5-10 most relevant fields from sample's 2411
-
-# 4. Prioritize MANDATORY fields
-```
+### 3. Validation Rules
+Each field includes validation rules in the `term` object:
+- `regex`: Regular expression validation
+- `syntax`: Syntax pattern
+- `example`: Example value
+- `file/date/dateTime`: Data type markers
 
 ---
 
-## 💡 Proposed Logic
+## 🔧 Code Integration
 
-### Phase 1: Determine Relevant Packages
+### Parsing the New API Structure
+
 ```python
-llm_prompt = f"""
-Document type: {doc_type}
-Research domain: {domain}
+import requests
 
-Available FAIR-DS packages:
-- investigation (17 fields): Project-level metadata
-- study (25 fields): Study-level metadata  
-- sample (2411 fields): Sample-level metadata
-- assay (99 fields): Assay/experiment-level metadata
-- observationunit (137 fields): Observation unit metadata
+response = requests.get("http://localhost:8083/api/packages")
+data = response.json()
 
-Which packages are relevant for this document?
-Return: ["investigation", "study", ...]
-"""
+# Access top-level info
+total_sheets = data["total"]  # 5
+total_fields = data["totalMetadataItems"]  # 2689
+
+# Access ISA sheet info
+for sheet_name, sheet_info in data["metadata"].items():
+    print(f"Sheet: {sheet_info['displayName']}")
+    print(f"  Description: {sheet_info['description']}")
+    print(f"  Hierarchy Order: {sheet_info['hierarchyOrder']}")
+    print(f"  Field Count: {len(sheet_info['metadata'])}")
+    
+    # Access fields
+    for field in sheet_info["metadata"]:
+        print(f"    - {field['label']} ({field['requirement']})")
+        print(f"      Package: {field['packageName']}")
+        print(f"      Regex: {field['term']['regex']}")
 ```
 
-### Phase 2: Select Fields for Each Package
+### Extracting Fields by Package Name
+
 ```python
-llm_prompt = f"""
-Package: {package_name} ({field_count} fields available)
+def get_fields_by_package(data, package_name):
+    """Extract all fields belonging to a specific package."""
+    fields = []
+    for sheet_name, sheet_info in data["metadata"].items():
+        for field in sheet_info["metadata"]:
+            if field["packageName"] == package_name:
+                field["isaSheet"] = sheet_name  # Add ISA sheet info
+                fields.append(field)
+    return fields
 
-Mandatory fields: {mandatory_fields}
-Optional fields (sample): {optional_fields[:20]}
-
-Document context: {doc_info}
-
-Select 5-15 most relevant fields for this document.
-Prioritize MANDATORY fields.
-"""
-```
-
-### Phase 3: Generate Field Values
-```python
-# Generate values for selected fields
-for field in selected_fields:
-    value = await llm.generate_value(
-        field_name=field['label'],
-        definition=field['definition'],
-        example=field['term']['example'],
-        regex=field['term']['regex'],
-        document=doc_info
-    )
+# Example: Get all 'miappe' fields
+miappe_fields = get_fields_by_package(data, "miappe")
 ```
 
 ---
 
-## 🔧 Code Changes Needed
+## 📝 Migration Notes
 
-### 1. `fairifier/services/fair_data_station.py`
-Current code needs adjustment to correctly parse the API return structure.
+### From Old API to New API
 
-### 2. `fairifier/agents/knowledge_retriever.py`
-- Remove MIxS assumption.
-- Use the actual 5 packages.
-- LLM selects packages based on document type.
-- LLM intelligently selects from 2411 sample fields.
+**Old Structure:**
+```python
+# Old: packages[sheet] is a list of fields
+fields = data["packages"]["investigation"]
+```
 
-### 3. Prompt Updates
-- "MIxS packages" → "FAIR-DS packages"
-- "MIMS, MIMAG" → "investigation, study, sample, assay, observationunit"
-- Mention actual field counts.
+**New Structure:**
+```python
+# New: metadata[sheet]["metadata"] is a list of fields
+fields = data["metadata"]["investigation"]["metadata"]
+```
 
----
+### Key Differences
 
-## 📝 Example Mandatory Fields
-
-### Investigation Level (Mandatory):
-- investigation identifier
-- investigation title
-- investigation description
-- firstname, lastname, email, organization
-
-### Study Level (Mandatory):
-- study identifier
-- study title
-- study description
-
----
-
-## 🎯 Next Steps
-
-I need to update the code to:
-1. ✅ Correctly parse the actual FAIR-DS API return format.
-2. ✅ Use real package names (investigation, study, sample, assay, observationunit).
-3. ✅ Enable LLM to intelligently handle 2411 sample fields.
-4. ✅ Prioritize MANDATORY fields.
-5. ✅ Use regex and example for validation.
-
+| Aspect | Old API | New API |
+|--------|---------|---------|
+| Top-level key | `packages` | `metadata` |
+| Sheet structure | List of fields | Object with `name`, `displayName`, `description`, `hierarchyOrder`, `metadata` |
+| Fields location | `packages[sheet]` | `metadata[sheet]["metadata"]` |
+| `/api/terms` | Returns JSON | Returns HTML (removed) |
+| Total items key | N/A | `totalMetadataItems` |

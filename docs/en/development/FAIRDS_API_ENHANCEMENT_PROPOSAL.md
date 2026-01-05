@@ -1,83 +1,61 @@
-# FAIR Data Station API Enhancement Proposal
+# Feature Request: Additional API Endpoints for Programmatic Access
 
-## Current API Capabilities
+## Summary
 
-Based on the [official documentation](https://docs.fairbydesign.nl/docs/fairdatastation/tutorials/api.html), the FAIR-DS API currently supports:
+We are developing [FAIRiAgent](https://github.com/your-repo/FAIRiAgent), an AI-powered tool that helps researchers automatically generate FAIR-compliant metadata from scientific documents. Our tool integrates with FAIR Data Station's API to retrieve metadata schemas and validate generated values.
 
-1. **GET `/api/terms`** - Returns all terms (893 total)
-2. **GET `/api/packages`** - Returns all packages grouped by ISA sheet (2689 total fields)
-3. **POST `/api/upload`** - Validates an Excel file
-
-## Problem Statement
-
-The current workflow requires fetching **all** terms (893) and **all** packages (2689 fields), then filtering client-side. This is inefficient for agentic workflows that need targeted queries.
-
-## Proposed API Enhancements
-
-### 1. **GET `/api/terms/{term_name}`** - Get Specific Term
-
-**Purpose**: Retrieve detailed information about a specific term by name, including which packages use it.
-
-**Request**:
-```bash
-curl http://localhost:8083/api/terms/study%20title
-```
-
-**Response**:
-```json
-{
-  "label": "study title",
-  "syntax": "{text}{10,}",
-  "example": "Cultivation and characterization of anaerobic Dehalobacter-enriched microbial cultures",
-  "definition": "Title describing the study",
-  "preferredUnit": null,
-  "ontology": null,
-  "regex": ".*{10,}",
-  "file": false,
-  "date": false,
-  "dateTime": false,
-  "url": "http://schema.org/title",
-  "packages": [
-    {
-      "packageName": "default",
-      "sheetName": "Study",
-      "requirement": "MANDATORY"
-    },
-    {
-      "packageName": "miappe",
-      "sheetName": "Study",
-      "requirement": "MANDATORY"
-    }
-  ]
-}
-```
-
-**Benefits**:
-- Quick lookup without fetching all 893 terms
-- See which packages use the term
-- Get validation rules (regex, syntax, example) for the term
+We would like to propose **two new API endpoints** that would significantly improve the efficiency of programmatic integrations like ours.
 
 ---
 
-### 2. **GET `/api/packages/{package_name}`** - Get Specific Package
+## Current API Usage
 
-**Purpose**: Retrieve all terms and metadata for a specific package.
+We currently use these endpoints:
+- `GET /api/packages` - Retrieve all metadata fields (works well ✅)
+- `POST /api/upload` - Validate Excel files (works well ✅)
+- `GET /api/terms` - ⚠️ Now returns HTML instead of JSON
 
-**Request**:
+### Challenge
+
+The `/api/packages` endpoint returns **all 2,689 fields** across all 59 packages in a single response (~500KB). For our use case, we typically only need 100-200 fields from 1-3 specific packages.
+
+**Current workflow:**
+```python
+# Must fetch everything (2,689 fields)
+response = requests.get("http://localhost:8083/api/packages")
+all_data = response.json()
+
+# Then filter client-side
+miappe_fields = [f for f in all_fields if f["packageName"] == "miappe"]
+```
+
+This results in:
+- **~93% unnecessary data transfer** when we only need one package
+- **No search capability** for discovering relevant terms
+- **Higher memory usage** on client side
+
+---
+
+## Proposed Enhancements
+
+### 1. `GET /api/packages/{package_name}` — Get Specific Package
+
+**Use case:** Retrieve all fields belonging to a specific package (e.g., `miappe`, `soil`, `default`).
+
+**Request:**
 ```bash
 curl http://localhost:8083/api/packages/miappe
 ```
 
-**Response**:
+**Suggested response:**
 ```json
 {
   "packageName": "miappe",
   "description": "Minimum Information About Plant Phenotyping Experiments",
-  "version": "1.0.0",
-  "isaSheets": ["investigation", "study", "sample", "observationunit"],
   "totalFields": 103,
   "mandatoryFields": 7,
   "optionalFields": 96,
+  "isaSheets": ["investigation", "study", "sample", "observationunit"],
   "fields": [
     {
       "label": "study title",
@@ -90,127 +68,99 @@ curl http://localhost:8083/api/packages/miappe
         "regex": ".*{10,}",
         "url": "http://schema.org/title"
       }
-    },
-    ...
-  ],
-  "mandatoryFieldsBySheet": {
-    "investigation": [...],
-    "study": [...],
-    "sample": [...],
-    "observationunit": [...]
-  },
-  "optionalFieldsBySheet": {
-    "investigation": [...],
-    "study": [...],
-    "sample": [...],
-    "observationunit": [...]
-  }
+    }
+    // ... remaining 102 fields
+  ]
 }
 ```
 
-**Benefits**:
-- Fetch only the package you need (e.g., 103 fields for miappe) instead of all 2689 fields
-- Understand package structure (mandatory vs optional fields)
-- See which ISA sheets the package covers
-- Get all terms with their validation rules
+**Benefits:**
+- Reduces data transfer by ~90% for typical use cases
+- Allows clients to fetch packages on-demand
+- Maintains backward compatibility (existing `/api/packages` still works)
+
+**Implementation note:** This could be a simple filter on the existing data structure.
 
 ---
 
-### 3. **GET `/api/search/terms?q={query}`** - Search Terms
+### 2. `GET /api/search/terms?q={query}` — Search Terms
 
-**Purpose**: Search terms by name, label, or definition to discover relevant terms.
+**Use case:** Discover relevant metadata terms by searching labels and definitions.
 
-**Request**:
+**Request:**
 ```bash
 curl "http://localhost:8083/api/search/terms?q=temperature"
 ```
 
-**Response**:
+**Suggested response:**
 ```json
 {
   "query": "temperature",
-  "total": 3,
+  "total": 5,
   "results": [
     {
       "label": "temperature",
       "definition": "The temperature at the time of sampling",
-      "packages": ["environmental_measurements"],
-      "matchType": "exact"
+      "packages": ["soil", "water", "air"],
+      "isaSheet": "sample",
+      "requirement": "OPTIONAL"
     },
     {
       "label": "air temperature",
-      "definition": "Temperature of the air",
-      "packages": ["environmental_measurements"],
-      "matchType": "partial"
-    },
-    {
-      "label": "water temperature",
-      "definition": "Temperature of the water",
-      "packages": ["environmental_measurements"],
-      "matchType": "partial"
+      "definition": "Temperature of the air at sampling time",
+      "packages": ["air"],
+      "isaSheet": "sample",
+      "requirement": "OPTIONAL"
     }
   ]
 }
 ```
 
-**Query Parameters**:
-- `q` (required): Search query string
-- `package` (optional): Filter by package name (e.g., `?q=temperature&package=environmental_measurements`)
-- `sheet` (optional): Filter by ISA sheet (e.g., `?q=temperature&sheet=sample`)
-- `requirement` (optional): Filter by requirement level (e.g., `?q=temperature&requirement=MANDATORY`)
-- `limit` (optional): Maximum results (default: 50)
+**Optional query parameters:**
+- `package` — Filter by package name
+- `sheet` — Filter by ISA sheet
+- `requirement` — Filter by requirement level (MANDATORY/OPTIONAL)
+- `limit` — Maximum results (default: 50)
 
-**Benefits**:
-- Discover relevant terms when exact name is unknown
-- Find alternative terms with similar meanings
-- Filter results by package, ISA sheet, or requirement level
-- Much faster than fetching all 893 terms and filtering client-side
+**Benefits:**
+- Enables term discovery without loading all data
+- Replaces the removed `/api/terms` JSON functionality
+- Helps users find the right metadata fields for their data
 
 ---
 
-## Example Usage
+## Priority
 
-### Current Workflow (Inefficient):
-```python
-# Fetch ALL terms (893)
-all_terms = client.get_terms()
+| Priority | Endpoint | Impact |
+|----------|----------|--------|
+| 🔴 High | `GET /api/packages/{package_name}` | ~90% reduction in data transfer |
+| 🟡 Medium | `GET /api/search/terms?q={query}` | Enables term discovery |
 
-# Fetch ALL packages (2689 fields)
-all_packages = client.get_packages()
-
-# Client-side filtering
-relevant_terms = [t for t in all_terms if "temperature" in t["label"].lower()]
-miappe_fields = [f for f in all_packages if f.get("packageName") == "miappe"]
-```
-
-### Enhanced Workflow (Efficient):
-```python
-# Search for relevant terms (only 3 results)
-temperature_terms = client.search_terms("temperature")
-
-# Get specific package (only 103 fields)
-miappe_package = client.get_package("miappe")
-
-# Get specific term with package info
-study_title = client.get_term("study title")
-```
+We believe `GET /api/packages/{package_name}` would provide the most immediate value and should be relatively straightforward to implement.
 
 ---
 
-## Backward Compatibility
+## Implementation Suggestions
 
-All proposed endpoints are **additive** - they don't modify existing endpoints:
-- `/api/terms` - Still works as before
-- `/api/packages` - Still works as before
-- `/api/upload` - Still works as before
-
-New endpoints provide additional functionality without breaking existing code.
+1. **URL encoding:** Term/package names with spaces should use URL encoding (e.g., `study%20title`)
+2. **Case insensitivity:** Package and term names should match case-insensitively
+3. **Error handling:** Return 404 with helpful message if package/term not found
+4. **Search:** Simple substring matching would be sufficient; fuzzy matching is nice-to-have
 
 ---
 
-## Implementation Notes
+## About Our Project
 
-1. **Term name encoding**: Use URL encoding for term names with spaces (e.g., `study%20title` for "study title")
-2. **Case sensitivity**: Term and package names should be case-insensitive for better usability
-3. **404 handling**: Return 404 if term/package not found
-4. **Search algorithm**: Implement fuzzy matching for better discovery (e.g., "temp" matches "temperature")
+FAIRiAgent is an open-source tool that uses LLMs to automatically extract metadata from scientific publications and format it according to FAIR Data Station's schema. The tool:
+
+1. Analyzes research documents (PDFs, text)
+2. Queries FAIR-DS API to get relevant metadata schemas
+3. Uses AI to extract and map information to metadata fields
+4. Validates the output against FAIR-DS validation rules
+
+These API enhancements would help us build a more efficient and responsive tool for the research community.
+
+
+We're happy to discuss further or contribute to the implementation if helpful.
+
+Thank you for building FAIR Data Station! 🙏
