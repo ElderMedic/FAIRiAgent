@@ -122,6 +122,9 @@ def save_runtime_config(
     Returns:
         Path to the saved configuration file
     """
+    # Ensure output directory exists
+    output_path.mkdir(parents=True, exist_ok=True)
+    
     # Collect configuration
     all_config = collect_runtime_config(document_path, project_id, output_path)
     

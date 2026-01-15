@@ -367,5 +367,147 @@ def validate_document(input_file: str):
     click.echo("Document validation passed!")
 
 
+@cli.command()
+@click.option('--verbose', '-v', is_flag=True, help='Show detailed diagnostic information')
+def check_mineru(verbose: bool):
+    """Check MinerU service availability and configuration.
+    
+    This command verifies that MinerU CLI and HTTP server are properly
+    configured and available for document conversion.
+    """
+    import subprocess
+    import socket
+    import requests
+    from urllib.parse import urlparse
+    
+    click.echo("=" * 60)
+    click.echo("MinerU Service Check")
+    click.echo("=" * 60)
+    
+    # Show configuration
+    click.echo("\n📋 Configuration:")
+    click.echo(f"   MINERU_ENABLED: {config.mineru_enabled}")
+    click.echo(f"   MINERU_CLI_PATH: {config.mineru_cli_path}")
+    click.echo(f"   MINERU_SERVER_URL: {config.mineru_server_url}")
+    click.echo(f"   MINERU_BACKEND: {config.mineru_backend}")
+    click.echo(f"   MINERU_TIMEOUT_SECONDS: {config.mineru_timeout_seconds}")
+    
+    if not config.mineru_enabled:
+        click.echo("\n⚠️  Warning: MinerU is disabled in configuration")
+        click.echo("   Set MINERU_ENABLED=true in .env to enable")
+        return
+    
+    results = []
+    
+    # Test 1: CLI availability
+    click.echo("\n🔍 Test 1: MinerU CLI")
+    cli_ok = False
+    try:
+        result = subprocess.run(
+            [config.mineru_cli_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            version_info = result.stdout.strip()
+            click.echo(f"   ✅ CLI available: {version_info}")
+            cli_ok = True
+        else:
+            click.echo(f"   ❌ CLI returned error code: {result.returncode}")
+    except FileNotFoundError:
+        click.echo(f"   ❌ CLI not found: {config.mineru_cli_path}")
+        click.echo("   Install MinerU: pip install mineru or conda install mineru")
+    except Exception as e:
+        click.echo(f"   ❌ Error checking CLI: {e}")
+    results.append(("CLI", cli_ok))
+    
+    # Test 2: Server availability
+    click.echo("\n🔍 Test 2: MinerU HTTP Server")
+    server_ok = False
+    if config.mineru_server_url:
+        parsed = urlparse(config.mineru_server_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 30000
+        
+        # Check port connectivity
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            
+            if result == 0:
+                click.echo(f"   ✅ Port {port} accessible")
+                # Try health check
+                try:
+                    health_url = f"{config.mineru_server_url.rstrip('/')}/health"
+                    response = requests.get(health_url, timeout=5)
+                    if response.status_code == 200:
+                        click.echo(f"   ✅ Health check passed")
+                        server_ok = True
+                    else:
+                        click.echo(f"   ⚠️  Health check returned: {response.status_code}")
+                        server_ok = True  # Server is running even if health endpoint is different
+                except requests.exceptions.RequestException as e:
+                    click.echo(f"   ⚠️  Health check failed: {e}")
+                    server_ok = True  # Port is open, assume server is running
+            else:
+                click.echo(f"   ❌ Port {port} not accessible")
+                click.echo(f"   Start server: {config.mineru_cli_path} server start")
+        except Exception as e:
+            click.echo(f"   ❌ Connection test failed: {e}")
+    else:
+        click.echo("   ❌ Server URL not configured")
+    results.append(("Server", server_ok))
+    
+    # Test 3: Client initialization
+    click.echo("\n🔍 Test 3: MinerUClient")
+    client_ok = False
+    try:
+        from .services.mineru_client import MinerUClient
+        
+        client = MinerUClient(
+            cli_path=config.mineru_cli_path,
+            server_url=config.mineru_server_url,
+            backend=config.mineru_backend,
+            timeout_seconds=config.mineru_timeout_seconds,
+        )
+        
+        if client.is_available():
+            click.echo("   ✅ MinerUClient initialized and available")
+            client_ok = True
+        else:
+            click.echo("   ❌ MinerUClient not available")
+    except Exception as e:
+        click.echo(f"   ❌ Client initialization failed: {e}")
+    results.append(("Client", client_ok))
+    
+    # Summary
+    click.echo("\n" + "=" * 60)
+    click.echo("Summary")
+    click.echo("=" * 60)
+    
+    all_passed = all(result for _, result in results)
+    
+    for name, result in results:
+        status = "✅ PASS" if result else "❌ FAIL"
+        click.echo(f"   {name}: {status}")
+    
+    if all_passed:
+        click.echo("\n🎉 All checks passed! MinerU is ready to use.")
+        if verbose:
+            click.echo("\n💡 Tip: Run 'pytest tests/test_mineru_client.py -v' for detailed tests")
+    else:
+        click.echo("\n⚠️  Some checks failed. MinerU may not be fully functional.")
+        click.echo("\n💡 Troubleshooting:")
+        if not results[0][1]:  # CLI failed
+            click.echo("   - Install MinerU: pip install mineru")
+        if not results[1][1]:  # Server failed
+            click.echo(f"   - Start server: {config.mineru_cli_path} server start")
+        click.echo("   - Check configuration in .env file")
+        click.echo("   - Run with --verbose for more details")
+
+
 if __name__ == "__main__":
     cli()

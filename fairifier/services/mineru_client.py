@@ -163,15 +163,32 @@ class MinerUClient:
             logger.debug("MinerU stdout: %s", completed.stdout.strip())
         if completed.stderr:
             logger.debug("MinerU stderr: %s", completed.stderr.strip())
+            # Check for errors in stderr even if return code is 0
+            if "ERROR" in completed.stderr or "Error" in completed.stderr:
+                error_lines = [line for line in completed.stderr.split('\n') 
+                              if 'ERROR' in line or 'Error' in line or 'Traceback' in line]
+                if error_lines:
+                    error_summary = '\n'.join(error_lines[:5])  # First 5 error lines
+                    logger.warning("MinerU stderr contains errors: %s", error_summary)
 
         # MinerU creates output in: {out_dir}/{docname}/vlm/{docname}.md
         # Search recursively for .md files
         markdown_files = list(out_dir.glob("**/*.md"))
         if not markdown_files:
+            # List what files were actually created for debugging
+            all_files = list(out_dir.rglob("*"))
+            file_list = "\n".join([f"  - {f}" for f in all_files[:10] if f.is_file()])
             message = (
-                "MinerU output directory "
-                f"'{out_dir}' does not contain a Markdown file."
+                f"MinerU output directory '{out_dir}' does not contain a Markdown file.\n"
+                f"Return code: {completed.returncode}\n"
             )
+            if completed.stderr:
+                error_summary = completed.stderr.strip()[:500]
+                message += f"Stderr: {error_summary}\n"
+            if file_list:
+                message += f"Files found in output directory:\n{file_list}"
+            else:
+                message += "No files found in output directory."
             raise MinerUConversionError(message)
 
         # Use the first markdown file found (typically there's only one)

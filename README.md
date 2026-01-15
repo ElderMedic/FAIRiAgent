@@ -554,6 +554,25 @@ python run_fairifier.py ui
 # Then use the example file option in the UI
 ```
 
+### 🔍 Check MinerU Service
+
+```bash
+# Quick check via CLI command
+python -m fairifier.cli check-mineru
+
+# Or run unit tests
+pytest tests/test_mineru_client.py -v
+
+# Run only non-integration tests (faster)
+pytest tests/test_mineru_client.py -v -m "not integration"
+
+# Run all tests including integration tests
+pytest tests/test_mineru_client.py -v
+
+# Get detailed status summary
+pytest tests/test_mineru_client.py::test_mineru_status_summary -v -s
+```
+
 ### 📚 Example Files
 
 - 📄 `examples/inputs/earthworm_4n_paper_bioRXiv.pdf` - Research paper example
