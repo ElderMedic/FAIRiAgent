@@ -16,8 +16,7 @@ Welcome to the FAIRiAgent documentation. Please select your preferred language:
 - [**LangGraph Studio Setup**](en/guides/LANGGRAPH_STUDIO_SETUP.md): Setting up LangGraph Studio for development.
 
 ### Development
-- [**FAIR-DS API Exploration**](en/development/FAIRDS_API_EXPLORATION.md): Notes on FAIR Data Station API.
-- [**FAIR-DS Enhancement Proposal**](en/development/FAIRDS_API_ENHANCEMENT_PROPOSAL.md): Proposals for API enhancements.
+- [**FAIR-DS API Manual**](en/development/FAIRDS_API_MANUAL.md): Complete API reference for FAIR Data Station integration.
 - [**Critic Rubric**](en/development/critic_rubric.yaml): The rubric used by the Critic Agent.
 
 ---
@@ -33,4 +32,4 @@ Welcome to the FAIRiAgent documentation. Please select your preferred language:
 - [**LangGraph Studio 设置**](zh/guides/LANGGRAPH_STUDIO_SETUP.md): 设置 LangGraph Studio 进行开发。
 
 ### 开发文档 (Development)
-- [**FAIR-DS API 探索**](zh/development/FAIRDS_API_EXPLORATION.md): FAIR Data Station API 结构分析笔记。
+- [**FAIR-DS API 手册**](zh/development/FAIRDS_API_MANUAL.md): FAIR Data Station API 完整参考文档。

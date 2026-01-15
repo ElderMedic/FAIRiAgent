@@ -51,7 +51,7 @@ ollama pull qwen3:8b
 #### 启动 FAIR-DS API（如果还没运行）
 ```bash
 # 检查是否运行
-curl http://localhost:8083/api/packages
+curl http://localhost:8083/api/package
 
 # 如果没有响应，需要启动 FAIR-DS
 # （根据你的 FAIR-DS 安装方式启动）
@@ -170,7 +170,7 @@ export LANGSMITH_API_KEY=your_key
 ### 问题 2: FAIR-DS 连接失败
 ```bash
 # 检查 FAIR-DS API
-curl http://localhost:8083/api/packages | jq '.[0:2]'
+curl http://localhost:8083/api/package
 
 # 如果返回 HTML 或错误，检查 FAIR-DS 是否正确启动
 ```

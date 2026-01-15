@@ -77,6 +77,10 @@ Handles the ingestion of raw scientific documents.
 
 ### 🧠 Knowledge Retrieval (Green)
 Grounds the agent's generation in established scientific standards.
+*   **FAIR Data Station Client:** Integrates with the FAIR-DS API for metadata retrieval:
+    - `GET /api/package?name={name}` - Fetch specific metadata packages efficiently (e.g., miappe, soil, default)
+    - `GET /api/terms?label={pattern}` - Search terms by label with server-side filtering
+    - `GET /api/terms?definition={pattern}` - Search terms by definition
 *   **Context Retriever:** Uses RAG (Retrieval-Augmented Generation) to fetch relevant schema definitions (e.g., "What is 'collection date' in MIxS?") and ontology terms (e.g., valid ENVO codes) based on the document's content.
 
 ### 🤖 FAIRiAgent Core Workflow (Red & Blue)

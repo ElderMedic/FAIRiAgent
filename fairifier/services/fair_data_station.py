@@ -4,17 +4,11 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Iterable, List, Optional
-import json as json_lib
 
 try:
     import requests
 except ImportError:  # pragma: no cover - handled gracefully at runtime
     requests = None  # type: ignore
-
-try:
-    from bs4 import BeautifulSoup
-except ImportError:
-    BeautifulSoup = None
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +18,15 @@ class FAIRDataStationUnavailable(RuntimeError):
 
 
 class FAIRDataStationClient:
-    """Thin HTTP client for FAIR Data Station metadata endpoints."""
+    """Thin HTTP client for FAIR Data Station metadata endpoints.
+    
+    API Version: Latest (January 2026)
+    Endpoints:
+        - GET /api - API overview
+        - GET /api/terms - Get all terms or filter by label/definition
+        - GET /api/package - Get all packages or specific package by name
+        - POST /api/upload - Upload and validate Excel file
+    """
 
     def __init__(self, base_url: str, timeout: int = 15) -> None:
         if not requests:
@@ -36,528 +38,400 @@ class FAIRDataStationClient:
         self._timeout = timeout
         self._session = requests.Session()
         self._session.headers.update({"Accept": "application/json"})
+        
+        # Caches
         self._packages_cache: Optional[List[Dict[str, Any]]] = None
-        self._terms_cache: Optional[List[Dict[str, Any]]] = None
+        self._terms_cache: Optional[Dict[str, Dict[str, Any]]] = None
+        self._available_packages_cache: Optional[List[str]] = None
 
     def is_available(self) -> bool:
-        """Return True if the FAIR Data Station API health endpoint responds."""
+        """Return True if the FAIR Data Station API responds."""
         try:
             response = self._session.get(
-                f"{self._base_url}/api/health", timeout=self._timeout
+                f"{self._base_url}/api", timeout=self._timeout
             )
             return response.status_code == 200
         except Exception as exc:  # pragma: no cover - network failure path
-            logger.debug("FAIR-DS health check failed: %s", exc)
+            logger.debug("FAIR-DS availability check failed: %s", exc)
             return False
 
-    def get_terms(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
-        """Fetch and cache all terms available from the FAIR Data Station."""
+    # =========================================================================
+    # Terms API
+    # =========================================================================
+
+    def get_terms(self, force_refresh: bool = False) -> Dict[str, Dict[str, Any]]:
+        """Fetch and cache all terms available from the FAIR Data Station.
+        
+        Returns:
+            Dictionary mapping term names to term details
+        """
         if self._terms_cache is not None and not force_refresh:
             return self._terms_cache
 
         try:
-            # Try JSON API endpoints first
-            endpoints = ["/api/terms", "/api/v1/terms", "/terms", "/metadata/terms"]
-            terms = []
+            response = self._session.get(
+                f"{self._base_url}/api/terms", timeout=self._timeout
+            )
             
-            for endpoint in endpoints:
-                try:
-                    response = self._session.get(
-                        f"{self._base_url}{endpoint}", timeout=self._timeout
-                    )
-                    if response.status_code == 200:
-                        content_type = response.headers.get('content-type', '')
-                        if 'application/json' in content_type:
-                            data = response.json()
-                            # FAIR-DS API returns {"total": N, "terms": {...}}
-                            if isinstance(data, dict) and "terms" in data:
-                                terms = list(data["terms"].values())
-                                logger.info(f"✅ Successfully fetched {len(terms)} terms from JSON API {endpoint}")
-                            else:
-                                terms = data if isinstance(data, list) else []
-                                logger.info(f"✅ Successfully fetched terms from JSON API {endpoint}")
-                            break
-                except Exception as e:
-                    logger.debug(f"Endpoint {endpoint} failed: {e}")
-                    continue
-            
-            # If JSON API didn't work, try scraping the web interface
-            if not terms:
-                logger.info("📡 JSON API not available, attempting to scrape FAIR-DS web interface...")
-                terms = self._scrape_terms_from_web()
-                
-            # If scraping didn't work, use fallback
-            if not terms:
-                logger.info("⚠️  Web scraping failed, using FAIR-DS standard fallback")
-                terms = self._get_fallback_terms()
-                
-        except Exception as exc:  # pragma: no cover - network failure path
-            logger.warning("Unable to fetch FAIR-DS terms: %s", exc)
-            terms = self._get_fallback_terms()
-
-        self._terms_cache = terms
-        return terms
-    
-    def _scrape_terms_from_web(self) -> List[Dict[str, Any]]:
-        """Scrape terms from FAIR-DS web interface using browser automation."""
-        try:
-            logger.info(f"🌐 Accessing FAIR-DS web interface at {self._base_url}/terms")
-            
-            # Import here to avoid dependency if not needed
-            from playwright.sync_api import sync_playwright
-            import time
-            
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                page = browser.new_page()
-                
-                # Navigate to terms page
-                logger.info("📡 Loading FAIR-DS terms page...")
-                page.goto(f"{self._base_url}/terms", timeout=30000)
-                
-                # Wait for Vaadin to initialize and load data
-                time.sleep(5)  # Give Vaadin time to load
-                
-                # Try to wait for table content
-                try:
-                    page.wait_for_selector('row gridcell', timeout=20000)
-                except:
-                    logger.warning("Timeout waiting for table, attempting to scrape anyway...")
-                
-                # Extract all rows from the table
-                rows = page.query_selector_all('row')
-                
-                terms = []
-                logger.info(f"📊 Found {len(rows)} rows in terms table")
-                
-                for i, row in enumerate(rows):
-                    try:
-                        cells = row.query_selector_all('gridcell')
-                        if len(cells) >= 5:
-                            sheet_name = cells[0].inner_text().strip()
-                            package_name = cells[1].inner_text().strip()
-                            field_name = cells[2].inner_text().strip()
-                            example = cells[3].inner_text().strip()
-                            description = cells[4].inner_text().strip()
-                            
-                            # Skip header row
-                            if not sheet_name or sheet_name == "Sheet Name":
-                                continue
-                            
-                            term = {
-                                "level": sheet_name.lower(),
-                                "package": package_name,
-                                "name": field_name,
-                                "label": field_name,
-                                "example": example,
-                                "description": description,
-                                "required": "default" in package_name.lower(),
-                                "source": "FAIR-DS-Web",
-                                "uri": f"http://fairbydesign.nl/terms/{field_name.replace(' ', '_')}"
-                            }
-                            terms.append(term)
-                            
-                            # Log progress every 50 terms
-                            if (i + 1) % 50 == 0:
-                                logger.info(f"   Scraped {i+1} terms...")
-                                
-                    except Exception as e:
-                        logger.debug(f"Failed to parse row {i}: {e}")
-                        continue
-                
-                browser.close()
-                
-                if terms:
-                    logger.info(f"✅ Successfully scraped {len(terms)} terms from web interface")
-                else:
-                    logger.warning("⚠️  No terms scraped from web interface")
+            if response.status_code == 200:
+                data = response.json()
+                # API returns {"total": N, "terms": {...}}
+                if isinstance(data, dict) and "terms" in data:
+                    self._terms_cache = data["terms"]
+                    logger.info(f"✅ Fetched {data.get('total', len(self._terms_cache))} terms from FAIR-DS API")
+                    return self._terms_cache
                     
-                return terms
+        except Exception as exc:
+            logger.warning("Unable to fetch FAIR-DS terms: %s", exc)
+
+        # Return empty dict on failure
+        self._terms_cache = {}
+        return self._terms_cache
+
+    def search_terms(
+        self, 
+        label: Optional[str] = None, 
+        definition: Optional[str] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """Search terms by label and/or definition using server-side filtering.
+        
+        Args:
+            label: Filter terms by label (supports pattern matching, case-insensitive)
+            definition: Filter terms by definition (supports pattern matching, case-insensitive)
+            
+        Returns:
+            Dictionary mapping term names to term details
+        """
+        if not label and not definition:
+            return self.get_terms()
+            
+        try:
+            params = {}
+            if label:
+                params["label"] = label
+            if definition:
+                params["definition"] = definition
                 
-        except Exception as e:
-            logger.warning(f"❌ Web scraping failed: {e}")
+            response = self._session.get(
+                f"{self._base_url}/api/terms",
+                params=params,
+                timeout=self._timeout
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, dict) and "terms" in data:
+                    terms = data["terms"]
+                    logger.info(f"✅ Found {data.get('total', len(terms))} terms matching filters")
+                    return terms
+                    
+        except Exception as exc:
+            logger.warning("Unable to search FAIR-DS terms: %s", exc)
+            
+        return {}
+
+    def get_term_by_label(self, label: str) -> Optional[Dict[str, Any]]:
+        """Get a specific term by its exact label.
+        
+        Args:
+            label: The exact label of the term
+            
+        Returns:
+            Term details or None if not found
+        """
+        terms = self.search_terms(label=label)
+        
+        # Look for exact match
+        for term_name, term_info in terms.items():
+            if term_info.get("label", "").lower() == label.lower():
+                return term_info
+        
+        # Return first match if no exact match
+        if terms:
+            return next(iter(terms.values()))
+            
+        return None
+
+    # =========================================================================
+    # Package API
+    # =========================================================================
+
+    def get_available_packages(self, force_refresh: bool = False) -> List[str]:
+        """Get list of all available package names.
+        
+        Returns:
+            List of package names
+        """
+        if self._available_packages_cache is not None and not force_refresh:
+            return self._available_packages_cache
+
+        try:
+            response = self._session.get(
+                f"{self._base_url}/api/package", timeout=self._timeout
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                # API returns {"message": "...", "packages": [...], "example": "..."}
+                if isinstance(data, dict) and "packages" in data:
+                    self._available_packages_cache = data["packages"]
+                    logger.info(f"✅ Found {len(self._available_packages_cache)} available packages")
+                    return self._available_packages_cache
+                    
+        except Exception as exc:
+            logger.warning("Unable to fetch FAIR-DS package list: %s", exc)
+
+        self._available_packages_cache = []
+        return self._available_packages_cache
+
+    def get_package(self, package_name: str) -> Optional[Dict[str, Any]]:
+        """Get a specific package with all its metadata fields.
+        
+        Args:
+            package_name: Name of the package (e.g., "miappe", "soil", "default")
+            
+        Returns:
+            Package data with structure:
+            {
+                "packageName": "miappe",
+                "itemCount": 63,
+                "metadata": [
+                    {
+                        "sheetName": "Study",
+                        "packageName": "miappe",
+                        "requirement": "MANDATORY",
+                        "label": "start date of study",
+                        "term": {...}
+                    },
+                    ...
+                ]
+            }
+        """
+        try:
+            response = self._session.get(
+                f"{self._base_url}/api/package",
+                params={"name": package_name},
+                timeout=self._timeout
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, dict) and "metadata" in data:
+                    logger.info(
+                        f"✅ Fetched package '{package_name}' with "
+                        f"{data.get('itemCount', len(data['metadata']))} fields"
+                    )
+                    return data
+                    
+            elif response.status_code == 404:
+                logger.warning(f"⚠️ Package '{package_name}' not found")
+                
+        except Exception as exc:
+            logger.warning(f"Unable to fetch package '{package_name}': {exc}")
+            
+        return None
+
+    def get_package_fields(
+        self, 
+        package_name: str, 
+        requirement: Optional[str] = None,
+        sheet_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get fields from a specific package with optional filtering.
+        
+        Args:
+            package_name: Name of the package
+            requirement: Filter by requirement level ("MANDATORY", "OPTIONAL", "RECOMMENDED")
+            sheet_name: Filter by ISA sheet name ("Investigation", "Study", etc.)
+            
+        Returns:
+            List of field dictionaries
+        """
+        package = self.get_package(package_name)
+        if not package:
             return []
+            
+        fields = package.get("metadata", [])
+        
+        # Filter by requirement
+        if requirement:
+            requirement_upper = requirement.upper()
+            fields = [f for f in fields if f.get("requirement") == requirement_upper]
+            
+        # Filter by sheet name
+        if sheet_name:
+            sheet_lower = sheet_name.lower()
+            fields = [f for f in fields if f.get("sheetName", "").lower() == sheet_lower]
+            
+        return fields
+
+    def get_mandatory_fields(self, package_name: str) -> List[Dict[str, Any]]:
+        """Get all mandatory fields from a specific package.
+        
+        Args:
+            package_name: Name of the package
+            
+        Returns:
+            List of mandatory field dictionaries
+        """
+        return self.get_package_fields(package_name, requirement="MANDATORY")
 
     def get_packages(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
-        """Fetch and cache all metadata packages from the FAIR Data Station."""
+        """Fetch and cache all metadata fields from the default package.
+        
+        Note: This fetches the 'default' package for backward compatibility.
+        Use get_package(name) to get specific packages.
+        
+        Returns:
+            List of field dictionaries
+        """
         if self._packages_cache is not None and not force_refresh:
             return self._packages_cache
 
-        try:
-            # Try multiple possible endpoints
-            endpoints = ["/api/packages", "/api/v1/packages", "/packages", "/metadata/packages"]
-            packages = []
+        package = self.get_package("default")
+        if package:
+            self._packages_cache = package.get("metadata", [])
+        else:
+            self._packages_cache = []
             
-            for endpoint in endpoints:
-                try:
-                    response = self._session.get(
-                        f"{self._base_url}{endpoint}", timeout=self._timeout
-                    )
-                        if response.status_code == 200:
-                        content_type = response.headers.get('content-type', '')
-                        if 'application/json' in content_type:
-                            data = response.json()
-                            # FAIR-DS API new format: {"total": N, "metadata": {...}}
-                            # Old format: {"total": N, "packages": {...}}
-                            packages_dict = data.get("metadata") or data.get("packages")
-                            if isinstance(packages_dict, dict):
-                                packages = []
-                                for level, level_data in packages_dict.items():
-                                    # New format: level_data is {"name": ..., "metadata": [...]}
-                                    if isinstance(level_data, dict) and "metadata" in level_data:
-                                        level_packages = level_data["metadata"]
-                                    # Old format: level_data is directly a list of fields
-                                    elif isinstance(level_data, list):
-                                        level_packages = level_data
-                                    else:
-                                        continue
-                                    for pkg in level_packages:
-                                        pkg["level"] = level  # Add level info
-                                        packages.append(pkg)
-                                logger.info(f"Successfully fetched {len(packages)} packages from {endpoint}")
-                            else:
-                                packages = data if isinstance(data, list) else []
-                                logger.info(f"Successfully fetched packages from {endpoint}")
-                            break
-                except Exception as e:
-                    logger.debug(f"Endpoint {endpoint} failed: {e}")
-                    continue
-            
-            if not packages:
-                logger.info("FAIR-DS API returns HTML (Vaadin app), using standard FAIR-DS packages")
-                packages = self._get_fallback_packages()
-                
-        except Exception as exc:  # pragma: no cover - network failure path
-            logger.warning("Unable to fetch FAIR-DS packages: %s", exc)
-            packages = self._get_fallback_packages()
+        return self._packages_cache
 
-        self._packages_cache = packages
-        return packages
+    # =========================================================================
+    # Helper Methods
+    # =========================================================================
 
-    def search_terms(self, query: str) -> List[Dict[str, Any]]:
-        """Return terms that contain the query in name, label, or description."""
-        query_lower = query.lower()
-        results: List[Dict[str, Any]] = []
-
-        for term in self.get_terms():
-            fields_to_search = self._iter_term_strings(term)
-            if any(query_lower in value for value in fields_to_search):
-                results.append(term)
-
-        return results
-
-    @staticmethod
-    def _iter_term_strings(term: Dict[str, Any]) -> Iterable[str]:
-        """Yield searchable string values from a FAIR-DS term payload."""
-        candidate_keys = ("name", "label", "description")
-        for key in candidate_keys:
-            value = term.get(key)
-            if isinstance(value, str):
-                yield value.lower()
-
-
-    def _get_fallback_terms(self) -> List[Dict[str, Any]]:
-        """Provide fallback FAIR-DS standard terms, organized by hierarchy."""
-        return [
-            # Investigation Level
-            {
-                "name": "investigation_title",
-                "label": "Investigation Title", 
-                "description": "The title of the investigation study",
-                "level": "investigation",
-                "package": "investigation_core",
-                "uri": "http://fair-ds.org/terms/investigation_title",
-                "required": True,
-                "data_type": "string"
-            },
-            {
-                "name": "investigation_description",
-                "label": "Investigation Description",
-                "description": "A description of the investigation study", 
-                "level": "investigation",
-                "package": "investigation_core",
-                "uri": "http://fair-ds.org/terms/investigation_description",
-                "required": True,
-                "data_type": "text"
-            },
-            {
-                "name": "investigation_identifier",
-                "label": "Investigation Identifier",
-                "description": "A unique identifier for the investigation",
-                "level": "investigation", 
-                "package": "investigation_core",
-                "uri": "http://fair-ds.org/terms/investigation_identifier",
-                "required": True,
-                "data_type": "string"
-            },
-            
-            # Study Level
-            {
-                "name": "study_title",
-                "label": "Study Title",
-                "description": "The title of the study within the investigation",
-                "level": "study",
-                "package": "study_core", 
-                "uri": "http://fair-ds.org/terms/study_title",
-                "required": True,
-                "data_type": "string"
-            },
-            {
-                "name": "study_description", 
-                "label": "Study Description",
-                "description": "A description of the study design and objectives",
-                "level": "study",
-                "package": "study_core",
-                "uri": "http://fair-ds.org/terms/study_description", 
-                "required": True,
-                "data_type": "text"
-            },
-            {
-                "name": "study_design_type",
-                "label": "Study Design Type",
-                "description": "The type of study design employed",
-                "level": "study",
-                "package": "study_design",
-                "uri": "http://fair-ds.org/terms/study_design_type",
-                "required": False,
-                "data_type": "controlled_vocabulary"
-            },
-            
-            # Assay Level
-            {
-                "name": "assay_title",
-                "label": "Assay Title", 
-                "description": "The title of the assay within the study",
-                "level": "assay",
-                "package": "assay_core",
-                "uri": "http://fair-ds.org/terms/assay_title",
-                "required": True,
-                "data_type": "string"
-            },
-            {
-                "name": "measurement_type",
-                "label": "Measurement Type",
-                "description": "The type of measurement being performed",
-                "level": "assay", 
-                "package": "assay_measurement",
-                "uri": "http://fair-ds.org/terms/measurement_type",
-                "required": True,
-                "data_type": "controlled_vocabulary"
-            },
-            {
-                "name": "technology_type", 
-                "label": "Technology Type",
-                "description": "The technology used to perform the measurement",
-                "level": "assay",
-                "package": "assay_technology",
-                "uri": "http://fair-ds.org/terms/technology_type",
-                "required": True,
-                "data_type": "controlled_vocabulary"
-            },
-            
-            # Observation Unit Level
-            {
-                "name": "sample_id",
-                "label": "Sample ID",
-                "description": "A unique identifier for the sample or observation unit",
-                "level": "observation_unit",
-                "package": "observation_core", 
-                "uri": "http://fair-ds.org/terms/sample_id",
-                "required": True,
-                "data_type": "string"
-            },
-            {
-                "name": "sample_type",
-                "label": "Sample Type", 
-                "description": "The type of sample being observed",
-                "level": "observation_unit",
-                "package": "observation_core",
-                "uri": "http://fair-ds.org/terms/sample_type",
-                "required": True,
-                "data_type": "controlled_vocabulary"
-            },
-            {
-                "name": "collection_date",
-                "label": "Collection Date",
-                "description": "The date when the sample was collected", 
-                "level": "observation_unit",
-                "package": "observation_temporal",
-                "uri": "http://fair-ds.org/terms/collection_date",
-                "required": False,
-                "data_type": "date"
-            },
-            {
-                "name": "geographic_location",
-                "label": "Geographic Location",
-                "description": "The geographic location where the sample was collected",
-                "level": "observation_unit",
-                "package": "observation_spatial",
-                "uri": "http://fair-ds.org/terms/geographic_location", 
-                "required": False,
-                "data_type": "string"
-            },
-            
-            # Environmental/Context Terms
-            {
-                "name": "environmental_medium",
-                "label": "Environmental Medium",
-                "description": "The environmental medium from which the sample was obtained",
-                "level": "observation_unit", 
-                "package": "environmental_context",
-                "uri": "http://fair-ds.org/terms/environmental_medium",
-                "required": False,
-                "data_type": "controlled_vocabulary"
-            },
-            {
-                "name": "temperature",
-                "label": "Temperature", 
-                "description": "The temperature at the time of sampling",
-                "level": "observation_unit",
-                "package": "environmental_measurements",
-                "uri": "http://fair-ds.org/terms/temperature",
-                "required": False,
-                "data_type": "numeric"
-            }
-        ]
-    
-    def _get_fallback_packages(self) -> List[Dict[str, Any]]:
-        """Provide fallback FAIR-DS standard packages, organized by hierarchy."""
-        return [
-            {
-                "name": "investigation_core",
-                "label": "Investigation Core Package",
-                "description": "Core metadata fields required for any investigation",
-                "level": "investigation",
-                "version": "1.0.0",
-                "required_fields": ["investigation_title", "investigation_description", "investigation_identifier"],
-                "optional_fields": ["investigation_submission_date", "investigation_public_release_date"]
-            },
-            {
-                "name": "study_core", 
-                "label": "Study Core Package",
-                "description": "Core metadata fields required for any study within an investigation",
-                "level": "study",
-                "version": "1.0.0", 
-                "required_fields": ["study_title", "study_description"],
-                "optional_fields": ["study_submission_date", "study_public_release_date"]
-            },
-            {
-                "name": "study_design",
-                "label": "Study Design Package",
-                "description": "Metadata fields describing the study design and methodology", 
-                "level": "study",
-                "version": "1.0.0",
-                "required_fields": [],
-                "optional_fields": ["study_design_type", "study_factor_type", "study_factor_value"]
-            },
-            {
-                "name": "assay_core",
-                "label": "Assay Core Package", 
-                "description": "Core metadata fields required for any assay",
-                "level": "assay",
-                "version": "1.0.0",
-                "required_fields": ["assay_title", "measurement_type", "technology_type"],
-                "optional_fields": ["assay_description"]
-            },
-            {
-                "name": "assay_measurement",
-                "label": "Assay Measurement Package",
-                "description": "Metadata fields describing the measurement performed in the assay",
-                "level": "assay", 
-                "version": "1.0.0",
-                "required_fields": ["measurement_type"],
-                "optional_fields": ["measurement_unit", "measurement_protocol"]
-            },
-            {
-                "name": "assay_technology", 
-                "label": "Assay Technology Package",
-                "description": "Metadata fields describing the technology used in the assay",
-                "level": "assay",
-                "version": "1.0.0",
-                "required_fields": ["technology_type"],
-                "optional_fields": ["technology_platform", "technology_protocol"]
-            },
-            {
-                "name": "observation_core",
-                "label": "Observation Unit Core Package",
-                "description": "Core metadata fields for observation units (samples)",
-                "level": "observation_unit",
-                "version": "1.0.0", 
-                "required_fields": ["sample_id", "sample_type"],
-                "optional_fields": ["sample_description"]
-            },
-            {
-                "name": "observation_temporal",
-                "label": "Observation Temporal Package", 
-                "description": "Temporal metadata for observation units",
-                "level": "observation_unit",
-                "version": "1.0.0",
-                "required_fields": [],
-                "optional_fields": ["collection_date", "collection_time", "storage_date"]
-            },
-            {
-                "name": "observation_spatial",
-                "label": "Observation Spatial Package",
-                "description": "Spatial metadata for observation units",
-                "level": "observation_unit", 
-                "version": "1.0.0",
-                "required_fields": [],
-                "optional_fields": ["geographic_location", "latitude", "longitude", "elevation"]
-            },
-            {
-                "name": "environmental_context",
-                "label": "Environmental Context Package",
-                "description": "Environmental context metadata for samples", 
-                "level": "observation_unit",
-                "version": "1.0.0",
-                "required_fields": [],
-                "optional_fields": ["environmental_medium", "habitat_type", "ecosystem_type"]
-            },
-            {
-                "name": "environmental_measurements",
-                "label": "Environmental Measurements Package",
-                "description": "Environmental measurement metadata",
-                "level": "observation_unit",
-                "version": "1.0.0", 
-                "required_fields": [],
-                "optional_fields": ["temperature", "pH", "salinity", "dissolved_oxygen"]
-            }
-        ]
-
-    def get_packages_by_level(self, level: str) -> List[Dict[str, Any]]:
-        """Get packages at specified hierarchy level."""
-        packages = self.get_packages()
-        return [pkg for pkg in packages if pkg.get('level') == level]
-    
-    def get_terms_by_level(self, level: str) -> List[Dict[str, Any]]:
-        """Get terms at specified hierarchy level."""
-        terms = self.get_terms()
-        return [term for term in terms if term.get('level') == level]
-
-    def get_hierarchical_structure(self) -> Dict[str, Dict[str, Any]]:
-        """Get hierarchical metadata structure."""
-        packages = self.get_packages()
-        terms = self.get_terms()
+    def get_fields_by_sheet(
+        self, 
+        package_name: str
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Get package fields grouped by ISA sheet.
         
-        structure = {
-            "investigation": {
-                "packages": [pkg for pkg in packages if pkg.get('level') == 'investigation'],
-                "terms": [term for term in terms if term.get('level') == 'investigation']
-            },
-            "study": {
-                "packages": [pkg for pkg in packages if pkg.get('level') == 'study'], 
-                "terms": [term for term in terms if term.get('level') == 'study']
-            },
-            "assay": {
-                "packages": [pkg for pkg in packages if pkg.get('level') == 'assay'],
-                "terms": [term for term in terms if term.get('level') == 'assay']
-            },
-            "observation_unit": {
-                "packages": [pkg for pkg in packages if pkg.get('level') == 'observation_unit'],
-                "terms": [term for term in terms if term.get('level') == 'observation_unit']
+        Args:
+            package_name: Name of the package
+            
+        Returns:
+            Dictionary mapping sheet names to lists of fields
+        """
+        package = self.get_package(package_name)
+        if not package:
+            return {}
+            
+        fields_by_sheet: Dict[str, List[Dict[str, Any]]] = {}
+        
+        for field in package.get("metadata", []):
+            sheet = field.get("sheetName", "Unknown")
+            if sheet not in fields_by_sheet:
+                fields_by_sheet[sheet] = []
+            fields_by_sheet[sheet].append(field)
+            
+        return fields_by_sheet
+
+    def get_fields_summary(
+        self, 
+        package_name: str
+    ) -> Dict[str, Any]:
+        """Get a summary of package fields by sheet and requirement level.
+        
+        Args:
+            package_name: Name of the package
+            
+        Returns:
+            Summary dictionary with structure:
+            {
+                "packageName": "miappe",
+                "totalFields": 63,
+                "bySheet": {
+                    "Investigation": {"total": 5, "mandatory": 2, "optional": 3},
+                    "Study": {"total": 20, "mandatory": 8, "optional": 12},
+                    ...
+                }
             }
+        """
+        package = self.get_package(package_name)
+        if not package:
+            return {}
+            
+        summary = {
+            "packageName": package.get("packageName", package_name),
+            "totalFields": package.get("itemCount", 0),
+            "bySheet": {}
         }
         
+        for field in package.get("metadata", []):
+            sheet = field.get("sheetName", "Unknown")
+            requirement = field.get("requirement", "OPTIONAL")
+            
+            if sheet not in summary["bySheet"]:
+                summary["bySheet"][sheet] = {"total": 0, "mandatory": 0, "optional": 0, "recommended": 0}
+                
+            summary["bySheet"][sheet]["total"] += 1
+            
+            if requirement == "MANDATORY":
+                summary["bySheet"][sheet]["mandatory"] += 1
+            elif requirement == "RECOMMENDED":
+                summary["bySheet"][sheet]["recommended"] += 1
+            else:
+                summary["bySheet"][sheet]["optional"] += 1
+                
+        return summary
+
+    def get_packages_by_level(self, level: str) -> List[Dict[str, Any]]:
+        """Get fields at specified ISA hierarchy level.
+        
+        Args:
+            level: ISA level name (investigation, study, observationunit, sample, assay)
+            
+        Returns:
+            List of fields from the default package at the specified level
+        """
+        return self.get_package_fields("default", sheet_name=level)
+
+    def get_terms_by_level(self, level: str) -> List[Dict[str, Any]]:
+        """Get terms at specified hierarchy level.
+        
+        Note: Terms don't have level information in the new API.
+        This method searches for terms with the level name in their label.
+        
+        Args:
+            level: ISA level name
+            
+        Returns:
+            List of terms matching the level
+        """
+        terms = self.search_terms(label=level)
+        return list(terms.values())
+
+    def get_hierarchical_structure(self) -> Dict[str, Dict[str, Any]]:
+        """Get hierarchical metadata structure from the default package.
+        
+        Returns:
+            Dictionary with ISA levels and their fields
+        """
+        fields_by_sheet = self.get_fields_by_sheet("default")
+        
+        # Map sheet names to standardized ISA levels
+        level_mapping = {
+            "investigation": "investigation",
+            "study": "study",
+            "observationunit": "observation_unit",
+            "sample": "sample",
+            "assay": "assay"
+        }
+        
+        structure = {}
+        for sheet_name, fields in fields_by_sheet.items():
+            level = level_mapping.get(sheet_name.lower(), sheet_name.lower())
+            
+            mandatory = [f for f in fields if f.get("requirement") == "MANDATORY"]
+            optional = [f for f in fields if f.get("requirement") != "MANDATORY"]
+            
+            structure[level] = {
+                "fields": fields,
+                "mandatory_count": len(mandatory),
+                "optional_count": len(optional),
+                "total_count": len(fields)
+            }
+            
         return structure
 
 

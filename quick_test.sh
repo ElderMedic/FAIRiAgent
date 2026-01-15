@@ -52,7 +52,7 @@ else
 fi
 
 # Check FAIR-DS API
-if ! curl -s ${FAIR_DS_API_URL:-http://localhost:8083}/api/packages > /dev/null 2>&1; then
+if ! curl -s ${FAIR_DS_API_URL:-http://localhost:8083}/api/package > /dev/null 2>&1; then
     echo "  ⚠️  Warning: FAIR-DS API not responding at ${FAIR_DS_API_URL:-http://localhost:8083}"
     echo "   Please start FAIR-DS API"
 else
@@ -144,7 +144,7 @@ else
     echo "🐛 Debug tips:"
     echo "  1. Check the output above for error messages"
     echo "  2. Verify Ollama is running: curl http://localhost:11434/api/tags"
-    echo "  3. Verify FAIR-DS API: curl http://localhost:8083/api/packages"
+    echo "  3. Verify FAIR-DS API: curl http://localhost:8083/api/package"
     echo "  4. Check logs in: $OUTPUT_DIR/processing_log.jsonl"
 fi
 

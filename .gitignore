@@ -271,3 +271,6 @@ evaluation/config/**/*.env.*
 evaluation/archive/runs/
 evaluation/archive/logs/
 .archive/
+
+# MSc thesis project (private/internal documents)
+msc_thesis_project/

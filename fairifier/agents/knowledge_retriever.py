@@ -85,7 +85,7 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 self.update_confidence(state, "knowledge_retrieval", 0.0)
                 return state
             
-            self.log_execution(state, "   📡 GET /api/packages...")
+            self.log_execution(state, "   📡 GET /api/package (default)...")
             self.log_execution(state, "   📡 GET /api/terms...")
             
             # Get packages and terms from FAIR-DS API

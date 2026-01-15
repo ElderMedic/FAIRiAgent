@@ -42,14 +42,20 @@ ollama pull qwen3:8b
 
 #### b. 检查 FAIR-DS API 是否运行
 ```bash
-curl http://localhost:8083/api/packages | jq '.[0:2]'
-# 应该返回 JSON 格式的 packages 数据
+# 检查包列表
+curl http://localhost:8083/api/package
+# 应该返回 JSON 格式的 packages 列表
 
-curl http://localhost:8083/api/terms | jq '.[0:2]'
-# 应该返回 JSON 格式的 terms 数据
+# 检查术语
+curl http://localhost:8083/api/terms | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Total terms: {d.get(\"total\", 0)}')"
+# 应该返回 terms 总数
+
+# 搜索特定术语
+curl "http://localhost:8083/api/terms?label=temperature"
+# 返回匹配的术语
 ```
 
-如果返回 HTML 或错误，需要启动 FAIR-DS API。
+如果返回错误，需要启动 FAIR-DS API。
 
 ### 3. 激活环境
 ```bash
@@ -386,10 +392,13 @@ cat output_*/workflow_results.json | jq '.execution_history[] |
 **解决方案：**
 ```bash
 # 检查 FAIR-DS 是否运行
-curl http://localhost:8083/api/packages
+curl http://localhost:8083/api/package
 
 # 如果没有运行，启动 FAIR-DS
 # (根据你的 FAIR-DS 安装方式)
+
+# 查看 Swagger UI 文档
+# http://localhost:8083/swagger-ui/index.html
 ```
 
 ### 问题 2: Ollama 模型不可用

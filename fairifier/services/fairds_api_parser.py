@@ -1,7 +1,10 @@
 """
 FAIR-DS API Parser - 解析真实的 FAIR-DS API 返回数据
 
-基于 FAIR-DS 官方文档：https://docs.fairbydesign.nl/docs/fairdatastation/tutorials/api.html
+API Version: Latest (January 2026)
+Endpoints:
+    - GET /api/terms - Get all terms or filter by label/definition
+    - GET /api/package - Get all packages or specific package by name
 """
 
 import logging
@@ -14,144 +17,371 @@ class FAIRDSAPIParser:
     """
     解析 FAIR-DS API 返回的数据结构
     
-    FAIR-DS 使用 ISA (Investigation-Study-Assay) 模型，包含5个 packages:
-    - investigation: 项目级别元数据
-    - study: 研究级别元数据
-    - sample: 样本级别元数据（字段最多）
-    - assay: 实验/分析级别元数据
-    - observationunit: 观察单元级别元数据
+    FAIR-DS 使用 ISA (Investigation-Study-Assay) 模型，包含5个 ISA sheets:
+    - Investigation: 项目级别元数据
+    - Study: 研究级别元数据
+    - ObservationUnit: 观察单元级别元数据
+    - Sample: 样本级别元数据（字段最多）
+    - Assay: 实验/分析级别元数据
     """
     
+    # ISA Sheets in hierarchy order
+    ISA_SHEETS = ["investigation", "study", "observationunit", "sample", "assay"]
+    
     @staticmethod
-    def parse_terms_response(api_response: Any) -> List[Dict[str, Any]]:
+    def parse_terms_response(api_response: Any) -> Dict[str, Dict[str, Any]]:
         """
         解析 /api/terms 返回的数据
         
-        接收格式：
-        - 原始 API 格式:
-          {
+        API 格式:
+        {
             "total": 892,
             "terms": {
-              "study title": {...},
-              ...
+                "study title": {
+                    "label": "study title",
+                    "syntax": "{text}",
+                    "example": "...",
+                    "definition": "...",
+                    "regex": "...",
+                    "url": "..."
+                },
+                ...
             }
-          }
-        - 或 FAIRDataStationClient 已处理的格式: list 或 dict
+        }
         
-        返回: 所有 terms 的列表
+        返回: Dictionary mapping term names to term details
         """
-        # 如果已经是列表，直接返回
-        if isinstance(api_response, list):
-            logger.info(f"✅ Parsed {len(api_response)} terms from FAIR-DS API (list format)")
-            return api_response
+        if isinstance(api_response, dict) and "terms" in api_response:
+            terms = api_response["terms"]
+            if isinstance(terms, dict):
+                logger.info(f"✅ Parsed {len(terms)} terms from FAIR-DS API")
+                return terms
         
-        # 如果是字典，尝试提取 terms
-        if isinstance(api_response, dict):
-            if "terms" in api_response:
-                terms_dict = api_response["terms"]
-                # 转换为列表
-                if isinstance(terms_dict, dict):
-                    terms_list = list(terms_dict.values())
-                else:
-                    terms_list = terms_dict if isinstance(terms_dict, list) else []
-                logger.info(f"✅ Parsed {len(terms_list)} terms from FAIR-DS API (dict format)")
-                return terms_list
+        logger.warning(f"⚠️ Could not parse terms from API response. Type: {type(api_response)}")
+        return {}
+    
+    @staticmethod
+    def parse_package_list_response(api_response: Any) -> List[str]:
+        """
+        解析 /api/package 返回的包列表
         
-        logger.warning(f"⚠️  Could not parse terms from API response. Type: {type(api_response)}")
+        API 格式 (无 name 参数时):
+        {
+            "message": "No package name specified. Available packages listed below.",
+            "packages": ["default", "miappe", "soil", ...],
+            "example": "/api/package?name=soil"
+        }
+        
+        返回: List of package names
+        """
+        if isinstance(api_response, dict) and "packages" in api_response:
+            packages = api_response["packages"]
+            if isinstance(packages, list):
+                logger.info(f"✅ Parsed {len(packages)} available packages")
+                return packages
+        
+        logger.warning(f"⚠️ Could not parse package list. Type: {type(api_response)}")
         return []
+    
+    @staticmethod
+    def parse_package_response(api_response: Any) -> Dict[str, Any]:
+        """
+        解析 /api/package?name={name} 返回的包数据
+        
+        API 格式:
+        {
+            "packageName": "miappe",
+            "itemCount": 63,
+            "metadata": [
+                {
+                    "definition": null,
+                    "sheetName": "Study",
+                    "packageName": "miappe",
+                    "requirement": "MANDATORY",
+                    "label": "start date of study",
+                    "term": {
+                        "label": "...",
+                        "syntax": "{date}",
+                        "example": "...",
+                        "definition": "...",
+                        "regex": "...",
+                        "url": "..."
+                    }
+                },
+                ...
+            ]
+        }
+        
+        返回: Parsed package data
+        """
+        if isinstance(api_response, dict):
+            if "metadata" in api_response and isinstance(api_response["metadata"], list):
+                logger.info(
+                    f"✅ Parsed package '{api_response.get('packageName', 'unknown')}' "
+                    f"with {api_response.get('itemCount', len(api_response['metadata']))} fields"
+                )
+                return api_response
+        
+        logger.warning(f"⚠️ Could not parse package response. Type: {type(api_response)}")
+        return {}
+    
+    @staticmethod
+    def group_fields_by_sheet(
+        fields: List[Dict[str, Any]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        将字段按 ISA sheet 分组
+        
+        Args:
+            fields: 字段列表（来自 package 响应的 metadata）
+            
+        Returns:
+            按 sheet 名称分组的字段字典
+        """
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        
+        for field in fields:
+            sheet = field.get("sheetName", "Unknown")
+            if sheet not in grouped:
+                grouped[sheet] = []
+            grouped[sheet].append(field)
+        
+        return grouped
+    
+    @staticmethod
+    def get_mandatory_fields(fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """获取必需字段"""
+        return [f for f in fields if f.get("requirement") == "MANDATORY"]
+    
+    @staticmethod
+    def get_optional_fields(fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """获取可选字段（包括 OPTIONAL 和 RECOMMENDED）"""
+        return [f for f in fields if f.get("requirement") != "MANDATORY"]
+    
+    @staticmethod
+    def get_fields_by_requirement(
+        fields: List[Dict[str, Any]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        将字段按 requirement level 分组
+        
+        Returns:
+            {
+                "mandatory": [...],
+                "recommended": [...],
+                "optional": [...]
+            }
+        """
+        result = {
+            "mandatory": [],
+            "recommended": [],
+            "optional": []
+        }
+        
+        for field in fields:
+            req = field.get("requirement", "OPTIONAL").upper()
+            if req == "MANDATORY":
+                result["mandatory"].append(field)
+            elif req == "RECOMMENDED":
+                result["recommended"].append(field)
+            else:
+                result["optional"].append(field)
+        
+        return result
+    
+    @staticmethod
+    def get_fields_by_sheet_and_requirement(
+        fields: List[Dict[str, Any]]
+    ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        """
+        将字段按 ISA sheet 和 requirement level 分组
+        
+        Returns:
+            {
+                "Investigation": {"mandatory": [...], "optional": [...]},
+                "Study": {"mandatory": [...], "optional": [...]},
+                ...
+            }
+        """
+        result: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+        
+        for field in fields:
+            sheet = field.get("sheetName", "Unknown")
+            req = field.get("requirement", "OPTIONAL").upper()
+            
+            if sheet not in result:
+                result[sheet] = {"mandatory": [], "recommended": [], "optional": []}
+            
+            if req == "MANDATORY":
+                result[sheet]["mandatory"].append(field)
+            elif req == "RECOMMENDED":
+                result[sheet]["recommended"].append(field)
+            else:
+                result[sheet]["optional"].append(field)
+        
+        return result
+    
+    @staticmethod
+    def extract_field_info(field: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        从 package field 中提取关键信息
+        
+        输入格式（来自 /api/package?name={name}）：
+        {
+            "label": "study title",
+            "sheetName": "Study",
+            "packageName": "miappe",
+            "requirement": "MANDATORY",
+            "definition": "...",
+            "term": {
+                "label": "study title",
+                "syntax": "{text}",
+                "example": "...",
+                "definition": "...",
+                "regex": "...",
+                "url": "http://..."
+            }
+        }
+        
+        返回标准化的字段信息
+        """
+        term = field.get("term", {})
+        
+        return {
+            "name": field.get("label", ""),
+            "label": field.get("label", ""),
+            "definition": term.get("definition", "") or field.get("definition", ""),
+            "required": field.get("requirement") == "MANDATORY",
+            "requirement": field.get("requirement", "OPTIONAL"),
+            "package": field.get("packageName", ""),
+            "isa_sheet": field.get("sheetName", "").lower(),
+            "sheet": field.get("sheetName", ""),
+            "syntax": term.get("syntax", ""),
+            "example": term.get("example", ""),
+            "regex": term.get("regex", ""),
+            "ontology_uri": term.get("url", ""),
+            "data_type": FAIRDSAPIParser._infer_data_type(term),
+            "preferred_unit": term.get("preferredUnit", ""),
+        }
+    
+    @staticmethod
+    def extract_term_info(term_name: str, term: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        从 term 中提取关键信息
+        
+        输入格式（来自 /api/terms 或 /api/terms?label={label}）：
+        {
+            "label": "temperature",
+            "syntax": "{number}",
+            "example": "25 °C",
+            "preferredUnit": "°C",
+            "definition": "temperature of the sample at time of sampling",
+            "regex": "...",
+            "url": "https://..."
+        }
+        
+        返回标准化的术语信息
+        """
+        return {
+            "name": term_name,
+            "label": term.get("label", term_name),
+            "definition": term.get("definition", ""),
+            "syntax": term.get("syntax", ""),
+            "example": term.get("example", ""),
+            "preferred_unit": term.get("preferredUnit", ""),
+            "regex": term.get("regex", ""),
+            "ontology_uri": term.get("url", ""),
+            "data_type": FAIRDSAPIParser._infer_data_type(term),
+            "is_file": term.get("file", False),
+            "is_date": term.get("date", False),
+            "is_datetime": term.get("dateTime", False),
+        }
+    
+    @staticmethod
+    def _infer_data_type(term: Dict[str, Any]) -> str:
+        """从 term 信息推断数据类型"""
+        if term.get("file"):
+            return "file"
+        elif term.get("dateTime"):
+            return "datetime"
+        elif term.get("date"):
+            return "date"
+        
+        syntax = term.get("syntax", "")
+        if "{number}" in syntax or "{float}" in syntax:
+            return "number"
+        elif "{date}" in syntax:
+            return "date"
+        elif "{id}" in syntax:
+            return "identifier"
+        elif "{text}" in syntax:
+            return "text"
+        
+        return "string"
+    
+    @staticmethod
+    def get_package_summary(package_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        生成包的摘要信息
+        
+        Args:
+            package_data: /api/package?name={name} 的响应
+            
+        Returns:
+            摘要字典
+        """
+        if not package_data or "metadata" not in package_data:
+            return {}
+        
+        fields = package_data["metadata"]
+        fields_by_sheet = FAIRDSAPIParser.get_fields_by_sheet_and_requirement(fields)
+        
+        summary = {
+            "package_name": package_data.get("packageName", ""),
+            "total_fields": package_data.get("itemCount", len(fields)),
+            "mandatory_count": sum(
+                len(sheet_data["mandatory"]) 
+                for sheet_data in fields_by_sheet.values()
+            ),
+            "sheets": {}
+        }
+        
+        for sheet_name, sheet_data in fields_by_sheet.items():
+            summary["sheets"][sheet_name] = {
+                "total": len(sheet_data["mandatory"]) + len(sheet_data["recommended"]) + len(sheet_data["optional"]),
+                "mandatory": len(sheet_data["mandatory"]),
+                "recommended": len(sheet_data["recommended"]),
+                "optional": len(sheet_data["optional"]),
+            }
+        
+        return summary
+
+    # =========================================================================
+    # Legacy compatibility methods (for backward compatibility)
+    # =========================================================================
     
     @staticmethod
     def parse_packages_response(api_response: Any) -> Dict[str, List[Dict[str, Any]]]:
         """
-        解析 /api/packages 返回的数据
+        Legacy method: 解析包响应并按 sheet 分组
         
-        新版 API 格式 (2026+):
-        {
-          "total": 5,
-          "totalMetadataItems": 2689,
-          "metadata": {
-            "investigation": {
-              "name": "investigation",
-              "displayName": "Investigation",
-              "description": "...",
-              "hierarchyOrder": 1,
-              "metadata": [...]  # Fields are here
-            },
-            ...
-          }
-        }
-        
-        旧版 API 格式:
-        {
-          "total": 5,
-          "packages": {
-            "investigation": [...],  # Fields directly in list
-            ...
-          }
-        }
+        Note: 新版 API 使用 /api/package?name={name} 获取特定包，
+        此方法保留用于向后兼容。
         """
-        packages = {}
+        if isinstance(api_response, dict) and "metadata" in api_response:
+            fields = api_response["metadata"]
+            if isinstance(fields, list):
+                return FAIRDSAPIParser.group_fields_by_sheet(fields)
         
-        if isinstance(api_response, dict):
-            # New API format: metadata[sheet]["metadata"] contains fields
-            if "metadata" in api_response and isinstance(api_response["metadata"], dict):
-                metadata = api_response["metadata"]
-                # Check if it's the new format (each sheet has 'metadata' key with fields)
-                first_sheet = next(iter(metadata.values()), None) if metadata else None
-                if first_sheet and isinstance(first_sheet, dict) and "metadata" in first_sheet:
-                    # New format: extract fields from metadata[sheet]["metadata"]
-                    for sheet_name, sheet_info in metadata.items():
-                        if isinstance(sheet_info, dict) and "metadata" in sheet_info:
-                            packages[sheet_name.lower()] = sheet_info["metadata"]
-                    logger.info(f"✅ Parsed packages from FAIR-DS API (new format):")
-                else:
-                    # Old format where metadata[sheet] is directly a list of fields
-                    packages = {k.lower(): v for k, v in metadata.items() if isinstance(v, list)}
-                    logger.info(f"✅ Parsed packages from FAIR-DS API (metadata format):")
-            # Old API format: packages[sheet] contains fields directly
-            elif "packages" in api_response:
-                packages = {k.lower(): v for k, v in api_response["packages"].items() if isinstance(v, list)}
-                logger.info(f"✅ Parsed packages from FAIR-DS API (packages format):")
-        # Fallback: if directly a list
-        elif isinstance(api_response, list):
-            # 按 sheetName 分组
-            for item in api_response:
-                sheet_name = item.get("sheetName", "").lower()
-                if sheet_name not in packages:
-                    packages[sheet_name] = []
-                packages[sheet_name].append(item)
-            logger.info(f"✅ Parsed {len(packages)} packages from list format:")
-        
-        # 统计
-        if packages:
-            for pkg_name, fields in packages.items():
-                if isinstance(fields, list):
-                    mandatory_count = sum(1 for f in fields if f.get("requirement") == "MANDATORY")
-                    logger.info(f"      {pkg_name}: {len(fields)} fields ({mandatory_count} mandatory)")
-        else:
-            logger.error(f"❌ Failed to parse packages. Response type: {type(api_response)}")
-            logger.error(f"   Response keys: {api_response.keys() if isinstance(api_response, dict) else 'N/A'}")
-        
-        return packages
-    
-    @staticmethod
-    def get_mandatory_fields(package_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """获取包中的必需字段"""
-        return [f for f in package_fields if f.get("requirement") == "MANDATORY"]
-    
-    @staticmethod
-    def get_optional_fields(package_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """获取包中的可选字段"""
-        return [f for f in package_fields if f.get("requirement") != "MANDATORY"]
+        return {}
     
     @staticmethod
     def get_all_package_names(packages_by_sheet: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         """
         获取所有唯一的 packageName 及其统计信息
         
-        返回: [{"name": "soil", "field_count": 103, "mandatory_count": 7, ...}, ...]
+        Note: 新版 API 可以直接调用 /api/package 获取包列表
         """
-        # 收集所有 packageNames
         package_stats = {}
         
         for sheet_name, fields in packages_by_sheet.items():
@@ -164,7 +394,6 @@ class FAIRDSAPIParser:
                         "mandatory_count": 0,
                         "optional_count": 0,
                         "sheets": set(),
-                        "sample_fields": []
                     }
                 
                 package_stats[pkg_name]["field_count"] += 1
@@ -172,25 +401,15 @@ class FAIRDSAPIParser:
                 
                 if field.get("requirement") == "MANDATORY":
                     package_stats[pkg_name]["mandatory_count"] += 1
-                elif field.get("requirement") == "OPTIONAL":
+                else:
                     package_stats[pkg_name]["optional_count"] += 1
-                
-                # 保存前3个字段作为样本
-                if len(package_stats[pkg_name]["sample_fields"]) < 3:
-                    package_stats[pkg_name]["sample_fields"].append({
-                        "label": field.get("label"),
-                        "definition": field.get("definition", "")[:100]
-                    })
         
-        # 转换为列表并排序
         result = []
         for pkg_name, stats in package_stats.items():
             stats["sheets"] = list(stats["sheets"])
             result.append(stats)
         
         result.sort(key=lambda x: x["field_count"], reverse=True)
-        
-        logger.info(f"✅ Found {len(result)} unique packages across all sheets")
         return result
     
     @staticmethod
@@ -199,14 +418,9 @@ class FAIRDSAPIParser:
         package_names: List[str]
     ) -> List[Dict[str, Any]]:
         """
-        获取指定 packages 的所有字段，自动去重
+        获取指定 packages 的所有字段
         
-        Args:
-            packages_by_sheet: 按 sheet 分组的所有字段
-            package_names: 要获取的 package 名称列表
-            
-        Returns:
-            去重后的字段列表
+        Note: 新版 API 建议直接使用 /api/package?name={name} 获取特定包
         """
         all_fields = []
         seen_labels = set()
@@ -215,12 +429,10 @@ class FAIRDSAPIParser:
             for field in fields:
                 if field.get("packageName") in package_names:
                     label = field.get("label")
-                    # 去重：同一个 label 只保留第一次出现
                     if label and label not in seen_labels:
                         seen_labels.add(label)
                         all_fields.append(field)
         
-        logger.info(f"✅ Collected {len(all_fields)} unique fields from {len(package_names)} packages")
         return all_fields
     
     @staticmethod
@@ -229,128 +441,30 @@ class FAIRDSAPIParser:
         package_names: List[str]
     ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
         """
-        获取指定 packages 的所有字段，按 ISA sheet 分组，每个 sheet 内按 mandatory/optional 分类
+        获取指定 packages 的所有字段，按 ISA sheet 分组
         
-        Args:
-            packages_by_sheet: 按 ISA sheet 分组的所有字段
-            package_names: 要获取的 package 名称列表
-            
-        Returns:
-            按 ISA sheet 分组的字段字典:
-            {
-                "investigation": {"mandatory": [...], "optional": [...]},
-                "study": {"mandatory": [...], "optional": [...]},
-                "assay": {"mandatory": [...], "optional": [...]},
-                "sample": {"mandatory": [...], "optional": [...]},
-                "observationunit": {"mandatory": [...], "optional": [...]}
-            }
+        Note: 新版 API 建议直接使用 /api/package?name={name}，
+        然后用 get_fields_by_sheet_and_requirement() 分组
         """
-        # ISA sheet 列表
-        isa_sheets = ["investigation", "study", "assay", "sample", "observationunit"]
+        result = {sheet: {"mandatory": [], "optional": []} for sheet in FAIRDSAPIParser.ISA_SHEETS}
+        seen_labels_by_sheet = {sheet: set() for sheet in FAIRDSAPIParser.ISA_SHEETS}
         
-        # 初始化结果结构
-        result = {
-            sheet: {"mandatory": [], "optional": []}
-            for sheet in isa_sheets
-        }
-        
-        # 用于去重的集合（按 ISA sheet 分别去重）
-        seen_labels_by_sheet = {sheet: set() for sheet in isa_sheets}
-        
-        # 遍历所有 ISA sheets
         for sheet_name, fields in packages_by_sheet.items():
-            # 标准化 sheet 名称（转换为小写）
             normalized_sheet = sheet_name.lower()
-            
-            # 如果 sheet 名称不在 ISA sheets 列表中，跳过
-            if normalized_sheet not in isa_sheets:
-                logger.warning(f"⚠️  Unknown ISA sheet: {sheet_name}, skipping")
+            if normalized_sheet not in FAIRDSAPIParser.ISA_SHEETS:
                 continue
             
-            # 遍历该 sheet 中的所有字段
             for field in fields:
-                # 检查是否属于指定的 packages
                 if field.get("packageName") in package_names:
                     label = field.get("label")
                     requirement = field.get("requirement", "").upper()
                     
-                    # 去重：同一个 label 在同一 ISA sheet 中只保留第一次出现
                     if label and label not in seen_labels_by_sheet[normalized_sheet]:
                         seen_labels_by_sheet[normalized_sheet].add(label)
                         
-                        # 根据 requirement 分类
                         if requirement == "MANDATORY":
                             result[normalized_sheet]["mandatory"].append(field)
                         else:
                             result[normalized_sheet]["optional"].append(field)
         
-        # 统计信息
-        total_fields = sum(
-            len(result[sheet]["mandatory"]) + len(result[sheet]["optional"])
-            for sheet in isa_sheets
-        )
-        total_mandatory = sum(len(result[sheet]["mandatory"]) for sheet in isa_sheets)
-        total_optional = sum(len(result[sheet]["optional"]) for sheet in isa_sheets)
-        
-        logger.info(
-            f"✅ Collected {total_fields} unique fields from {len(package_names)} packages "
-            f"({total_mandatory} mandatory, {total_optional} optional) "
-            f"across {len([s for s in isa_sheets if result[s]['mandatory'] or result[s]['optional']])} ISA sheets"
-        )
-        
         return result
-    
-    @staticmethod
-    def extract_field_info(field: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        从 package field 中提取关键信息，包括 isa_sheet 和 package
-        
-        输入格式（来自 /api/packages）：
-        {
-          "label": "study title",
-          "sheetName": "study",  # ISA sheet (investigation/study/assay/sample/observationunit)
-          "packageName": "miappe",  # Package name
-          "definition": "...",
-          "requirement": "MANDATORY",
-          "packageName": "default",
-          "sheetName": "Study",
-          "term": {
-            "syntax": "{text}{10,}",
-            "example": "...",
-            "regex": ".*{10,}",
-            "url": "http://schema.org/title"
-          }
-        }
-        """
-        term = field.get("term", {})
-        sheet_name = field.get("sheetName", "").lower()  # Normalize to lowercase
-        
-        return {
-            "name": field.get("label", ""),
-            "definition": field.get("definition", ""),
-            "required": field.get("requirement") == "MANDATORY",
-            "package": field.get("packageName", ""),  # Real package from FAIR-DS
-            "isa_sheet": sheet_name,  # ISA sheet: investigation/study/assay/sample/observationunit
-            "syntax": term.get("syntax", ""),
-            "example": term.get("example", ""),
-            "regex": term.get("regex", ""),
-            "ontology_uri": term.get("url", ""),
-            "data_type": FAIRDSAPIParser._infer_data_type(term),
-            # Keep original sheet name for reference
-            "sheet": field.get("sheetName", "")
-        }
-    
-    @staticmethod
-    def _infer_data_type(term: Dict[str, Any]) -> str:
-        """从 term 信息推断数据类型"""
-        if term.get("file"):
-            return "file"
-        elif term.get("date"):
-            return "date"
-        elif term.get("dateTime"):
-            return "datetime"
-        elif term.get("regex", "").startswith("^[0-9"):
-            return "number"
-        else:
-            return "string"
-

@@ -90,7 +90,7 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 
 - 🤖 **Multi-Agent Architecture**: Specialized agents for document parsing, knowledge retrieval, and JSON generation
 - 📄 **Document Processing**: Extract metadata from PDF and text documents with MinerU integration
-- 🧠 **Knowledge Retrieval**: Integrate with FAIR Data Station and local knowledge base
+- 🧠 **Knowledge Retrieval**: Integrate with FAIR Data Station API (59 packages, 892 terms) and local knowledge base
 - 🏷️ **Evidence-based Fields**: Every field includes evidence, confidence, origin, and package source
 - 📊 **JSON-only Output**: FAIR-DS compatible metadata format (no RDF/RO-Crate)
 - 🎛️ **Multi-Model Support**: Ollama (local) / OpenAI / Qwen / Anthropic
@@ -363,7 +363,7 @@ FAIRiAgent generates structured, evidence-based metadata in FAIR-DS compatible f
 When connected to a FAIR Data Station instance, FAIRiAgent can:
 
 - 🔍 Search for standardized terms relevant to your research
-- 📦 Use community-approved metadata packages
+- 📦 Use community-approved metadata packages (59 packages available)
 - 🏷️ Enhance fields with validated definitions
 - 🌐 Ensure better interoperability
 
@@ -375,7 +375,17 @@ wget http://download.systemsbiology.nl/unlock/fairds-latest.jar
 java -jar fairds-latest.jar
 
 # Access at http://localhost:8083
+# Swagger UI: http://localhost:8083/swagger-ui/index.html
 ```
+
+**Available API Endpoints:**
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/package` | List all packages or get specific package by name |
+| `GET /api/terms` | Get all terms or filter by label/definition |
+| `POST /api/upload` | Validate metadata Excel file |
+
+See [FAIR-DS API Manual](docs/en/development/FAIRDS_API_MANUAL.md) for detailed documentation.
 
 ## 🔧 Local Provisional Extensions
 
@@ -606,7 +616,7 @@ Detailed documentation is available in the [docs/](docs/README.md) directory.
   - [Quick Start (中文)](docs/zh/guides/QUICKSTART.md) – Quick start guide in Chinese
   - [Test Guide (中文)](docs/zh/guides/TEST_GUIDE.md) – Test guide in Chinese
 - **Development**
-  - [FAIR-DS API Exploration](docs/en/development/FAIRDS_API_EXPLORATION.md) – API analysis
+  - [FAIR-DS API Manual](docs/en/development/FAIRDS_API_MANUAL.md) – API analysis
   - [Critic Rubric](docs/en/development/critic_rubric.yaml) – Evaluation criteria
 - **Web UI**
   - [Web UI Guide](fairifier/apps/README.md) – Streamlit UI features
