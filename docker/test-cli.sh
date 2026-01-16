@@ -10,7 +10,8 @@
 set -e
 
 # Set variables
-IMAGE_NAME="fairiagent:latest"
+# IMAGE_NAME="fairiagent:latest"
+IMAGE_NAME="ghcr.io/eldermedic/fairiagent:latest"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 INPUT_DIR="${PROJECT_ROOT}/examples/inputs"
@@ -83,16 +84,35 @@ echo ""
 echo "⏳ Processing document..."
 echo ""
 
+# Determine Docker extra hosts for Linux compatibility
+# On Linux, host.docker.internal may not work, so we add it explicitly
+if [ "$(uname)" = "Linux" ]; then
+    # Use --add-host to make host.docker.internal work on Linux
+    DOCKER_EXTRA_HOSTS="--add-host=host.docker.internal:host-gateway"
+else
+    # macOS/Windows Docker Desktop supports host.docker.internal natively
+    DOCKER_EXTRA_HOSTS=""
+fi
+
+# Set default URLs if not provided
+if [ -z "${FAIRIFIER_LLM_BASE_URL}" ]; then
+    FAIRIFIER_LLM_BASE_URL="http://host.docker.internal:11434"
+fi
+if [ -z "${FAIR_DS_API_URL}" ]; then
+    FAIR_DS_API_URL="http://host.docker.internal:8083"
+fi
+
 # Run Docker CLI
 docker run --rm \
+    ${DOCKER_EXTRA_HOSTS} \
     -v "${INPUT_DIR}:/app/test-inputs:ro" \
     -v "${OUTPUT_DIR}:/app/output" \
     -e LLM_PROVIDER="${LLM_PROVIDER:-ollama}" \
     -e FAIRIFIER_LLM_MODEL="${FAIRIFIER_LLM_MODEL:-qwen3:30b-a3b}" \
-    -e FAIRIFIER_LLM_BASE_URL="${FAIRIFIER_LLM_BASE_URL:-http://host.docker.internal:11434}" \
+    -e FAIRIFIER_LLM_BASE_URL="${FAIRIFIER_LLM_BASE_URL}" \
     -e LLM_API_KEY="${LLM_API_KEY:-}" \
     -e LANGSMITH_API_KEY="${LANGSMITH_API_KEY:-}" \
-    -e FAIR_DS_API_URL="${FAIR_DS_API_URL:-http://host.docker.internal:8083}" \
+    -e FAIR_DS_API_URL="${FAIR_DS_API_URL}" \
     ${IMAGE_NAME} \
     python run_fairifier.py process "/app/test-inputs/${TEST_FILE}"
 
