@@ -84,18 +84,31 @@ Grounds the agent's generation in established scientific standards.
 *   **Context Retriever:** Uses RAG (Retrieval-Augmented Generation) to fetch relevant schema definitions (e.g., "What is 'collection date' in MIxS?") and ontology terms (e.g., valid ENVO codes) based on the document's content.
 
 ### 🤖 FAIRiAgent Core Workflow (Red & Blue)
-The "brain" of the system, implementing a reflective agentic loop.
-*   **Metadata Generator Agent:** The primary LLM (e.g., GPT-4o, Claude Sonnet) that extracts metadata fields using the parsed text and retrieved knowledge.
-*   **Critic Agent:** A secondary agent persona that acts as a quality gatekeeper. It evaluates the generated JSON against the schema and assigns confidence scores (0.0-1.0).
-*   **Critic Decision Logic:**
-    *   **ACCEPT:** Score ≥ accept_threshold (typically 0.65-0.70) → Proceed to next step
-    *   **RETRY:** revise_min ≤ score < accept_threshold (typically 0.40-0.65) → Retry with feedback
-    *   **ESCALATE:** Score < revise_min (typically < 0.40) → Critical issues, requires attention
-*   **Retry Mechanism (Priority Order):**
-    1. **User-configured `max_step_retries`** (HIGHEST PRIORITY) - Ensures user-defined retry limits are always respected
-    2. **Critic Decision** - If retries available, RETRY/ESCALATE decisions trigger retry attempts
-    3. **Output Quality Check** - After max retries, workflow continues if usable output exists (flagged for human review)
-*   **Feedback Loop:** The Critic generates specific, actionable feedback that guides the Generator to improve its output. All LLM interactions (including Critic evaluations) are automatically logged to `llm_responses.json` for debugging and analysis.
+The "brain" of the system, implementing a reflective agentic loop with API-aware evaluation.
+
+*   **Document Parser Agent:** LLM-based extraction of structured information from scientific documents.
+*   **Planner Node:** Analyzes document domain and generates agent-specific guidance.
+*   **Knowledge Retriever Agent:** Queries FAIR-DS API for metadata packages and terms, reports API capabilities.
+*   **JSON Generator Agent:** Maps extracted information to ISA-Tab compliant FAIR metadata.
+*   **Critic Agent:** An LLM-as-Judge that evaluates each agent's output using rubric-driven scoring.
+
+**Critic Decision Logic:**
+*   **ACCEPT:** Score ≥ accept_threshold (typically 0.65-0.70) → Proceed to next step
+*   **RETRY:** revise_min ≤ score < accept_threshold (typically 0.40-0.65) → Retry with feedback
+*   **ESCALATE:** Score < revise_min (typically < 0.40) → Critical issues, requires attention
+
+**Key Features:**
+*   **API-Aware Evaluation:** Critic considers FAIR-DS API limitations when evaluating Knowledge Retriever. If API only provides limited packages, Critic evaluates whether agent made optimal use of available resources rather than penalizing for unavailable packages.
+*   **No-Progress Detection:** If score remains unchanged for 2 consecutive retry attempts, workflow terminates early with output flagged for human review. This prevents infinite loops when external constraints (e.g., API limitations) prevent improvement.
+*   **Feedback Deduplication:** Historical guidance is limited to 10 items per agent to prevent token waste from accumulating redundant suggestions.
+
+**Retry Mechanism (Priority Order):**
+1. **User-configured `max_step_retries`** (HIGHEST PRIORITY) - Ensures user-defined retry limits are always respected
+2. **No-Progress Detection** - Exits early if consecutive attempts produce identical scores
+3. **Critic Decision** - If retries available, RETRY/ESCALATE decisions trigger retry attempts
+4. **Output Quality Check** - After max retries, workflow continues if usable output exists (flagged for human review)
+
+**Feedback Loop:** The Critic generates specific, actionable feedback that guides agents to improve. Feedback is deduplicated and limited to prevent context window overflow. All LLM interactions are logged to `llm_responses.json` for debugging.
 
 ### 💾 Standardized Output (Purple)
 *   **Finalizer:** Converts the validated JSON into domain-specific formats like **ISA-Tab** (Investigation-Study-Assay) for direct repository submission.

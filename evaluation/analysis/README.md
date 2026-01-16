@@ -22,7 +22,8 @@ evaluation/analysis/
 ├── analyzers/
 │   ├── model_performance.py     # Model performance metrics
 │   ├── workflow_reliability.py  # Workflow reliability analysis
-│   └── failure_patterns.py      # Failure pattern analysis
+│   ├── failure_patterns.py      # Failure pattern analysis
+│   └── pass_at_k.py             # Pass@k metrics (SWE-agent style)
 ├── visualizations/
 │   ├── model_comparison.py      # Model comparison charts
 │   ├── workflow_reliability.py  # Reliability visualizations
@@ -73,10 +74,23 @@ Similarly, new documents are auto-discovered:
 
 ```
 evaluation/analysis/output/
-├── figures/          # All visualization PNG files
-├── tables/           # CSV and LaTeX tables
-├── data/             # Processed data (CSV)
-└── analysis_summary.json  # Summary statistics
+├── figures/                      # All visualization PNG files
+├── tables/                       # CSV and LaTeX tables
+│   ├── model_rankings.csv/tex
+│   ├── reliability_summary.csv/tex
+│   ├── agent_reliability.csv/tex
+│   ├── failure_by_agent.csv/tex
+│   ├── pass_at_k_lenient.csv/tex   # Pass@k with lenient criteria
+│   ├── pass_at_k_moderate.csv/tex  # Pass@k with moderate criteria
+│   ├── pass_at_k_strict.csv/tex    # Pass@k with strict criteria
+│   ├── pass_at_k_by_document.csv   # Pass@k breakdown by document
+│   └── pass_at_k_multi_criteria.csv # Comparison across criteria
+├── data/                         # Processed data (CSV)
+│   ├── model_performance.csv
+│   ├── document_performance.csv
+│   ├── workflow_reliability.csv
+│   └── pass_at_k_report.json       # Full pass@k analysis report
+└── analysis_summary.json         # Summary statistics
 ```
 
 ## Key Features
@@ -90,6 +104,18 @@ evaluation/analysis/output/
 - Automatically detects baseline runs (directories starting with `baseline_`)
 - Compares baseline vs agentic workflows
 - Generates per-document and overall comparisons
+
+### Pass@k Analysis
+- Similar to SWE-agent benchmark metrics
+- Calculates probability of success in k attempts
+- Configurable success criteria with presets:
+  - `basic`: Any output
+  - `lenient`: Minimal quality
+  - `moderate`: Recommended default
+  - `strict`: High quality
+  - `very_strict`: Publication-ready
+- Generates tables: `pass_at_k_*.csv`, `pass_at_k_*.tex`
+- Multi-criteria comparison across presets
 
 ### Model Name Normalization
 - Merges variant names (e.g., `gpt5` + `openai_gpt5` → `GPT-5`)

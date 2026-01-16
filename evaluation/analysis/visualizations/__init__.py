@@ -8,12 +8,14 @@ from .model_comparison import ModelComparisonVisualizer
 from .workflow_reliability import WorkflowReliabilityVisualizer
 from .failure_analysis import FailureAnalysisVisualizer
 from .baseline_comparison import BaselineComparisonVisualizer
+from .pass_at_k import PassAtKVisualizer
 
 __all__ = [
     'ModelComparisonVisualizer',
     'WorkflowReliabilityVisualizer',
     'FailureAnalysisVisualizer',
-    'BaselineComparisonVisualizer'
+    'BaselineComparisonVisualizer',
+    'PassAtKVisualizer',
 ]
 
 

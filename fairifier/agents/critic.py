@@ -262,11 +262,25 @@ class CriticAgent(BaseAgent):
             "suggestions": evaluation.get("improvement_ops", []),
             "timestamp": datetime.now().isoformat()
         }
+        
+        # Manage historical guidance with size limits to prevent token waste
         history = state["context"].setdefault("critic_guidance_history", {})
         history.setdefault(agent_name, [])
+        
+        # Add new improvement ops (deduplicated)
         for op in evaluation.get("improvement_ops", []):
+            # Simple deduplication: avoid exact duplicates
             if op not in history[agent_name]:
                 history[agent_name].append(op)
+        
+        # LIMIT: Keep only the last 10 suggestions per agent to prevent token explosion
+        MAX_GUIDANCE_PER_AGENT = 10
+        if len(history[agent_name]) > MAX_GUIDANCE_PER_AGENT:
+            # Keep the most recent suggestions
+            history[agent_name] = history[agent_name][-MAX_GUIDANCE_PER_AGENT:]
+            logger.info(
+                f"Trimmed historical guidance for {agent_name} to {MAX_GUIDANCE_PER_AGENT} items"
+            )
         
         # Store previous attempt for comparison
         if agent_name == "DocumentParser":
@@ -328,12 +342,29 @@ class CriticAgent(BaseAgent):
         # Get domain from either research_domain or scientific_domain
         domain = doc_info.get("research_domain") or doc_info.get("scientific_domain")
         
+        # Get API capabilities from state (set by KnowledgeRetriever)
+        api_capabilities = state.get("api_capabilities", {})
+        available_packages = api_capabilities.get("available_packages", [])
+        limitation_note = api_capabilities.get("limitation_note")
+        
         # Build clear summary with agent output prominently displayed
         summary = {
             "agent_output_status": "present" if retrieved else "missing",
             "document_domain": domain,
             "document_type": doc_info.get("document_type"),
             "planner_guidance": planner_guidance,
+            # CRITICAL: Include API limitations so Critic understands constraints
+            "api_limitations": {
+                "available_packages_in_api": available_packages,
+                "total_packages_available": len(available_packages),
+                "limitation_note": limitation_note,
+                "evaluation_guidance": (
+                    "IMPORTANT: Evaluate the agent's work within the constraints of what the API actually provides. "
+                    "If the API only has limited packages available, the agent cannot retrieve packages that don't exist. "
+                    "Judge based on whether the agent made optimal use of available resources, not whether it retrieved "
+                    "packages that are unavailable in the API."
+                ) if len(available_packages) <= 1 else None
+            },
             "retrieval_results": {
                 "total_terms_retrieved": len(retrieved),
                 "packages_selected": packages_found,

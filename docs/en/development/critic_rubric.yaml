@@ -68,14 +68,16 @@ nodes:
         checks:
           - "Mandatory fields for investigation + study layers are always included."
           - "Optional fields reflect planner instructions (e.g., ethics, DMP, KER)."
+          - "IMPORTANT: Consider API limitations! If api_limitations shows limited packages available, evaluate whether agent made optimal use of available resources."
       faithfulness:
         checks:
           - "No local heuristics or hallucinated terms; every term exists in FAIR-DS response."
           - "Return counts (mandatory vs optional) match actual selections."
       actionability:
         checks:
-          - "If coverage is low, specify which packages/ISA sheets to re-fetch."
-          - "Suggest concrete filters or keywords to improve FAIR-DS matching."
+          - "If coverage is low AND more packages exist in API, specify which packages to re-fetch."
+          - "If API has limited packages (check api_limitations field), acknowledge this constraint and ACCEPT if agent used available packages effectively."
+          - "Do NOT suggest retrieving packages that don't exist in the API."
 
   json_generator:
     accept_threshold: 0.70

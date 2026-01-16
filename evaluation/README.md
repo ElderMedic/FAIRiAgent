@@ -133,6 +133,28 @@ The framework evaluates:
 - **LLM Judge Score**: Internal quality assessment from critic agent
 - **Workflow Reliability**: Completion rates, retry rates, failure patterns
 - **Runtime**: Time taken for extraction
+- **Pass@k**: Probability of successful extraction in k attempts (similar to SWE-agent benchmark)
+
+### Pass@k Metrics
+
+Pass@k measures the probability of at least one successful run in k attempts. Success is defined by configurable criteria:
+
+| Preset | Fields | Required Completeness | F1 Score | Description |
+|--------|--------|----------------------|----------|-------------|
+| `basic` | ≥1 | 0% | 0 | Any output counts as success |
+| `lenient` | ≥5 | ≥20% | 0 | Minimal quality threshold |
+| `moderate` | ≥10 | ≥50% | ≥0.3 | Recommended default |
+| `strict` | ≥15 | ≥70% | ≥0.5 | High quality threshold |
+| `very_strict` | ≥20 | ≥80% | ≥0.6 | Publication-ready quality |
+
+Run standalone pass@k analysis:
+
+```bash
+python scripts/calculate_pass_at_k.py \
+  --runs-dir runs \
+  --preset moderate \
+  --output analysis/output/pass_at_k_report.md
+```
 
 ## Analysis Outputs
 
@@ -148,6 +170,9 @@ The framework evaluates:
 - Reliability summaries
 - Agent-specific metrics
 - Failure statistics
+- Pass@k summaries by criteria preset (lenient/moderate/strict)
+- Pass@k by document
+- Multi-criteria comparison
 
 ### Data Files
 - Model-level performance metrics

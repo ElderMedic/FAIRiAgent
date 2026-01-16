@@ -24,7 +24,7 @@ class FAIRDataStationClient:
     Endpoints:
         - GET /api - API overview
         - GET /api/terms - Get all terms or filter by label/definition
-        - GET /api/package - Get all packages or specific package by name
+        - GET /api/package - Get all packages, specific package by name, or search fields
         - POST /api/upload - Upload and validate Excel file
     """
 
@@ -230,6 +230,84 @@ class FAIRDataStationClient:
             logger.warning(f"Unable to fetch package '{package_name}': {exc}")
             
         return None
+
+    def search_terms_for_fields(
+        self,
+        term_label: str,
+        definition: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Search for metadata terms using /api/terms endpoint.
+        
+        This is the correct way to search for field-related terms in FAIR-DS API.
+        The /api/terms endpoint supports pattern matching on label and definition.
+        
+        Args:
+            term_label: Filter terms by label (supports pattern matching, case-insensitive)
+            definition: Optional filter by definition (supports pattern matching, case-insensitive)
+            
+        Returns:
+            List of term dictionaries matching the search criteria
+            
+        Example:
+            # Search for temperature-related terms
+            terms = client.search_terms_for_fields("temperature")
+            # Returns terms like "temperature", "air temperature", "water temperature"
+        """
+        terms = self.search_terms(label=term_label, definition=definition)
+        
+        # Convert dict to list format for consistency
+        result = []
+        for term_name, term_info in terms.items():
+            result.append({
+                "term_name": term_name,
+                "label": term_info.get("label", term_name),
+                "definition": term_info.get("definition", ""),
+                "syntax": term_info.get("syntax", ""),
+                "example": term_info.get("example", ""),
+                "preferred_unit": term_info.get("preferredUnit", ""),
+                "url": term_info.get("url", ""),
+                "regex": term_info.get("regex", ""),
+            })
+        
+        logger.info(f"✅ Found {len(result)} terms matching '{term_label}'")
+        return result
+    
+    def search_fields_in_packages(
+        self,
+        field_label: str,
+        package_names: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """Search for fields by label across specified packages (client-side filtering).
+        
+        Note: FAIR-DS API does not support server-side field search in /api/package.
+        This method fetches package data and filters fields client-side.
+        
+        Args:
+            field_label: Field label to search for (case-insensitive partial match)
+            package_names: Optional list of package names to search in. If None, searches all packages.
+            
+        Returns:
+            List of field dictionaries matching the search criteria
+        """
+        if package_names is None:
+            package_names = self.get_available_packages()
+        
+        matching_fields = []
+        search_label_lower = field_label.lower()
+        
+        for pkg_name in package_names:
+            package = self.get_package(pkg_name)
+            if not package or "metadata" not in package:
+                continue
+                
+            for field in package["metadata"]:
+                field_label_value = field.get("label", "")
+                # Case-insensitive partial match
+                if search_label_lower in field_label_value.lower():
+                    matching_fields.append(field)
+        
+        logger.info(f"✅ Found {len(matching_fields)} fields matching '{field_label}' across {len(package_names)} packages")
+        return matching_fields
 
     def get_package_fields(
         self, 

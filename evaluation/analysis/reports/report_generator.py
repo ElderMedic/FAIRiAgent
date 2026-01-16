@@ -14,12 +14,15 @@ from ..data_loaders import EvaluationDataLoader
 from ..analyzers import (
     ModelPerformanceAnalyzer,
     WorkflowReliabilityAnalyzer,
-    FailurePatternAnalyzer
+    FailurePatternAnalyzer,
+    PassAtKAnalyzer,
+    CRITERIA_PRESETS,
 )
 from ..visualizations import (
     ModelComparisonVisualizer,
     WorkflowReliabilityVisualizer,
-    FailureAnalysisVisualizer
+    FailureAnalysisVisualizer,
+    PassAtKVisualizer,
 )
 from ..baseline_comparison import load_agentic_data, load_baseline_data
 from ..visualizations.baseline_comparison import BaselineComparisonVisualizer
@@ -83,6 +86,7 @@ class ReportGenerator:
         self.reliability_viz = WorkflowReliabilityVisualizer(self.figures_dir)
         self.failure_viz = FailureAnalysisVisualizer(self.figures_dir)
         self.baseline_viz = BaselineComparisonVisualizer(self.figures_dir)
+        self.pass_at_k_viz = PassAtKVisualizer(self.figures_dir)
         
         # Load baseline comparison data (if available)
         self.agentic_data = None
@@ -94,6 +98,18 @@ class ReportGenerator:
                 print(f"  ✅ Found {len(self.baseline_data)} baseline configuration(s)")
         except Exception as e:
             print(f"  ⚠️  Could not load baseline data: {e}")
+        
+        # Initialize pass@k analyzer
+        self.pass_at_k_analyzer = PassAtKAnalyzer(
+            self.runs_dir,
+            criteria=CRITERIA_PRESETS['moderate'],
+            k_values=[1, 3, 5, 10]
+        )
+        n_pass_at_k = self.pass_at_k_analyzer.load_results(
+            exclude_models=EXCLUDED_MODELS,
+            exclude_docs=EXCLUDED_DOCUMENTS
+        )
+        print(f"  ✅ Loaded {n_pass_at_k} runs for pass@k analysis")
     
     def generate_all(self):
         """Generate all analyses and visualizations."""
@@ -121,6 +137,13 @@ class ReportGenerator:
             print("📊 Generating Baseline Comparisons")
             print(f"{'='*80}\n")
             self._generate_baseline_comparisons()
+        
+        # Generate pass@k analysis
+        print(f"\n{'='*80}")
+        print("🎯 Generating Pass@k Analysis")
+        print(f"{'='*80}\n")
+        
+        self._generate_pass_at_k_analysis()
         
         # Generate tables
         print(f"\n{'='*80}")
@@ -179,6 +202,55 @@ class ReportGenerator:
         self.baseline_viz.create_comparison_by_document(self.agentic_data, self.baseline_data)
         self.baseline_viz.create_fields_by_document(self.agentic_data, self.baseline_data)
     
+    def _generate_pass_at_k_analysis(self):
+        """Generate pass@k analysis tables, visualizations, and report."""
+        print("  📊 Pass@k Analysis (Tables):")
+        
+        # Generate summary table for each criteria preset
+        for preset_name in ['lenient', 'moderate', 'strict']:
+            self.pass_at_k_analyzer.criteria = CRITERIA_PRESETS[preset_name]
+            
+            summary_df = self.pass_at_k_analyzer.get_summary_dataframe()
+            if not summary_df.empty:
+                # Save CSV
+                csv_path = self.tables_dir / f'pass_at_k_{preset_name}.csv'
+                summary_df.to_csv(csv_path, index=False)
+                
+                # Save LaTeX
+                # Select key columns for LaTeX
+                latex_cols = ['model', 'total_runs', 'success_rate', 'pass@1', 'pass@3', 'pass@5', 'pass@10']
+                latex_df = summary_df[[c for c in latex_cols if c in summary_df.columns]]
+                latex_path = self.tables_dir / f'pass_at_k_{preset_name}.tex'
+                latex_df.to_latex(latex_path, index=False, float_format='%.3f')
+                
+                print(f"    ✅ Saved: pass_at_k_{preset_name}.csv, pass_at_k_{preset_name}.tex")
+        
+        # Generate document-level pass@k (using moderate criteria)
+        self.pass_at_k_analyzer.criteria = CRITERIA_PRESETS['moderate']
+        summary_df = self.pass_at_k_analyzer.get_summary_dataframe()
+        doc_df = self.pass_at_k_analyzer.get_document_level_dataframe()
+        if not doc_df.empty:
+            doc_df.to_csv(self.tables_dir / 'pass_at_k_by_document.csv', index=False)
+            print(f"    ✅ Saved: pass_at_k_by_document.csv")
+        
+        # Generate multi-criteria comparison
+        comparison_df = self.pass_at_k_analyzer.get_multi_criteria_comparison()
+        if not comparison_df.empty:
+            comparison_df.to_csv(self.tables_dir / 'pass_at_k_multi_criteria.csv', index=False)
+            print(f"    ✅ Saved: pass_at_k_multi_criteria.csv")
+        
+        # Generate full JSON report
+        report = self.pass_at_k_analyzer.generate_report(output_format='dict')
+        report_path = self.data_dir / 'pass_at_k_report.json'
+        with open(report_path, 'w') as f:
+            json.dump(report, f, indent=2, default=str)
+        print(f"    ✅ Saved: pass_at_k_report.json")
+        
+        # Generate visualizations
+        print("\n  📈 Pass@k Visualizations:")
+        if not summary_df.empty:
+            self.pass_at_k_viz.generate_all(summary_df, doc_df, comparison_df)
+    
     def _generate_tables(self):
         """Generate LaTeX and CSV tables."""
         # Model rankings
@@ -221,7 +293,11 @@ class ReportGenerator:
             'n_documents': len(self.doc_df['document_id'].unique()),
             'model_rankings': self.performance_analyzer.get_model_rankings().to_dict(),
             'reliability_summary': self.reliability_analyzer.get_reliability_summary().to_dict(),
-            'retry_patterns': self.reliability_analyzer.get_retry_patterns()
+            'retry_patterns': self.reliability_analyzer.get_retry_patterns(),
+            'pass_at_k': {
+                'criteria': str(self.pass_at_k_analyzer.criteria),
+                'summary': self.pass_at_k_analyzer.get_summary_dataframe().to_dict('records')
+            }
         }
         
         with open(self.output_dir / 'analysis_summary.json', 'w', encoding='utf-8') as f:

@@ -50,10 +50,6 @@ class FAIRifierLangGraphApp:
         self.max_global_retries = config.max_global_retries
         self.max_step_retries = config.max_step_retries
         
-        # Multi-turn reflection configuration
-        # Each retry attempt can have multiple reflection iterations
-        self.max_reflection_iters = getattr(config, 'max_reflection_iters', 3)
-        
         # Initialize checkpointer
         self.checkpointer = MemorySaver()
         
@@ -90,18 +86,14 @@ class FAIRifierLangGraphApp:
         check_output_fn
     ) -> FAIRifierState:
         """
-        Execute an agent with multi-turn self-reflection and retry logic.
+        Execute an agent with Critic evaluation and retry logic.
         
-        Architecture:
-        - Outer loop: retry attempts (full re-execution)
-        - Inner loop: reflection iterations (iterative refinement within same attempt)
-        
-        Flow per attempt:
-        1. Agent executes (or revises if reflection_iter > 0)
+        Flow:
+        1. Agent executes
         2. Critic evaluates
         3. If ACCEPT: done
-        4. If not ACCEPT and reflection_iters left: provide feedback, loop back to step 1
-        5. If not ACCEPT and no reflection_iters left: increment retry, start new attempt
+        4. If not ACCEPT and retries left: provide feedback, retry
+        5. If not ACCEPT and no retries left: accept with review flag or fail
         
         Args:
             state: Current workflow state
@@ -117,12 +109,16 @@ class FAIRifierLangGraphApp:
         if "context" not in state:
             state["context"] = {}
         
-        # Initialize reflection tracking
-        if "reflection_trajectory" not in state:
-            state["reflection_trajectory"] = {}
-        state["reflection_trajectory"][agent_name] = []
+        # Initialize retry tracking
+        if "retry_trajectory" not in state:
+            state["retry_trajectory"] = {}
+        state["retry_trajectory"][agent_name] = []
         
-        # Outer retry loop (full re-execution attempts)
+        # Track previous scores for no-progress detection
+        previous_scores = []
+        NO_PROGRESS_THRESHOLD = 2  # Exit if score unchanged for this many consecutive attempts
+        
+        # Retry loop
         for attempt in range(1, self.max_step_retries + 2):  # +2 = initial + max_retries
             # Check global retry limit
             if self.global_retry_count >= self.max_global_retries:
@@ -146,122 +142,100 @@ class FAIRifierLangGraphApp:
             # Set retry context for agent
             state["context"]["retry_count"] = attempt - 1
             
-            # Track final decision for this attempt
-            final_decision = "ACCEPT"
-            final_score = 0.0
+            # Create execution record
+            execution_record = {
+                "agent_name": agent_name,
+                "attempt": attempt,
+                "start_time": datetime.now().isoformat(),
+                "end_time": None,
+                "success": False,
+                "critic_evaluation": None
+            }
             
-            # Inner reflection loop (iterative refinement within same attempt)
-            for reflection_iter in range(self.max_reflection_iters):
-                state["context"]["reflection_iter"] = reflection_iter
-                state["context"]["is_revision"] = reflection_iter > 0
+            try:
+                # Execute agent
+                state = await agent.execute(state)
+                execution_record["success"] = True
+                execution_record["end_time"] = datetime.now().isoformat()
                 
-                # Create execution record
-                execution_record = {
-                    "agent_name": agent_name,
-                    "attempt": attempt,
-                    "reflection_iter": reflection_iter,
-                    "start_time": datetime.now().isoformat(),
-                    "end_time": None,
-                    "success": False,
-                    "critic_evaluation": None,
-                    "is_revision": reflection_iter > 0
-                }
-                
-                try:
-                    # Log reflection iteration
-                    if reflection_iter > 0:
-                        logger.info(f"   🔄 Reflection {reflection_iter}/{self.max_reflection_iters-1}: {agent_name} refining output...")
-                    
-                    # Execute agent (initial or revision)
-                    state = await agent.execute(state)
-                    execution_record["success"] = True
-                    execution_record["end_time"] = datetime.now().isoformat()
-                    
-                except Exception as e:
-                    logger.error(f"❌ {agent_name} error (reflection {reflection_iter}): {str(e)}")
-                    execution_record["success"] = False
-                    execution_record["end_time"] = datetime.now().isoformat()
-                    execution_record["error"] = str(e)
-                    state["execution_history"].append(execution_record)
-                    
-                    # On error, break reflection loop and try next attempt
-                    final_decision = "ERROR"
-                    break
-                
-                # Add execution record
+            except Exception as e:
+                logger.error(f"❌ {agent_name} error (attempt {attempt}): {str(e)}")
+                execution_record["success"] = False
+                execution_record["end_time"] = datetime.now().isoformat()
+                execution_record["error"] = str(e)
                 state["execution_history"].append(execution_record)
                 
-                # Call Critic
-                if reflection_iter == 0:
-                    logger.info(f"🔍 Critic evaluating {agent_name}...")
-                else:
-                    logger.info(f"   🔍 Critic re-evaluating after reflection {reflection_iter}...")
-                state = await self.critic.execute(state)
-                
-                # Get Critic decision
-                last_execution = state["execution_history"][-1]
-                critic_eval = last_execution.get("critic_evaluation", {})
-                final_decision = critic_eval.get("decision", "ACCEPT")
-                final_score = critic_eval.get("score", 0.0)
-                
-                # Record reflection trajectory
-                state["reflection_trajectory"][agent_name].append({
-                    "attempt": attempt,
-                    "reflection_iter": reflection_iter,
-                    "decision": final_decision,
-                    "score": final_score,
-                    "issues_count": len(critic_eval.get("issues", [])),
-                    "timestamp": datetime.now().isoformat()
-                })
-                
-                logger.info(
-                    f"   📊 Critic: {final_decision} (score: {final_score:.2f}, "
-                    f"attempt: {attempt}/{self.max_step_retries + 1}, "
-                    f"reflection: {reflection_iter}/{self.max_reflection_iters-1})"
-                )
-                
-                if final_decision == "ACCEPT":
-                    logger.info(f"✅ {agent_name} completed successfully (score {final_score:.2f} >= accept threshold)")
-                    break  # Exit reflection loop
-                
-                # Check if more reflections are allowed
-                if reflection_iter < self.max_reflection_iters - 1:
-                    # Provide feedback for next reflection iteration
-                    logger.info(
-                        f"   🔄 {agent_name} needs improvement (score: {final_score:.2f}), "
-                        f"starting reflection {reflection_iter + 1}..."
-                    )
-                    state = await self.critic.provide_feedback_to_agent(agent_name, critic_eval, state)
-                else:
-                    # Max reflections reached for this attempt
-                    logger.info(
-                        f"   ⚠️ Max reflections ({self.max_reflection_iters}) reached for attempt {attempt}, "
-                        f"final score: {final_score:.2f}"
-                    )
-            
-            # Clear reflection context
-            state["context"]["reflection_iter"] = 0
-            state["context"]["is_revision"] = False
-            
-            # Check if we should exit retry loop
-            if final_decision == "ACCEPT":
-                break  # Success, exit retry loop
-            
-            if final_decision == "ERROR":
+                # On error, try next attempt if available
                 if attempt <= self.max_step_retries:
-                    continue  # Try next attempt on error
+                    continue
                 else:
-                    break  # Max retries reached
+                    break
             
-            # Handle non-ACCEPT after all reflections
+            # Add execution record
+            state["execution_history"].append(execution_record)
+            
+            # Call Critic
+            logger.info(f"🔍 Critic evaluating {agent_name}...")
+            state = await self.critic.execute(state)
+            
+            # Get Critic decision
+            last_execution = state["execution_history"][-1]
+            critic_eval = last_execution.get("critic_evaluation", {})
+            decision = critic_eval.get("decision", "ACCEPT")
+            score = critic_eval.get("score", 0.0)
+            
+            # Record retry trajectory
+            state["retry_trajectory"][agent_name].append({
+                "attempt": attempt,
+                "decision": decision,
+                "score": score,
+                "issues_count": len(critic_eval.get("issues", [])),
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            logger.info(
+                f"   📊 Critic: {decision} (score: {score:.2f}, "
+                f"attempt: {attempt}/{self.max_step_retries + 1})"
+            )
+            
+            # Handle decision
+            if decision == "ACCEPT":
+                logger.info(f"✅ {agent_name} completed successfully (score {score:.2f} >= accept threshold)")
+                break
+            
+            # Track score for no-progress detection
+            previous_scores.append(round(score, 2))
+            
+            # Check for no-progress: if score unchanged for N consecutive attempts
+            if len(previous_scores) >= NO_PROGRESS_THRESHOLD:
+                recent_scores = previous_scores[-NO_PROGRESS_THRESHOLD:]
+                if len(set(recent_scores)) == 1:
+                    # All recent scores are identical - no progress being made
+                    logger.warning(
+                        f"⚠️ No progress detected for {agent_name}: "
+                        f"score unchanged at {score:.2f} for {NO_PROGRESS_THRESHOLD} consecutive attempts\n"
+                        f"  This may indicate API limitations or infeasible requirements.\n"
+                        f"  Accepting current output to avoid further token waste."
+                    )
+                    if check_output_fn(state):
+                        state["needs_human_review"] = True
+                        state["no_progress_detected"] = True
+                        break
+                    else:
+                        logger.error(f"❌ No progress and no usable output from {agent_name}")
+                        state["errors"] = state.get("errors", []) + [
+                            f"{agent_name}: No progress after {NO_PROGRESS_THRESHOLD} attempts (score stuck at {score:.2f})"
+                        ]
+                        break
+            
+            # Check if more retries available
             if attempt > self.max_step_retries:
                 # Max retries reached - check if we have usable output
                 if check_output_fn(state):
                     logger.warning(
                         f"⚠️ Max retries reached ({attempt-1}/{self.max_step_retries}) "
                         f"but {agent_name} has usable output - accepting with review flag\n"
-                        f"  Final Critic decision: {final_decision} (score: {final_score:.2f})\n"
-                        f"  Total reflections: {len(state['reflection_trajectory'][agent_name])}\n"
+                        f"  Final Critic decision: {decision} (score: {score:.2f})\n"
                         f"  Note: Workflow continues because output is usable, but needs human review"
                     )
                     state["needs_human_review"] = True
@@ -270,16 +244,15 @@ class FAIRifierLangGraphApp:
                     logger.error(
                         f"❌ Max retries reached ({attempt-1}/{self.max_step_retries}) "
                         f"with no usable output from {agent_name}\n"
-                        f"  Final Critic decision: {final_decision} (score: {final_score:.2f})\n"
-                        f"  Total reflections: {len(state['reflection_trajectory'][agent_name])}\n"
+                        f"  Final Critic decision: {decision} (score: {score:.2f})\n"
                         f"  Workflow will continue but may fail at finalization"
                     )
                     break
             else:
-                # More retries available - prepare for next attempt
+                # More retries available - provide feedback and continue
                 logger.info(
-                    f"🔄 {agent_name} did not reach ACCEPT after {self.max_reflection_iters} reflections "
-                    f"(score: {final_score:.2f}), starting retry {attempt}/{self.max_step_retries}..."
+                    f"   🔄 {agent_name} needs improvement (score: {score:.2f}), "
+                    f"preparing retry {attempt}/{self.max_step_retries}..."
                 )
                 state = await self.critic.provide_feedback_to_agent(agent_name, critic_eval, state)
         
@@ -401,20 +374,100 @@ class FAIRifierLangGraphApp:
         
         return state
     
+    def _find_existing_mineru_result(self, document_path: str) -> Optional[Tuple[str, str]]:
+        """
+        Check if pre-converted MinerU results exist for this document.
+        
+        Searches in the same directory as the document for:
+        1. mineru_{doc_name}/{doc_name}/vlm/{doc_name}.md (standard MinerU output structure)
+        2. mineru_{doc_name}/**/*.md (any markdown in the mineru directory)
+        
+        Args:
+            document_path: Path to the original PDF document
+            
+        Returns:
+            Tuple of (markdown_path, images_dir) if found, None otherwise
+        """
+        from pathlib import Path
+        
+        doc_path = Path(document_path)
+        doc_name = doc_path.stem
+        doc_dir = doc_path.parent
+        
+        # Check for mineru_{doc_name} directory in same location as document
+        mineru_dir = doc_dir / f"mineru_{doc_name}"
+        
+        if not mineru_dir.exists():
+            return None
+        
+        logger.info(f"🔍 Found pre-converted MinerU directory: {mineru_dir}")
+        
+        # Try standard MinerU output structure: mineru_{doc_name}/{doc_name}/vlm/{doc_name}.md
+        standard_md_path = mineru_dir / doc_name / "vlm" / f"{doc_name}.md"
+        if standard_md_path.exists():
+            images_dir = mineru_dir / doc_name / "vlm" / "images"
+            logger.info(f"✅ Found pre-converted markdown: {standard_md_path}")
+            return str(standard_md_path), str(images_dir) if images_dir.exists() else None
+        
+        # Fallback: search for any .md file in the mineru directory
+        md_files = list(mineru_dir.rglob("*.md"))
+        if md_files:
+            # Prefer files named like the document
+            for md_file in md_files:
+                if doc_name in md_file.stem:
+                    images_dir = md_file.parent / "images"
+                    logger.info(f"✅ Found pre-converted markdown: {md_file}")
+                    return str(md_file), str(images_dir) if images_dir.exists() else None
+            
+            # Use first found markdown file
+            md_file = md_files[0]
+            images_dir = md_file.parent / "images"
+            logger.info(f"✅ Found pre-converted markdown: {md_file}")
+            return str(md_file), str(images_dir) if images_dir.exists() else None
+        
+        logger.warning(f"⚠️ MinerU directory exists but no markdown found: {mineru_dir}")
+        return None
+    
     def _read_document_content(
         self, 
         document_path: str,
         output_dir: Optional[str] = None
     ) -> Tuple[str, Dict[str, Any]]:
-        """Read content using MinerU when available."""
+        """Read content using MinerU when available, or use pre-converted results."""
+        from pathlib import Path
+        
         conversion_info: Dict[str, Any] = {}
+        
         if document_path.endswith(".pdf"):
+            # First, check if pre-converted MinerU results exist
+            existing_result = self._find_existing_mineru_result(document_path)
+            if existing_result:
+                markdown_path, images_dir = existing_result
+                logger.info(f"📄 Using pre-converted MinerU result (skipping conversion)")
+                try:
+                    with open(markdown_path, "r", encoding="utf-8") as f:
+                        markdown_text = f.read()
+                    
+                    # Build conversion_info similar to MinerU client output
+                    conversion_info = {
+                        "source": "pre-converted",
+                        "markdown_path": markdown_path,
+                        "images_dir": images_dir,
+                        "output_dir": str(Path(markdown_path).parent.parent),
+                        "method": "mineru_preconverted"
+                    }
+                    logger.info(f"✅ Loaded pre-converted MinerU markdown ({len(markdown_text)} chars)")
+                    return markdown_text, conversion_info
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to read pre-converted result: {e}")
+                    # Fall through to normal conversion
+            
+            # No pre-converted results, use MinerU client if available
             if self.mineru_client:
                 try:
                     # Use output_dir for MinerU artifacts if provided
                     mineru_output = None
                     if output_dir:
-                        from pathlib import Path
                         doc_name = Path(document_path).stem
                         mineru_output = Path(output_dir) / f"mineru_{doc_name}"
                         logger.info(f"MinerU will save artifacts to: {mineru_output}")
@@ -431,16 +484,21 @@ class FAIRifierLangGraphApp:
                     return conversion.markdown_text, conversion_info
                 except MinerUConversionError as exc:
                     logger.warning("MinerU conversion failed (%s). Falling back to PyMuPDF.", exc)
+            
+            # Fallback to PyMuPDF
             import fitz  # PyMuPDF
             doc = fitz.open(document_path)
             text = ""
             for page in doc:
                 text += page.get_text()
             doc.close()
+            conversion_info["method"] = "pymupdf"
             return text, conversion_info
         
+        # Non-PDF files: read directly
         with open(document_path, "r", encoding="utf-8") as file:
             text = file.read()
+        conversion_info["method"] = "direct_read"
         return text, conversion_info
     
     @traceable(name="PlanWorkflow", tags=["workflow", "planning"])
@@ -1145,11 +1203,11 @@ Return JSON in the following format:
         # Generate execution summary
         execution_history = state.get("execution_history", [])
         
-        # Count reflection iterations
-        reflection_trajectory = state.get("reflection_trajectory", {})
-        total_reflections = sum(len(traj) for traj in reflection_trajectory.values())
-        reflections_by_agent = {
-            agent: len(traj) for agent, traj in reflection_trajectory.items()
+        # Count retry attempts
+        retry_trajectory = state.get("retry_trajectory", {})
+        total_retries = sum(len(traj) for traj in retry_trajectory.values())
+        retries_by_agent = {
+            agent: len(traj) for agent, traj in retry_trajectory.items()
         }
         
         summary = {
@@ -1158,10 +1216,10 @@ Return JSON in the following format:
             "failed_steps": sum(1 for e in execution_history if not e.get("success")),
             "steps_requiring_retry": sum(1 for e in execution_history if e.get("attempt", 1) > 1),
             "needs_human_review": state.get("needs_human_review", False),
-            # Multi-turn reflection stats
-            "total_reflections": total_reflections,
-            "reflections_by_agent": reflections_by_agent,
-            "reflection_trajectory": reflection_trajectory,
+            # Retry stats
+            "total_retries": total_retries,
+            "retries_by_agent": retries_by_agent,
+            "retry_trajectory": retry_trajectory,
         }
         
         confidence_snapshot = aggregate_confidence(state, config)

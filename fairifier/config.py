@@ -88,10 +88,6 @@ class FAIRifierConfig:
     max_step_retries: int = 2  # Maximum retries per step before escalation
     max_global_retries: int = 5  # Maximum total retries across all steps
     
-    # Multi-turn reflection configuration
-    # Each retry attempt can have multiple reflection iterations for iterative refinement
-    max_reflection_iters: int = 3  # Maximum reflection iterations per retry attempt
-    
     # Confidence thresholds
     min_confidence_threshold: float = 0.75
     auto_approve_threshold: float = 0.90
@@ -184,35 +180,40 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("LLM_API_KEY"):
         config_instance.llm_api_key = os.getenv("LLM_API_KEY")
 
+    # Provider-specific base URL configuration
+    # IMPORTANT: Each provider block should only set base_url for its own provider
+    
     # Qwen API base URL (default: Alibaba Cloud DashScope)
-    if os.getenv("QWEN_API_BASE_URL"):
-        config_instance.llm_base_url = os.getenv("QWEN_API_BASE_URL")
-    elif (config_instance.llm_provider == "qwen" and
-          config_instance.llm_base_url == "http://localhost:11434"):
-        # Default Qwen API endpoint (DashScope OpenAI-compatible)
-        config_instance.llm_base_url = (
-            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-        )
+    if config_instance.llm_provider == "qwen":
+        if os.getenv("QWEN_API_BASE_URL"):
+            config_instance.llm_base_url = os.getenv("QWEN_API_BASE_URL")
+        elif config_instance.llm_base_url == "http://localhost:11434":
+            # Default Qwen API endpoint (DashScope OpenAI-compatible)
+            config_instance.llm_base_url = (
+                "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+            )
     
     # Ollama base URL (default: localhost:11434)
-    if config_instance.llm_provider == "ollama":
+    elif config_instance.llm_provider == "ollama":
         if os.getenv("FAIRIFIER_LLM_BASE_URL"):
             # Use explicitly set base URL
             config_instance.llm_base_url = os.getenv("FAIRIFIER_LLM_BASE_URL")
-        elif config_instance.llm_base_url != "http://localhost:11434" and not os.getenv("FAIRIFIER_LLM_BASE_URL"):
-            # If base_url is not the default Ollama URL and not explicitly set, reset to default
-            # This handles the case when switching from Qwen to Ollama
-            if "dashscope" in config_instance.llm_base_url.lower() or "aliyuncs" in config_instance.llm_base_url.lower():
-                config_instance.llm_base_url = "http://localhost:11434"
+        else:
+            # Default Ollama endpoint
+            config_instance.llm_base_url = "http://localhost:11434"
 
     # OpenAI API base URL (default: official OpenAI API)
-    if (os.getenv("OPENAI_API_BASE_URL") and
-            config_instance.llm_provider == "openai"):
-        config_instance.llm_base_url = os.getenv("OPENAI_API_BASE_URL")
-    elif (config_instance.llm_provider == "openai" and
-          config_instance.llm_base_url == "http://localhost:11434"):
-        # Default OpenAI API endpoint
-        config_instance.llm_base_url = "https://api.openai.com/v1"
+    elif config_instance.llm_provider == "openai":
+        if os.getenv("OPENAI_API_BASE_URL"):
+            config_instance.llm_base_url = os.getenv("OPENAI_API_BASE_URL")
+        else:
+            # Default OpenAI API endpoint
+            config_instance.llm_base_url = "https://api.openai.com/v1"
+    
+    # Anthropic Claude - uses official API, no custom base_url needed
+    elif config_instance.llm_provider == "anthropic":
+        # Anthropic SDK uses its own endpoint, base_url not applicable
+        config_instance.llm_base_url = None
 
     if os.getenv("LLM_TEMPERATURE"):
         config_instance.llm_temperature = float(os.getenv("LLM_TEMPERATURE"))

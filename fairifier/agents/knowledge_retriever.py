@@ -85,16 +85,35 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 self.update_confidence(state, "knowledge_retrieval", 0.0)
                 return state
             
-            self.log_execution(state, "   📡 GET /api/package (default)...")
+            self.log_execution(state, "   📡 GET /api/package (list all packages)...")
             self.log_execution(state, "   📡 GET /api/terms...")
             
-            # Get packages and terms from FAIR-DS API
-            # Note: fair_ds_client methods already parse the API response
-            packages_metadata = self.fair_ds_client.get_packages()  # Returns List[Dict] - already parsed
+            # Step 1: Get list of all available packages
+            available_package_names = self.fair_ds_client.get_available_packages()
+            self.log_execution(state, f"   ✅ Found {len(available_package_names)} available packages: {available_package_names}")
+            
+            if not available_package_names:
+                error_msg = "FAIR-DS API returned no packages. Ensure API is properly configured."
+                self.log_execution(state, f"❌ {error_msg}", "error")
+                state["errors"] = state.get("errors", []) + [error_msg]
+                self.update_confidence(state, "knowledge_retrieval", 0.0)
+                return state
+            
+            # Step 2: Fetch fields from all packages
+            self.log_execution(state, f"   📦 Fetching fields from {len(available_package_names)} packages...")
+            all_packages_metadata = []
+            for pkg_name in available_package_names:
+                package_data = self.fair_ds_client.get_package(pkg_name)
+                if package_data and "metadata" in package_data:
+                    fields = package_data["metadata"]
+                    all_packages_metadata.extend(fields)
+                    self.log_execution(state, f"      • {pkg_name}: {len(fields)} fields")
+            
+            # Get terms from FAIR-DS API
             terms = self.fair_ds_client.get_terms()  # Returns Dict[str, Dict] - already parsed
             
-            # Group packages by sheet (packages_metadata is already a list of fields)
-            packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(packages_metadata)
+            # Group all fields by sheet
+            packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(all_packages_metadata)
             
             # Validate we got real API data
             if not packages_by_sheet or len(packages_by_sheet) == 0:
@@ -246,6 +265,9 @@ class KnowledgeRetrieverAgent(BaseAgent):
             # Start with all mandatory fields
             final_selected_fields = list(all_mandatory_fields)
             
+            # Collect all terms to search (from LLM requests)
+            all_terms_to_search = []
+            
             # Use LLM to select optional fields for each ISA sheet
             for sheet in isa_sheets:
                 optional_fields_for_sheet = fields_by_isa_sheet[sheet]["optional"]
@@ -256,7 +278,8 @@ class KnowledgeRetrieverAgent(BaseAgent):
                     )
                     
                     # Use LLM to intelligently select optional fields (no fallback)
-                    selected_optional = await llm_methods.llm_select_fields_from_package(
+                    # Returns: {"selected_fields": [...], "terms_to_search": [...]}
+                    llm_result = await llm_methods.llm_select_fields_from_package(
                         self.llm_helper,
                         doc_info,
                         sheet,  # ISA sheet level (investigation, study, assay, sample, observationunit)
@@ -266,12 +289,52 @@ class KnowledgeRetrieverAgent(BaseAgent):
                         critic_feedback
                     )
                     
+                    selected_optional = llm_result.get("selected_fields", [])
+                    terms_to_search = llm_result.get("terms_to_search", [])
+                    
                     final_selected_fields.extend(selected_optional)
+                    all_terms_to_search.extend(terms_to_search)
                     
                     self.log_execution(
                         state,
                         f"   ✅ {sheet}: LLM selected {len(selected_optional)} optional fields"
                     )
+                    if terms_to_search:
+                        self.log_execution(
+                            state,
+                            f"   🔍 {sheet}: LLM requested term search for: {terms_to_search}"
+                        )
+            
+            # Phase 4: Search for additional terms/fields if LLM requested
+            if all_terms_to_search and self.fair_ds_client:
+                self.log_execution(state, f"🔍 Phase 4: Searching for {len(all_terms_to_search)} additional terms...")
+                
+                for term in all_terms_to_search:
+                    # Search using /api/terms endpoint
+                    found_terms = self.fair_ds_client.search_terms_for_fields(term)
+                    if found_terms:
+                        self.log_execution(
+                            state,
+                            f"   📚 Found {len(found_terms)} terms matching '{term}'"
+                        )
+                        # Store found terms in state for JSON generator to use
+                        if "additional_terms" not in state:
+                            state["additional_terms"] = []
+                        state["additional_terms"].extend(found_terms)
+                    
+                    # Also search across packages for fields with matching labels
+                    found_fields = self.fair_ds_client.search_fields_in_packages(term, available_package_names)
+                    if found_fields:
+                        self.log_execution(
+                            state,
+                            f"   📦 Found {len(found_fields)} fields matching '{term}' across packages"
+                        )
+                        # Add unique fields to final selection
+                        existing_labels = {f.get("label") for f in final_selected_fields}
+                        for field in found_fields:
+                            if field.get("label") not in existing_labels:
+                                final_selected_fields.append(field)
+                                existing_labels.add(field.get("label"))
             
             # Log final statistics
             total_mandatory = len(all_mandatory_fields)
@@ -321,6 +384,18 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 }
                 for item in knowledge_items
             ]
+            
+            # Store API capability info for Critic to understand limitations
+            state["api_capabilities"] = {
+                "available_packages": available_package_names,
+                "total_packages_available": len(available_package_names),
+                "packages_requested_by_planner": self._extract_requested_packages(planner_instruction),
+                "packages_actually_available": all_packages,
+                "limitation_note": (
+                    f"FAIR-DS API only has {len(available_package_names)} package(s) available: {available_package_names}. "
+                    "The agent can only select from packages that actually exist in the API."
+                ) if len(available_package_names) <= 1 else None
+            }
             
             self.log_execution(
                 state,
@@ -379,3 +454,24 @@ class KnowledgeRetrieverAgent(BaseAgent):
         api_bonus = 0.2 if self.fair_ds_client else 0.0
         
         return min(base_score + confidence_bonus + api_bonus, 1.0)
+    
+    def _extract_requested_packages(self, planner_instruction: Optional[str]) -> List[str]:
+        """Extract package names/keywords mentioned in planner instruction."""
+        if not planner_instruction:
+            return []
+        
+        # Common domain keywords that Planner might request
+        domain_keywords = [
+            "transcriptomics", "RNA-seq", "genomics", "proteomics", "metabolomics",
+            "ecotoxicology", "environmental", "soil", "nanomaterial", "exposure",
+            "time-series", "longitudinal", "temporal", "bioinformatics",
+            "organism", "species", "taxonomy", "biodata", "omics"
+        ]
+        
+        instruction_lower = planner_instruction.lower()
+        requested = []
+        for keyword in domain_keywords:
+            if keyword.lower() in instruction_lower:
+                requested.append(keyword)
+        
+        return requested

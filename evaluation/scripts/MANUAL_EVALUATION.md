@@ -77,6 +77,48 @@ python evaluation/scripts/evaluate_outputs.py \
   --env-file evaluation/config/env.evaluation
 ```
 
+### 6. Calculate Pass@k Metrics
+
+Calculate pass@k metrics (probability of success in k attempts):
+
+```bash
+# Using preset criteria
+python evaluation/scripts/calculate_pass_at_k.py \
+  --runs-dir evaluation/runs \
+  --preset moderate
+
+# Using custom criteria
+python evaluation/scripts/calculate_pass_at_k.py \
+  --runs-dir evaluation/runs \
+  --min-fields 10 \
+  --min-req-comp 0.5 \
+  --min-f1 0.3
+
+# Save to file
+python evaluation/scripts/calculate_pass_at_k.py \
+  --runs-dir evaluation/runs \
+  --preset moderate \
+  --format json \
+  --output evaluation/analysis/output/pass_at_k.json
+```
+
+Available presets:
+- `basic`: Any output (fields≥1)
+- `lenient`: Minimal quality (fields≥5, req_comp≥20%)
+- `moderate`: Recommended (fields≥10, req_comp≥50%, F1≥0.3)
+- `strict`: High quality (fields≥15, req_comp≥70%, F1≥0.5)
+- `very_strict`: Publication-ready (fields≥20, req_comp≥80%, F1≥0.6)
+
+### 7. Run Full Analysis
+
+Generate comprehensive analysis report including pass@k:
+
+```bash
+python evaluation/analysis/run_analysis.py \
+  --runs-dir evaluation/runs \
+  --output-dir evaluation/analysis/output
+```
+
 ## Available Model Configs
 
 ### Qwen Models (Dashscope API)

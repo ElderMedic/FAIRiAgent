@@ -113,34 +113,77 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 
 </div>
 
-The system uses a **LangGraph-based multi-agent workflow** with intelligent self-correction:
+### Graphical Abstract
+
+The system uses a **LangGraph-based multi-agent workflow** with **API-aware evaluation** and intelligent self-correction:
 
 ```mermaid
-flowchart LR
-    A[PDF Document] --> B[Document Parser]
-    B --> C[Planner]
-    C --> D[Knowledge Retriever]
-    D --> E[JSON Generator]
-
-    %% Critic acts after each agent step
-    B -. Critic (ReAct judge) .-> F(Critic Node)
-    C -. Critic (ReAct judge) .-> F
-    D -. Critic (ReAct judge) .-> F
-    E -. Critic (ReAct judge) .-> F
-
-    F --> G{Quality Check}
-    G -- Accept --> H[FAIR Metadata]
-    G -- Retry --> E
-    G -- Escalate --> I[Manual Review]
-    I -- (or if manual review not implemented) --> H[FAIR Metadata]
-
-    %% Critic oversees the whole agent workflow
-    style F fill:#fff9c4,stroke:#fbc02d,stroke-width:2px
-    style A fill:#e3f2fd
-    style H fill:#c8e6c9
-    style G fill:#ffccbc
+flowchart TD
+    subgraph INPUT["📥 Input Layer"]
+        A[📄 PDF Document]
+        M[🔧 MinerU Parser]
+        A --> M
+    end
+    
+    subgraph ORCHESTRATOR["🎯 Orchestrator (LangGraph)"]
+        direction TB
+        
+        subgraph PARSE["Step 1: Document Parsing"]
+            B[🔍 Document Parser<br/>LLM Extraction]
+            C1[🧑‍⚖️ Critic<br/>LLM-as-Judge]
+            B --> C1
+        end
+        
+        subgraph PLAN["Step 2: Planning"]
+            D[📋 Planner<br/>Domain Analysis]
+        end
+        
+        subgraph RETRIEVE["Step 3: Knowledge Retrieval"]
+            E[🧠 Knowledge Retriever<br/>FAIR-DS API + Terms]
+            C2[🧑‍⚖️ Critic<br/>API-Aware Evaluation]
+            E --> C2
+        end
+        
+        subgraph GENERATE["Step 4: Metadata Generation"]
+            F[📝 JSON Generator<br/>ISA-Tab Mapping]
+            C3[🧑‍⚖️ Critic<br/>Evidence Check]
+            F --> C3
+        end
+    end
+    
+    subgraph EXTERNAL["🌐 External Services"]
+        API[🗄️ FAIR-DS API<br/>Packages & Terms]
+    end
+    
+    subgraph OUTPUT["📤 Output Layer"]
+        H[📊 FAIR Metadata<br/>ISA-Tab JSON]
+        R[📋 Workflow Report<br/>Confidence & Trajectory]
+    end
+    
+    M --> B
+    C1 -->|ACCEPT| D
+    C1 -->|RETRY/ESCALATE| B
+    D --> E
+    API -.->|packages, terms| E
+    E -.->|api_capabilities| C2
+    C2 -->|ACCEPT| F
+    C2 -->|RETRY/ESCALATE| E
+    C3 -->|ACCEPT| H
+    C3 -->|RETRY/ESCALATE| F
+    H --> R
+    
+    style A fill:#e3f2fd,stroke:#1565c0
+    style H fill:#c8e6c9,stroke:#2e7d32
+    style C1 fill:#fff9c4,stroke:#f9a825
+    style C2 fill:#fff9c4,stroke:#f9a825
+    style C3 fill:#fff9c4,stroke:#f9a825
+    style API fill:#e8f5e9,stroke:#43a047
+    style R fill:#f3e5f5,stroke:#8e24aa
 ```
 
+> **Figure Caption:** FAIRiAgent employs a LangGraph-orchestrated multi-agent pipeline for automated FAIR metadata extraction. The system processes scientific documents through four main stages: (1) **Document Parser** extracts structured information using LLM-based adaptive extraction; (2) **Planner** analyzes document domain and generates agent-specific guidance; (3) **Knowledge Retriever** queries FAIR-DS API for metadata packages and terms, with API capability awareness; (4) **JSON Generator** maps extracted information to ISA-Tab compliant metadata. Each agent is evaluated by an embedded **Critic Agent** using LLM-as-Judge rubrics, with retry mechanisms (up to 2 attempts). The Critic evaluates outputs considering API limitations, preventing infinite retry loops when external constraints exist. A no-progress detection mechanism terminates unproductive retry cycles early, optimizing token usage while maintaining output quality.
+
+---
 
 **Workflow Flow:**
 
@@ -151,17 +194,32 @@ flowchart LR
 </div>
 
 **Agents & Nodes:**
-1. **Document Parser**: Extracts structured information from documents
-2. **Planner Node**: Summarizes document type/domain and issues special instructions
-3. **Knowledge Retriever**: Enriches metadata with FAIR-DS and local knowledge (follows Planner instructions)
-4. **JSON Generator**: Creates FAIR-DS compatible metadata (with Planner/Critic feedback)
-5. **Critic**: Uses LLM-as-Judge rubric (see `docs/en/development/critic_rubric.yaml`) to score outputs and emit improvement ops
+1. **Document Parser**: Extracts structured information from documents using LLM
+   - → **Critic evaluates** → If not ACCEPT: Retry (with feedback) or Escalate
+2. **Planner Node**: Analyzes document type/domain and generates agent-specific instructions
+3. **Knowledge Retriever**: Queries FAIR-DS API for metadata packages and terms
+   - Reports **API capabilities** (available packages) to enable informed Critic evaluation
+   - → **Critic evaluates with API awareness** → If not ACCEPT: Retry or Escalate
+4. **JSON Generator**: Creates ISA-Tab compatible FAIR metadata with evidence mapping
+   - → **Critic evaluates** → If not ACCEPT: Retry or Escalate
+5. **Critic Agent**: Embedded after each agent, evaluates outputs using LLM-as-Judge rubric
+   - **API-Aware**: Considers external API limitations when evaluating Knowledge Retriever
+   - **Decisions**: ACCEPT (proceed), RETRY (with feedback), or ESCALATE (manual review)
 
 **Workflow Features:**
-- 🔄 **Retry Logic**: Automatic retry with feedback from Critic agent
-- 🎯 **Conditional Routing**: Dynamic workflow based on evaluation results
-- 📊 **Execution Summary**: Track steps, retries, and outcomes
-- 💾 **State Persistence**: LangGraph checkpointer for state management
+- 🧠 **API-Aware Evaluation**: Critic understands FAIR-DS API limitations and evaluates agents within realistic constraints
+- 🛑 **No-Progress Detection**: Automatically terminates retry loops when consecutive attempts produce identical scores
+- 📉 **Feedback Deduplication**: Limits historical guidance to 10 items per agent to prevent token waste
+- 🔄 **Retry Logic**: Up to 2 retry attempts per agent, with Critic feedback guiding improvements
+- 🎯 **Conditional Routing**: Dynamic workflow based on Critic decisions (ACCEPT/RETRY/ESCALATE)
+- 📊 **Execution Tracking**: Full trajectory of steps, retries, and scores
+- 💾 **State Persistence**: LangGraph checkpointer for workflow state management
+
+**Retry Mechanism Details:**
+- **Retry Attempts**: Up to 2 retries per agent (configurable via `max_step_retries`)
+- **Global Limit**: Maximum total retries across all agents (configurable via `max_global_retries`)
+- **No-Progress Exit**: If score unchanged for 2 consecutive attempts, workflow accepts output with review flag
+- Retry trajectory tracked in `retry_trajectory` state for analysis and debugging
 
 ## 🧑‍⚖️ LLM-as-Judge Critic & Confidence
 

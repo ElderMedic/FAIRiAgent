@@ -364,7 +364,7 @@
           "notes": "Extracted from assay - Illumina"
         },
         {
-          "field_name": "Volume_µL",
+          "field_name": "Volume_\u00b5L",
           "isa_sheet": "assay",
           "package_source": "Illumina",
           "is_required": false,
@@ -391,7 +391,7 @@
           "notes": "Extracted from assay - Illumina"
         },
         {
-          "field_name": "RAN_Qubit_measured_conc_ng_per_µL",
+          "field_name": "RAN_Qubit_measured_conc_ng_per_\u00b5L",
           "isa_sheet": "assay",
           "package_source": "Illumina",
           "is_required": false,
@@ -400,7 +400,7 @@
           "notes": "Extracted from assay - Illumina"
         },
         {
-          "field_name": "RNA_Qubit_calculuated_conc_ng_per_µL",
+          "field_name": "RNA_Qubit_calculuated_conc_ng_per_\u00b5L",
           "isa_sheet": "assay",
           "package_source": "Illumina",
           "is_required": false,
@@ -843,6 +843,1153 @@
         "annotated_required": 21,
         "annotated_recommended": 22,
         "annotated_optional": 0
+      }
+    },
+    {
+      "document_id": "pomato",
+      "document_path": "evaluation/datasets/raw/pomato/mineru_selected_POMATO_2nd stage_fullproposal_2nd submission_16.09.24/selected_POMATO_2nd_stage_fullproposal_2nd_submission_16.09_260116_045215.md",
+      "metadata": {
+        "domain": "plant pathology",
+        "experiment_type": "multi_scenario",
+        "annotation_date": "2026-01-16",
+        "annotator": "changlinke",
+        "annotation_time_minutes": 0,
+        "notes": "POMATO project: Combined ground truth from pathogen_source (67 fields), plant_host (58 fields), aggregate (76 fields). Includes pathogen isolation, plant host, and aggregate/microbiome scenarios."
+      },
+      "ground_truth_fields": [
+        {
+          "field_name": "investigation identifier",
+          "isa_sheet": "investigation",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] MANDATORY in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "investigation title",
+          "isa_sheet": "investigation",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] MANDATORY in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "investigation description",
+          "isa_sheet": "investigation",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] MANDATORY in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "firstname",
+          "isa_sheet": "investigation",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] MANDATORY in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "lastname",
+          "isa_sheet": "investigation",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] MANDATORY in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "email address",
+          "isa_sheet": "investigation",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] MANDATORY in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "orcid",
+          "isa_sheet": "investigation",
+          "package_source": "default",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] RECOMMENDED in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "organization",
+          "isa_sheet": "investigation",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] MANDATORY in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "department",
+          "isa_sheet": "investigation",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] MANDATORY in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "study identifier",
+          "isa_sheet": "study",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] MANDATORY in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "study description",
+          "isa_sheet": "study",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] MANDATORY in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "study title",
+          "isa_sheet": "study",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] MANDATORY in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "investigation identifier",
+          "isa_sheet": "study",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "FAIR-DS default package",
+          "notes": "[pathogen_source] MANDATORY in FAIR-DS; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "study identifier",
+          "isa_sheet": "observationunit",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "observation unit identifier",
+          "isa_sheet": "observationunit",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "observation unit name",
+          "isa_sheet": "observationunit",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "observation unit description",
+          "isa_sheet": "observationunit",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "geographic location (country and/or sea)",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA default sample checklist",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "geographic location",
+          "isa_sheet": "observationunit",
+          "package_source": "default",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "geographic location (region and locality)",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "broad-scale environmental context",
+          "isa_sheet": "observationunit",
+          "package_source": "plant associated",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source; [plant_host]"
+        },
+        {
+          "field_name": "local environmental context",
+          "isa_sheet": "observationunit",
+          "package_source": "plant associated",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source; [plant_host]"
+        },
+        {
+          "field_name": "geographic location (country and/or sea)",
+          "isa_sheet": "observationunit",
+          "package_source": "plant associated",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source; [plant_host]"
+        },
+        {
+          "field_name": "provenance",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source; [plant_host]"
+        },
+        {
+          "field_name": "environmental sample",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "isolation source type",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "geographic location (country and/or sea)",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "host scientific name",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "host health state",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "isolation source",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "bio material",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "isolate",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "sub species",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "strain",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "sub strain",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "serovar",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "generation",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source; [plant_host]"
+        },
+        {
+          "field_name": "mating type",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "lab host",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "culture collection",
+          "isa_sheet": "observationunit",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Pathogen source)",
+          "notes": "[pathogen_source] Extracted from OU | Pathogen source"
+        },
+        {
+          "field_name": "observation unit identifier",
+          "isa_sheet": "sample",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "sample identifier",
+          "isa_sheet": "sample",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "sample description",
+          "isa_sheet": "sample",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "sample name",
+          "isa_sheet": "sample",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "collection date",
+          "isa_sheet": "sample",
+          "package_source": "ENA default sample checklist",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "collected by",
+          "isa_sheet": "sample",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample"
+        },
+        {
+          "field_name": "ncbi taxonomy id",
+          "isa_sheet": "sample",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "scientific name",
+          "isa_sheet": "sample",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "biosafety level",
+          "isa_sheet": "sample",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "collection date",
+          "isa_sheet": "sample",
+          "package_source": "default",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "project  name",
+          "isa_sheet": "sample",
+          "package_source": "plant associated",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample"
+        },
+        {
+          "field_name": "collection date",
+          "isa_sheet": "sample",
+          "package_source": "plant associated",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]"
+        },
+        {
+          "field_name": "environmental medium",
+          "isa_sheet": "sample",
+          "package_source": "plant associated",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]"
+        },
+        {
+          "field_name": "geographic location (latitude)",
+          "isa_sheet": "sample",
+          "package_source": "plant associated",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]"
+        },
+        {
+          "field_name": "geographic location (longitude)",
+          "isa_sheet": "sample",
+          "package_source": "plant associated",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]"
+        },
+        {
+          "field_name": "depth",
+          "isa_sheet": "sample",
+          "package_source": "plant associated",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample"
+        },
+        {
+          "field_name": "collection date",
+          "isa_sheet": "sample",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample"
+        },
+        {
+          "field_name": "lat lon",
+          "isa_sheet": "sample",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample"
+        },
+        {
+          "field_name": "sample treatment",
+          "isa_sheet": "sample",
+          "package_source": "default",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "sampling strategy",
+          "isa_sheet": "sample",
+          "package_source": "default",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "isolation method",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample"
+        },
+        {
+          "field_name": "isolation matrix",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample"
+        },
+        {
+          "field_name": "identified by",
+          "isa_sheet": "sample",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample"
+        },
+        {
+          "field_name": "sample type",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "sample mass/volume",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "extract mass/volume",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample; [plant_host]; [aggregate]"
+        },
+        {
+          "field_name": "specimen voucher",
+          "isa_sheet": "sample",
+          "package_source": "ENA prokaryotic pathogen minimal sample checklist",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Pathogen source sample)",
+          "notes": "[pathogen_source] Extracted from S | Pathogen source sample"
+        },
+        {
+          "field_name": "geographic location (region and locality)",
+          "isa_sheet": "observationunit",
+          "package_source": "plant associated",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Plant host)",
+          "notes": "[plant_host] Extracted from OU | Plant host"
+        },
+        {
+          "field_name": "genotype",
+          "isa_sheet": "observationunit",
+          "package_source": "plant associated",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: OU | Plant host)",
+          "notes": "[plant_host] Extracted from OU | Plant host"
+        },
+        {
+          "field_name": "growth conditions",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: OU | Plant host)",
+          "notes": "[plant_host] Extracted from OU | Plant host"
+        },
+        {
+          "field_name": "accession id",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Plant host)",
+          "notes": "[plant_host] Extracted from OU | Plant host"
+        },
+        {
+          "field_name": "age",
+          "isa_sheet": "observationunit",
+          "package_source": "plant associated",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: OU | Plant host)",
+          "notes": "[plant_host] Extracted from OU | Plant host"
+        },
+        {
+          "field_name": "developmental stage",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: OU | Plant host)",
+          "notes": "[plant_host] Extracted from OU | Plant host"
+        },
+        {
+          "field_name": "project name",
+          "isa_sheet": "sample",
+          "package_source": "plant associated",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Plant sample)",
+          "notes": "[plant_host] Extracted from S | Plant sample"
+        },
+        {
+          "field_name": "collection date",
+          "isa_sheet": "sample",
+          "package_source": "Crop Plant sample enhanced annotation checklist",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Plant sample)",
+          "notes": "[plant_host] Extracted from S | Plant sample"
+        },
+        {
+          "field_name": "tissue type",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Plant sample)",
+          "notes": "[plant_host] Extracted from S | Plant sample"
+        },
+        {
+          "field_name": "is infected",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Plant sample)",
+          "notes": "[plant_host] Extracted from S | Plant sample"
+        },
+        {
+          "field_name": "circadian time",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Plant sample)",
+          "notes": "[plant_host] Extracted from S | Plant sample"
+        },
+        {
+          "field_name": "time post inoculation",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Plant sample)",
+          "notes": "[plant_host] Extracted from S | Plant sample"
+        },
+        {
+          "field_name": "disease stage",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Plant sample)",
+          "notes": "[plant_host] Extracted from S | Plant sample"
+        },
+        {
+          "field_name": "dna quality",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: S | Plant sample)",
+          "notes": "[plant_host] Extracted from S | Plant sample"
+        },
+        {
+          "field_name": "rna quality",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: S | Plant sample)",
+          "notes": "[plant_host] Extracted from S | Plant sample"
+        },
+        {
+          "field_name": "broad-scale environmental context",
+          "isa_sheet": "observationunit",
+          "package_source": "miscellaneous natural or artificial environment",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "local environmental context",
+          "isa_sheet": "observationunit",
+          "package_source": "miscellaneous natural or artificial environment",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "geographic location (country and/or sea)",
+          "isa_sheet": "observationunit",
+          "package_source": "miscellaneous natural or artificial environment",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "plant developmental stage",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "plant growth conditions",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "plant provenance",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "plant accession id",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "plant generation",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "plant tissue type",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "plant is infected",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "plant circadian time",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "plant time post inoculation",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "plant disease stage",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "plant sample treatment",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "plant sampling strategy",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "consortium id",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "consortium type",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen isolation source",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen isolate",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen isolation source type",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen provenance",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen environmental medium",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen geographic location (latitude)",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen geographic location (longitude)",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen depth",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen sample treatment",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen sampling strategy",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen isolation matrix",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen generation",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen type",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "pathogen pathogenicity",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "aggregate id",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "aggregate name",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "is natural aggregation",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "aggregate version",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "aggregation strategy",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "aggregate maintenance conditions",
+          "isa_sheet": "observationunit",
+          "package_source": "POMATO",
+          "is_required": false,
+          "is_recommended": true,
+          "evidence_location": "Provided in metadata template (sheet: OU | Aggregate)",
+          "notes": "[aggregate] Extracted from OU | Aggregate"
+        },
+        {
+          "field_name": "project name",
+          "isa_sheet": "sample",
+          "package_source": "miscellaneous natural or artificial environment",
+          "is_required": false,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Aggregate sample)",
+          "notes": "[aggregate] Extracted from S | Aggregate sample"
+        },
+        {
+          "field_name": "collection date",
+          "isa_sheet": "sample",
+          "package_source": "miscellaneous natural or artificial environment",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Aggregate sample)",
+          "notes": "[aggregate] Extracted from S | Aggregate sample"
+        },
+        {
+          "field_name": "geographic location (latitude)",
+          "isa_sheet": "sample",
+          "package_source": "miscellaneous natural or artificial environment",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Aggregate sample)",
+          "notes": "[aggregate] Extracted from S | Aggregate sample"
+        },
+        {
+          "field_name": "geographic location (longitude)",
+          "isa_sheet": "sample",
+          "package_source": "miscellaneous natural or artificial environment",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Aggregate sample)",
+          "notes": "[aggregate] Extracted from S | Aggregate sample"
+        },
+        {
+          "field_name": "environmental medium",
+          "isa_sheet": "sample",
+          "package_source": "miscellaneous natural or artificial environment",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Aggregate sample)",
+          "notes": "[aggregate] Extracted from S | Aggregate sample"
+        },
+        {
+          "field_name": "sampling timepoint",
+          "isa_sheet": "sample",
+          "package_source": "POMATO",
+          "is_required": true,
+          "is_recommended": false,
+          "evidence_location": "Provided in metadata template (sheet: S | Aggregate sample)",
+          "notes": "[aggregate] Extracted from S | Aggregate sample"
+        }
+      ],
+      "ground_truth_stats": {
+        "total_required_fields": 89,
+        "total_recommended_fields": 16,
+        "total_optional_fields": 20,
+        "annotated_required": 89,
+        "annotated_recommended": 16,
+        "annotated_optional": 20
       }
     }
   ]

@@ -207,7 +207,7 @@ async def llm_select_fields_from_package(
     mandatory_fields: List[Dict[str, Any]],
     optional_fields: List[Dict[str, Any]],
     critic_feedback: Optional[Dict[str, Any]] = None
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     LLM selects relevant optional fields from a package for a specific ISA sheet.
     Mandatory fields are always included.
@@ -222,7 +222,9 @@ async def llm_select_fields_from_package(
         critic_feedback: Optional feedback
         
     Returns:
-        List of selected optional field dictionaries
+        Dict with:
+        - "selected_fields": List of selected optional field dictionaries
+        - "terms_to_search": List of term labels to search for additional fields
     """
     # Show ALL optional fields - no sampling (complete information)
     optional_sample = optional_fields
@@ -259,11 +261,32 @@ async def llm_select_fields_from_package(
 
 **Your task:** Select at least 5 relevant OPTIONAL fields for the {isa_sheet} level based on document content.
 
+**IMPORTANT - Term & Field Search Capabilities:**
+The FAIR-DS API provides two search mechanisms:
+
+1. **Term Search** (`/api/terms?label={{pattern}}`):
+   - Search for metadata terms by label or definition
+   - Supports partial matching (case-insensitive)
+   - Returns term definitions, syntax, examples, and ontology URLs
+   - Example: searching "temperature" returns "temperature", "air temperature", "water temperature", etc.
+
+2. **Field Search** (client-side across packages):
+   - Search for fields by label across all packages
+   - Supports partial matching (case-insensitive)
+   - Returns full field info including package, ISA sheet, and requirement level
+
+**When to use term/field search:**
+- If the document mentions a specific metadata term that is not in the current optional fields list
+- If you need domain-specific fields that might be in other packages
+- If you want to ensure comprehensive coverage by searching for related fields
+- If you need to find the correct terminology for a concept (e.g., "sampling date" vs "collection date")
+
 **Selection criteria:**
 1. Field is relevant to the document's content at the {isa_sheet} level
 2. Information for this field is likely present in the document
 3. Field adds value for FAIR data principles (findability, accessibility, interoperability, reusability)
 4. Balance between general and specific fields appropriate for {isa_sheet} level
+5. If a needed field is missing, you can request it by name for the system to search
 
 **Think step by step:**
 1. What is the document about?
@@ -271,6 +294,7 @@ async def llm_select_fields_from_package(
 3. Which fields match the document's domain and content at this ISA level?
 4. Which fields can actually be filled from this document?
 5. What fields are most important for findability and reusability at the {isa_sheet} level?
+6. Are there any specific metadata terms mentioned in the document that are not in the optional fields list? If so, note them for field search.
 
 **OUTPUT FORMAT - CRITICAL:**
 Return ONLY valid JSON. Do NOT include:
@@ -282,7 +306,23 @@ Return ONLY valid JSON. Do NOT include:
 Return ONLY the raw JSON object in this format:
 {{
   "selected_fields": ["field_label1", "field_label2", ...],
+  "terms_to_search": ["term1", "term2", ...],
   "reasoning": "explanation focusing on {isa_sheet} level relevance"
+}}
+
+**Fields format:**
+- `selected_fields`: List of field labels from the optional fields list above
+- `terms_to_search`: (OPTIONAL) List of terms/field names to search for if not in the current list. The system will:
+  1. Search `/api/terms?label={{term}}` for matching term definitions
+  2. Search across all packages for fields with matching labels
+- `reasoning`: Explanation of your selection
+
+**Example:**
+If the document mentions "soil temperature" but it's not in the optional fields list, you can include it in `terms_to_search`:
+{{
+  "selected_fields": ["field1", "field2", ...],
+  "terms_to_search": ["soil temperature", "pH"],
+  "reasoning": "..."
 }}
 
 Select at least 5 fields. Choose as many as needed based on document content and metadata requirements. There is no upper limit - use your judgment to ensure comprehensive coverage for the {isa_sheet} level."""
@@ -304,6 +344,17 @@ Mandatory fields (auto-included):
 Optional fields to choose from:
 {json.dumps(optional_summary, indent=2)}
 
+**Term/Field Search Available:**
+If you need a specific field that is NOT in the optional fields list above, you can request it in the `terms_to_search` array. The system will:
+1. Search `/api/terms` for matching term definitions
+2. Search across all packages for fields with matching labels
+
+Examples of when to use term/field search:
+- Document mentions "soil temperature" but it's not in the list → add to `terms_to_search`
+- Document mentions "pH" or "acidity" but it's not in the list → add to `terms_to_search`
+- You need domain-specific fields that might be in other packages → add to `terms_to_search`
+- You want to find the standard FAIR-DS terminology for a concept → add to `terms_to_search`
+
 Select at least 5 relevant optional fields for the {isa_sheet} level. There is no upper limit - choose as many as needed.
 
 **OUTPUT FORMAT - CRITICAL:**
@@ -311,7 +362,8 @@ Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
 - DO NOT include explanatory text before or after the JSON
 - DO NOT include comments or notes
 - If you must use markdown, use ```json code blocks (but raw JSON is preferred)
-- Return ONLY the JSON content, nothing else."""
+- Return ONLY the JSON content, nothing else.
+- Include `terms_to_search` array if you need to search for terms/fields not in the list above."""
 
     messages = [
         SystemMessage(content=system_prompt),
@@ -329,6 +381,7 @@ Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
     
     result = json.loads(content)
     selected_items = result.get("selected_fields", [])
+    terms_to_search = result.get("terms_to_search", [])
     
     # Extract labels (could be strings or dicts)
     selected_labels = set()
@@ -348,4 +401,11 @@ Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
     
     logger.info(f"LLM selected {len(selected_optional)} optional fields from {package_name}")
     
-    return selected_optional
+    if terms_to_search:
+        logger.info(f"LLM requested term search for: {terms_to_search}")
+    
+    # Return both selected fields and terms to search
+    return {
+        "selected_fields": selected_optional,
+        "terms_to_search": terms_to_search
+    }
