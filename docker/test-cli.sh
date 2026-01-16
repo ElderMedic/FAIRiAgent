@@ -79,9 +79,6 @@ echo "📂 Input directory: ${INPUT_DIR}"
 echo "📁 Output directory: ${OUTPUT_DIR}"
 echo "🤖 LLM Provider: ${LLM_PROVIDER:-ollama}"
 echo "🧠 Model: ${FAIRIFIER_LLM_MODEL:-qwen3:30b-a3b}"
-echo "🔌 FAIR-DS API: ${FAIR_DS_API_URL:-http://host.docker.internal:8083}"
-echo ""
-echo "⏳ Processing document..."
 echo ""
 
 # Determine Docker extra hosts for Linux compatibility
@@ -89,6 +86,14 @@ echo ""
 if [ "$(uname)" = "Linux" ]; then
     # Use --add-host to make host.docker.internal work on Linux
     DOCKER_EXTRA_HOSTS="--add-host=host.docker.internal:host-gateway"
+    
+    # On Linux, replace localhost with host.docker.internal for Docker container access
+    if [ -n "${FAIRIFIER_LLM_BASE_URL}" ] && echo "${FAIRIFIER_LLM_BASE_URL}" | grep -q "localhost"; then
+        FAIRIFIER_LLM_BASE_URL=$(echo "${FAIRIFIER_LLM_BASE_URL}" | sed 's/localhost/host.docker.internal/g')
+    fi
+    if [ -n "${FAIR_DS_API_URL}" ] && echo "${FAIR_DS_API_URL}" | grep -q "localhost"; then
+        FAIR_DS_API_URL=$(echo "${FAIR_DS_API_URL}" | sed 's/localhost/host.docker.internal/g')
+    fi
 else
     # macOS/Windows Docker Desktop supports host.docker.internal natively
     DOCKER_EXTRA_HOSTS=""
@@ -101,6 +106,13 @@ fi
 if [ -z "${FAIR_DS_API_URL}" ]; then
     FAIR_DS_API_URL="http://host.docker.internal:8083"
 fi
+
+# Display final configuration
+echo "🔌 Ollama URL: ${FAIRIFIER_LLM_BASE_URL}"
+echo "🔌 FAIR-DS API: ${FAIR_DS_API_URL}"
+echo ""
+echo "⏳ Processing document..."
+echo ""
 
 # Run Docker CLI
 docker run --rm \
