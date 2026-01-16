@@ -92,14 +92,16 @@ def _extract_json_from_markdown(content: str) -> str:
 
 
 def _fix_json_string(content: str) -> str:
-    """Fix common JSON formatting issues.
+    """Fix common JSON formatting issues, including truncated JSON.
     
     Args:
-        content: JSON string that may have formatting issues
+        content: JSON string that may have formatting issues or be truncated
         
     Returns:
         Fixed JSON string
     """
+    import re
+    
     # Remove markdown code blocks if present
     content = _extract_json_from_markdown(content)
     
@@ -111,31 +113,7 @@ def _fix_json_string(content: str) -> str:
     content = content[json_start:]
     
     # Fix common JSON syntax errors:
-    # 1. Unquoted string values: "key": value" -> "key": "value"
-    # Pattern: ": number_or_text" where text is not quoted
-    # This is tricky - we need to be careful not to break valid JSON
-    
-    # Fix pattern: "key": number text" -> "key": "number text"
-    # Match: ": followed by optional whitespace, then number, then text, then closing quote
-    import re
-    # Pattern to find unquoted string values after numbers or text
-    # Look for: ": 8 per sampling day" or ": value text"
-    # But be careful - this should only match when there's text after a number that's not quoted
-    def fix_unquoted_string_value(match):
-        key_part = match.group(1)  # The "key": part
-        value_part = match.group(2)  # The value part
-        # If value doesn't start with quote and contains text, quote it
-        value_stripped = value_part.strip()
-        if not value_stripped.startswith('"') and not value_stripped.startswith('[') and not value_stripped.startswith('{'):
-            # Check if it's a number followed by text (like "8 per sampling day")
-            # Or just unquoted text
-            if ' ' in value_stripped or any(c.isalpha() for c in value_stripped):
-                # This looks like an unquoted string, quote it
-                return f'{key_part} "{value_stripped}"'
-        return match.group(0)
-    
     # More targeted fix: look for pattern ": number text" where text is not quoted
-    # Pattern: ": 8 per sampling day" -> ": "8 per sampling day"
     content = re.sub(
         r'("([^"]+)":\s*)(\d+)\s+([a-zA-Z][^",}\]]+)"',
         r'\1"\3 \4"',
@@ -143,18 +121,15 @@ def _fix_json_string(content: str) -> str:
     )
     
     # Fix pattern: ": text" where text starts with letter and is not quoted
-    # But be careful - only fix if it's clearly a string value (contains spaces or special chars)
-    # This is more aggressive - only apply if we detect it's likely a string
-    # Pattern: ": value" where value is not quoted and contains spaces
     content = re.sub(
         r'("([^"]+)":\s*)([a-zA-Z][^",}\]]+\s+[^",}\]]+)"',
         lambda m: f'{m.group(1)}"{m.group(3)}"',
         content
     )
     
-    # Try to find the last complete JSON object
-    # Count braces to find where the main object ends
+    # Try to find a complete JSON object first
     brace_count = 0
+    bracket_count = 0
     last_valid_pos = -1
     in_string = False
     escape_next = False
@@ -182,43 +157,138 @@ def _fix_json_string(content: str) -> str:
             if brace_count == 0:
                 last_valid_pos = i + 1
                 break
+        elif char == '[':
+            bracket_count += 1
+        elif char == ']':
+            bracket_count -= 1
     
     # If we found a complete object, use it
     if last_valid_pos > 0:
         return content[:last_valid_pos]
     
-    # Otherwise, try to fix common issues
-    # Remove trailing incomplete content
-    # Find the last complete property before error
-    # Look for pattern: "key": value followed by comma or closing brace
-    # This is a simplified approach - find last complete key-value pair
+    # JSON is truncated - attempt to repair it
+    logger.debug(f"JSON appears truncated, attempting repair...")
     
-    # Try to find last complete property by looking for patterns
-    # Pattern: "key": value, or "key": value}
-    property_pattern = r'"([^"]+)":\s*([^,}]+?)(?=,\s*"|})'
-    matches = list(re.finditer(property_pattern, content))
+    # Find the last complete key-value pair by looking for patterns
+    # Look for: "key": "value", or "key": number, or "key": [...], or "key": {...}
     
-    if matches:
-        # Get the last complete property
-        last_match = matches[-1]
-        end_pos = last_match.end()
+    # Strategy 1: Find last complete property with string value ending in comma
+    last_complete_pos = -1
+    
+    # Look for pattern: "key": "value",
+    string_value_pattern = r'"[^"]+"\s*:\s*"[^"]*"\s*,'
+    for match in re.finditer(string_value_pattern, content):
+        last_complete_pos = max(last_complete_pos, match.end() - 1)  # Position after value, before comma
+    
+    # Look for pattern: "key": number,
+    number_value_pattern = r'"[^"]+"\s*:\s*[\d.eE+-]+\s*,'
+    for match in re.finditer(number_value_pattern, content):
+        last_complete_pos = max(last_complete_pos, match.end() - 1)
+    
+    # Look for pattern: "key": true/false/null,
+    literal_value_pattern = r'"[^"]+"\s*:\s*(?:true|false|null)\s*,'
+    for match in re.finditer(literal_value_pattern, content):
+        last_complete_pos = max(last_complete_pos, match.end() - 1)
+    
+    if last_complete_pos > 0:
+        # Found a complete property, truncate there and close braces/brackets
+        partial_content = content[:last_complete_pos].rstrip(',')
         
-        # Check what comes after
-        remaining = content[end_pos:].strip()
-        if remaining.startswith(','):
-            end_pos += 1
-        elif remaining.startswith('}'):
-            end_pos += 1
+        # Count unclosed braces and brackets
+        open_braces = 0
+        open_brackets = 0
+        in_str = False
+        esc_next = False
         
-        # Extract up to this point
-        partial_content = content[:end_pos]
+        for char in partial_content:
+            if esc_next:
+                esc_next = False
+                continue
+            if char == '\\':
+                esc_next = True
+                continue
+            if char == '"' and not esc_next:
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if char == '{':
+                open_braces += 1
+            elif char == '}':
+                open_braces -= 1
+            elif char == '[':
+                open_brackets += 1
+            elif char == ']':
+                open_brackets -= 1
         
-        # Close any open braces
-        open_braces = partial_content.count('{') - partial_content.count('}')
-        if open_braces > 0:
-            partial_content += '}' * open_braces
+        # Close arrays first (inner), then objects (outer)
+        partial_content += ']' * max(0, open_brackets)
+        partial_content += '}' * max(0, open_braces)
         
+        logger.debug(f"Repaired truncated JSON: added {open_brackets} ] and {open_braces} }}")
         return partial_content
+    
+    # Strategy 2: More aggressive - find any complete value and truncate there
+    # Look for last closed quote followed by comma or end
+    last_quote_comma = -1
+    for i in range(len(content) - 1, 0, -1):
+        if content[i] == ',' and i > 0:
+            # Check if this comma follows a value
+            j = i - 1
+            while j >= 0 and content[j] in ' \t\n\r':
+                j -= 1
+            if j >= 0 and content[j] in '}"0123456789]eEtrufalsn':
+                last_quote_comma = i
+                break
+    
+    if last_quote_comma > 0:
+        partial_content = content[:last_quote_comma]
+        
+        # Count and close braces/brackets
+        open_braces = partial_content.count('{') - partial_content.count('}')
+        open_brackets = partial_content.count('[') - partial_content.count(']')
+        
+        partial_content += ']' * max(0, open_brackets)
+        partial_content += '}' * max(0, open_braces)
+        
+        logger.debug(f"Aggressive repair: truncated at position {last_quote_comma}")
+        return partial_content
+    
+    # Strategy 3: Last resort - just close all open braces
+    open_braces = content.count('{') - content.count('}')
+    open_brackets = content.count('[') - content.count(']')
+    
+    # Try to find and fix truncated string
+    # If we're in the middle of a string value, close it
+    quote_count = 0
+    for i, char in enumerate(content):
+        if char == '"' and (i == 0 or content[i-1] != '\\'):
+            quote_count += 1
+    
+    if quote_count % 2 == 1:
+        # Odd number of quotes - string is truncated
+        # Find last quote and truncate before it
+        last_quote = content.rfind('"')
+        if last_quote > 0:
+            # Find the key start for this value
+            key_start = content.rfind('"', 0, last_quote - 1)
+            if key_start > 0:
+                key_start = content.rfind('"', 0, key_start)
+                if key_start > 0:
+                    # Find the comma before this key
+                    comma_pos = content.rfind(',', 0, key_start)
+                    if comma_pos > 0:
+                        partial_content = content[:comma_pos]
+                        open_braces = partial_content.count('{') - partial_content.count('}')
+                        open_brackets = partial_content.count('[') - partial_content.count(']')
+                        partial_content += ']' * max(0, open_brackets)
+                        partial_content += '}' * max(0, open_braces)
+                        logger.debug(f"Fixed truncated string by removing incomplete property")
+                        return partial_content
+    
+    # Final fallback - close what we have
+    content += ']' * max(0, open_brackets)
+    content += '}' * max(0, open_braces)
     
     return content
 

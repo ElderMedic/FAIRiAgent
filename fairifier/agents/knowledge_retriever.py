@@ -89,12 +89,12 @@ class KnowledgeRetrieverAgent(BaseAgent):
             self.log_execution(state, "   📡 GET /api/terms...")
             
             # Get packages and terms from FAIR-DS API
-            packages_response = self.fair_ds_client.get_packages()
-            terms_response = self.fair_ds_client.get_terms()
+            # Note: fair_ds_client methods already parse the API response
+            packages_metadata = self.fair_ds_client.get_packages()  # Returns List[Dict] - already parsed
+            terms = self.fair_ds_client.get_terms()  # Returns Dict[str, Dict] - already parsed
             
-            # Parse API responses
-            packages_by_sheet = FAIRDSAPIParser.parse_packages_response(packages_response)
-            terms = FAIRDSAPIParser.parse_terms_response(terms_response)
+            # Group packages by sheet (packages_metadata is already a list of fields)
+            packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(packages_metadata)
             
             # Validate we got real API data
             if not packages_by_sheet or len(packages_by_sheet) == 0:

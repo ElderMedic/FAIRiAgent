@@ -146,6 +146,31 @@ class CorrectnessEvaluator:
         fn = len(gt_field_names - extracted_field_names)
         # True Negatives: not applicable (we don't track fields that shouldn't exist)
         
+        # === NEW: Confidence-aware excess field analysis ===
+        # Separate excess fields by confidence level
+        HIGH_CONF_THRESHOLD = 0.8
+        excess_field_names = extracted_field_names - gt_field_names
+        
+        high_conf_excess = 0
+        low_conf_excess = 0
+        excess_field_details = []
+        
+        for field in extracted_fields:
+            if field['field_name'] in excess_field_names:
+                conf = field.get('confidence', 0.0)
+                status = field.get('status', '')
+                excess_field_details.append({
+                    'field_name': field['field_name'],
+                    'confidence': conf,
+                    'status': status,
+                    'is_high_conf': conf >= HIGH_CONF_THRESHOLD
+                })
+                if conf >= HIGH_CONF_THRESHOLD:
+                    high_conf_excess += 1
+                else:
+                    low_conf_excess += 1
+        
+        # === Original metrics (for comparison) ===
         # Precision: TP / (TP + FP) = correct extractions / total extractions
         precision = tp / n_extracted_fields if n_extracted_fields > 0 else 0.0
         
@@ -155,8 +180,22 @@ class CorrectnessEvaluator:
         # F1 score
         f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
         
+        # === NEW: Adjusted metrics (only penalize low-confidence excess) ===
+        # Adjusted Precision: TP / (TP + low_conf_excess)
+        # High-confidence excess fields are not penalized
+        adjusted_denominator = tp + low_conf_excess
+        adjusted_precision = tp / adjusted_denominator if adjusted_denominator > 0 else 0.0
+        
+        # Adjusted F1
+        adjusted_f1 = 2 * (adjusted_precision * recall) / (adjusted_precision + recall) if (adjusted_precision + recall) > 0 else 0.0
+        
+        # Bonus score for high-confidence excess fields (potentially valuable discoveries)
+        # Normalized by GT size to make it comparable across documents
+        discovery_bonus = high_conf_excess / n_gt_fields if n_gt_fields > 0 else 0.0
+        
         result = {
             'field_level_results': field_results,
+            'excess_field_details': excess_field_details,
             'summary_metrics': {
                 'total_ground_truth_fields': n_gt_fields,
                 'total_extracted_fields': n_extracted_fields,
@@ -166,9 +205,16 @@ class CorrectnessEvaluator:
                 'true_positives': tp,
                 'false_positives': fp,
                 'false_negatives': fn,
+                # Original metrics
                 'precision': precision,
                 'recall': recall,
-                'f1_score': f1
+                'f1_score': f1,
+                # NEW: Confidence-aware metrics
+                'high_conf_excess': high_conf_excess,
+                'low_conf_excess': low_conf_excess,
+                'adjusted_precision': adjusted_precision,
+                'adjusted_f1': adjusted_f1,
+                'discovery_bonus': discovery_bonus,
             }
         }
         
@@ -184,13 +230,15 @@ class CorrectnessEvaluator:
             if sheet_name == 'description':
                 continue
             
-            for field in sheet_data.get('fields', []):
-                fields.append({
-                    'field_name': field.get('field_name', ''),
-                    'value': field.get('value', ''),
-                    'evidence': field.get('evidence', ''),
-                    'confidence': field.get('confidence', 0.0)
-                })
+            if isinstance(sheet_data, dict):
+                for field in sheet_data.get('fields', []):
+                    fields.append({
+                        'field_name': field.get('field_name', ''),
+                        'value': field.get('value', ''),
+                        'evidence': field.get('evidence', ''),
+                        'confidence': field.get('confidence', 0.0),
+                        'status': field.get('status', ''),  # confirmed/provisional
+                    })
         
         # Fallback: check flat metadata list
         if not fields:
@@ -200,7 +248,8 @@ class CorrectnessEvaluator:
                     'field_name': field.get('field_name', ''),
                     'value': field.get('value', ''),
                     'evidence': field.get('evidence', ''),
-                    'confidence': field.get('confidence', 0.0)
+                    'confidence': field.get('confidence', 0.0),
+                    'status': field.get('status', ''),
                 })
         
         return fields

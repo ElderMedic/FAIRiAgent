@@ -50,6 +50,10 @@ class FAIRifierLangGraphApp:
         self.max_global_retries = config.max_global_retries
         self.max_step_retries = config.max_step_retries
         
+        # Multi-turn reflection configuration
+        # Each retry attempt can have multiple reflection iterations
+        self.max_reflection_iters = getattr(config, 'max_reflection_iters', 3)
+        
         # Initialize checkpointer
         self.checkpointer = MemorySaver()
         
@@ -86,7 +90,18 @@ class FAIRifierLangGraphApp:
         check_output_fn
     ) -> FAIRifierState:
         """
-        Execute an agent with internal retry logic (like old Orchestrator).
+        Execute an agent with multi-turn self-reflection and retry logic.
+        
+        Architecture:
+        - Outer loop: retry attempts (full re-execution)
+        - Inner loop: reflection iterations (iterative refinement within same attempt)
+        
+        Flow per attempt:
+        1. Agent executes (or revises if reflection_iter > 0)
+        2. Critic evaluates
+        3. If ACCEPT: done
+        4. If not ACCEPT and reflection_iters left: provide feedback, loop back to step 1
+        5. If not ACCEPT and no reflection_iters left: increment retry, start new attempt
         
         Args:
             state: Current workflow state
@@ -102,7 +117,12 @@ class FAIRifierLangGraphApp:
         if "context" not in state:
             state["context"] = {}
         
-        # Internal retry loop
+        # Initialize reflection tracking
+        if "reflection_trajectory" not in state:
+            state["reflection_trajectory"] = {}
+        state["reflection_trajectory"][agent_name] = []
+        
+        # Outer retry loop (full re-execution attempts)
         for attempt in range(1, self.max_step_retries + 2):  # +2 = initial + max_retries
             # Check global retry limit
             if self.global_retry_count >= self.max_global_retries:
@@ -126,59 +146,122 @@ class FAIRifierLangGraphApp:
             # Set retry context for agent
             state["context"]["retry_count"] = attempt - 1
             
-            # Create execution record
-            execution_record = {
-                "agent_name": agent_name,
-                "attempt": attempt,
-                "start_time": datetime.now().isoformat(),
-                "end_time": None,
-                "success": False,
-                "critic_evaluation": None
-            }
+            # Track final decision for this attempt
+            final_decision = "ACCEPT"
+            final_score = 0.0
             
-            try:
-                # Execute agent
-                state = await agent.execute(state)
-                execution_record["success"] = True
-                execution_record["end_time"] = datetime.now().isoformat()
+            # Inner reflection loop (iterative refinement within same attempt)
+            for reflection_iter in range(self.max_reflection_iters):
+                state["context"]["reflection_iter"] = reflection_iter
+                state["context"]["is_revision"] = reflection_iter > 0
                 
-            except Exception as e:
-                logger.error(f"❌ {agent_name} error: {str(e)}")
-                execution_record["success"] = False
-                execution_record["end_time"] = datetime.now().isoformat()
-                execution_record["error"] = str(e)
+                # Create execution record
+                execution_record = {
+                    "agent_name": agent_name,
+                    "attempt": attempt,
+                    "reflection_iter": reflection_iter,
+                    "start_time": datetime.now().isoformat(),
+                    "end_time": None,
+                    "success": False,
+                    "critic_evaluation": None,
+                    "is_revision": reflection_iter > 0
+                }
+                
+                try:
+                    # Log reflection iteration
+                    if reflection_iter > 0:
+                        logger.info(f"   🔄 Reflection {reflection_iter}/{self.max_reflection_iters-1}: {agent_name} refining output...")
+                    
+                    # Execute agent (initial or revision)
+                    state = await agent.execute(state)
+                    execution_record["success"] = True
+                    execution_record["end_time"] = datetime.now().isoformat()
+                    
+                except Exception as e:
+                    logger.error(f"❌ {agent_name} error (reflection {reflection_iter}): {str(e)}")
+                    execution_record["success"] = False
+                    execution_record["end_time"] = datetime.now().isoformat()
+                    execution_record["error"] = str(e)
+                    state["execution_history"].append(execution_record)
+                    
+                    # On error, break reflection loop and try next attempt
+                    final_decision = "ERROR"
+                    break
+                
+                # Add execution record
                 state["execution_history"].append(execution_record)
                 
+                # Call Critic
+                if reflection_iter == 0:
+                    logger.info(f"🔍 Critic evaluating {agent_name}...")
+                else:
+                    logger.info(f"   🔍 Critic re-evaluating after reflection {reflection_iter}...")
+                state = await self.critic.execute(state)
+                
+                # Get Critic decision
+                last_execution = state["execution_history"][-1]
+                critic_eval = last_execution.get("critic_evaluation", {})
+                final_decision = critic_eval.get("decision", "ACCEPT")
+                final_score = critic_eval.get("score", 0.0)
+                
+                # Record reflection trajectory
+                state["reflection_trajectory"][agent_name].append({
+                    "attempt": attempt,
+                    "reflection_iter": reflection_iter,
+                    "decision": final_decision,
+                    "score": final_score,
+                    "issues_count": len(critic_eval.get("issues", [])),
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                logger.info(
+                    f"   📊 Critic: {final_decision} (score: {final_score:.2f}, "
+                    f"attempt: {attempt}/{self.max_step_retries + 1}, "
+                    f"reflection: {reflection_iter}/{self.max_reflection_iters-1})"
+                )
+                
+                if final_decision == "ACCEPT":
+                    logger.info(f"✅ {agent_name} completed successfully (score {final_score:.2f} >= accept threshold)")
+                    break  # Exit reflection loop
+                
+                # Check if more reflections are allowed
+                if reflection_iter < self.max_reflection_iters - 1:
+                    # Provide feedback for next reflection iteration
+                    logger.info(
+                        f"   🔄 {agent_name} needs improvement (score: {final_score:.2f}), "
+                        f"starting reflection {reflection_iter + 1}..."
+                    )
+                    state = await self.critic.provide_feedback_to_agent(agent_name, critic_eval, state)
+                else:
+                    # Max reflections reached for this attempt
+                    logger.info(
+                        f"   ⚠️ Max reflections ({self.max_reflection_iters}) reached for attempt {attempt}, "
+                        f"final score: {final_score:.2f}"
+                    )
+            
+            # Clear reflection context
+            state["context"]["reflection_iter"] = 0
+            state["context"]["is_revision"] = False
+            
+            # Check if we should exit retry loop
+            if final_decision == "ACCEPT":
+                break  # Success, exit retry loop
+            
+            if final_decision == "ERROR":
                 if attempt <= self.max_step_retries:
-                    continue  # Retry on error
+                    continue  # Try next attempt on error
                 else:
                     break  # Max retries reached
             
-            # Add execution record
-            state["execution_history"].append(execution_record)
-            
-            # Call Critic
-            logger.info(f"🔍 Critic evaluating {agent_name}...")
-            state = await self.critic.execute(state)
-            
-            # Get Critic decision
-            last_execution = state["execution_history"][-1]
-            critic_eval = last_execution.get("critic_evaluation", {})
-            decision = critic_eval.get("decision", "ACCEPT")
-            score = critic_eval.get("score", 0.0)
-            
-            logger.info(f"📊 Critic: {decision} (score: {score:.2f}, attempt: {attempt}/{self.max_step_retries + 1})")
-            
-            if decision == "ACCEPT":
-                logger.info(f"✅ {agent_name} completed successfully (score {score:.2f} >= accept threshold)")
-                break  # Success
-            elif attempt > self.max_step_retries:
+            # Handle non-ACCEPT after all reflections
+            if attempt > self.max_step_retries:
                 # Max retries reached - check if we have usable output
                 if check_output_fn(state):
                     logger.warning(
                         f"⚠️ Max retries reached ({attempt-1}/{self.max_step_retries}) "
                         f"but {agent_name} has usable output - accepting with review flag\n"
-                        f"  Last Critic decision: {decision} (score: {score:.2f})\n"
+                        f"  Final Critic decision: {final_decision} (score: {final_score:.2f})\n"
+                        f"  Total reflections: {len(state['reflection_trajectory'][agent_name])}\n"
                         f"  Note: Workflow continues because output is usable, but needs human review"
                     )
                     state["needs_human_review"] = True
@@ -187,15 +270,16 @@ class FAIRifierLangGraphApp:
                     logger.error(
                         f"❌ Max retries reached ({attempt-1}/{self.max_step_retries}) "
                         f"with no usable output from {agent_name}\n"
-                        f"  Last Critic decision: {decision} (score: {score:.2f})\n"
+                        f"  Final Critic decision: {final_decision} (score: {final_score:.2f})\n"
+                        f"  Total reflections: {len(state['reflection_trajectory'][agent_name])}\n"
                         f"  Workflow will continue but may fail at finalization"
                     )
                     break
             else:
-                # RETRY or ESCALATE but still have retries left
+                # More retries available - prepare for next attempt
                 logger.info(
-                    f"🔄 {agent_name} needs improvement (decision: {decision}, score: {score:.2f}), "
-                    f"retrying... (attempt {attempt}/{self.max_step_retries + 1})"
+                    f"🔄 {agent_name} did not reach ACCEPT after {self.max_reflection_iters} reflections "
+                    f"(score: {final_score:.2f}), starting retry {attempt}/{self.max_step_retries}..."
                 )
                 state = await self.critic.provide_feedback_to_agent(agent_name, critic_eval, state)
         
@@ -1061,12 +1145,23 @@ Return JSON in the following format:
         # Generate execution summary
         execution_history = state.get("execution_history", [])
         
+        # Count reflection iterations
+        reflection_trajectory = state.get("reflection_trajectory", {})
+        total_reflections = sum(len(traj) for traj in reflection_trajectory.values())
+        reflections_by_agent = {
+            agent: len(traj) for agent, traj in reflection_trajectory.items()
+        }
+        
         summary = {
             "total_steps": len(execution_history),
             "successful_steps": sum(1 for e in execution_history if e.get("success")),
             "failed_steps": sum(1 for e in execution_history if not e.get("success")),
             "steps_requiring_retry": sum(1 for e in execution_history if e.get("attempt", 1) > 1),
-            "needs_human_review": state.get("needs_human_review", False)
+            "needs_human_review": state.get("needs_human_review", False),
+            # Multi-turn reflection stats
+            "total_reflections": total_reflections,
+            "reflections_by_agent": reflections_by_agent,
+            "reflection_trajectory": reflection_trajectory,
         }
         
         confidence_snapshot = aggregate_confidence(state, config)

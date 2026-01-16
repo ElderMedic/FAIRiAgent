@@ -88,6 +88,10 @@ class FAIRifierConfig:
     max_step_retries: int = 2  # Maximum retries per step before escalation
     max_global_retries: int = 5  # Maximum total retries across all steps
     
+    # Multi-turn reflection configuration
+    # Each retry attempt can have multiple reflection iterations for iterative refinement
+    max_reflection_iters: int = 3  # Maximum reflection iterations per retry attempt
+    
     # Confidence thresholds
     min_confidence_threshold: float = 0.75
     auto_approve_threshold: float = 0.90
