@@ -36,15 +36,25 @@ def run_ui():
     return subprocess.Popen(cmd)
 
 
+def show_help():
+    """Show help message."""
+    print("Usage: python run_fairifier.py [mode] [options]")
+    print("\nModes:")
+    print("  api     - Run FastAPI server")
+    print("  cli     - Run CLI interface (pass additional args after 'cli')")
+    print("  process - Shortcut for CLI process command")
+    print("\nExamples:")
+    print("  python run_fairifier.py api")
+    print("  python run_fairifier.py cli process document.pdf")
+    print("  python run_fairifier.py process document.pdf  # shortcut")
+    print("  python run_fairifier.py cli --help            # CLI help")
+
+
 def main():
     """Main launcher."""
-    if len(sys.argv) < 2:
-        print("Usage: python run_fairifier.py [api|ui|both|cli]")
-        print("  api  - Run FastAPI server only")
-        print("  ui   - Run Streamlit UI only")
-        print("  both - Run both API and UI")
-        print("  cli  - Run CLI interface")
-        sys.exit(1)
+    if len(sys.argv) < 2 or sys.argv[1] in ['-h', '--help', 'help']:
+        show_help()
+        sys.exit(0)
     
     mode = sys.argv[1].lower()
     processes = []
@@ -55,32 +65,25 @@ def main():
             processes.append(run_api())
             print("📡 API server running at http://localhost:8000")
             
-        elif mode == "ui":
-            print("🎨 Starting FAIRifier UI...")
-            processes.append(run_ui())
-            print("🌐 UI running at http://localhost:8501")
-            
-        elif mode == "both":
-            print("🚀 Starting FAIRifier API server...")
-            processes.append(run_api())
-            time.sleep(2)  # Give API time to start
-            
-            print("🎨 Starting FAIRifier UI...")
-            processes.append(run_ui())
-            
-            print("\n✅ FAIRifier is running!")
-            print("📡 API: http://localhost:8000")
-            print("🌐 UI:  http://localhost:8501")
-            print("📖 API Docs: http://localhost:8000/docs")
-            
         elif mode == "cli":
+            # Pass remaining arguments to CLI
             print("💻 Starting FAIRifier CLI...")
+            sys.argv = [sys.argv[0]] + sys.argv[2:]  # Remove 'cli' from args
+            from fairifier.cli import cli
+            cli()
+            return
+            
+        elif mode == "process":
+            # Shortcut for CLI process command
+            print("💻 Processing document...")
+            sys.argv = [sys.argv[0], 'process'] + sys.argv[2:]
             from fairifier.cli import cli
             cli()
             return
             
         else:
             print(f"❌ Unknown mode: {mode}")
+            print("\nRun 'python run_fairifier.py --help' for usage information")
             sys.exit(1)
         
         # Wait for processes

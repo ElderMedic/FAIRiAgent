@@ -33,12 +33,23 @@ docker-compose down -v
 # Build image
 docker build -t fairiagent .
 
-# Run CLI
-docker run --rm -v $(pwd)/document.pdf:/app/document.pdf fairiagent \
-  python run_fairifier.py process document.pdf
-
 # Run API (default mode)
 docker run -p 8000:8000 fairiagent
+
+# Show help
+docker run --rm fairiagent python run_fairifier.py --help
+
+# Run CLI to process a document
+docker run --rm \
+  -v $(pwd)/document.pdf:/app/document.pdf \
+  -v $(pwd)/output:/app/output \
+  fairiagent python run_fairifier.py process /app/document.pdf
+
+# Or use the process shortcut
+docker run --rm \
+  -v $(pwd)/document.pdf:/app/document.pdf \
+  -v $(pwd)/output:/app/output \
+  fairiagent python run_fairifier.py process /app/document.pdf
 ```
 
 ## Configuration

@@ -77,6 +77,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/docs 2>/dev/null || exit 1
 
 # Set default command (can be overridden)
-# CLI mode: docker run fairiagent python run_fairifier.py process document.pdf
-# API mode: docker run -p 8000:8000 fairiagent python run_fairifier.py api
+# Examples:
+#   docker run fairiagent                                    # Run API (default)
+#   docker run fairiagent python run_fairifier.py --help    # Show help
+#   docker run fairiagent python run_fairifier.py process document.pdf  # CLI
 CMD ["python", "run_fairifier.py", "api"]
