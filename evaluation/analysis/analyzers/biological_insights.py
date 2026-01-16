@@ -221,6 +221,73 @@ class BiologicalInsightsAnalyzer:
         
         return fields
     
+    def _is_valid_run(self, metadata: Dict, document_id: str) -> bool:
+        """
+        Check if a run is valid (has mandatory fields from ground truth).
+        
+        A run is considered failed if:
+        1. It has 0 extracted fields (complete failure)
+        2. It's missing core mandatory fields (e.g., investigation title, study title)
+        
+        Returns:
+            True if run is valid, False if it should be excluded from analysis
+        """
+        fields = self._extract_fields_from_metadata(metadata)
+        
+        # Rule 1: Empty runs are invalid
+        if len(fields) == 0:
+            return False
+        
+        # Rule 2: Check for core mandatory fields (must have at least some)
+        # These are fields that should ALWAYS be present in a valid extraction
+        core_mandatory = {
+            'investigation': ['investigation title', 'investigation description'],
+            'study': ['study title', 'study description'],
+        }
+        
+        field_names_by_sheet = defaultdict(set)
+        for f in fields:
+            field_names_by_sheet[f['isa_sheet']].add(f.get('field_name', '').lower())
+        
+        # Must have at least one core field from investigation OR study
+        has_investigation = any(
+            f in field_names_by_sheet.get('investigation', set()) 
+            for f in core_mandatory['investigation']
+        )
+        has_study = any(
+            f in field_names_by_sheet.get('study', set()) 
+            for f in core_mandatory['study']
+        )
+        
+        return has_investigation or has_study
+    
+    def _get_valid_runs(self, document_id: str) -> Dict[str, Dict[str, Dict]]:
+        """
+        Get only valid runs for a document, filtering out failed extractions.
+        
+        Returns:
+            Dict mapping model_name -> run_name -> metadata (only for valid runs)
+        """
+        valid_runs = {}
+        excluded_count = 0
+        
+        for model_name, model_data in self.all_runs.items():
+            if document_id not in model_data:
+                continue
+            
+            valid_runs[model_name] = {}
+            for run_name, metadata in model_data[document_id].items():
+                if self._is_valid_run(metadata, document_id):
+                    valid_runs[model_name][run_name] = metadata
+                else:
+                    excluded_count += 1
+                    logger.debug(f"Excluded failed run: {model_name}/{document_id}/{run_name}")
+        
+        if excluded_count > 0:
+            logger.info(f"Excluded {excluded_count} failed runs for {document_id}")
+        
+        return valid_runs
+    
     def _get_field_key(self, field_name: str, isa_sheet: str) -> str:
         """Generate unique key for a field."""
         return f"{isa_sheet}::{field_name.lower()}"
@@ -263,6 +330,8 @@ class BiologicalInsightsAnalyzer:
         Medium consensus fields (40-90%) = Domain-dependent metadata
         Low consensus fields (<40%) = Marginal or reporting-deficient fields
         
+        Note: Failed runs (missing mandatory fields) are excluded from analysis.
+        
         Returns:
             Dict mapping document_id to list of ConsensusResult
         """
@@ -282,11 +351,11 @@ class BiologicalInsightsAnalyzer:
             
             total_runs = 0
             
-            for model_name, model_data in self.all_runs.items():
-                if doc not in model_data:
-                    continue
-                
-                for run_name, metadata in model_data[doc].items():
+            # Use only valid runs (exclude failed extractions)
+            valid_runs = self._get_valid_runs(doc)
+            
+            for model_name, model_runs in valid_runs.items():
+                for run_name, metadata in model_runs.items():
                     total_runs += 1
                     run_id = f"{model_name}:{run_name}"
                     
@@ -377,6 +446,8 @@ class BiologicalInsightsAnalyzer:
         High disagreement = Ambiguous reporting in source documents
         Low disagreement = Clear community consensus
         
+        Note: Failed runs (missing mandatory fields) are excluded from analysis.
+        
         Returns:
             Dict mapping document_id to list of DisagreementResult
         """
@@ -384,14 +455,14 @@ class BiologicalInsightsAnalyzer:
         docs_to_analyze = [document_id] if document_id else self._get_all_documents()
         
         for doc in docs_to_analyze:
-            # Track which models include each field
+            # Track which models include each field (using valid runs only)
             field_by_model = defaultdict(lambda: defaultdict(list))
             
-            for model_name, model_data in self.all_runs.items():
-                if doc not in model_data:
-                    continue
-                
-                for run_name, metadata in model_data[doc].items():
+            # Use only valid runs (exclude failed extractions)
+            valid_runs = self._get_valid_runs(doc)
+            
+            for model_name, model_runs in valid_runs.items():
+                for run_name, metadata in model_runs.items():
                     fields = self._extract_fields_from_metadata(metadata)
                     
                     for field_data in fields:
@@ -408,7 +479,8 @@ class BiologicalInsightsAnalyzer:
             
             # Calculate disagreement scores
             doc_results = []
-            all_models = set(self.all_runs.keys())
+            # Only count models that have valid runs for this document
+            all_models = set(valid_runs.keys())
             
             for field_key, model_occurrences in field_by_model.items():
                 models_with_field = set(model_occurrences.keys())

@@ -1,0 +1,75 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.env
+.venv
+venv/
+ENV/
+env/
+
+# Output directories
+output/
+logs/
+*.log
+
+# Test files
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Evaluation data (not needed in container)
+evaluation/runs/
+evaluation/analysis/output/
+evaluation/datasets/raw/
+
+# Examples (can be mounted if needed)
+examples/
+
+# Docker files (don't copy into itself)
+docker/
+Dockerfile*
+.dockerignore
+
+# Archive
+evaluation/archive/
+.archive/
+
+# LangGraph Studio
+.langgraph_api/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp

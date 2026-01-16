@@ -14,6 +14,7 @@ Welcome to the FAIRiAgent documentation. Please select your preferred language:
 
 ### Guides
 - [**LangGraph Studio Setup**](en/guides/LANGGRAPH_STUDIO_SETUP.md): Setting up LangGraph Studio for development.
+- [**Docker Deployment**](en/guides/DOCKER_DEPLOYMENT.md): Complete guide for Docker and Docker Compose deployment.
 
 ### Development
 - [**FAIR-DS API Manual**](en/development/FAIRDS_API_MANUAL.md): Complete API reference for FAIR Data Station integration.

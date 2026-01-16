@@ -256,6 +256,20 @@ pip install -r requirements.txt
 python run_fairifier.py process examples/inputs/your_document.pdf
 ```
 
+### 🐳 Docker Quick Start
+
+```bash
+# Using Docker Compose (includes all services)
+cd docker
+docker-compose up -d
+
+# Access at:
+# - API: http://localhost:8000
+# - UI: http://localhost:8501
+```
+
+See [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md) for details.
+
 ### 📦 Installation
 
 <details>
@@ -688,6 +702,9 @@ Detailed documentation is available in the [docs/](docs/README.md) directory.
   - [Evaluation Methodology](docs/en/EVALUATION_METHODOLOGY.md) – Evaluation metrics and baseline
   - [LLM Integration Guide](docs/en/LLM_INTEGRATION_GUIDE.md) – Provider configuration
   - [LangSmith Testing Guide](docs/en/LANGSMITH_TESTING_GUIDE.md) – Testing and debugging
+- **Deployment**
+  - [Docker Deployment](docs/en/guides/DOCKER_DEPLOYMENT.md) – Docker and Docker Compose guide
+  - [docker/ README](docker/README.md) – Quick reference for Docker setup
 - **Guides**
   - [LangGraph Studio Setup](docs/en/guides/LANGGRAPH_STUDIO_SETUP.md) – Local development environment
   - [Quick Start (中文)](docs/zh/guides/QUICKSTART.md) – Quick start guide in Chinese
