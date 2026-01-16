@@ -61,6 +61,7 @@ RUN if python -c "import playwright" 2>/dev/null; then \
 # Copy application code
 COPY fairifier/ ./fairifier/
 COPY kb/ ./kb/
+COPY docs/en/development/critic_rubric.yaml ./docs/en/development/critic_rubric.yaml
 COPY run_fairifier.py .
 COPY langgraph.json .
 COPY pyproject.toml .

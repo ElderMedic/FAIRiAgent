@@ -32,6 +32,9 @@ htmlcov/
 docs/
 *.md
 !README.md
+!docs/en/
+!docs/en/development/
+!docs/en/development/critic_rubric.yaml
 
 # IDE files
 .vscode/

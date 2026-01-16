@@ -1,121 +1,57 @@
-# FAIRiAgent Docker Deployment
+# FAIRiAgent Docker
 
-Deploy FAIRiAgent using Docker and Docker Compose.
+Minimal Docker usage for CLI and API.
 
-## Files
+## Quick Start (CLI)
 
-- **`../Dockerfile`** - Main Dockerfile (supports CLI and API modes)
-- **`compose.yaml`** - Docker Compose configuration
-- **`../.dockerignore`** - Docker build ignore file
-
-## Quick Start
-
-### Using Docker Compose (Recommended)
+From the project root:
 
 ```bash
-# Start all services (API, Qdrant, GROBID)
+# 1) Copy config template
+cp env.example .env
+
+# 2) Build image (run from project root)
+docker build -t fairiagent:latest .
+
+# 3) Run CLI on a test file
+cd docker
+./test-cli.sh
+
+# Or specify a test file
+./test-cli.sh BIOREM_appendix2.pdf
+```
+
+## Quick Start (API)
+
+```bash
+# From docker directory
 cd docker
 docker-compose up -d
 
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
-
-# Stop and remove volumes
-docker-compose down -v
+# API Docs: http://localhost:8000/docs
 ```
 
-### Using Dockerfile Directly
+## Environment Variables
 
+Use the root template: `env.example`. The script loads `docker/.env` first,
+then falls back to the root `.env`.
+
+Most users only need:
 ```bash
-# Build image
-docker build -t fairiagent .
-
-# Run API (default mode)
-docker run -p 8000:8000 fairiagent
-
-# Show help
-docker run --rm fairiagent python run_fairifier.py --help
-
-# Run CLI to process a document
-docker run --rm \
-  -v $(pwd)/document.pdf:/app/document.pdf \
-  -v $(pwd)/output:/app/output \
-  fairiagent python run_fairifier.py process /app/document.pdf
-
-# Or use the process shortcut
-docker run --rm \
-  -v $(pwd)/document.pdf:/app/document.pdf \
-  -v $(pwd)/output:/app/output \
-  fairiagent python run_fairifier.py process /app/document.pdf
+LLM_PROVIDER=ollama
+FAIRIFIER_LLM_MODEL=qwen3:30b-a3b
+FAIRIFIER_LLM_BASE_URL=http://host.docker.internal:11434
 ```
 
-## Configuration
-
-### Environment Variables
-
-Create a `.env` file in the project root:
-
+For OpenAI:
 ```bash
-# LLM Configuration
-LLM_PROVIDER=ollama  # or openai, qwen, anthropic
-FAIRIFIER_LLM_MODEL=qwen3:30b
+LLM_PROVIDER=openai
+FAIRIFIER_LLM_MODEL=gpt-5.2-2025-12-11
 LLM_API_KEY=your_api_key_here
-
-# FAIR-DS API (external service)
-FAIR_DS_API_URL=http://localhost:8083
-
-# Optional services
-QDRANT_URL=http://qdrant:6333
-GROBID_URL=http://grobid:8070
-
-# LangSmith (optional)
-LANGSMITH_API_KEY=your_key
-LANGSMITH_PROJECT=fairifier
 ```
 
-## Services
+## Notes
 
-- **fairifier-api** - FastAPI server (port 8000)
-- **qdrant** - Vector database (port 6333, optional)
-- **grobid** - PDF parsing service (port 8070, optional)
-
-## Access Points
-
-After starting services:
-
-- **API**: http://localhost:8000
-- **API Docs**: http://localhost:8000/docs
-- **Qdrant Dashboard**: http://localhost:6333/dashboard
-
-## Data Persistence
-
-Docker Compose creates persistent volumes:
-- `qdrant_data` - Qdrant vector database storage
-
-## Development Mode
-
-For development with hot-reload, source code is mounted as volumes:
-
-```yaml
-volumes:
-  - ../output:/app/output
-  - ../kb:/app/kb
-```
-
-## Troubleshooting
-
-### Port Conflicts
-
-If ports are already in use, modify port mappings in `compose.yaml`:
-
-```yaml
-ports:
-  - "8001:8000"  # Use 8001 instead of 8000
-```
-
-### FAIR-DS API
-
-FAIR-DS API is expected to run externally (not in Docker Compose). If running on the host machine, use `http://host.docker.internal:8083` to access it from containers.
+- Run `docker build` from the project root (not inside `docker/`).
+- Test inputs are in `examples/inputs/`.
+- For FAIR-DS on your host machine, set `FAIR_DS_API_URL=http://host.docker.internal:8083`.

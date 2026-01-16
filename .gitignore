@@ -227,6 +227,8 @@ examples/
 # Output directories
 output/
 /output/
+docker-output/
+docker-test-output/
 
 # Environment files with secrets
 env.anthropic
@@ -236,6 +238,8 @@ env.*
 !*.template
 !*.example
 !env.example
+!.env.example
+!docker/.env.example
 
 # Grant documents (personal/sensitive)
 grant/
