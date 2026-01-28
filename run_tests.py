@@ -133,7 +133,7 @@ Examples:
     
     # Run tests based on mode
     if args.mode == 'all':
-        print_header("Running All Tests (67 tests)")
+        print_header("Running All Tests (107 tests)")
         exit_code = run_command(pytest_cmd + pytest_opts)
     
     elif args.mode == 'fast':
