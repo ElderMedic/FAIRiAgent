@@ -10,13 +10,14 @@
 set -e
 
 # Set variables
-IMAGE_NAME="fairiagent:latest"
+# IMAGE_NAME="fairiagent:latest"
+IMAGE_NAME="ghcr.io/eldermedic/fairiagent:latest"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 INPUT_DIR="${PROJECT_ROOT}/examples/inputs"
 OUTPUT_DIR="${PROJECT_ROOT}/docker-test-output"
 
-# Load .env file if it exists (check docker/.env first, then root .env)
+# Load .env file if it exists (check docker/.env first, then root .env, fallback to env.example)
 if [ -f "${SCRIPT_DIR}/.env" ]; then
     echo "📋 Loading configuration from docker/.env file..."
     export $(grep -v '^#' "${SCRIPT_DIR}/.env" | xargs)
@@ -24,6 +25,11 @@ if [ -f "${SCRIPT_DIR}/.env" ]; then
 elif [ -f "${PROJECT_ROOT}/.env" ]; then
     echo "📋 Loading configuration from root .env file..."
     export $(grep -v '^#' "${PROJECT_ROOT}/.env" | xargs)
+    echo ""
+elif [ -f "${PROJECT_ROOT}/env.example" ]; then
+    echo "⚠️  No .env file found, using env.example as fallback..."
+    echo "💡 Tip: Copy env.example to .env and customize it: cp env.example .env"
+    export $(grep -v '^#' "${PROJECT_ROOT}/env.example" | xargs)
     echo ""
 fi
 
@@ -77,22 +83,73 @@ echo "📄 Processing: ${TEST_FILE}"
 echo "📂 Input directory: ${INPUT_DIR}"
 echo "📁 Output directory: ${OUTPUT_DIR}"
 echo "🤖 LLM Provider: ${LLM_PROVIDER:-ollama}"
-echo "🧠 Model: ${FAIRIFIER_LLM_MODEL:-qwen3:30b-a3b}"
-echo "🔌 FAIR-DS API: ${FAIR_DS_API_URL:-http://host.docker.internal:8083}"
+echo "🧠 Model: ${FAIRIFIER_LLM_MODEL:-qwen3:30b}"
+echo ""
+
+# Determine Docker network configuration for Linux compatibility
+# On Linux, use --network host for better compatibility with local services
+if [ "$(uname)" = "Linux" ]; then
+    # Use host network mode on Linux for direct access to localhost services
+    # This allows containers to access services on the host (Ollama, FAIR-DS) directly
+    DOCKER_NETWORK="--network host"
+    DOCKER_EXTRA_HOSTS=""
+    
+    # With host network, use localhost URLs
+    if [ -n "${FAIRIFIER_LLM_BASE_URL}" ] && echo "${FAIRIFIER_LLM_BASE_URL}" | grep -q "host.docker.internal"; then
+        FAIRIFIER_LLM_BASE_URL=$(echo "${FAIRIFIER_LLM_BASE_URL}" | sed 's/host.docker.internal/localhost/g')
+    fi
+    if [ -n "${FAIRIFIER_LLM_BASE_URL}" ] && echo "${FAIRIFIER_LLM_BASE_URL}" | grep -q "localhost"; then
+        # Keep localhost for host network mode
+        :
+    fi
+    if [ -n "${FAIR_DS_API_URL}" ] && echo "${FAIR_DS_API_URL}" | grep -q "host.docker.internal"; then
+        FAIR_DS_API_URL=$(echo "${FAIR_DS_API_URL}" | sed 's/host.docker.internal/localhost/g')
+    fi
+    if [ -n "${FAIR_DS_API_URL}" ] && echo "${FAIR_DS_API_URL}" | grep -q "localhost"; then
+        # Keep localhost for host network mode
+        :
+    fi
+else
+    # macOS/Windows Docker Desktop supports host.docker.internal natively
+    DOCKER_NETWORK=""
+    DOCKER_EXTRA_HOSTS=""
+fi
+
+# Set default URLs if not provided
+if [ -z "${FAIRIFIER_LLM_BASE_URL}" ]; then
+    if [ "$(uname)" = "Linux" ]; then
+        FAIRIFIER_LLM_BASE_URL="http://localhost:11434"
+    else
+        FAIRIFIER_LLM_BASE_URL="http://host.docker.internal:11434"
+    fi
+fi
+if [ -z "${FAIR_DS_API_URL}" ]; then
+    if [ "$(uname)" = "Linux" ]; then
+        FAIR_DS_API_URL="http://localhost:8083"
+    else
+        FAIR_DS_API_URL="http://host.docker.internal:8083"
+    fi
+fi
+
+# Display final configuration
+echo "🔌 Ollama URL: ${FAIRIFIER_LLM_BASE_URL}"
+echo "🔌 FAIR-DS API: ${FAIR_DS_API_URL}"
 echo ""
 echo "⏳ Processing document..."
 echo ""
 
 # Run Docker CLI
 docker run --rm \
+    ${DOCKER_NETWORK} \
+    ${DOCKER_EXTRA_HOSTS} \
     -v "${INPUT_DIR}:/app/test-inputs:ro" \
     -v "${OUTPUT_DIR}:/app/output" \
     -e LLM_PROVIDER="${LLM_PROVIDER:-ollama}" \
-    -e FAIRIFIER_LLM_MODEL="${FAIRIFIER_LLM_MODEL:-qwen3:30b-a3b}" \
-    -e FAIRIFIER_LLM_BASE_URL="${FAIRIFIER_LLM_BASE_URL:-http://host.docker.internal:11434}" \
+    -e FAIRIFIER_LLM_MODEL="${FAIRIFIER_LLM_MODEL:-qwen3:30b}" \
+    -e FAIRIFIER_LLM_BASE_URL="${FAIRIFIER_LLM_BASE_URL}" \
     -e LLM_API_KEY="${LLM_API_KEY:-}" \
     -e LANGSMITH_API_KEY="${LANGSMITH_API_KEY:-}" \
-    -e FAIR_DS_API_URL="${FAIR_DS_API_URL:-http://host.docker.internal:8083}" \
+    -e FAIR_DS_API_URL="${FAIR_DS_API_URL}" \
     ${IMAGE_NAME} \
     python run_fairifier.py process "/app/test-inputs/${TEST_FILE}"
 
