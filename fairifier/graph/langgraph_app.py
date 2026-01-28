@@ -10,6 +10,7 @@ This implements a proper LangGraph application where:
 
 import logging
 import json
+import os
 from typing import Dict, Any, Literal, Optional, Tuple
 from datetime import datetime
 from langsmith import traceable
@@ -50,14 +51,69 @@ class FAIRifierLangGraphApp:
         self.max_global_retries = config.max_global_retries
         self.max_step_retries = config.max_step_retries
         
-        # Initialize checkpointer
-        self.checkpointer = MemorySaver()
+        # Initialize checkpointer based on configuration
+        self._checkpointer_cm = None  # Store context manager for cleanup
+        self._checkpointer_factory = None  # For AsyncSqliteSaver
+        self.checkpointer = self._initialize_checkpointer()
         
         # Build the graph
         graph_structure = self._build_graph_structure()
-        self.workflow = graph_structure.compile(checkpointer=self.checkpointer)
+        # For AsyncSqliteSaver, compile without checkpointer initially
+        # We'll handle it at invocation time
+        if self._checkpointer_factory is not None:
+            # Async checkpointer - compile without it, handle at invocation
+            self.workflow = graph_structure.compile()
+            logger.info("Workflow compiled (async checkpointer will be managed at invocation time)")
+        else:
+            # Sync checkpointer or none - compile normally
+            self.workflow = graph_structure.compile(checkpointer=self.checkpointer)
         
         logger.info("✅ LangGraph app initialized")
+    
+    def close(self):
+        """Explicitly close checkpointer and cleanup resources.
+        
+        Call this method to properly cleanup SQLite connections when done.
+        Recommended for long-running applications (API, UI).
+        
+        Note: For AsyncSqliteSaver, LangGraph manages the lifecycle automatically.
+        This is mainly for SqliteSaver (sync) context managers.
+        """
+        if self._checkpointer_cm is not None:
+            try:
+                # Only try to close if it's a synchronous context manager
+                # AsyncSqliteSaver is managed by LangGraph
+                if hasattr(self._checkpointer_cm, '__exit__'):
+                    self._checkpointer_cm.__exit__(None, None, None)
+                    logger.info("Checkpointer resources cleaned up")
+                self._checkpointer_cm = None
+            except Exception as e:
+                logger.warning(f"Error during checkpointer cleanup: {e}")
+    
+    def __del__(self):
+        """Cleanup checkpointer context manager on instance deletion.
+        
+        Ensures proper cleanup of SQLite connections when using SqliteSaver.
+        For AsyncSqliteSaver, LangGraph manages the lifecycle.
+        """
+        if self._checkpointer_cm is not None:
+            try:
+                # Only try to close if it's a synchronous context manager
+                if hasattr(self._checkpointer_cm, '__exit__'):
+                    self._checkpointer_cm.__exit__(None, None, None)
+                    logger.debug("Checkpointer context manager cleaned up in __del__")
+            except Exception as e:
+                # Suppress exceptions during cleanup to avoid issues in destructor
+                logger.debug(f"Error during checkpointer cleanup in __del__: {e}")
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - cleanup resources."""
+        self.close()
+        return False
     
     def _initialize_mineru_client(self) -> Optional[MinerUClient]:
         """Instantiate MinerU client if configuration is enabled."""
@@ -77,6 +133,76 @@ class FAIRifierLangGraphApp:
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Failed to initialize MinerU client: %s", exc)
         return None
+    
+    def _initialize_checkpointer(self):
+        """Initialize checkpointer based on configuration.
+        
+        Returns:
+            Checkpointer instance or None based on config.checkpointer_backend
+        """
+        backend = config.checkpointer_backend.lower()
+        
+        if backend == "none":
+            logger.info("Checkpointer: None (stateless mode)")
+            return None
+        
+        elif backend == "memory":
+            logger.warning(
+                "Checkpointer: MemorySaver (in-memory, dev/test only). "
+                "NOT for production - state will be lost on process exit."
+            )
+            return MemorySaver()
+        
+        elif backend == "sqlite":
+            try:
+                # Try AsyncSqliteSaver for async workflow support
+                try:
+                    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+                    
+                    db_path = str(config.checkpoint_db_path)
+                    config.checkpoint_db_path.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    # Store the factory function, not the context manager
+                    # We'll use it at invocation time in async context
+                    self._checkpointer_factory = lambda: AsyncSqliteSaver.from_conn_string(db_path)
+                    
+                    logger.info(f"Checkpointer: AsyncSqliteSaver (persistent) at {db_path}")
+                    logger.info("Note: Async checkpointer will be managed at workflow invocation time")
+                    return None  # Will be created at invocation time
+                    
+                except ImportError:
+                    logger.warning("aiosqlite not available, falling back to sync SqliteSaver")
+                    # Fallback to sync SqliteSaver
+                    from langgraph.checkpoint.sqlite import SqliteSaver
+                    
+                    db_path = str(config.checkpoint_db_path)
+                    config.checkpoint_db_path.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    checkpointer_cm = SqliteSaver.from_conn_string(db_path)
+                    checkpointer = checkpointer_cm.__enter__()
+                    self._checkpointer_cm = checkpointer_cm
+                    
+                    logger.info(f"Checkpointer: SqliteSaver (persistent, sync fallback) at {db_path}")
+                    return checkpointer
+                    
+            except ImportError as exc:
+                logger.error(
+                    "Failed to import SQLite checkpointer. "
+                    "Install: pip install langgraph-checkpoint-sqlite aiosqlite"
+                )
+                raise ImportError(
+                    "langgraph-checkpoint-sqlite and aiosqlite required for sqlite checkpointer. "
+                    "Install with: pip install langgraph-checkpoint-sqlite aiosqlite"
+                ) from exc
+            except Exception as exc:
+                logger.error(f"Failed to initialize SQLite checkpointer: {exc}")
+                raise
+        
+        else:
+            raise ValueError(
+                f"Invalid checkpointer_backend: {backend}. "
+                f"Must be 'none', 'memory', or 'sqlite'"
+            )
     
     async def _execute_agent_with_retry(
         self,
@@ -1349,6 +1475,18 @@ Return JSON in the following format:
             from pathlib import Path
             doc_name = Path(document_path).stem
             
+            # FAIR-compliant LangSmith project name
+            if config.enable_langsmith and getattr(config, 'langsmith_use_fair_naming', True):
+                from fairifier.utils.langsmith_helper import generate_fair_langsmith_project_name
+                fair_project = generate_fair_langsmith_project_name(
+                    environment=None,
+                    model_provider=config.llm_provider,
+                    model_name=config.llm_model,
+                    project_id=project_id,
+                )
+                os.environ["LANGCHAIN_PROJECT"] = fair_project
+                logger.info(f"📊 LangSmith: {fair_project}")
+            
             # Build descriptive run name with key configs
             mineru_status = "MinerU" if config.mineru_enabled else "PyMuPDF"
             run_name = f"{doc_name} | {config.llm_provider}:{config.llm_model} | {mineru_status}"
@@ -1357,6 +1495,7 @@ Return JSON in the following format:
             langsmith_metadata = {
                 "document": doc_name,
                 "document_path": document_path,
+                "project_id": project_id,
                 "workflow_type": "langgraph",
                 "llm_provider": config.llm_provider,
                 "llm_model": config.llm_model,
@@ -1388,7 +1527,19 @@ Return JSON in the following format:
                 # Default is 25, we increase to 50 to support up to ~8 retries per agent
                 "recursion_limit": 50
             }
-            result = await self.workflow.ainvoke(initial_state, config=config_dict)
+            
+            # Handle async checkpointer context if needed
+            if self._checkpointer_factory is not None:
+                # Use AsyncSqliteSaver with async context
+                logger.debug("Using AsyncSqliteSaver with async context management")
+                async with self._checkpointer_factory() as checkpointer:
+                    # Recompile workflow with the checkpointer instance
+                    graph_structure = self._build_graph_structure()
+                    workflow_with_cp = graph_structure.compile(checkpointer=checkpointer)
+                    result = await workflow_with_cp.ainvoke(initial_state, config=config_dict)
+            else:
+                # Use pre-compiled workflow (sync checkpointer or none)
+                result = await self.workflow.ainvoke(initial_state, config=config_dict)
             
             logger.info(f"✅ LangGraph workflow completed (project: {project_id})")
             

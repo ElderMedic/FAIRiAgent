@@ -31,7 +31,6 @@ This will start:
 - **FAIRiAgent API** (http://localhost:8000)
 - **FAIRiAgent UI** (http://localhost:8501)
 - **Qdrant** vector database (optional)
-- **GROBID** PDF parser (optional)
 
 ### Using Dockerfile Only
 
@@ -80,7 +79,6 @@ FAIR_DS_API_URL=http://host.docker.internal:8083
 
 # Optional Services
 QDRANT_URL=http://qdrant:6333
-GROBID_URL=http://grobid:8070
 
 # MinerU (optional PDF converter)
 MINERU_ENABLED=false
@@ -135,16 +133,11 @@ services:
    - Vector database for embeddings
    - Used for future RAG features
 
-4. **grobid** (Port 8070, Optional)
-   - PDF parsing service
-   - Extracts structured text from PDFs
-
 ### Network
 
 All services run on the default Docker network. Services can communicate using their service names:
 - `http://fairifier-api:8000`
 - `http://qdrant:6333`
-- `http://grobid:8070`
 
 ## Volumes
 

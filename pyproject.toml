@@ -4,14 +4,14 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "fairifier"
-version = "1.0.0.20251206rc"
+version = "1.0.1"
 description = "FAIRifier Agentic Framework for automated FAIR metadata generation"
 authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
 packages = [{include = "fairifier"}]
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = ">=3.9,<3.14"
 # Core agentic framework
 langgraph = "^0.0.65"
 langchain = "^0.1.0"
@@ -27,8 +27,6 @@ qdrant-client = "^1.7.0"
 rdflib = "^7.0.0"
 pyshacl = "^0.25.0"
 pyld = "^2.0.3"
-# Document parsing
-grobid-client = "^0.8.0"
 pytesseract = "^0.3.10"
 pymupdf = "^1.23.0"
 # RO-Crate

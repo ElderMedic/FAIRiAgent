@@ -78,44 +78,74 @@ Tests for MinerU document conversion service integration.
 
 ## Running Tests
 
-### Run All Tests
+### Quick Start (Unified Test Script)
+
+We provide a unified test runner script for convenience:
+
+```bash
+# Run all tests (67 tests)
+./run_tests.sh all
+
+# Run fast tests only (48 unit tests, ~6s)
+./run_tests.sh fast
+
+# Run integration tests only (19 tests, requires services, ~25s)
+./run_tests.sh integration
+
+# Run with coverage report
+./run_tests.sh coverage
+
+# Run specific test file
+./run_tests.sh specific test_critic_utils.py
+
+# Show help
+./run_tests.sh --help
+```
+
+### Direct Pytest Commands
+
+#### Run All Tests
 ```bash
 pytest tests/ -v
 ```
 
-### Run Only Fast Tests (Exclude Integration/Slow)
+#### Run Only Fast Tests (Exclude Integration/Slow)
 ```bash
 pytest tests/ -v -m "not integration and not slow"
 ```
 
-### Run Integration Tests Only (Requires External Services)
+#### Run Integration Tests Only (Requires External Services)
 ```bash
 # Requires FAIR-DS API and MinerU server
 pytest tests/ -v -m "integration"
 ```
 
-### Run Specific Test File
+#### Run Specific Test File
 ```bash
 pytest tests/test_confidence_aggregator.py -v
 pytest tests/test_fair_data_station.py -v  # Integration tests
 ```
 
-### Run Specific Test Class
+#### Run Specific Test Class
 ```bash
 pytest tests/test_mineru_client.py::TestMinerUCLI -v
 ```
 
-### Run with Coverage
+#### Run with Coverage
 ```bash
-pytest tests/ --cov=fairifier --cov-report=html
+pytest tests/ --cov=fairifier --cov-report=html --cov-report=term-missing
 ```
 
 ## Test Statistics
 
-- **Total Tests**: 67
-- **Test Files**: 7
-- **Integration Tests**: 13 (FAIR-DS API, MinerU)
-- **Unit Tests**: 54
+- **Total Tests**: 67 (✅ All passing)
+- **Test Files**: 8 (7 in tests/ + conftest.py)
+- **Integration Tests**: 19 (FAIR-DS API: 13, MinerU: 6)
+- **Unit Tests**: 48 (fast, no external dependencies)
+- **Execution Time**: 
+  - Fast tests: ~3s (unit tests only)
+  - Integration tests: ~25s (requires services)
+  - All tests: ~16s (with services running)
 
 ## Test Coverage by Component
 
@@ -126,6 +156,14 @@ pytest tests/ --cov=fairifier --cov-report=html
 - ✅ FAIR-DS API Client - Real Integration (13 tests)
 - ✅ Config Saver (13 tests)
 - ✅ MinerU Client (13 tests)
+
+## Test Status Summary
+
+Last run: 2025-01-28
+- Python version: 3.13.7
+- Pytest version: 9.0.1
+- Environment: FAIRiAgent mamba environment
+- Status: ✅ **All 67 tests passing**
 
 ## Test Markers
 

@@ -10,6 +10,7 @@
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-green.svg)](https://langchain-ai.github.io/langgraph/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![FAIR-DS](https://img.shields.io/badge/FAIR--DS-Compatible-orange.svg)](https://fairds.systemsbiology.nl/)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ElderMedic/FAIRiAgent)
 
 [🚀 Quick Start](#-quick-start) • [📖 Documentation](#-documentation) • [🎨 Web UI](#-web-ui-features) • [🤝 Contributing](#-contributing)
 
@@ -104,6 +105,25 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 - 💬 **Real-time Streaming**: Chat-like interface with live progress updates
 - ⚙️ **Configuration Management**: Save and manage runtime configurations
 - 📋 **Runtime Config Export**: Automatic export of input, .env, and runtime configurations
+
+## 📁 Repository Structure
+
+```
+FAIRiAgent/
+├── fairifier/           # Core framework
+│   ├── agents/         # Multi-agent implementations
+│   ├── graph/          # LangGraph workflow
+│   ├── services/       # External service clients
+│   ├── utils/          # Utilities and helpers
+│   └── apps/           # Web UI and API
+├── tests/              # Test suite (67 tests ✅)
+├── kb/                 # Knowledge base
+├── docs/               # Documentation
+├── run_tests.sh/py     # Test runners
+└── .memory/            # Temporary files (gitignored)
+```
+
+> **📝 Note**: `.memory/` contains temporary reports and is not tracked by git. See `.memory/README.md`.
 
 ## 🏗️ Architecture
 
@@ -213,7 +233,7 @@ flowchart TD
 - 🔄 **Retry Logic**: Up to 2 retry attempts per agent, with Critic feedback guiding improvements
 - 🎯 **Conditional Routing**: Dynamic workflow based on Critic decisions (ACCEPT/RETRY/ESCALATE)
 - 📊 **Execution Tracking**: Full trajectory of steps, retries, and scores
-- 💾 **State Persistence**: LangGraph checkpointer for workflow state management
+- 💾 **State Persistence**: Configurable LangGraph checkpointer (none/memory/sqlite) for workflow state management and resume support
 
 **Retry Mechanism Details:**
 - **Retry Attempts**: Up to 2 retries per agent (configurable via `max_step_retries`)
@@ -353,6 +373,36 @@ FAIR_DS_API_URL=http://localhost:8083
 # LangSmith (optional)
 LANGSMITH_API_KEY=your_key
 LANGSMITH_PROJECT=fairifier-testing
+
+# Checkpointer (workflow state persistence)
+# Options: none (stateless), memory (dev/test only), sqlite (production)
+CHECKPOINTER_BACKEND=sqlite  # Default: sqlite
+# CHECKPOINT_DB_PATH=output/.checkpoints.db  # Optional: custom DB path
+```
+
+**Checkpointer modes:**
+- `none`: Stateless, no resume support (for one-shot workflows)
+- `memory`: In-memory only, **dev/test only** (state lost on exit)
+- `sqlite`: Persistent storage, enables `resume` command (production-ready)
+
+**Resource management:**
+```python
+# Option 1: Context manager (recommended for scripts)
+with FAIRifierLangGraphApp() as workflow:
+    result = await workflow.run(document_path, project_id)
+    # Automatic cleanup on exit
+
+# Option 2: Manual cleanup (recommended for API/long-running services)
+workflow = FAIRifierLangGraphApp()
+try:
+    result = await workflow.run(document_path, project_id)
+finally:
+    workflow.close()  # Explicit cleanup of SQLite connections
+
+# Option 3: Garbage collection (automatic, but timing not guaranteed)
+workflow = FAIRifierLangGraphApp()
+result = await workflow.run(document_path, project_id)
+# Will cleanup when garbage collected (not recommended for production)
 ```
 
 **Web UI Configuration:**
@@ -386,7 +436,7 @@ FAIRiAgent generates structured, evidence-based metadata in FAIR-DS compatible f
 
 ```json
 {
-  "fairifier_version": "V1.0.0.20251206_rc",
+  "fairifier_version": "V1.0.1",
   "generated_at": "2025-01-27T10:30:00",
   "document_source": "paper.pdf",
   "overall_confidence": 0.85,
@@ -568,28 +618,34 @@ Core dependencies:
 ## 📋 CLI Commands
 
 ```bash
-# Process document
+# Process document and generate FAIR metadata
 python run_fairifier.py process <document> [options]
 
-# Start web UI
-python run_fairifier.py ui
+# Launch Web UI (Streamlit by default; use --gradio for Gradio)
+python run_fairifier.py ui [--gradio] [--port PORT]
 
-# Check status
+# Show status for a run
 python run_fairifier.py status <project-id>
 
-# Show configuration
+# Show current configuration
 python run_fairifier.py config-info
 
-# Validate document
+# Pre-flight: document (size/format) + environment (MinerU, FAIR-DS, LLM)
 python run_fairifier.py validate-document <document>
+python run_fairifier.py validate-document --env-only   # environment only, no document
+
+# Check MinerU service availability
+python run_fairifier.py check-mineru [-v]
 ```
 
-**Options:**
-- `--output-dir, -o`: Specify output directory
-- `--project-id, -p`: Custom project ID
-- `--env-file, -e`: Use custom .env file
-- `--json-log`: Enable JSON line logging (default: True)
-- `--verbose, -v`: Show detailed processing steps
+**Process options:**
+- `--output-dir, -o`: Output directory for artifacts (default: `output/<timestamp>`)
+- `--project-id, -p`: Project ID for this run (default: auto-generated)
+- `--env-file, -e`: Path to .env file for this run (optional)
+- `--json-log`: Write JSONL processing log (default: True)
+- `--verbose, -v`: Print detailed processing steps
+
+**General:** Run `python run_fairifier.py --help` for full usage; run `python run_fairifier.py COMMAND --help` for command-specific options.
 
 ## 🎨 Web UI Features
 
@@ -624,6 +680,56 @@ python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf \
 # Test web UI
 python run_fairifier.py ui
 # Then use the example file option in the UI
+```
+
+### 🧬 Running Unit Tests
+
+We provide **67 comprehensive tests** covering all components:
+
+```bash
+# Run all tests (Bash)
+./run_tests.sh all
+
+# Run all tests (Python, cross-platform)
+python run_tests.py all
+
+# Run fast unit tests only (~3s, no external services needed)
+./run_tests.sh fast
+python run_tests.py fast
+
+# Run integration tests only (~25s, requires FAIR-DS + MinerU)
+./run_tests.sh integration
+python run_tests.py integration
+
+# Generate coverage report
+./run_tests.sh coverage
+python run_tests.py coverage
+
+# Run specific test file
+./run_tests.sh specific test_critic_utils.py
+python run_tests.py specific test_critic_utils.py
+```
+
+**Test Statistics:**
+- ✅ 67 tests (48 unit + 19 integration)
+- ✅ All tests passing
+- ⚡ Fast tests: ~3s
+- 📊 Coverage: See `tests/README.md` for details
+- 📝 Reports: Saved to `.memory/test-reports/` (not in git)
+
+**Direct pytest commands:**
+```bash
+# All tests
+pytest tests/ -v
+
+# Fast tests only
+pytest tests/ -v -m "not integration and not slow"
+
+# Integration tests
+pytest tests/ -v -m "integration"
+
+# With coverage
+pytest tests/ --cov=fairifier --cov-report=html
 ```
 
 ### 🔍 Check MinerU Service
@@ -755,7 +861,7 @@ MIT License - Free for academic and research use.
 
 <div align="center">
 
-**🎯 FAIRiAgent V1.0.0.20251206_rc**  
+**🎯 FAIRiAgent V1.0.1**  
 *LangGraph-powered • Web UI-enabled • Standards-compliant*
 
 [⬆ Back to Top](#-fairiagent)
@@ -770,7 +876,7 @@ MIT License - Free for academic and research use.
 
 ---
 
-## 🔄 Recent Updates (V1.0.0.20251206_rc)
+## 🔄 Recent Updates (V1.0.1)
 
 - ✅ **LangGraph Integration**: Full LangGraph workflow with state persistence
 - ✅ **Streamlit Web UI**: Interactive web interface with real-time streaming

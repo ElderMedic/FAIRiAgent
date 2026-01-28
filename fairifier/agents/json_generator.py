@@ -276,7 +276,7 @@ class JSONGeneratorAgent(BaseAgent):
         
         # Build ISA-structured output - NO HARDCODED PACKAGE NAMES
         output = {
-            "fairifier_version": "V1.0.0.20251206_rc",
+            "fairifier_version": "V1.0.1",
             "generated_at": datetime.now().isoformat(),
             "document_source": state.get("document_path", ""),
             "overall_confidence": round(overall_confidence, 3),
@@ -309,14 +309,8 @@ class JSONGeneratorAgent(BaseAgent):
                 }
             },
             
-            # Document information summary
-            "document_info": {
-                "title": doc_info.get("title"),
-                "abstract": doc_info.get("abstract"),
-                "authors": doc_info.get("authors", []),
-                "keywords": doc_info.get("keywords", []),
-                "research_domain": doc_info.get("research_domain")
-            },
+            # Document information summary (compact view; derived from flexible LLM extraction)
+            "document_info": self._build_document_info_compact(doc_info),
             
             # Statistics
             "statistics": {
@@ -346,7 +340,94 @@ class JSONGeneratorAgent(BaseAgent):
                 )
         
         return output
-    
+
+    def _build_document_info_compact(self, doc_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build the compact document_info block (title, abstract, authors, keywords, research_domain)
+        from the flexible document_info returned by DocumentParser/LLM.
+
+        The LLM may return different keys (e.g. document_type, scientific_domain, key_information,
+        metadata_for_fair_principles) instead of title/abstract/authors. This method maps those
+        into the fixed compact schema so the output JSON always has a populated document_info.
+        """
+        if not doc_info:
+            return {
+                "title": None,
+                "abstract": None,
+                "authors": [],
+                "keywords": [],
+                "research_domain": None
+            }
+
+        # Title: direct or from common variants / first short key_information item
+        title = (
+            doc_info.get("title")
+            or doc_info.get("investigation_title")
+            or (doc_info.get("metadata_for_fair_principles") or {}).get("title") if isinstance(doc_info.get("metadata_for_fair_principles"), dict) else None
+        )
+        if not title and isinstance(doc_info.get("key_information"), list):
+            for item in doc_info["key_information"]:
+                if isinstance(item, str) and 10 <= len(item) <= 200:
+                    title = item
+                    break
+
+        # Abstract: direct or from summary/description / first long key_information string
+        abstract = (
+            doc_info.get("abstract")
+            or doc_info.get("summary")
+            or doc_info.get("description")
+            or doc_info.get("investigation_description")
+            or (doc_info.get("metadata_for_fair_principles") or {}).get("abstract") if isinstance(doc_info.get("metadata_for_fair_principles"), dict) else None
+        )
+        if not abstract and isinstance(doc_info.get("key_information"), list):
+            for item in doc_info["key_information"]:
+                if isinstance(item, str) and len(item) > 200:
+                    abstract = item
+                    break
+
+        # Authors: direct list or personnel/consortium (normalize to list of strings)
+        authors = doc_info.get("authors")
+        if not authors and doc_info.get("personnel"):
+            authors = doc_info["personnel"] if isinstance(doc_info["personnel"], list) else [doc_info["personnel"]]
+        if not authors and doc_info.get("consortium"):
+            raw = doc_info["consortium"]
+            authors = raw if isinstance(raw, list) else [raw]
+        if authors is None:
+            authors = []
+        if not isinstance(authors, list):
+            authors = [authors] if authors else []
+        authors = [str(a) for a in authors if a]
+
+        # Keywords: direct or use key_information if list of short strings
+        keywords = doc_info.get("keywords")
+        if not keywords and isinstance(doc_info.get("key_information"), list):
+            short_strings = [x for x in doc_info["key_information"] if isinstance(x, str) and 0 < len(x) <= 150]
+            if short_strings:
+                keywords = short_strings[:20]
+        if keywords is None:
+            keywords = []
+        if not isinstance(keywords, list):
+            keywords = [keywords] if keywords else []
+
+        # Research domain: direct or from scientific_domain (dict with primary_field / subfields)
+        research_domain = doc_info.get("research_domain") or doc_info.get("domain")
+        if not research_domain and isinstance(doc_info.get("scientific_domain"), dict):
+            sd = doc_info["scientific_domain"]
+            primary = sd.get("primary_field") or sd.get("domain")
+            subfields = sd.get("subfields") or []
+            if primary:
+                research_domain = primary if not subfields else f"{primary} ({', '.join(subfields[:5])})"
+        if not research_domain and isinstance(doc_info.get("scientific_domain"), str):
+            research_domain = doc_info["scientific_domain"]
+
+        return {
+            "title": title or None,
+            "abstract": abstract or None,
+            "authors": authors,
+            "keywords": keywords,
+            "research_domain": research_domain or None
+        }
+
     def _group_fields_by_isa_sheet(
         self, 
         fields: List[MetadataField]

@@ -4,6 +4,8 @@ langchain-community>=0.0.38
 langchain-ollama>=1.0.0
 langchain-openai>=1.0.0
 langgraph>=0.0.65
+langgraph-checkpoint-sqlite>=1.0.0
+aiosqlite>=0.22.0
 langsmith>=0.1.0
 
 # Document processing

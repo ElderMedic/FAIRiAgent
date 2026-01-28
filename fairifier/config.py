@@ -117,7 +117,6 @@ class FAIRifierConfig:
     # FAIR Data Station API URL (default: local)
     fair_ds_api_url: Optional[str] = "http://localhost:8083"
     qdrant_url: Optional[str] = None  # Vector database (optional)
-    grobid_url: Optional[str] = None  # PDF parsing service (optional)
     
     # Document conversion (MinerU)
     mineru_enabled: bool = False
@@ -128,9 +127,17 @@ class FAIRifierConfig:
     
     # LangSmith configuration
     langsmith_api_key: Optional[str] = None
-    langsmith_project: str = "fairifier"
+    # Default project name (will be enhanced with FAIR naming scheme)
+    # FAIR naming: fairifier-{environment}-{provider}-{model}-{timestamp}
+    langsmith_project: str = "fairifier"  # Base name, enhanced at runtime
     langsmith_endpoint: str = "https://api.smith.langchain.com"
-    enable_langsmith: bool = True  # Enabled by default
+    enable_langsmith: bool = False  # Off by default; set True when LANGSMITH_API_KEY is set
+    langsmith_use_fair_naming: bool = True  # Use FAIR-compliant naming scheme
+    
+    # Checkpointer configuration
+    # Options: "none" (stateless), "memory" (dev/test only), "sqlite" (production)
+    checkpointer_backend: str = "sqlite"
+    checkpoint_db_path: Path = project_root / "output" / ".checkpoints.db"
     
     def __post_init__(self):
         """Create necessary directories."""
@@ -138,6 +145,10 @@ class FAIRifierConfig:
         self.kb_path.mkdir(exist_ok=True)
         self.schemas_path.mkdir(exist_ok=True)
         self.shapes_path.mkdir(exist_ok=True)
+        
+        # Ensure checkpoint DB parent directory exists if using sqlite
+        if self.checkpointer_backend == "sqlite":
+            self.checkpoint_db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def apply_env_overrides(config_instance: FAIRifierConfig):
@@ -155,20 +166,29 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("QDRANT_URL"):
         config_instance.qdrant_url = os.getenv("QDRANT_URL")
 
-    if os.getenv("GROBID_URL"):
-        config_instance.grobid_url = os.getenv("GROBID_URL")
-
     if os.getenv("LANGSMITH_API_KEY"):
         config_instance.langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
         config_instance.enable_langsmith = True
 
-    # Auto-enable tracing environment variables if API key is set
+    # LANGSMITH_DISABLE=1 or LANGCHAIN_TRACING_V2=false: disable tracing (default for production)
+    if os.getenv("LANGSMITH_DISABLE", "").strip() in ("1", "true", "yes"):
+        config_instance.enable_langsmith = False
+    if os.getenv("LANGCHAIN_TRACING_V2", "").strip().lower() == "false":
+        config_instance.enable_langsmith = False
+
+    # Single source of truth: set env so LangChain/LangSmith SDK no-ops when disabled
     if config_instance.langsmith_api_key and config_instance.enable_langsmith:
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
         os.environ["LANGCHAIN_PROJECT"] = config_instance.langsmith_project
+    else:
+        os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
     if os.getenv("LANGSMITH_PROJECT"):
         config_instance.langsmith_project = os.getenv("LANGSMITH_PROJECT")
+    
+    # FAIR naming configuration
+    if os.getenv("LANGSMITH_USE_FAIR_NAMING"):
+        config_instance.langsmith_use_fair_naming = os.getenv("LANGSMITH_USE_FAIR_NAMING").lower() in ("true", "1", "yes")
 
     if os.getenv("LANGSMITH_ENDPOINT"):
         config_instance.langsmith_endpoint = os.getenv("LANGSMITH_ENDPOINT")
@@ -304,6 +324,17 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("MINERU_TIMEOUT_SECONDS"):
         timeout_value = os.getenv("MINERU_TIMEOUT_SECONDS")
         config_instance.mineru_timeout_seconds = int(timeout_value)
+    
+    # Checkpointer configuration
+    if os.getenv("CHECKPOINTER_BACKEND"):
+        backend = os.getenv("CHECKPOINTER_BACKEND").lower()
+        if backend in ("none", "memory", "sqlite"):
+            config_instance.checkpointer_backend = backend
+        else:
+            raise ValueError(f"Invalid CHECKPOINTER_BACKEND: {backend}. Must be 'none', 'memory', or 'sqlite'")
+    
+    if os.getenv("CHECKPOINT_DB_PATH"):
+        config_instance.checkpoint_db_path = Path(os.getenv("CHECKPOINT_DB_PATH"))
 
 
 # Global config instance

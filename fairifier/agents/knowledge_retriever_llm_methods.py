@@ -168,7 +168,12 @@ Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
             logger.warning(f"Using default packages from API (fallback): {default_packages}")
             return default_packages
         
-        selected_items = result.get("selected_packages", [])
+        # Handle case where LLM returns a list directly instead of {"selected_packages": [...]}
+        if isinstance(result, list):
+            logger.warning("LLM returned a list instead of object format - extracting package names")
+            selected_items = result
+        else:
+            selected_items = result.get("selected_packages", [])
         
         # Extract package names (could be strings or dicts)
         selected_package_names = []
@@ -189,7 +194,7 @@ Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
             selected_package_names = default_packages
         
         logger.info(f"LLM selected packages: {selected_package_names}")
-        logger.info(f"Reasoning: {result.get('reasoning', '')[:200]}")
+        logger.info(f"Reasoning: {(result.get('reasoning', '') if isinstance(result, dict) else '')[:200]}")
         
         return selected_package_names
         
@@ -380,8 +385,14 @@ Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
         content = content.split("```")[1].split("```")[0].strip()
     
     result = json.loads(content)
-    selected_items = result.get("selected_fields", [])
-    terms_to_search = result.get("terms_to_search", [])
+    # Handle LLM returning a list (e.g. phi4) instead of {"selected_fields": [...], "terms_to_search": [...]}
+    if isinstance(result, list):
+        logger.warning("LLM returned a list instead of object format - using as selected_fields")
+        selected_items = result
+        terms_to_search = []
+    else:
+        selected_items = result.get("selected_fields", [])
+        terms_to_search = result.get("terms_to_search", [])
     
     # Extract labels (could be strings or dicts)
     selected_labels = set()

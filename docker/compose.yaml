@@ -11,8 +11,6 @@ services:
     environment:
       # Optional: Vector database (if using Qdrant)
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
-      # Optional: GROBID service (if using GROBID for PDF parsing)
-      - GROBID_URL=${GROBID_URL:-http://grobid:8070}
       # FAIR-DS API (external service, not in docker compose)
       - FAIR_DS_API_URL=${FAIR_DS_API_URL:-http://host.docker.internal:8083}
       # LLM Configuration (set via .env file)
@@ -27,7 +25,6 @@ services:
       - ../kb:/app/kb
     depends_on:
       - qdrant
-      - grobid
     restart: unless-stopped
 
   # Vector database (optional - only if using Qdrant)
@@ -37,13 +34,6 @@ services:
       - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
-    restart: unless-stopped
-
-  # GROBID service for PDF parsing (optional)
-  grobid:
-    image: lfoppiano/grobid:0.8.0
-    ports:
-      - "8070:8070"
     restart: unless-stopped
 
 volumes:

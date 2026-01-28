@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="FAIRifier API",
     description="Automated FAIR metadata generation system",
-    version="1.0.0.20251206rc"
+    version="1.0.1"
 )
 
 # Add CORS middleware

@@ -1967,6 +1967,53 @@ _last_model = None
 _last_base_url = None
 
 
+def check_ollama_model_available(base_url: str, model_name: str, timeout: int = 5) -> tuple[bool, str]:
+    """
+    Verify that the requested Ollama model exists on the server.
+
+    Uses GET /api/tags to list models; checks for exact match or tag suffix match
+    (e.g. "phi4" matches "phi4:latest", "phi4:7b").
+
+    Returns:
+        (True, resolved_name) if model is available, e.g. (True, "phi4:latest").
+        (False, error_message) if not available or request failed.
+    """
+    if not base_url or not model_name:
+        return False, "base_url and model_name are required"
+    try:
+        import requests
+    except ImportError:
+        return False, "requests not installed; cannot verify Ollama model"
+    url = f"{base_url.rstrip('/')}/api/tags"
+    try:
+        r = requests.get(url, timeout=timeout)
+        if r.status_code != 200:
+            return False, f"Ollama returned HTTP {r.status_code}"
+        data = r.json()
+        models = data.get("models") or []
+        names = [m.get("name") for m in models if isinstance(m, dict) and m.get("name")]
+        # Exact match
+        if model_name in names:
+            return True, model_name
+        # Match without tag: "phi4" matches "phi4:latest", "phi4:7b"
+        model_lower = model_name.lower()
+        for name in names:
+            if name.lower() == model_lower or name.lower().startswith(model_lower + ":"):
+                return True, name
+        available = ", ".join(names[:15]) if names else "none"
+        if len(names) > 15:
+            available += f", ... ({len(names)} total)"
+        return False, (
+            f"model '{model_name}' not found on Ollama server. "
+            f"Available: {available}. "
+            f"Pull with: ollama pull {model_name}"
+        )
+    except requests.exceptions.RequestException as e:
+        return False, f"Ollama unreachable: {e}"
+    except (ValueError, KeyError) as e:
+        return False, f"Invalid response from Ollama: {e}"
+
+
 def get_llm_helper(force_reinit=False) -> LLMHelper:
     """Get or create the global LLM helper instance.
     

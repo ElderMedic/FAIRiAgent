@@ -14,14 +14,15 @@ import click
 from .graph.langgraph_app import FAIRifierLangGraphApp
 from .config import config
 from .utils.json_logger import get_logger
-from .utils.llm_helper import get_llm_helper, save_llm_responses
+from .utils.llm_helper import get_llm_helper, save_llm_responses, check_ollama_model_available
 
-# Enable LangSmith tracing by default
-os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "fairifier")
+# LangSmith: config.apply_env_overrides() already set LANGCHAIN_TRACING_V2 and LANGCHAIN_PROJECT
 
 # Use JSON logger
 json_logger = get_logger("fairifier.cli")
+
+# Registry path for tracking runs
+RUNS_REGISTRY_PATH = Path(config.project_root) / "output" / ".runs.json"
 
 # Also set up console logging for visibility
 console_handler = logging.StreamHandler(sys.stdout)
@@ -38,25 +39,163 @@ root_logger.setLevel(logging.INFO)
 if not root_logger.handlers:
     root_logger.addHandler(console_handler)
 
+# Suppress noisy third-party loggers (sqlite checkpoint, HTTP, LangSmith)
+# They log every DB op / request at INFO and flood stdout + full_output.log
+for _name in ("aiosqlite", "urllib3", "httpcore", "httpx", "langsmith", "langsmith.client"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 
-@click.group()
-def cli():
-    """FAIRifier: Automated FAIR metadata generation."""
-    pass
+
+def _register_run(project_id: str, output_path: Path):
+    """Register a run in the runs registry.
+    
+    Args:
+        project_id: The project ID for this run
+        output_path: The output directory path (absolute)
+    """
+    registry_path = RUNS_REGISTRY_PATH
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Load existing registry or create new
+    if registry_path.exists():
+        try:
+            with open(registry_path, 'r', encoding='utf-8') as f:
+                registry = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            registry = {}
+    else:
+        registry = {}
+    
+    # Add/update entry (store relative path from output/ for portability)
+    output_root = config.project_root / "output"
+    try:
+        rel_path = output_path.relative_to(output_root)
+        registry[project_id] = str(rel_path)
+    except ValueError:
+        # output_path is not relative to output_root, use absolute
+        registry[project_id] = str(output_path)
+    
+    # Save registry
+    with open(registry_path, 'w', encoding='utf-8') as f:
+        json.dump(registry, f, indent=2, ensure_ascii=False)
+
+
+def _resolve_project_id(project_id: str) -> Optional[Path]:
+    """Resolve a project_id to its output directory path.
+    
+    Uses registry first, then scans runtime_config.json files as fallback.
+    
+    Args:
+        project_id: The project ID to resolve
+        
+    Returns:
+        Path to the output directory, or None if not found
+    """
+    output_root = config.project_root / "output"
+    
+    # Try registry first
+    registry_path = RUNS_REGISTRY_PATH
+    if registry_path.exists():
+        try:
+            with open(registry_path, 'r', encoding='utf-8') as f:
+                registry = json.load(f)
+            
+            if project_id in registry:
+                run_dir_str = registry[project_id]
+                # Try relative to output/ first
+                if not run_dir_str.startswith('/'):
+                    run_dir = output_root / run_dir_str
+                else:
+                    run_dir = Path(run_dir_str)
+                
+                if run_dir.exists():
+                    return run_dir
+        except (json.JSONDecodeError, IOError):
+            pass
+    
+    # Fallback: scan output subdirectories for runtime_config.json
+    if not output_root.exists():
+        return None
+    
+    for subdir in output_root.iterdir():
+        if not subdir.is_dir():
+            continue
+        
+        runtime_config_file = subdir / "runtime_config.json"
+        if runtime_config_file.exists():
+            try:
+                with open(runtime_config_file, 'r', encoding='utf-8') as f:
+                    runtime_config = json.load(f)
+                
+                if runtime_config.get("runtime_info", {}).get("project_id") == project_id:
+                    return subdir
+            except (json.JSONDecodeError, IOError):
+                continue
+    
+    return None
+
+
+def _is_process_running(pid: int) -> bool:
+    """Check if a process with given PID is running (Linux/Mac compatible).
+    
+    Args:
+        pid: Process ID to check
+        
+    Returns:
+        True if process is running, False otherwise
+    """
+    try:
+        # Unix-like systems (Linux/Mac): sending signal 0 checks existence
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+    except Exception:
+        return False
+
+
+@click.group(
+    context_settings={"help_option_names": ["-h", "--help"]},
+    invoke_without_command=True,
+)
+@click.pass_context
+def cli(ctx: click.Context):
+    """FAIRiAgent CLI – FAIR metadata generation from research documents."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+        return
 
 
 @cli.command()
-@click.argument('document_path', type=click.Path(exists=True))
-@click.option('--output-dir', '-o', type=click.Path(),
-              help='Output directory for artifacts')
-@click.option('--project-id', '-p',
-              help='Project ID (auto-generated if not provided)')
-@click.option('--env-file', '-e', type=click.Path(exists=True),
-              help='Path to .env file with configuration (optional)')
-@click.option('--json-log', is_flag=True, default=True,
-              help='Use JSON line logging (default: True)')
-@click.option('--verbose', '-v', is_flag=True,
-              help='Show detailed processing steps')
+@click.argument("document_path", type=click.Path(exists=True))
+@click.option(
+    "--output-dir",
+    "-o",
+    type=click.Path(),
+    help="Output directory for generated artifacts (default: output/<timestamp>).",
+)
+@click.option(
+    "--project-id",
+    "-p",
+    help="Project ID for this run (default: auto-generated).",
+)
+@click.option(
+    "--env-file",
+    "-e",
+    type=click.Path(exists=True),
+    help="Path to .env file to use for this run (optional).",
+)
+@click.option(
+    "--json-log",
+    is_flag=True,
+    default=True,
+    help="Write JSONL processing log (default: True).",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Print detailed processing steps.",
+)
 def process(
     document_path: str,
     output_dir: Optional[str] = None,
@@ -65,7 +204,7 @@ def process(
     json_log: bool = True,
     verbose: bool = False
 ):
-    """Process a document and generate FAIR metadata."""
+    """Process a document and generate FAIR-DS compatible metadata."""
     # Load custom .env file if provided (before importing config)
     if env_file:
         from .config import load_env_file, apply_env_overrides
@@ -116,16 +255,39 @@ def process(
     click.echo(f"📄 Document: {document_path}")
     click.echo(f"📁 Output: {output_path}")
     click.echo(f"🤖 LLM: {config.llm_model} ({config.llm_provider})")
+    # Verify Ollama model exists before running (avoid silent fallback to default)
+    if config.llm_provider.lower() == "ollama" and config.llm_base_url:
+        model_ok, model_msg = check_ollama_model_available(config.llm_base_url, config.llm_model)
+        if not model_ok:
+            click.echo(f"❌ LLM model check failed: {model_msg}", err=True)
+            if not os.getenv("FAIRIFIER_LLM_SKIP_MODEL_CHECK", "").strip().lower() in ("1", "true", "yes"):
+                click.echo("   Set FAIRIFIER_LLM_SKIP_MODEL_CHECK=1 to skip this check.", err=True)
+                sys.exit(1)
+            click.echo("   ⚠️  Proceeding anyway (FAIRIFIER_LLM_SKIP_MODEL_CHECK is set).", err=True)
+        else:
+            if model_msg != config.llm_model:
+                click.echo(f"   ✓ Model resolved: {config.llm_model} → {model_msg}")
     click.echo(f"🌐 FAIR-DS API: {config.fair_ds_api_url or 'http://localhost:8083 (default)'}")
     
-    # LangSmith status - use unique project name if custom env file
-    langsmith_project = config.langsmith_project
-    if env_file:
-        env_name = Path(env_file).stem
-        langsmith_project = f"{config.langsmith_project}-{env_name}"
-        # Set unique LangSmith project for this run
+    # LangSmith status - only set project name when tracing is enabled
+    langsmith_project = None
+    if config.enable_langsmith:
+        if config.langsmith_use_fair_naming:
+            from fairifier.utils.langsmith_helper import generate_fair_langsmith_project_name
+            env_suffix = Path(env_file).stem if env_file else None
+            langsmith_project = generate_fair_langsmith_project_name(
+                environment="cli",
+                model_provider=config.llm_provider,
+                model_name=config.llm_model,
+                project_id=None,
+                custom_suffix=env_suffix
+            )
+        else:
+            langsmith_project = config.langsmith_project
+            if env_file:
+                langsmith_project = f"{config.langsmith_project}-{Path(env_file).stem}"
         os.environ["LANGCHAIN_PROJECT"] = langsmith_project
-    
+
     if config.enable_langsmith and config.langsmith_api_key:
         click.echo(f"📊 LangSmith: ✅ Enabled "
                    f"(Project: {langsmith_project})")
@@ -158,6 +320,13 @@ async def _run_workflow(
     # Set LangSmith project if provided (for isolation)
     if langsmith_project:
         os.environ["LANGCHAIN_PROJECT"] = langsmith_project
+    
+    # Register this run in the runs registry
+    _register_run(project_id, output_path)
+    
+    # Write .running file with PID for status tracking
+    running_file = output_path / ".running"
+    running_file.write_text(str(os.getpid()))
     
     # Set up log file redirection
     log_file = output_path / "full_output.log"
@@ -312,24 +481,438 @@ async def _run_workflow(
         json_logger.error("workflow_failed", error=str(e), project_id=project_id)
         sys.exit(1)
     finally:
+        # Clean up .running file
+        running_file = output_path / ".running"
+        if running_file.exists():
+            running_file.unlink()
+        
         # Clean up log handler and close file
         root_logger.removeHandler(tee_handler)
         log_handle.close()
 
 
 @cli.command()
-@click.argument('project_id')
-def status(project_id: str):
-    """Get status of a project."""
-    click.echo(f"Getting status for project: {project_id}")
-    # This would query the workflow checkpointer in a full implementation
-    click.echo("Status checking not implemented in CLI mode")
+@click.option("--gradio", is_flag=True, help="Launch Gradio UI (default: Streamlit).")
+@click.option(
+    "--port",
+    type=int,
+    default=None,
+    help="Port for Streamlit (default: 8501) or Gradio (default: 7860).",
+)
+def ui(gradio: bool, port: Optional[int]):
+    """Launch the Web UI (Streamlit or Gradio)."""
+    import subprocess
+
+    if gradio:
+        port = port or 7860
+        click.echo("🚀 Starting Gradio Web UI...")
+        click.echo(f"   Interface: http://localhost:{port}")
+        click.echo("   API docs:  http://localhost:{port}/docs")
+        subprocess.run(
+            [sys.executable, "fairifier/apps/ui/gradio_app.py"],
+            cwd=Path(__file__).resolve().parents[2],
+        )
+    else:
+        port = port or 8501
+        click.echo("🚀 Starting Streamlit Web UI...")
+        click.echo(f"   Interface: http://localhost:{port}")
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "streamlit",
+                "run",
+                "fairifier/apps/ui/streamlit_app.py",
+                "--server.port",
+                str(port),
+                "--server.address",
+                "0.0.0.0",
+                "--browser.gatherUsageStats",
+                "false",
+            ],
+            cwd=Path(__file__).resolve().parents[2],
+        )
 
 
 @cli.command()
+@click.argument("project_id")
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show detailed checkpoint information (if available).",
+)
+def status(project_id: str, verbose: bool):
+    """Show status for a run by project ID."""
+    # Resolve project_id to output directory
+    run_dir = _resolve_project_id(project_id)
+    
+    if not run_dir:
+        click.echo(f"❌ No run found for project ID: {project_id}", err=True)
+        click.echo("\nTip: Check available runs in output/ directory", err=True)
+        sys.exit(1)
+    
+    section = "=" * 70
+    click.echo(section)
+    click.echo(f"Status for: {project_id}")
+    click.echo(section)
+    
+    # Load runtime_config.json if available
+    runtime_config_file = run_dir / "runtime_config.json"
+    runtime_info = {}
+    if runtime_config_file.exists():
+        try:
+            with open(runtime_config_file, 'r', encoding='utf-8') as f:
+                runtime_config = json.load(f)
+            runtime_info = runtime_config.get("runtime_info", {})
+            
+            click.echo(f"\n📄 Document:   {runtime_info.get('document_name', 'unknown')}")
+            click.echo(f"   Path:       {runtime_info.get('document_path', 'unknown')}")
+            click.echo(f"📁 Output:     {run_dir}")
+            click.echo(f"🕐 Started:    {runtime_info.get('timestamp', 'unknown')}")
+        except (json.JSONDecodeError, IOError) as e:
+            click.echo(f"⚠️  Could not load runtime_config.json: {e}")
+    else:
+        click.echo(f"\n📁 Output:     {run_dir}")
+        click.echo("⚠️  No runtime_config.json found (run may have been interrupted early)")
+    
+    # Check if running
+    running_file = run_dir / ".running"
+    is_running = False
+    if running_file.exists():
+        try:
+            pid = int(running_file.read_text().strip())
+            is_running = _is_process_running(pid)
+            if is_running:
+                click.echo(f"\n🔄 Status:     RUNNING (PID: {pid})")
+            else:
+                click.echo(f"\n⚠️  Status:     INTERRUPTED (process {pid} not found)")
+                # Clean up stale .running file
+                running_file.unlink()
+        except (ValueError, IOError):
+            pass
+    
+    # Load processing_log.jsonl if available
+    processing_log_file = run_dir / "processing_log.jsonl"
+    status_from_log = None
+    duration_from_log = None
+    confidence_from_log = {}
+    
+    if processing_log_file.exists() and not is_running:
+        try:
+            with open(processing_log_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        log_entry = json.loads(line.strip())
+                        event = log_entry.get("event")
+                        
+                        if event == "processing_completed":
+                            status_from_log = log_entry.get("status", "unknown")
+                            duration_from_log = log_entry.get("duration_seconds")
+                        
+                        elif event == "confidence_score":
+                            component = log_entry.get("component", "unknown")
+                            score = log_entry.get("score", 0.0)
+                            confidence_from_log[component] = score
+                    except json.JSONDecodeError:
+                        continue
+            
+            if status_from_log:
+                status_emoji = "✅" if status_from_log == "completed" else "❌"
+                click.echo(f"\n{status_emoji} Status:     {status_from_log.upper()}")
+                if duration_from_log:
+                    click.echo(f"⏱️  Duration:   {duration_from_log:.1f} seconds")
+            
+            if confidence_from_log:
+                overall_conf = confidence_from_log.get("overall")
+                if overall_conf is not None:
+                    conf_emoji = "🟢" if overall_conf >= 0.8 else "🟡" if overall_conf >= 0.5 else "🔴"
+                    click.echo(f"\n{conf_emoji} Confidence: {overall_conf:.2%}")
+                    
+                    if verbose:
+                        click.echo("   Components:")
+                        for component, score in sorted(confidence_from_log.items()):
+                            if component != "overall":
+                                click.echo(f"     - {component}: {score:.2%}")
+        except IOError as e:
+            click.echo(f"⚠️  Could not load processing_log.jsonl: {e}")
+    
+    # Infer status from files if not in log
+    if not is_running and status_from_log is None:
+        metadata_json_file = run_dir / "metadata_json.json"
+        if metadata_json_file.exists():
+            click.echo(f"\n✅ Status:     COMPLETED (inferred from metadata_json.json)")
+        else:
+            click.echo(f"\n❓ Status:     UNKNOWN (no processing_log.jsonl or metadata_json.json)")
+    
+    # Check for errors in logs (optional, simple implementation)
+    error_count = 0
+    if processing_log_file.exists():
+        try:
+            with open(processing_log_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        log_entry = json.loads(line.strip())
+                        if log_entry.get("level") == "error":
+                            error_count += 1
+                    except json.JSONDecodeError:
+                        continue
+        except IOError:
+            pass
+    
+    if error_count > 0:
+        click.echo(f"\n⚠️  Errors:     {error_count} error(s) in processing_log.jsonl")
+    
+    # Optionally show checkpoint info if verbose and checkpointer is sqlite
+    if verbose and config.checkpointer_backend == "sqlite" and not is_running:
+        try:
+            from .graph.langgraph_app import FAIRifierLangGraphApp
+            
+            app = FAIRifierLangGraphApp()
+            if app.checkpointer:
+                checkpoint_config = {"configurable": {"thread_id": project_id}}
+                state_snapshot = app.workflow.get_state(checkpoint_config)
+                
+                if state_snapshot and state_snapshot.values:
+                    click.echo(f"\n🔍 Checkpoint: Available")
+                    click.echo(f"   Next nodes: {state_snapshot.next or 'none (completed)'}")
+                    if state_snapshot.metadata:
+                        step = state_snapshot.metadata.get("step", "unknown")
+                        click.echo(f"   Last step:  {step}")
+                else:
+                    click.echo(f"\n🔍 Checkpoint: None found for this thread_id")
+        except Exception as e:
+            click.echo(f"\n⚠️  Could not load checkpoint info: {e}")
+    
+    click.echo("\n" + section)
+
+
+@cli.command()
+@click.argument("project_id")
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show detailed processing steps.",
+)
+def resume(project_id: str, verbose: bool):
+    """Resume an interrupted run from its last checkpoint.
+    
+    Requires persistent checkpointer (CHECKPOINTER_BACKEND=sqlite).
+    """
+    # Check checkpointer backend
+    if config.checkpointer_backend != "sqlite":
+        click.echo(
+            f"❌ Resume requires persistent checkpointer (sqlite).", err=True
+        )
+        click.echo(
+            f"   Current backend: {config.checkpointer_backend}", err=True
+        )
+        click.echo(
+            f"   Set CHECKPOINTER_BACKEND=sqlite in .env to enable resume.", err=True
+        )
+        sys.exit(1)
+    
+    # Resolve project_id to output directory
+    run_dir = _resolve_project_id(project_id)
+    
+    if not run_dir:
+        click.echo(f"❌ No run found for project ID: {project_id}", err=True)
+        sys.exit(1)
+    
+    # Check if already running
+    running_file = run_dir / ".running"
+    if running_file.exists():
+        try:
+            pid = int(running_file.read_text().strip())
+            if _is_process_running(pid):
+                click.echo(f"❌ Run is already in progress (PID: {pid})", err=True)
+                sys.exit(1)
+            else:
+                # Stale .running file, clean up
+                running_file.unlink()
+        except (ValueError, IOError):
+            pass
+    
+    # Load runtime_config to get document_path
+    runtime_config_file = run_dir / "runtime_config.json"
+    document_path = None
+    if runtime_config_file.exists():
+        try:
+            with open(runtime_config_file, 'r', encoding='utf-8') as f:
+                runtime_config = json.load(f)
+            runtime_info = runtime_config.get("runtime_info", {})
+            document_path = runtime_info.get("document_path")
+        except (json.JSONDecodeError, IOError):
+            pass
+    
+    if not document_path:
+        click.echo(f"❌ Could not find document_path in runtime_config.json", err=True)
+        sys.exit(1)
+    
+    # Enable verbose logging if requested
+    if verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+    
+    click.echo("=" * 70)
+    click.echo("🔄 Resuming FAIRifier run")
+    click.echo("=" * 70)
+    click.echo(f"📄 Project ID: {project_id}")
+    click.echo(f"📁 Output:     {run_dir}")
+    click.echo(f"📄 Document:   {document_path}")
+    click.echo(f"🤖 LLM:        {config.llm_model} ({config.llm_provider})")
+    click.echo("=" * 70)
+    click.echo()
+    
+    # Run workflow (will resume from checkpoint with same thread_id)
+    asyncio.run(_resume_workflow(document_path, run_dir, project_id, verbose))
+
+
+async def _resume_workflow(
+    document_path: str,
+    output_path: Path,
+    project_id: str,
+    verbose: bool = False
+):
+    """Resume a workflow from its last checkpoint."""
+    start_time = datetime.now()
+    
+    # Write .running file
+    running_file = output_path / ".running"
+    running_file.write_text(str(os.getpid()))
+    
+    # Set up log file (append mode for resume)
+    log_file = output_path / "full_output.log"
+    log_handle = open(log_file, 'a', encoding='utf-8', buffering=1)
+    log_handle.write(f"\n\n{'='*70}\n")
+    log_handle.write(f"Resume started at: {start_time.isoformat()}\n")
+    log_handle.write(f"{'='*70}\n\n")
+    
+    # Reuse same TeeHandler setup from _run_workflow
+    class TeeHandler(logging.Handler):
+        def __init__(self, file_handle):
+            super().__init__()
+            self.file_handle = file_handle
+        
+        def emit(self, record):
+            try:
+                msg = self.format(record)
+                self.file_handle.write(msg + '\n')
+                self.file_handle.flush()
+            except Exception:
+                self.handleError(record)
+    
+    tee_handler = TeeHandler(log_handle)
+    tee_handler.setFormatter(console_formatter)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(tee_handler)
+    
+    try:
+        workflow = FAIRifierLangGraphApp()
+        
+        click.echo(f"🔄 Resuming from last checkpoint (Project ID: {project_id})\n")
+        
+        # Resume: invoke with None (or minimal state) and same thread_id
+        # LangGraph will load last checkpoint and continue from there
+        result = await workflow.run(document_path, project_id, output_dir=str(output_path))
+        
+        # Extract results (same as _run_workflow)
+        status = result.get("status", "unknown")
+        confidence_scores = result.get("confidence_scores", {})
+        needs_review = result.get("needs_human_review", False)
+        errors = result.get("errors", [])
+        artifacts = result.get("artifacts", {})
+        
+        # Calculate duration of this resume session
+        duration = (datetime.now() - start_time).total_seconds()
+        
+        click.echo("\n" + "=" * 70)
+        click.echo("📊 Resume Results")
+        click.echo("=" * 70)
+        
+        # Display confidence scores
+        click.echo("\n🎯 Confidence Scores:")
+        for component, score in confidence_scores.items():
+            emoji = "✅" if score >= 0.8 else "⚠️" if score >= 0.6 else "❌"
+            click.echo(f"  {emoji} {component}: {score:.2%}")
+        
+        # Display status
+        click.echo(f"\n📈 Status: {status.upper()}")
+        click.echo(f"⏱️  Resume duration: {duration:.2f} seconds")
+        
+        if needs_review:
+            click.echo("⚠️  Human review recommended")
+        
+        if errors:
+            click.echo(f"\n❌ Errors ({len(errors)}):")
+            for error in errors[:5]:
+                click.echo(f"  - {error}")
+        
+        # Save artifacts (same logic as _run_workflow)
+        click.echo("\n💾 Saving artifacts...")
+        if artifacts:
+            for artifact_name, content in artifacts.items():
+                if content:
+                    extensions = {
+                        "metadata_json": ".json",
+                        "validation_report": ".txt",
+                        "processing_log": ".jsonl"
+                    }
+                    ext = extensions.get(artifact_name, ".json")
+                    filename = f"{artifact_name}{ext}"
+                    filepath = output_path / filename
+                    
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    
+                    size_kb = len(content) / 1024
+                    click.echo(f"  ✓ {filename} ({size_kb:.1f} KB)")
+        
+        # Save processing log (append mode)
+        processing_log_file = output_path / "processing_log.jsonl"
+        with open(processing_log_file, 'a', encoding='utf-8') as f:
+            for log_entry in json_logger.get_logs():
+                f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+        click.echo(f"  ✓ processing_log.jsonl (appended)")
+        
+        # Save LLM responses
+        try:
+            llm_helper = get_llm_helper()
+            if llm_helper.llm_responses:
+                save_llm_responses(output_path, llm_helper)
+                click.echo(f"  ✓ llm_responses.json ({len(llm_helper.llm_responses)} interactions)")
+        except Exception as e:
+            click.echo(f"  ⚠️  Could not save LLM responses: {e}", err=True)
+        
+        click.echo("\n" + "=" * 70)
+        
+        if status == "failed":
+            click.echo("❌ Resume FAILED!")
+            click.echo(f"📁 Output: {output_path}")
+            click.echo("=" * 70)
+            sys.exit(1)
+        else:
+            click.echo("✨ Resume complete!")
+            click.echo(f"📁 Output: {output_path}")
+            click.echo("=" * 70)
+    
+    except Exception as e:
+        click.echo(f"\n❌ Resume error: {str(e)}", err=True)
+        sys.exit(1)
+    finally:
+        # Clean up .running file
+        if running_file.exists():
+            running_file.unlink()
+        
+        # Clean up log handler and close file
+        root_logger.removeHandler(tee_handler)
+        log_handle.close()
+
+
+@cli.command("config-info")
 def config_info():
-    """Show current configuration."""
-    click.echo("FAIRifier Configuration:")
+    """Show current FAIRiAgent configuration."""
+    click.echo("FAIRiAgent Configuration:")
     click.echo(f"  Project root: {config.project_root}")
     click.echo(f"  Knowledge base: {config.kb_path}")
     click.echo(f"  Output path: {config.output_path}")
@@ -339,41 +922,138 @@ def config_info():
     click.echo(f"  Default MIxS package: {config.default_mixs_package}")
 
 
-@cli.command()
-@click.argument('input_file', type=click.Path(exists=True))
-def validate_document(input_file: str):
-    """Validate a document can be processed."""
-    file_path = Path(input_file)
-    
-    click.echo(f"Validating document: {file_path}")
-    
-    # Check file size
-    file_size = file_path.stat().st_size
-    max_size = config.max_document_size_mb * 1024 * 1024
-    
-    if file_size > max_size:
-        click.echo(f"❌ File too large: "
-                   f"{file_size / (1024*1024):.1f}MB "
-                   f"(max: {config.max_document_size_mb}MB)")
-        return
-    
-    # Check file type
-    if file_path.suffix.lower() not in ['.pdf', '.txt', '.md']:
-        click.echo(f"⚠️  File type {file_path.suffix} "
-                   f"may not be fully supported")
-    
-    click.echo(f"✓ File size: {file_size / (1024*1024):.1f}MB")
-    click.echo(f"✓ File type: {file_path.suffix}")
-    click.echo("Document validation passed!")
+def _check_mineru_preflight() -> tuple[bool, str]:
+    """Quick MinerU pre-flight: server reachable if enabled. Returns (ok, message)."""
+    import socket
+    from urllib.parse import urlparse
+
+    if not config.mineru_enabled:
+        return True, "disabled (optional)"
+    if not config.mineru_server_url:
+        return False, "enabled but MINERU_SERVER_URL not set"
+    try:
+        parsed = urlparse(config.mineru_server_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 30000
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(3)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        if result == 0:
+            return True, "reachable"
+        return False, f"port {port} not accessible"
+    except Exception as e:
+        return False, str(e)
 
 
-@cli.command()
-@click.option('--verbose', '-v', is_flag=True, help='Show detailed diagnostic information')
+def _check_fair_ds_preflight() -> tuple[bool, str]:
+    """Quick FAIR-DS API pre-flight. Returns (ok, message)."""
+    if not config.fair_ds_api_url:
+        return True, "not configured (optional)"
+    try:
+        from .services.fair_data_station import FAIRDataStationClient
+
+        client = FAIRDataStationClient(config.fair_ds_api_url, timeout=5)
+        if client.is_available():
+            return True, "reachable"
+        return False, "no response"
+    except Exception as e:
+        return False, str(e)
+
+
+def _check_llm_preflight() -> tuple[bool, str]:
+    """Quick LLM pre-flight: config present; for Ollama, ping base URL and verify model exists. Returns (ok, message)."""
+    try:
+        import requests
+    except ImportError:
+        return True, f"{config.llm_provider} / {config.llm_model} (requests not installed, skip ping)"
+    if not config.llm_base_url and config.llm_provider.lower() == "ollama":
+        return False, "Ollama selected but LLM base URL not set"
+    if config.llm_provider.lower() == "ollama" and config.llm_base_url:
+        model_ok, model_msg = check_ollama_model_available(config.llm_base_url, config.llm_model, timeout=3)
+        if not model_ok:
+            return False, model_msg
+        if model_msg != config.llm_model:
+            return True, f"{config.llm_model} → {model_msg}"
+        return True, f"{config.llm_model} (ok)"
+    return True, f"{config.llm_provider} / {config.llm_model} (config ok)"
+
+
+@cli.command("validate-document")
+@click.argument("input_file", type=click.Path(exists=True), required=False)
+@click.option(
+    "--env-only",
+    is_flag=True,
+    help="Only run environment checks (MinerU, FAIR-DS, LLM); skip document validation.",
+)
+def validate_document(input_file: Optional[str], env_only: bool):
+    """Pre-flight check: document (size/format) and environment (MinerU, FAIR-DS, LLM).
+
+    Run before 'process' to ensure the document and services are ready.
+    Use --env-only to check only environment (no document path needed).
+    """
+    if not input_file and not env_only:
+        click.echo("Error: INPUT_FILE required unless --env-only.", err=True)
+        sys.exit(2)
+
+    section = "=" * 60
+    click.echo(section)
+    click.echo("Pre-flight check")
+    click.echo(section)
+
+    doc_ok = True  # skip document checks when --env-only
+    if not env_only and input_file:
+        file_path = Path(input_file)
+        click.echo("\n📄 Document")
+        click.echo(f"   Path: {file_path}")
+        file_size = file_path.stat().st_size
+        max_size = config.max_document_size_mb * 1024 * 1024
+        if file_size > max_size:
+            size_mb = file_size / (1024 * 1024)
+            click.echo(f"   ❌ File too large: {size_mb:.2f} MB (max: {config.max_document_size_mb} MB)")
+            doc_ok = False
+        else:
+            if file_size < 1024 * 1024:
+                size_str = f"{file_size / 1024:.1f} KB"
+            else:
+                size_str = f"{file_size / (1024 * 1024):.2f} MB"
+            click.echo(f"   ✓ Size: {size_str}")
+        if file_path.suffix.lower() not in (".pdf", ".txt", ".md"):
+            click.echo(f"   ⚠️  Type {file_path.suffix} may not be fully supported")
+        else:
+            click.echo(f"   ✓ Type: {file_path.suffix}")
+        if doc_ok:
+            click.echo("   Document validation passed.")
+
+    click.echo("\n🔧 Environment")
+    mineru_ok, mineru_msg = _check_mineru_preflight()
+    click.echo(f"   MinerU:      {'✅ ' + mineru_msg if mineru_ok else '❌ ' + mineru_msg}")
+    fair_ok, fair_msg = _check_fair_ds_preflight()
+    click.echo(f"   FAIR-DS API: {'✅ ' + fair_msg if fair_ok else '❌ ' + fair_msg}")
+    llm_ok, llm_msg = _check_llm_preflight()
+    click.echo(f"   LLM:         {'✅ ' + llm_msg if llm_ok else '❌ ' + llm_msg}")
+
+    click.echo("\n" + section)
+    all_ok = doc_ok and mineru_ok and fair_ok and llm_ok
+    if all_ok:
+        click.echo("Pre-flight passed. You can run 'process'.")
+    else:
+        click.echo("Pre-flight had failures. Fix issues above before running 'process'.")
+        sys.exit(1)
+
+
+@cli.command("check-mineru")
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show detailed diagnostic information.",
+)
 def check_mineru(verbose: bool):
     """Check MinerU service availability and configuration.
-    
-    This command verifies that MinerU CLI and HTTP server are properly
-    configured and available for document conversion.
+
+    Verifies MinerU CLI and HTTP server are configured and available
+    for document conversion.
     """
     import subprocess
     import socket

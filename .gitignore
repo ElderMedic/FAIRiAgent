@@ -5,6 +5,10 @@ __pycache__/
 
 .DS_Store
 
+# Temporary files and local memory
+.memory/
+
+# Output directories
 /output/
 
 # C extensions
