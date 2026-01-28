@@ -29,6 +29,7 @@ from ..utils.llm_helper import get_llm_helper
 from ..utils.report_generator import WorkflowReportGenerator
 from ..services.mineru_client import MinerUClient, MinerUConversionError
 from ..services.confidence_aggregator import aggregate_confidence
+from ..tools.mineru_tools import create_mineru_convert_tool
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,12 @@ class FAIRifierLangGraphApp:
         self.critic = CriticAgent()
         self.llm_helper = get_llm_helper()
         self.mineru_client = self._initialize_mineru_client()
+        
+        # Create MinerU tool for LangChain integration
+        self.mineru_tool = None
+        if self.mineru_client:
+            self.mineru_tool = create_mineru_convert_tool(client=self.mineru_client)
+            logger.info("MinerU tool enabled for LangGraph workflow.")
         
         # Initialize retry counters (like old Orchestrator)
         self.global_retry_count = 0
@@ -588,28 +595,37 @@ class FAIRifierLangGraphApp:
                     logger.warning(f"⚠️ Failed to read pre-converted result: {e}")
                     # Fall through to normal conversion
             
-            # No pre-converted results, use MinerU client if available
-            if self.mineru_client:
-                try:
-                    # Use output_dir for MinerU artifacts if provided
-                    mineru_output = None
-                    if output_dir:
-                        doc_name = Path(document_path).stem
-                        mineru_output = Path(output_dir) / f"mineru_{doc_name}"
-                        logger.info(f"MinerU will save artifacts to: {mineru_output}")
-                    
-                    conversion = self.mineru_client.convert_document(
-                        document_path,
-                        output_dir=mineru_output
-                    )
-                    conversion_info = conversion.to_dict()
-                    logger.info("MinerU conversion successful: %s", conversion.markdown_path)
-                    logger.info(f"MinerU artifacts: {conversion.output_dir}")
-                    if conversion.images_dir:
-                        logger.info(f"MinerU images: {conversion.images_dir}")
-                    return conversion.markdown_text, conversion_info
-                except MinerUConversionError as exc:
-                    logger.warning("MinerU conversion failed (%s). Falling back to PyMuPDF.", exc)
+            # No pre-converted results, use MinerU tool if available
+            if self.mineru_tool:
+                # Use output_dir for MinerU artifacts if provided
+                mineru_output = None
+                if output_dir:
+                    doc_name = Path(document_path).stem
+                    mineru_output = str(Path(output_dir) / f"mineru_{doc_name}")
+                    logger.info(f"MinerU will save artifacts to: {mineru_output}")
+                
+                # Invoke MinerU tool
+                result = self.mineru_tool.invoke({
+                    "input_path": document_path,
+                    "output_dir": mineru_output
+                })
+                
+                if result["success"]:
+                    # Conversion successful
+                    conversion_info = {
+                        "markdown_path": result["markdown_path"],
+                        "output_dir": result["output_dir"],
+                        "images_dir": result["images_dir"],
+                        "method": result["method"]
+                    }
+                    logger.info("MinerU conversion successful: %s", result["markdown_path"])
+                    logger.info(f"MinerU artifacts: {result['output_dir']}")
+                    if result["images_dir"]:
+                        logger.info(f"MinerU images: {result['images_dir']}")
+                    return result["markdown_text"], conversion_info
+                else:
+                    # Conversion failed
+                    logger.warning("MinerU conversion failed (%s). Falling back to PyMuPDF.", result["error"])
             
             # Fallback to PyMuPDF
             import fitz  # PyMuPDF

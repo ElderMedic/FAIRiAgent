@@ -116,10 +116,10 @@ FAIRiAgent/
 │   ├── services/       # External service clients
 │   ├── utils/          # Utilities and helpers
 │   └── apps/           # Web UI and API
-├── tests/              # Test suite (67 tests ✅)
+├── tests/              # Test suite (112 tests ✅)
 ├── kb/                 # Knowledge base
 ├── docs/               # Documentation
-├── run_tests.sh/py     # Test runners
+├── run_tests.py        # Test runner (cross-platform)
 └── .memory/            # Temporary files (gitignored)
 ```
 
@@ -688,30 +688,30 @@ We provide **67 comprehensive tests** covering all components:
 
 ```bash
 # Run all tests (Bash)
-./run_tests.sh all
+python run_tests.py all
 
 # Run all tests (Python, cross-platform)
 python run_tests.py all
 
 # Run fast unit tests only (~3s, no external services needed)
-./run_tests.sh fast
+python run_tests.py fast
 python run_tests.py fast
 
 # Run integration tests only (~25s, requires FAIR-DS + MinerU)
-./run_tests.sh integration
+python run_tests.py integration
 python run_tests.py integration
 
 # Generate coverage report
-./run_tests.sh coverage
+python run_tests.py coverage
 python run_tests.py coverage
 
 # Run specific test file
-./run_tests.sh specific test_critic_utils.py
+python run_tests.py specific test_critic_utils.py
 python run_tests.py specific test_critic_utils.py
 ```
 
 **Test Statistics:**
-- ✅ 67 tests (48 unit + 19 integration)
+- ✅ 112 tests (93 unit + 19 integration)
 - ✅ All tests passing
 - ⚡ Fast tests: ~3s
 - 📊 Coverage: See `tests/README.md` for details
