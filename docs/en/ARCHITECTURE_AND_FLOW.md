@@ -74,6 +74,7 @@ graph TD
 ### 📄 Input Processing (Grey)
 Handles the ingestion of raw scientific documents.
 *   **MinerU Parser:** A specialized tool for high-fidelity PDF-to-Markdown conversion. It preserves document structure, tables, and scientific notation, which is critical for accurate metadata extraction.
+*   **Tool Integration:** MinerU is exposed as a LangChain tool (`convert_document`), enabling transparent document conversion with full tracing in LangSmith.
 
 ### 🧠 Knowledge Retrieval (Green)
 Grounds the agent's generation in established scientific standards.
@@ -81,6 +82,10 @@ Grounds the agent's generation in established scientific standards.
     - `GET /api/package?name={name}` - Fetch specific metadata packages efficiently (e.g., miappe, soil, default)
     - `GET /api/terms?label={pattern}` - Search terms by label with server-side filtering
     - `GET /api/terms?definition={pattern}` - Search terms by definition
+*   **LangChain Tools Layer (v1.0+):** External dependencies (FAIR-DS API, MinerU) are exposed as LangChain tools for:
+    - **Full observability**: Every tool call traced in LangSmith
+    - **Reusability**: Tools shared across agents and workflows
+    - **Structured error handling**: Consistent `{success, data, error}` format
 *   **Context Retriever:** Uses RAG (Retrieval-Augmented Generation) to fetch relevant schema definitions (e.g., "What is 'collection date' in MIxS?") and ontology terms (e.g., valid ENVO codes) based on the document's content.
 
 ### 🤖 FAIRiAgent Core Workflow (Red & Blue)

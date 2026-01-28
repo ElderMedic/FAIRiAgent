@@ -84,22 +84,22 @@ We provide a unified test runner script for convenience:
 
 ```bash
 # Run all tests (67 tests)
-./run_tests.sh all
+python run_tests.py all
 
 # Run fast tests only (48 unit tests, ~6s)
-./run_tests.sh fast
+python run_tests.py fast
 
 # Run integration tests only (19 tests, requires services, ~25s)
-./run_tests.sh integration
+python run_tests.py integration
 
 # Run with coverage report
-./run_tests.sh coverage
+python run_tests.py coverage
 
 # Run specific test file
-./run_tests.sh specific test_critic_utils.py
+python run_tests.py specific test_critic_utils.py
 
 # Show help
-./run_tests.sh --help
+python run_tests.py --help
 ```
 
 ### Direct Pytest Commands

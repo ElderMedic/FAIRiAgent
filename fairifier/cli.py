@@ -920,6 +920,14 @@ def config_info():
     click.echo(f"  LLM base URL: {config.llm_base_url}")
     click.echo(f"  Min confidence: {config.min_confidence_threshold}")
     click.echo(f"  Default MIxS package: {config.default_mixs_package}")
+    click.echo(f"\n  External Services:")
+    click.echo(f"    • FAIR-DS API: {config.fair_ds_api_url or 'Not configured'}")
+    click.echo(f"    • MinerU: {'Enabled' if config.mineru_enabled else 'Disabled'}")
+    click.echo(f"  Tools Layer:")
+    click.echo(f"    • LangChain Tools: Enabled (v1.0+)")
+    click.echo(f"    • FAIR-DS Tools: 5 tools (get_available_packages, get_package, get_terms, search_terms_for_fields, search_fields_in_packages)")
+    click.echo(f"    • MinerU Tool: 1 tool (convert_document)")
+    click.echo(f"    • Observability: Full LangSmith tracing")
 
 
 def _check_mineru_preflight() -> tuple[bool, str]:
