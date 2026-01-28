@@ -12,6 +12,7 @@ from ..models import FAIRifierState
 from ..config import config
 from ..utils.llm_helper import get_llm_helper
 from ..services.mineru_client import MinerUClient, MinerUConversionError
+from ..tools.mineru_tools import create_mineru_convert_tool
 
 
 class DocumentParserAgent(BaseAgent):
@@ -23,6 +24,7 @@ class DocumentParserAgent(BaseAgent):
         self.llm_helper = get_llm_helper()
         
         self.mineru_client: Optional[MinerUClient] = None
+        self.mineru_tool = None
         if config.mineru_enabled and config.mineru_server_url:
             try:
                 candidate = MinerUClient(
@@ -33,7 +35,9 @@ class DocumentParserAgent(BaseAgent):
                 )
                 if candidate.is_available():
                     self.mineru_client = candidate
-                    self.logger.info("MinerU client enabled for DocumentParser.")
+                    # Create MinerU tool for LangChain integration
+                    self.mineru_tool = create_mineru_convert_tool(client=candidate)
+                    self.logger.info("MinerU tool enabled for DocumentParser.")
                 else:
                     self.logger.warning(
                         "MinerU CLI not available or misconfigured. Falling back to PyMuPDF."
@@ -221,19 +225,32 @@ class DocumentParserAgent(BaseAgent):
         """
         conversion_info: Dict[str, Any] = {}
         if document_path.endswith('.pdf'):
-            if self.mineru_client:
-                try:
-                    conversion = self.mineru_client.convert_document(document_path)
-                    conversion_info = conversion.to_dict()
+            if self.mineru_tool:
+                # Use MinerU tool for conversion
+                result = self.mineru_tool.invoke({
+                    "input_path": document_path,
+                    "output_dir": None
+                })
+                
+                if result["success"]:
+                    # Conversion successful
+                    conversion_info = {
+                        "markdown_path": result["markdown_path"],
+                        "output_dir": result["output_dir"],
+                        "images_dir": result["images_dir"],
+                        "method": result["method"]
+                    }
                     self.log_execution(
                         state,
-                        f"🪄 MinerU converted PDF to Markdown at {conversion.markdown_path}"
+                        f"🪄 MinerU converted PDF to Markdown at {result['markdown_path']}"
                     )
-                    return conversion.markdown_text, conversion_info, "mineru"
-                except MinerUConversionError as exc:
-                    warning_msg = f"MinerU conversion failed: {exc}. Falling back to local PDF extraction."
+                    return result["markdown_text"], conversion_info, "mineru"
+                else:
+                    # Conversion failed, log and fallback
+                    warning_msg = f"MinerU conversion failed: {result['error']}. Falling back to local PDF extraction."
                     self.log_execution(state, f"⚠️ {warning_msg}", "warning")
                     self.logger.warning(warning_msg)
+            
             text = self._extract_pdf_text(document_path)
             return text, conversion_info, "pdf_text"
         

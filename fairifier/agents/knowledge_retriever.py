@@ -12,6 +12,7 @@ from ..services.fair_data_station import FAIRDataStationClient
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.llm_helper import get_llm_helper
 from . import knowledge_retriever_llm_methods as llm_methods
+from ..tools.fair_ds_tools import create_fair_ds_tools
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,10 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 self.fair_ds_client = None
         else:
             self.log_info("⚠️  FAIR-DS API URL not available, using local fallback")
+        
+        # Create FAIR-DS tools (pass client for reuse)
+        tools_list = create_fair_ds_tools(client=self.fair_ds_client)
+        self.tools = {tool.name: tool for tool in tools_list}
     
     def log_info(self, message: str):
         """Helper for logging without state."""
@@ -88,8 +93,16 @@ class KnowledgeRetrieverAgent(BaseAgent):
             self.log_execution(state, "   📡 GET /api/package (list all packages)...")
             self.log_execution(state, "   📡 GET /api/terms...")
             
-            # Step 1: Get list of all available packages
-            available_package_names = self.fair_ds_client.get_available_packages()
+            # Step 1: Get list of all available packages (using tool)
+            packages_result = self.tools["get_available_packages"].invoke({"force_refresh": False})
+            if not packages_result["success"]:
+                error_msg = f"Failed to get available packages: {packages_result['error']}"
+                self.log_execution(state, f"❌ {error_msg}", "error")
+                state["errors"] = state.get("errors", []) + [error_msg]
+                self.update_confidence(state, "knowledge_retrieval", 0.0)
+                return state
+            
+            available_package_names = packages_result["data"]
             self.log_execution(state, f"   ✅ Found {len(available_package_names)} available packages: {available_package_names}")
             
             if not available_package_names:
@@ -99,18 +112,25 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 self.update_confidence(state, "knowledge_retrieval", 0.0)
                 return state
             
-            # Step 2: Fetch fields from all packages
+            # Step 2: Fetch fields from all packages (using tool)
             self.log_execution(state, f"   📦 Fetching fields from {len(available_package_names)} packages...")
             all_packages_metadata = []
             for pkg_name in available_package_names:
-                package_data = self.fair_ds_client.get_package(pkg_name)
-                if package_data and "metadata" in package_data:
-                    fields = package_data["metadata"]
+                pkg_result = self.tools["get_package"].invoke({"package_name": pkg_name})
+                if pkg_result["success"] and pkg_result["data"] and "metadata" in pkg_result["data"]:
+                    fields = pkg_result["data"]["metadata"]
                     all_packages_metadata.extend(fields)
                     self.log_execution(state, f"      • {pkg_name}: {len(fields)} fields")
+                else:
+                    self.log_execution(state, f"      ⚠️ {pkg_name}: failed or no metadata", "warning")
             
-            # Get terms from FAIR-DS API
-            terms = self.fair_ds_client.get_terms()  # Returns Dict[str, Dict] - already parsed
+            # Get terms from FAIR-DS API (using tool)
+            terms_result = self.tools["get_terms"].invoke({"force_refresh": False})
+            if not terms_result["success"]:
+                self.log_execution(state, f"⚠️ Failed to get terms: {terms_result['error']}", "warning")
+                terms = {}
+            else:
+                terms = terms_result["data"]  # Returns Dict[str, Dict] - already parsed
             
             # Group all fields by sheet
             packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(all_packages_metadata)
@@ -305,14 +325,18 @@ class KnowledgeRetrieverAgent(BaseAgent):
                             f"   🔍 {sheet}: LLM requested term search for: {terms_to_search}"
                         )
             
-            # Phase 4: Search for additional terms/fields if LLM requested
+            # Phase 4: Search for additional terms/fields if LLM requested (using tools)
             if all_terms_to_search and self.fair_ds_client:
                 self.log_execution(state, f"🔍 Phase 4: Searching for {len(all_terms_to_search)} additional terms...")
                 
                 for term in all_terms_to_search:
-                    # Search using /api/terms endpoint
-                    found_terms = self.fair_ds_client.search_terms_for_fields(term)
-                    if found_terms:
+                    # Search using /api/terms endpoint (tool)
+                    terms_search_result = self.tools["search_terms_for_fields"].invoke({
+                        "term_label": term,
+                        "definition": None
+                    })
+                    if terms_search_result["success"] and terms_search_result["data"]:
+                        found_terms = terms_search_result["data"]
                         self.log_execution(
                             state,
                             f"   📚 Found {len(found_terms)} terms matching '{term}'"
@@ -322,9 +346,15 @@ class KnowledgeRetrieverAgent(BaseAgent):
                             state["additional_terms"] = []
                         state["additional_terms"].extend(found_terms)
                     
-                    # Also search across packages for fields with matching labels
-                    found_fields = self.fair_ds_client.search_fields_in_packages(term, available_package_names)
-                    if found_fields:
+                    # Also search across packages for fields with matching labels (tool)
+                    # Convert list to comma-separated string for tool
+                    package_names_str = ",".join(available_package_names) if available_package_names else None
+                    fields_search_result = self.tools["search_fields_in_packages"].invoke({
+                        "field_label": term,
+                        "package_names": package_names_str
+                    })
+                    if fields_search_result["success"] and fields_search_result["data"]:
+                        found_fields = fields_search_result["data"]
                         self.log_execution(
                             state,
                             f"   📦 Found {len(found_fields)} fields matching '{term}' across packages"
