@@ -31,6 +31,13 @@ from ..services.mineru_client import MinerUClient, MinerUConversionError
 from ..services.confidence_aggregator import aggregate_confidence
 from ..tools.mineru_tools import create_mineru_convert_tool
 
+# Mem0 service (optional)
+try:
+    from ..services.mem0_service import Mem0Service, get_mem0_service
+except ImportError:
+    Mem0Service = None
+    get_mem0_service = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,6 +59,9 @@ class FAIRifierLangGraphApp:
         if self.mineru_client:
             self.mineru_tool = create_mineru_convert_tool(client=self.mineru_client)
             logger.info("MinerU tool enabled for LangGraph workflow.")
+        
+        # Initialize mem0 service for persistent memory (optional)
+        self.mem0_service = self._initialize_mem0_service()
         
         # Initialize retry counters (like old Orchestrator)
         self.global_retry_count = 0
@@ -140,6 +150,32 @@ class FAIRifierLangGraphApp:
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Failed to initialize MinerU client: %s", exc)
         return None
+    
+    def _initialize_mem0_service(self) -> Optional["Mem0Service"]:
+        """Initialize mem0 service if enabled and available.
+        
+        Returns:
+            Mem0Service instance or None if disabled/unavailable.
+        """
+        if not config.mem0_enabled:
+            logger.debug("Mem0 disabled by configuration")
+            return None
+        
+        if get_mem0_service is None:
+            logger.warning("mem0ai package not installed, memory features disabled")
+            return None
+        
+        try:
+            service = get_mem0_service()
+            if service and service.is_available():
+                logger.info("✅ Mem0 service enabled for persistent memory")
+                return service
+            else:
+                logger.warning("Mem0 service not available (check Qdrant connection)")
+                return None
+        except Exception as e:
+            logger.warning(f"Failed to initialize mem0 service: {e}")
+            return None
     
     def _initialize_checkpointer(self):
         """Initialize checkpointer based on configuration.
@@ -251,6 +287,38 @@ class FAIRifierLangGraphApp:
         previous_scores = []
         NO_PROGRESS_THRESHOLD = 2  # Exit if score unchanged for this many consecutive attempts
         
+        # Retrieve relevant memories before execution (if mem0 is enabled)
+        session_id = state.get("session_id")
+        if self.mem0_service and session_id:
+            try:
+                # Use agent's custom query hint if available, otherwise use default
+                query_hint = None
+                if hasattr(agent, 'get_memory_query_hint'):
+                    query_hint = agent.get_memory_query_hint(state)
+                
+                # Default query based on document info and agent name
+                if not query_hint:
+                    doc_title = state.get("document_info", {}).get("title", "")
+                    doc_domain = state.get("document_info", {}).get("research_domain", "")
+                    query_hint = f"Context for {agent_name}: {doc_title} {doc_domain}".strip()
+                
+                relevant_memories = self.mem0_service.search(
+                    query=query_hint,
+                    session_id=session_id,
+                    agent_id=agent_name,
+                    limit=5
+                )
+                
+                if relevant_memories:
+                    state["context"]["retrieved_memories"] = relevant_memories
+                    logger.debug(f"📚 Retrieved {len(relevant_memories)} memories for {agent_name}")
+                else:
+                    state["context"]["retrieved_memories"] = []
+                    
+            except Exception as e:
+                logger.warning(f"Memory retrieval failed for {agent_name}: {e}")
+                state["context"]["retrieved_memories"] = []
+        
         # Retry loop
         for attempt in range(1, self.max_step_retries + 2):  # +2 = initial + max_retries
             # Check global retry limit
@@ -334,6 +402,30 @@ class FAIRifierLangGraphApp:
             # Handle decision
             if decision == "ACCEPT":
                 logger.info(f"✅ {agent_name} completed successfully (score {score:.2f} >= accept threshold)")
+                
+                # Store key insights as memories (if mem0 is enabled)
+                if self.mem0_service and session_id:
+                    try:
+                        # Generate a summary of agent output for memory storage
+                        agent_output_summary = self._generate_agent_output_summary(
+                            agent_name, state, critic_eval
+                        )
+                        if agent_output_summary:
+                            self.mem0_service.add(
+                                messages=[{"role": "assistant", "content": agent_output_summary}],
+                                session_id=session_id,
+                                agent_id=agent_name,
+                                metadata={
+                                    "workflow_step": agent_name,
+                                    "score": score,
+                                    "attempt": attempt,
+                                    "timestamp": datetime.now().isoformat()
+                                }
+                            )
+                            logger.debug(f"💾 Stored memory for {agent_name}")
+                    except Exception as e:
+                        logger.warning(f"Memory storage failed for {agent_name}: {e}")
+                
                 break
             
             # Track score for no-progress detection
@@ -390,6 +482,75 @@ class FAIRifierLangGraphApp:
                 state = await self.critic.provide_feedback_to_agent(agent_name, critic_eval, state)
         
         return state
+    
+    def _generate_agent_output_summary(
+        self, 
+        agent_name: str, 
+        state: FAIRifierState, 
+        critic_eval: Dict[str, Any]
+    ) -> Optional[str]:
+        """Generate a summary of agent output for memory storage.
+        
+        Args:
+            agent_name: Name of the agent that produced the output
+            state: Current workflow state
+            critic_eval: Critic evaluation results
+            
+        Returns:
+            Summary string suitable for memory storage, or None if no summary available.
+        """
+        try:
+            summaries = []
+            
+            if agent_name == "DocumentParser":
+                doc_info = state.get("document_info", {})
+                if doc_info:
+                    title = doc_info.get("title", "Unknown")
+                    domain = doc_info.get("research_domain", "")
+                    keywords = doc_info.get("keywords", [])[:5]
+                    summaries.append(f"Parsed document: '{title}'")
+                    if domain:
+                        summaries.append(f"Research domain: {domain}")
+                    if keywords:
+                        summaries.append(f"Key topics: {', '.join(keywords)}")
+                        
+            elif agent_name == "KnowledgeRetriever":
+                knowledge = state.get("retrieved_knowledge", [])
+                if knowledge:
+                    packages = set()
+                    for k in knowledge[:10]:
+                        pkg = k.get("package_source") or k.get("metadata", {}).get("package", "")
+                        if pkg:
+                            packages.add(pkg)
+                    if packages:
+                        summaries.append(f"Selected FAIR-DS packages: {', '.join(packages)}")
+                    summaries.append(f"Retrieved {len(knowledge)} knowledge items")
+                    
+            elif agent_name == "JSONGenerator":
+                fields = state.get("metadata_fields", [])
+                if fields:
+                    high_conf = [f for f in fields if f.get("confidence", 0) > 0.7]
+                    summaries.append(f"Generated {len(fields)} metadata fields")
+                    if high_conf:
+                        summaries.append(f"{len(high_conf)} fields with high confidence")
+            
+            # Add critic feedback summary if available
+            if critic_eval:
+                score = critic_eval.get("score", 0)
+                summaries.append(f"Quality score: {score:.2f}")
+                
+                # Include specific strengths if available
+                strengths = critic_eval.get("strengths", [])
+                if strengths:
+                    summaries.append(f"Strengths: {'; '.join(strengths[:2])}")
+            
+            if summaries:
+                return f"[{agent_name}] " + ". ".join(summaries)
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Failed to generate summary for {agent_name}: {e}")
+            return None
     
     def get_graph_without_checkpointer(self):
         """Get a compiled graph without checkpointer for LangGraph Studio."""
@@ -1481,7 +1642,9 @@ Return JSON in the following format:
                 "parse_retry_count": 0,
                 "retrieve_retry_count": 0,
                 "generate_retry_count": 0
-            }
+            },
+            # Memory integration: session_id bound to thread_id for consistent resume
+            "session_id": project_id,
         }
         
         logger.info(f"🚀 Starting LangGraph Workflow (project: {project_id})")

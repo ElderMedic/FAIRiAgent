@@ -38,3 +38,15 @@ python-dotenv>=1.0.0
 # LangGraph CLI (optional, for langgraph dev command)
 # Install with: pip install -U "langgraph-cli[inmem]"
 # langgraph-cli[inmem]>=0.0.1
+
+# ============================================================================
+# Optional Dependencies (install only if needed)
+# ============================================================================
+
+# Memory layer (optional, for mem0 integration)
+# Provides persistent semantic memory for context compression and retrieval
+# Requires Qdrant server running at localhost:6333
+# Enable with: MEM0_ENABLED=true in .env
+# Install with: pip install mem0ai qdrant-client
+# mem0ai>=1.0.0
+# qdrant-client>=1.7.0

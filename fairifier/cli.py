@@ -1197,5 +1197,212 @@ def check_mineru(verbose: bool):
         click.echo("   - Run with --verbose for more details")
 
 
+@cli.group()
+def memory():
+    """Manage mem0 persistent memory for workflow sessions."""
+    pass
+
+
+@memory.command("list")
+@click.argument("session_id", required=False)
+@click.option(
+    "--agent",
+    "-a",
+    help="Filter by agent name (e.g., DocumentParser, JSONGenerator).",
+)
+@click.option(
+    "--limit",
+    "-n",
+    type=int,
+    default=50,
+    help="Maximum number of memories to display (default: 50).",
+)
+def memory_list(session_id: Optional[str], agent: Optional[str], limit: int):
+    """List memories for a session (project ID).
+    
+    If no session_id is provided, shows memory service status.
+    
+    Examples:
+    
+        fairifier memory list                    # Show status
+        fairifier memory list fairifier_20260129_120000  # List all memories
+        fairifier memory list fairifier_20260129_120000 -a JSONGenerator  # Filter by agent
+    """
+    # Check if mem0 is enabled
+    if not config.mem0_enabled:
+        click.echo("❌ Mem0 is disabled in configuration.")
+        click.echo("   Set MEM0_ENABLED=true in .env to enable.")
+        return
+    
+    # Try to get mem0 service
+    try:
+        from .services.mem0_service import get_mem0_service
+        mem0_service = get_mem0_service()
+    except ImportError:
+        click.echo("❌ mem0ai package not installed.")
+        click.echo("   Install with: pip install mem0ai")
+        return
+    
+    if not mem0_service or not mem0_service.is_available():
+        click.echo("❌ Mem0 service not available.")
+        click.echo("   Check Qdrant connection at: "
+                   f"{config.mem0_qdrant_host}:{config.mem0_qdrant_port}")
+        return
+    
+    if not session_id:
+        # Show status only
+        click.echo("=" * 60)
+        click.echo("Mem0 Memory Service Status")
+        click.echo("=" * 60)
+        click.echo(f"✅ Status:     Available")
+        click.echo(f"📦 Qdrant:     {config.mem0_qdrant_host}:{config.mem0_qdrant_port}")
+        click.echo(f"📁 Collection: {config.mem0_collection_name}")
+        click.echo(f"🧠 Embedding:  {config.mem0_embedding_model}")
+        click.echo("\nUsage: fairifier memory list <session_id>")
+        return
+    
+    # List memories for the session
+    click.echo("=" * 60)
+    click.echo(f"Memories for session: {session_id}")
+    click.echo("=" * 60)
+    
+    memories = mem0_service.list_memories(session_id, agent_id=agent)
+    
+    if not memories:
+        click.echo("\n(No memories found)")
+        return
+    
+    # Display memories
+    displayed = 0
+    for m in memories[:limit]:
+        if displayed > 0:
+            click.echo("-" * 40)
+        
+        memory_id = m.get("id", "unknown")[:12]
+        memory_text = m.get("memory", "")
+        agent_id = m.get("agent_id", "unknown")
+        metadata = m.get("metadata", {})
+        score = metadata.get("score", "N/A")
+        timestamp = metadata.get("timestamp", "")[:19] if metadata.get("timestamp") else ""
+        
+        click.echo(f"\n🆔 {memory_id}...")
+        click.echo(f"🤖 Agent: {agent_id}")
+        if score != "N/A":
+            click.echo(f"📊 Score: {score}")
+        if timestamp:
+            click.echo(f"⏰ Time:  {timestamp}")
+        click.echo(f"💭 {memory_text[:200]}{'...' if len(memory_text) > 200 else ''}")
+        
+        displayed += 1
+    
+    if len(memories) > limit:
+        click.echo(f"\n... and {len(memories) - limit} more (use -n to show more)")
+    
+    click.echo("\n" + "=" * 60)
+    click.echo(f"Total: {len(memories)} memories")
+
+
+@memory.command("clear")
+@click.argument("session_id")
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Skip confirmation prompt.",
+)
+def memory_clear(session_id: str, force: bool):
+    """Clear all memories for a session (project ID).
+    
+    This is useful for re-running a workflow with fresh context.
+    
+    Example:
+    
+        fairifier memory clear fairifier_20260129_120000
+    """
+    # Check if mem0 is enabled
+    if not config.mem0_enabled:
+        click.echo("❌ Mem0 is disabled in configuration.")
+        click.echo("   Set MEM0_ENABLED=true in .env to enable.")
+        return
+    
+    # Try to get mem0 service
+    try:
+        from .services.mem0_service import get_mem0_service
+        mem0_service = get_mem0_service()
+    except ImportError:
+        click.echo("❌ mem0ai package not installed.")
+        click.echo("   Install with: pip install mem0ai")
+        return
+    
+    if not mem0_service or not mem0_service.is_available():
+        click.echo("❌ Mem0 service not available.")
+        return
+    
+    # Count memories first
+    memories = mem0_service.list_memories(session_id)
+    count = len(memories)
+    
+    if count == 0:
+        click.echo(f"No memories found for session: {session_id}")
+        return
+    
+    # Confirm deletion
+    if not force:
+        click.echo(f"⚠️  About to delete {count} memories for session: {session_id}")
+        if not click.confirm("Are you sure?"):
+            click.echo("Cancelled.")
+            return
+    
+    # Delete memories
+    deleted = mem0_service.delete_session_memories(session_id)
+    
+    if deleted > 0:
+        click.echo(f"✅ Deleted {deleted} memories for session: {session_id}")
+    else:
+        click.echo(f"⚠️  No memories were deleted (may have been already cleared)")
+
+
+@memory.command("status")
+def memory_status():
+    """Show mem0 memory service status and configuration."""
+    click.echo("=" * 60)
+    click.echo("Mem0 Memory Service Status")
+    click.echo("=" * 60)
+    
+    click.echo("\n📋 Configuration:")
+    click.echo(f"   MEM0_ENABLED:          {config.mem0_enabled}")
+    click.echo(f"   MEM0_QDRANT_HOST:      {config.mem0_qdrant_host}")
+    click.echo(f"   MEM0_QDRANT_PORT:      {config.mem0_qdrant_port}")
+    click.echo(f"   MEM0_COLLECTION_NAME:  {config.mem0_collection_name}")
+    click.echo(f"   MEM0_EMBEDDING_MODEL:  {config.mem0_embedding_model}")
+    click.echo(f"   MEM0_LLM_MODEL:        {config.mem0_llm_model or '(uses main LLM)'}")
+    click.echo(f"   MEM0_OLLAMA_BASE_URL:  {config.mem0_ollama_base_url or '(uses main LLM base URL)'}")
+    
+    if not config.mem0_enabled:
+        click.echo("\n⚠️  Mem0 is DISABLED")
+        click.echo("   Set MEM0_ENABLED=true in .env to enable.")
+        return
+    
+    # Try to connect
+    click.echo("\n🔍 Connection Test:")
+    try:
+        from .services.mem0_service import get_mem0_service
+        mem0_service = get_mem0_service()
+        
+        if mem0_service and mem0_service.is_available():
+            click.echo("   ✅ Mem0 service is available")
+            click.echo("   ✅ Qdrant connection OK")
+        else:
+            click.echo("   ❌ Mem0 service not available")
+            click.echo(f"   Check Qdrant at: {config.mem0_qdrant_host}:{config.mem0_qdrant_port}")
+    except ImportError:
+        click.echo("   ❌ mem0ai package not installed")
+        click.echo("   Install with: pip install mem0ai")
+    except Exception as e:
+        click.echo(f"   ❌ Connection failed: {e}")
+    
+    click.echo("\n" + "=" * 60)
+
+
 if __name__ == "__main__":
     cli()

@@ -118,6 +118,15 @@ class FAIRifierState(TypedDict):
     execution_plan: Dict[str, Any]  # Current execution plan
     execution_summary: Dict[str, Any]  # Summary of execution (completed, failed, etc.)
     
+    # Context for retry and memory (contains critic_feedback, retrieved_memories, etc.)
+    context: Dict[str, Any]
+    
+    # Agent guidance from planner
+    agent_guidance: Dict[str, str]
+    
+    # Memory integration (optional, for mem0)
+    session_id: Optional[str]  # For mem0 session scoping, bound to thread_id
+    
     # Metadata
     status: str
     processing_start: str

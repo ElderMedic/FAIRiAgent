@@ -139,6 +139,16 @@ class FAIRifierConfig:
     checkpointer_backend: str = "sqlite"
     checkpoint_db_path: Path = project_root / "output" / ".checkpoints.db"
     
+    # Mem0 Memory Layer Configuration (Optional)
+    # Provides persistent semantic memory for context compression and retrieval
+    mem0_enabled: bool = False  # Off by default, opt-in feature
+    mem0_ollama_base_url: Optional[str] = None  # Defaults to llm_base_url if not set
+    mem0_embedding_model: str = "nomic-embed-text"  # Ollama embedding model
+    mem0_llm_model: Optional[str] = None  # Defaults to llm_model if not set
+    mem0_qdrant_host: str = "localhost"  # Qdrant server host
+    mem0_qdrant_port: int = 6333  # Qdrant server port
+    mem0_collection_name: str = "fairifier_memories"  # Qdrant collection name
+    
     def __post_init__(self):
         """Create necessary directories."""
         self.output_path.mkdir(exist_ok=True)
@@ -335,6 +345,45 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     
     if os.getenv("CHECKPOINT_DB_PATH"):
         config_instance.checkpoint_db_path = Path(os.getenv("CHECKPOINT_DB_PATH"))
+    
+    # Mem0 Memory Layer configuration
+    if os.getenv("MEM0_ENABLED"):
+        enabled_value = os.getenv("MEM0_ENABLED").lower()
+        config_instance.mem0_enabled = enabled_value in ("true", "1", "yes")
+    
+    if os.getenv("MEM0_OLLAMA_BASE_URL"):
+        config_instance.mem0_ollama_base_url = os.getenv("MEM0_OLLAMA_BASE_URL")
+    
+    if os.getenv("MEM0_EMBEDDING_MODEL"):
+        config_instance.mem0_embedding_model = os.getenv("MEM0_EMBEDDING_MODEL")
+    
+    if os.getenv("MEM0_LLM_MODEL"):
+        config_instance.mem0_llm_model = os.getenv("MEM0_LLM_MODEL")
+    
+    if os.getenv("MEM0_QDRANT_HOST"):
+        config_instance.mem0_qdrant_host = os.getenv("MEM0_QDRANT_HOST")
+    
+    if os.getenv("MEM0_QDRANT_PORT"):
+        config_instance.mem0_qdrant_port = int(os.getenv("MEM0_QDRANT_PORT"))
+    
+    # Also support MEM0_QDRANT_URL as "host:port" format
+    if os.getenv("MEM0_QDRANT_URL"):
+        qdrant_url = os.getenv("MEM0_QDRANT_URL")
+        # Parse URL like "http://localhost:6333" or "localhost:6333"
+        if "://" in qdrant_url:
+            qdrant_url = qdrant_url.split("://", 1)[1]
+        if ":" in qdrant_url:
+            host, port = qdrant_url.rsplit(":", 1)
+            config_instance.mem0_qdrant_host = host
+            try:
+                config_instance.mem0_qdrant_port = int(port)
+            except ValueError:
+                pass
+        else:
+            config_instance.mem0_qdrant_host = qdrant_url
+    
+    if os.getenv("MEM0_COLLECTION_NAME"):
+        config_instance.mem0_collection_name = os.getenv("MEM0_COLLECTION_NAME")
 
 
 # Global config instance

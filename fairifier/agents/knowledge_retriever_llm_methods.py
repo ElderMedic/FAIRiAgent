@@ -67,6 +67,11 @@ async def llm_select_relevant_packages(
     
     system_prompt = f"""You are an expert at selecting appropriate FAIR-DS metadata packages for research data.
 
+**CRITICAL CONSTRAINTS:**
+1. Maximum response size: 5,000 characters
+2. Keep reasoning concise (< 200 characters)
+3. Focus on essential package selection
+
 **Your task:** Analyze the document and select the MOST RELEVANT metadata packages from the REAL packages available in FAIR-DS API.
 
 {pkg_overview}
@@ -85,18 +90,23 @@ async def llm_select_relevant_packages(
 3. What methods are used? (sequencing, phenotyping, etc.)
 4. Which packages from the list above best match these characteristics?
 
-**OUTPUT FORMAT - CRITICAL:**
-Return ONLY valid JSON. Do NOT include:
-- Markdown code blocks (no ```json or ```)
-- Explanatory text before or after the JSON
-- Comments or notes
-- Any other content
+**OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**
+Wrap your JSON in markdown code blocks EXACTLY like this:
 
-Return ONLY the raw JSON object in this format:
+```json
 {{
-  "selected_packages": ["package1", "package2", ...],
-  "reasoning": "why these specific packages from the API are relevant"
+  "selected_packages": ["package1", "package2"],
+  "reasoning": "concise reason"
 }}
+```
+
+REQUIREMENTS:
+- Line 1: ```json (alone)
+- Lines 2-N: Valid JSON only
+- Line N+1: ``` (alone)
+- NO text before the opening ```json
+- NO text after the closing ```
+- NO comments in JSON
 
 Select at least 1 package. Choose as many as needed - there is no upper limit."""
 
@@ -119,12 +129,22 @@ Available FAIR-DS packages:
 
 Select the relevant packages for this document.
 
-**OUTPUT FORMAT - CRITICAL:**
-Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
-- DO NOT include explanatory text before or after the JSON
-- DO NOT include comments or notes
-- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
-- Return ONLY the JSON content, nothing else."""
+**OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**
+Wrap your JSON in markdown code blocks:
+
+```json
+{{
+  "selected_packages": ["pkg1", "pkg2"],
+  "reasoning": "brief reason"
+}}
+```
+
+REQUIREMENTS:
+- Line 1: ```json (alone)
+- Lines 2-N: Valid JSON only
+- Line N+1: ``` (alone)
+- NO text before/after block
+- NO comments in JSON"""
 
     messages = [
         SystemMessage(content=system_prompt),
@@ -258,6 +278,11 @@ async def llm_select_fields_from_package(
     
     system_prompt = f"""You are an expert at selecting relevant metadata fields.
 
+**CRITICAL CONSTRAINTS:**
+1. Maximum response size: 10,000 characters
+2. Keep reasoning concise (< 300 characters)
+3. Focus on essential field selection
+
 **ISA Sheet Level:** {isa_sheet.upper()}
 **ISA Level Description:** {isa_description}
 **Package:** {package_name}
@@ -301,36 +326,41 @@ The FAIR-DS API provides two search mechanisms:
 5. What fields are most important for findability and reusability at the {isa_sheet} level?
 6. Are there any specific metadata terms mentioned in the document that are not in the optional fields list? If so, note them for field search.
 
-**OUTPUT FORMAT - CRITICAL:**
-Return ONLY valid JSON. Do NOT include:
-- Markdown code blocks (no ```json or ```)
-- Explanatory text before or after the JSON
-- Comments or notes
-- Any other content
+**OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**
+Wrap your JSON in markdown code blocks EXACTLY like this:
 
-Return ONLY the raw JSON object in this format:
+```json
 {{
-  "selected_fields": ["field_label1", "field_label2", ...],
-  "terms_to_search": ["term1", "term2", ...],
-  "reasoning": "explanation focusing on {isa_sheet} level relevance"
+  "selected_fields": ["field1", "field2"],
+  "terms_to_search": ["term1"],
+  "reasoning": "brief explanation"
 }}
+```
+
+REQUIREMENTS:
+- Line 1: ```json (alone)
+- Lines 2-N: Valid JSON only
+- Line N+1: ``` (alone)
+- NO text before the opening ```json
+- NO text after the closing ```
+- NO comments in JSON
+- Reasoning: < 300 characters
 
 **Fields format:**
 - `selected_fields`: List of field labels from the optional fields list above
-- `terms_to_search`: (OPTIONAL) List of terms/field names to search for if not in the current list. The system will:
-  1. Search `/api/terms?label={{term}}` for matching term definitions
-  2. Search across all packages for fields with matching labels
-- `reasoning`: Explanation of your selection
+- `terms_to_search`: (OPTIONAL) List of terms/field names to search for if not in the current list
+- `reasoning`: Brief explanation (< 300 chars)
 
 **Example:**
-If the document mentions "soil temperature" but it's not in the optional fields list, you can include it in `terms_to_search`:
+```json
 {{
-  "selected_fields": ["field1", "field2", ...],
-  "terms_to_search": ["soil temperature", "pH"],
-  "reasoning": "..."
+  "selected_fields": ["field1", "field2"],
+  "terms_to_search": ["soil temperature"],
+  "reasoning": "Fields match document's soil analysis focus at {isa_sheet} level"
 }}
+```
 
-Select at least 5 fields. Choose as many as needed based on document content and metadata requirements. There is no upper limit - use your judgment to ensure comprehensive coverage for the {isa_sheet} level."""
+Select at least 5 fields. Choose as many as needed - there is no upper limit."""
 
     if critic_feedback:
         feedback_text = "\n\n**Improve based on feedback:**\n"
@@ -362,13 +392,24 @@ Examples of when to use term/field search:
 
 Select at least 5 relevant optional fields for the {isa_sheet} level. There is no upper limit - choose as many as needed.
 
-**OUTPUT FORMAT - CRITICAL:**
-Return ONLY valid JSON. Prefer raw JSON without markdown code blocks.
-- DO NOT include explanatory text before or after the JSON
-- DO NOT include comments or notes
-- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
-- Return ONLY the JSON content, nothing else.
-- Include `terms_to_search` array if you need to search for terms/fields not in the list above."""
+**OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**
+Wrap your JSON in markdown code blocks:
+
+```json
+{{
+  "selected_fields": ["field1", "field2"],
+  "terms_to_search": ["term1"],
+  "reasoning": "brief reason"
+}}
+```
+
+REQUIREMENTS:
+- Line 1: ```json (alone)
+- Lines 2-N: Valid JSON only
+- Line N+1: ``` (alone)
+- NO text before/after block
+- NO comments in JSON
+- Include `terms_to_search` array if needed"""
 
     messages = [
         SystemMessage(content=system_prompt),
