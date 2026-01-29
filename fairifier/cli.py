@@ -1302,6 +1302,122 @@ def memory_list(session_id: Optional[str], agent: Optional[str], limit: int):
     click.echo(f"Total: {len(memories)} memories")
 
 
+@memory.command("overview")
+@click.argument("session_id")
+@click.option(
+    "--simple",
+    "-s",
+    is_flag=True,
+    help="Use simple summary without LLM (faster).",
+)
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    help="Output raw JSON data.",
+)
+def memory_overview(session_id: str, simple: bool, output_json: bool):
+    """Generate an overview of memories for a session.
+    
+    Similar to ChatGPT's memory overview, this command analyzes all memories
+    stored for a workflow session and provides a natural language summary of
+    what the system has learned.
+    
+    Examples:
+    
+        fairifier memory overview my_project_20260129  # Full overview with LLM
+        fairifier memory overview my_project_20260129 -s  # Simple overview (no LLM)
+        fairifier memory overview my_project_20260129 --json  # Raw JSON output
+    """
+    # Check if mem0 is enabled
+    if not config.mem0_enabled:
+        click.echo("❌ Mem0 is disabled in configuration.")
+        click.echo("   Set MEM0_ENABLED=true in .env to enable.")
+        return
+    
+    # Try to get mem0 service
+    try:
+        from .services.mem0_service import get_mem0_service
+        mem0_service = get_mem0_service()
+    except ImportError:
+        click.echo("❌ mem0ai package not installed.")
+        click.echo("   Install with: pip install mem0ai")
+        return
+    
+    if not mem0_service or not mem0_service.is_available():
+        click.echo("❌ Mem0 service not available.")
+        click.echo("   Check Qdrant connection at: "
+                   f"{config.mem0_qdrant_host}:{config.mem0_qdrant_port}")
+        return
+    
+    # Generate overview
+    click.echo(f"🔍 Analyzing memories for session: {session_id}")
+    if not simple:
+        click.echo("   (Using LLM to generate natural language summary...)")
+    
+    overview = mem0_service.generate_memory_overview(
+        session_id=session_id,
+        use_llm=not simple
+    )
+    
+    # Check for errors
+    if "error" in overview:
+        click.echo(f"\n❌ Error: {overview['error']}")
+        return
+    
+    # Output format
+    if output_json:
+        # Raw JSON output
+        import json
+        click.echo(json.dumps(overview, indent=2, ensure_ascii=False))
+        return
+    
+    # Pretty formatted output
+    click.echo("\n" + "=" * 70)
+    click.echo(f"📚 Memory Overview: {session_id}")
+    click.echo("=" * 70)
+    
+    # Statistics
+    click.echo(f"\n📊 Statistics:")
+    click.echo(f"   Total Memories: {overview['total_memories']}")
+    
+    if overview.get('agents'):
+        click.echo(f"\n🤖 Agent Activity:")
+        for agent, count in sorted(overview['agents'].items(), key=lambda x: x[1], reverse=True):
+            click.echo(f"   • {agent}: {count} memories")
+    
+    if overview.get('themes'):
+        click.echo(f"\n🏷️  Key Themes:")
+        for theme in overview['themes']:
+            click.echo(f"   • {theme}")
+    
+    # Main summary
+    if overview.get('summary'):
+        click.echo(f"\n📝 Summary:")
+        # Indent the summary for better readability
+        summary_lines = overview['summary'].split('\n')
+        for line in summary_lines:
+            if line.strip():
+                click.echo(f"   {line}")
+            else:
+                click.echo()
+    
+    # Sample memories preview
+    if overview.get('memory_texts') and len(overview['memory_texts']) > 0:
+        click.echo(f"\n💡 Recent Memories (showing 5/{overview['total_memories']}):")
+        for i, mem in enumerate(overview['memory_texts'][:5], 1):
+            # Truncate long memories
+            display_mem = mem if len(mem) <= 80 else mem[:77] + "..."
+            click.echo(f"   {i}. {display_mem}")
+        
+        if overview['total_memories'] > 5:
+            click.echo(f"   ... and {overview['total_memories'] - 5} more")
+    
+    click.echo("\n" + "=" * 70)
+    click.echo("💡 Tip: Use 'fairifier memory list <session_id>' to see all memories")
+    click.echo()
+
+
 @memory.command("clear")
 @click.argument("session_id")
 @click.option(
@@ -1375,8 +1491,11 @@ def memory_status():
     click.echo(f"   MEM0_QDRANT_PORT:      {config.mem0_qdrant_port}")
     click.echo(f"   MEM0_COLLECTION_NAME:  {config.mem0_collection_name}")
     click.echo(f"   MEM0_EMBEDDING_MODEL:  {config.mem0_embedding_model}")
+    click.echo(f"   MEM0_EMBEDDING_DIMS:   {config.mem0_embedding_dims}")
+    click.echo(f"   MEM0_LLM_PROVIDER:     {config.mem0_llm_provider}")
     click.echo(f"   MEM0_LLM_MODEL:        {config.mem0_llm_model or '(uses main LLM)'}")
-    click.echo(f"   MEM0_OLLAMA_BASE_URL:  {config.mem0_ollama_base_url or '(uses main LLM base URL)'}")
+    click.echo(f"   MEM0_LLM_BASE_URL:     {config.mem0_llm_base_url or '(not set)'}")
+    click.echo(f"   MEM0_OLLAMA_BASE_URL:  {config.mem0_ollama_base_url or '(not set)'}")
     
     if not config.mem0_enabled:
         click.echo("\n⚠️  Mem0 is DISABLED")

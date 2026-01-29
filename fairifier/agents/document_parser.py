@@ -80,6 +80,9 @@ class DocumentParserAgent(BaseAgent):
             critic_feedback = feedback.get("critic_feedback")
             planner_instruction = feedback.get("planner_instruction")
             guidance_history = feedback.get("guidance_history") or []
+            prior_memory_context = self.format_retrieved_memories_for_prompt(
+                feedback.get("retrieved_memories") or []
+            )
             
             if critic_feedback:
                 self.log_execution(state, "🔄 Retrying with Critic feedback...")
@@ -110,7 +113,8 @@ class DocumentParserAgent(BaseAgent):
                 text, 
                 critic_feedback,
                 is_structured_markdown=is_mineru_content,
-                planner_instruction=planner_instruction
+                planner_instruction=planner_instruction,
+                prior_memory_context=prior_memory_context or None
             )
             
             # Remove raw_text if LLM included it (to avoid passing large text to subsequent agents)
@@ -307,3 +311,39 @@ class DocumentParserAgent(BaseAgent):
             return 0.3
         else:
             return 0.1
+    
+    def get_memory_query_hint(self, state: FAIRifierState) -> Optional[str]:
+        """
+        Generate memory query hint for DocumentParser.
+        
+        Focuses on: similar document types' parsing strategies, quality patterns,
+        and common issues (e.g., "PDF documents <500 words often lack sufficient metadata").
+        
+        Args:
+            state: Current workflow state
+            
+        Returns:
+            Query hint string for memory retrieval, or None for default
+        """
+        doc_info = state.get("document_info", {})
+        doc_type = doc_info.get("document_type", "unknown")
+        source = state.get("document_source", "")
+        
+        # Determine file format
+        file_type = "PDF" if source.lower().endswith(".pdf") else "text"
+        
+        # Check if we have MinerU conversion info
+        conversion_info = state.get("document_conversion", {})
+        has_mineru = bool(conversion_info.get("markdown_path"))
+        
+        # Build query focusing on parsing strategies and quality patterns
+        if has_mineru:
+            return (
+                f"Document parsing strategies, quality patterns, and metadata extraction "
+                f"best practices for {doc_type} documents in {file_type} format with structured conversion"
+            )
+        else:
+            return (
+                f"Document parsing strategies, quality patterns, and common issues "
+                f"for {doc_type} documents in {file_type} format"
+            )

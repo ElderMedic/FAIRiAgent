@@ -38,6 +38,9 @@ class JSONGeneratorAgent(BaseAgent):
             critic_feedback = feedback.get("critic_feedback")
             planner_instruction = feedback.get("planner_instruction")
             guidance_history = feedback.get("guidance_history") or []
+            prior_memory_context = self.format_retrieved_memories_for_prompt(
+                feedback.get("retrieved_memories") or []
+            )
             
             if critic_feedback:
                 self.log_execution(state, "🔄 Retrying metadata generation with Critic feedback...")
@@ -57,7 +60,8 @@ class JSONGeneratorAgent(BaseAgent):
                 f"from KnowledgeRetriever (already filtered for relevance)"
             )
             metadata_fields = await self._generate_with_llm(
-                doc_info, knowledge_items, document_text, critic_feedback, planner_instruction
+                doc_info, knowledge_items, document_text, critic_feedback, planner_instruction,
+                prior_memory_context=prior_memory_context or None
             )
             self.log_execution(
                 state, 
@@ -123,7 +127,8 @@ class JSONGeneratorAgent(BaseAgent):
         knowledge_items: List[Dict[str, Any]],
         document_text: str,
         critic_feedback: Optional[Dict[str, Any]] = None,
-        planner_instruction: Optional[str] = None
+        planner_instruction: Optional[str] = None,
+        prior_memory_context: Optional[str] = None
     ) -> List[MetadataField]:
         """
         Generate metadata fields with LLM-based value extraction.
@@ -156,7 +161,8 @@ class JSONGeneratorAgent(BaseAgent):
         # Generate values for all selected fields
         self.logger.info("Generating metadata values for all selected fields...")
         mapped_fields = await self.llm_helper.generate_complete_metadata(
-            doc_info, selected_fields, document_text, critic_feedback, planner_instruction
+            doc_info, selected_fields, document_text, critic_feedback, planner_instruction,
+            prior_memory_context=prior_memory_context
         )
         
         # Build lookup for knowledge items (to get FAIR-DS metadata)
@@ -629,4 +635,34 @@ class JSONGeneratorAgent(BaseAgent):
         
         confidence = avg_confidence + required_bonus - field_count_penalty
         return max(0.0, min(1.0, confidence))
+    
+    def get_memory_query_hint(self, state: FAIRifierState) -> Optional[str]:
+        """
+        Generate memory query hint for JSONGenerator.
+        
+        Focuses on: field mapping examples, value generation patterns, and ontology URIs
+        for the specific packages being used.
+        
+        Args:
+            state: Current workflow state
+            
+        Returns:
+            Query hint string for memory retrieval, or None for default
+        """
+        packages = state.get("selected_packages", [])
+        doc_info = state.get("document_info", {})
+        domain = doc_info.get("research_domain", "")
+        
+        if packages:
+            # Use first 3 packages for specificity
+            pkg_str = ", ".join(packages[:3])
+            base_query = (
+                f"Field mapping examples, value generation patterns, and ontology URIs "
+                f"for packages: {pkg_str}"
+            )
+            if domain:
+                base_query += f" in {domain} domain"
+            return base_query
+        else:
+            return "FAIR metadata field mapping and value generation best practices"
 

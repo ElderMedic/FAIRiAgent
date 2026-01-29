@@ -11,7 +11,7 @@ This implements a proper LangGraph application where:
 import logging
 import json
 import os
-from typing import Dict, Any, Literal, Optional, Tuple
+from typing import Dict, Any, Literal, Optional, Tuple, List, Callable
 from datetime import datetime
 from langsmith import traceable
 
@@ -171,11 +171,13 @@ class FAIRifierLangGraphApp:
                 logger.info("✅ Mem0 service enabled for persistent memory")
                 return service
             else:
-                logger.warning("Mem0 service not available (check Qdrant connection)")
+                logger.info(
+                    "Mem0 not used (optional). Workflow continues without memory layer."
+                )
                 return None
-        except Exception as e:
-            logger.warning(f"Failed to initialize mem0 service: {e}")
-            return None
+        except Exception:
+            # Only reachable when MEM0_STRICT=1 and mem0 init failed: re-raise
+            raise
     
     def _initialize_checkpointer(self):
         """Initialize checkpointer based on configuration.
@@ -247,6 +249,309 @@ class FAIRifierLangGraphApp:
                 f"Must be 'none', 'memory', or 'sqlite'"
             )
     
+    def _retrieve_relevant_memories(
+        self,
+        agent_name: str,
+        state: FAIRifierState,
+        session_id: str,
+        top_k: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Retrieve relevant memories before agent execution (R in R+W).
+        
+        Query construction: task + doc_type + schema + failure_signals
+        Filters: project_id/doc_hash/agent_name with cross-agent support
+        
+        Args:
+            agent_name: Name of the agent about to execute
+            state: Current workflow state (for context extraction)
+            session_id: Session ID for memory filtering
+            top_k: Number of memories to retrieve
+            
+        Returns:
+            List of relevant memories with content and metadata
+        """
+        if not self.mem0_service:
+            return []
+            
+        try:
+            # Extract context for query construction
+            doc_info = state.get("document_info", {})
+            doc_type = doc_info.get("document_type", "document")
+            domain = doc_info.get("research_domain", "")
+            
+            # Build task-specific query (not "Context for agent X")
+            if agent_name == "DocumentParser":
+                query = (
+                    f"parsing {doc_type} in {domain or 'scientific'} domain: "
+                    f"extraction rules validation failures common issues"
+                )
+            elif agent_name == "KnowledgeRetriever":
+                query = (
+                    f"FAIR-DS packages ontologies for {domain or doc_type}: "
+                    f"package combinations field mappings coverage issues"
+                )
+            elif agent_name == "JSONGenerator":
+                query = (
+                    f"FAIR metadata for {domain or doc_type}: "
+                    f"field-ontology mappings confidence schema validation"
+                )
+            elif agent_name == "Critic":
+                query = (
+                    f"evaluating {domain or doc_type} metadata quality: "
+                    f"common issues thresholds improvement patterns"
+                )
+            elif agent_name == "Planner":
+                query = (
+                    f"workflow strategy for {domain or doc_type}: "
+                    f"orchestration retry failure handling"
+                )
+            else:
+                query = f"workflow for {domain or doc_type}"
+            
+            # Search with cross-agent support
+            memories = self.mem0_service.search(
+                query=query,
+                session_id=session_id,
+                limit=top_k
+            )
+            
+            if memories:
+                logger.info(
+                    f"📚 Retrieved {len(memories)} memories for {agent_name}"
+                )
+            
+            return memories
+            
+        except Exception as e:
+            logger.warning(f"Memory retrieval failed for {agent_name}: {e}")
+            return []
+    
+    def _should_write_memory(
+        self,
+        agent_name: str,
+        state: FAIRifierState,
+        critic_eval: Dict[str, Any],
+        attempt: int
+    ) -> bool:
+        """Determine if output should be written to memory (W gating).
+        
+        Only write: constraints/decisions/repair rules/preferences/failures
+        
+        Gating criteria:
+        - High critic score (>0.75) - lowered threshold
+        - First success after failures (repair rule learned)
+        - Novel failure patterns (for future avoidance)
+        - Workflow decisions (package selection, field mappings)
+        """
+        score = critic_eval.get("score", 0)
+        decision = critic_eval.get("decision", "")
+        
+        # Rule 1: High-quality outputs (lowered to 0.75 from 0.8)
+        if decision == "ACCEPT" and score > 0.75:
+            logger.info(
+                f"✅ Write gate passed: high-quality (score={score:.2f})"
+            )
+            return True
+        
+        # Rule 2: Successful repair (learned correction)
+        if decision == "ACCEPT" and attempt > 1:
+            logger.info(
+                f"✅ Write gate passed: learned repair (attempt={attempt})"
+            )
+            return True
+        
+        # Rule 3: Failure patterns (for avoidance)
+        if decision == "REJECT" and attempt == 1:
+            issues = critic_eval.get("issues", [])
+            if issues and len(issues) > 0:
+                logger.info("✅ Write gate passed: novel failure pattern")
+                return True
+        
+        # Rule 4: Workflow decisions (always valuable)
+        if decision == "ACCEPT" and agent_name in ["KnowledgeRetriever", "JSONGenerator"]:
+            logger.info(
+                f"✅ Write gate passed: workflow decision from {agent_name}"
+            )
+            return True
+        
+        logger.info(
+            f"❌ Write gate failed: score={score:.2f}, "
+            f"decision={decision}, attempt={attempt}"
+        )
+        return False
+    
+    def _extract_actionable_insight(
+        self,
+        agent_name: str,
+        state: FAIRifierState,
+        critic_eval: Dict[str, Any],
+        attempt: int
+    ) -> List[str]:
+        """Extract actionable insights including workflow decisions.
+        
+        Returns list of insights (not just one) to capture:
+        - Document patterns (for DocumentParser)
+        - Package selections (for KnowledgeRetriever)
+        - Field mappings (for JSONGenerator)
+        - Repair rules
+        - Failure causes
+        """
+        try:
+            decision = critic_eval.get("decision", "")
+            score = critic_eval.get("score", 0)
+            insights = []
+            
+            # === KnowledgeRetriever: Capture package selection decisions ===
+            if agent_name == "KnowledgeRetriever" and decision == "ACCEPT":
+                knowledge = state.get("retrieved_knowledge", [])
+                doc_info = state.get("document_info", {})
+                domain = doc_info.get("research_domain", "") if doc_info else ""
+                
+                logger.info(f"🔍 KR insight extraction: knowledge count={len(knowledge)}, domain='{domain}'")
+                
+                if knowledge:
+                    # Extract selected packages
+                    packages = set()
+                    for k in knowledge[:20]:
+                        if isinstance(k, dict):
+                            pkg = k.get("package_source") or k.get("metadata", {}).get("package", "")
+                            if pkg and pkg not in ["default"]:
+                                packages.add(pkg)
+                    
+                    logger.info(f"   Extracted packages: {packages}")
+                    
+                    if packages:
+                        pkg_list = sorted(list(packages))[:4]
+                        if domain:
+                            insights.append(
+                                f"{domain} research requires FAIR-DS packages: {', '.join(pkg_list)}"
+                            )
+                        else:
+                            insights.append(
+                                f"FAIR-DS packages selected: {', '.join(pkg_list)}"
+                            )
+                    
+                    # Extract ontology usage
+                    ontologies = set()
+                    for k in knowledge[:20]:
+                        if isinstance(k, dict):
+                            onto = k.get("ontology_id", "")
+                            if onto and ":" in onto:
+                                prefix = onto.split(":")[0]
+                                if prefix in ["ENVO", "OBI", "EDAM", "NPO", "GO", "ECO", "CHEBI"]:
+                                    ontologies.add(prefix)
+                    
+                    logger.info(f"   Extracted ontologies: {ontologies}")
+                    
+                    if ontologies:
+                        onto_str = ", ".join(sorted(ontologies))
+                        insights.append(
+                            f"FAIR-DS ontologies mapped: {onto_str}"
+                        )
+                    
+                    # Add count insight if significant
+                    if len(knowledge) > 50:
+                        insights.append(
+                            f"Complex study requires {len(knowledge)} FAIR-DS metadata terms"
+                        )
+            
+            # === JSONGenerator: Capture field mapping patterns ===
+            elif agent_name == "JSONGenerator" and decision == "ACCEPT":
+                fields = state.get("metadata_fields", [])
+                doc_info = state.get("document_info", {})
+                domain = doc_info.get("research_domain", "") if doc_info else ""
+                
+                logger.info(f"🔍 JG insight extraction: fields count={len(fields)}, domain='{domain}'")
+                
+                if fields:
+                    # Sample field-ontology mappings
+                    mappings = []
+                    for f in fields[:20]:
+                        if isinstance(f, dict):
+                            field_name = f.get("field_name", "")
+                            onto_uri = f.get("ontology_uri", "")
+                            if onto_uri and ":" in onto_uri:
+                                prefix = onto_uri.split(":")[0].split("/")[-1]
+                                if field_name:
+                                    mappings.append(f"{field_name}→{prefix}")
+                    
+                    logger.info(f"   Extracted mappings: {len(mappings)}")
+                    
+                    if mappings:
+                        sample = mappings[:4]
+                        insights.append(
+                            f"Metadata field mappings discovered: {', '.join(sample)}"
+                        )
+                    
+                    # ISA level distribution
+                    isa_levels = {}
+                    for f in fields:
+                        if isinstance(f, dict):
+                            level = f.get("isa_level", "unknown")
+                            isa_levels[level] = isa_levels.get(level, 0) + 1
+                    
+                    logger.info(f"   ISA levels: {isa_levels}")
+                    
+                    if len(isa_levels) > 1:
+                        level_str = ", ".join([f"{k}:{v}" for k, v in sorted(isa_levels.items())[:3]])
+                        insights.append(f"Metadata spans ISA levels: {level_str}")
+                    
+                    # Total field count
+                    if len(fields) > 30:
+                        insights.append(
+                            f"Generated {len(fields)} FAIR-DS compliant metadata fields"
+                        )
+            
+            # === DocumentParser: Capture document patterns ===
+            elif agent_name == "DocumentParser" and decision == "ACCEPT":
+                doc_info = state.get("document_info", {})
+                
+                logger.info(f"🔍 DP insight extraction: doc_info keys={list(doc_info.keys()) if doc_info else []}")
+                
+                if doc_info:
+                    doc_type = doc_info.get("document_type", "")
+                    domain = doc_info.get("research_domain", "")
+                    study_design = doc_info.get("study_design", "")
+                    organisms = doc_info.get("organisms", [])
+                    
+                    if domain and doc_type:
+                        insights.append(f"{domain} research typically uses {doc_type} format")
+                    
+                    if study_design and len(study_design) > 10:
+                        insights.append(f"Study design pattern: {study_design[:100]}")
+                    
+                    if organisms and len(organisms) > 0:
+                        org_sample = organisms[:2] if isinstance(organisms, list) else []
+                        if org_sample:
+                            insights.append(f"Model organisms: {', '.join(org_sample)}")
+            
+            # === Repairs: what was fixed ===
+            if decision == "ACCEPT" and attempt > 1:
+                improvements = critic_eval.get("improvements", [])
+                if improvements:
+                    fix = improvements[0][:120]
+                    insights.append(f"Repair learned: {fix}")
+            
+            # === High-quality patterns ===
+            if decision == "ACCEPT" and score > 0.75:
+                strengths = critic_eval.get("strengths", [])
+                if strengths and not insights:  # Only if no workflow insights yet
+                    strength = strengths[0][:120]
+                    insights.append(f"Quality pattern: {strength}")
+            
+            # === Failures: root causes ===
+            if decision == "REJECT":
+                issues = critic_eval.get("issues", [])
+                if issues:
+                    issue = issues[0][:120]
+                    insights.append(f"Failure cause: {issue}")
+            
+            return insights if insights else []
+            
+        except Exception as e:
+            logger.warning(f"Failed to extract insights for {agent_name}: {e}")
+            return []
+    
     async def _execute_agent_with_retry(
         self,
         state: FAIRifierState,
@@ -258,11 +563,12 @@ class FAIRifierLangGraphApp:
         Execute an agent with Critic evaluation and retry logic.
         
         Flow:
-        1. Agent executes
-        2. Critic evaluates
-        3. If ACCEPT: done
-        4. If not ACCEPT and retries left: provide feedback, retry
-        5. If not ACCEPT and no retries left: accept with review flag or fail
+        1. Retrieve memories (R)
+        2. Agent executes
+        3. Critic evaluates
+        4. If ACCEPT: write memory if gated (W)
+        5. If not ACCEPT and retries left: provide feedback, retry
+        6. If not ACCEPT and no retries: accept with review or fail
         
         Args:
             state: Current workflow state
@@ -287,37 +593,18 @@ class FAIRifierLangGraphApp:
         previous_scores = []
         NO_PROGRESS_THRESHOLD = 2  # Exit if score unchanged for this many consecutive attempts
         
-        # Retrieve relevant memories before execution (if mem0 is enabled)
+        # [R] Retrieve relevant memories before execution
         session_id = state.get("session_id")
         if self.mem0_service and session_id:
-            try:
-                # Use agent's custom query hint if available, otherwise use default
-                query_hint = None
-                if hasattr(agent, 'get_memory_query_hint'):
-                    query_hint = agent.get_memory_query_hint(state)
-                
-                # Default query based on document info and agent name
-                if not query_hint:
-                    doc_title = state.get("document_info", {}).get("title", "")
-                    doc_domain = state.get("document_info", {}).get("research_domain", "")
-                    query_hint = f"Context for {agent_name}: {doc_title} {doc_domain}".strip()
-                
-                relevant_memories = self.mem0_service.search(
-                    query=query_hint,
-                    session_id=session_id,
-                    agent_id=agent_name,
-                    limit=5
-                )
-                
-                if relevant_memories:
-                    state["context"]["retrieved_memories"] = relevant_memories
-                    logger.debug(f"📚 Retrieved {len(relevant_memories)} memories for {agent_name}")
-                else:
-                    state["context"]["retrieved_memories"] = []
-                    
-            except Exception as e:
-                logger.warning(f"Memory retrieval failed for {agent_name}: {e}")
-                state["context"]["retrieved_memories"] = []
+            relevant_memories = self._retrieve_relevant_memories(
+                agent_name=agent_name,
+                state=state,
+                session_id=session_id,
+                top_k=10
+            )
+            state["context"]["retrieved_memories"] = relevant_memories
+        else:
+            state["context"]["retrieved_memories"] = []
         
         # Retry loop
         for attempt in range(1, self.max_step_retries + 2):  # +2 = initial + max_retries
@@ -401,30 +688,59 @@ class FAIRifierLangGraphApp:
             
             # Handle decision
             if decision == "ACCEPT":
-                logger.info(f"✅ {agent_name} completed successfully (score {score:.2f} >= accept threshold)")
+                logger.info(
+                    f"✅ {agent_name} completed successfully "
+                    f"(score {score:.2f} >= accept threshold)"
+                )
                 
-                # Store key insights as memories (if mem0 is enabled)
+                # [W] Write memory with gating (only valuable insights)
                 if self.mem0_service and session_id:
                     try:
-                        # Generate a summary of agent output for memory storage
-                        agent_output_summary = self._generate_agent_output_summary(
-                            agent_name, state, critic_eval
+                        # Check if this output deserves memory storage
+                        should_write = self._should_write_memory(
+                            agent_name, state, critic_eval, attempt
                         )
-                        if agent_output_summary:
-                            self.mem0_service.add(
-                                messages=[{"role": "assistant", "content": agent_output_summary}],
-                                session_id=session_id,
-                                agent_id=agent_name,
-                                metadata={
-                                    "workflow_step": agent_name,
-                                    "score": score,
-                                    "attempt": attempt,
-                                    "timestamp": datetime.now().isoformat()
-                                }
+                        
+                        if should_write:
+                            # Extract actionable insights (can be multiple)
+                            insights = self._extract_actionable_insight(
+                                agent_name, state, critic_eval, attempt
                             )
-                            logger.debug(f"💾 Stored memory for {agent_name}")
+                            
+                            if insights:
+                                # Store each insight separately for better retrieval
+                                for insight in insights:
+                                    self.mem0_service.add(
+                                        messages=[{
+                                            "role": "assistant",
+                                            "content": insight
+                                        }],
+                                        session_id=session_id,
+                                        agent_id=agent_name,
+                                        metadata={
+                                            "workflow_step": agent_name,
+                                            "score": score,
+                                            "attempt": attempt,
+                                            "decision": decision,
+                                            "timestamp": datetime.now().isoformat()
+                                        }
+                                    )
+                                logger.info(
+                                    f"💾 Stored {len(insights)} memories for {agent_name}"
+                                )
+                            else:
+                                logger.info(
+                                    f"⏭️  No actionable insights extracted from {agent_name}"
+                                )
+                        else:
+                            logger.info(
+                                f"⏭️  Skipped memory write for {agent_name} "
+                                f"(didn't pass gating)"
+                            )
                     except Exception as e:
-                        logger.warning(f"Memory storage failed for {agent_name}: {e}")
+                        logger.warning(
+                            f"Memory storage failed for {agent_name}: {e}"
+                        )
                 
                 break
             
@@ -482,75 +798,6 @@ class FAIRifierLangGraphApp:
                 state = await self.critic.provide_feedback_to_agent(agent_name, critic_eval, state)
         
         return state
-    
-    def _generate_agent_output_summary(
-        self, 
-        agent_name: str, 
-        state: FAIRifierState, 
-        critic_eval: Dict[str, Any]
-    ) -> Optional[str]:
-        """Generate a summary of agent output for memory storage.
-        
-        Args:
-            agent_name: Name of the agent that produced the output
-            state: Current workflow state
-            critic_eval: Critic evaluation results
-            
-        Returns:
-            Summary string suitable for memory storage, or None if no summary available.
-        """
-        try:
-            summaries = []
-            
-            if agent_name == "DocumentParser":
-                doc_info = state.get("document_info", {})
-                if doc_info:
-                    title = doc_info.get("title", "Unknown")
-                    domain = doc_info.get("research_domain", "")
-                    keywords = doc_info.get("keywords", [])[:5]
-                    summaries.append(f"Parsed document: '{title}'")
-                    if domain:
-                        summaries.append(f"Research domain: {domain}")
-                    if keywords:
-                        summaries.append(f"Key topics: {', '.join(keywords)}")
-                        
-            elif agent_name == "KnowledgeRetriever":
-                knowledge = state.get("retrieved_knowledge", [])
-                if knowledge:
-                    packages = set()
-                    for k in knowledge[:10]:
-                        pkg = k.get("package_source") or k.get("metadata", {}).get("package", "")
-                        if pkg:
-                            packages.add(pkg)
-                    if packages:
-                        summaries.append(f"Selected FAIR-DS packages: {', '.join(packages)}")
-                    summaries.append(f"Retrieved {len(knowledge)} knowledge items")
-                    
-            elif agent_name == "JSONGenerator":
-                fields = state.get("metadata_fields", [])
-                if fields:
-                    high_conf = [f for f in fields if f.get("confidence", 0) > 0.7]
-                    summaries.append(f"Generated {len(fields)} metadata fields")
-                    if high_conf:
-                        summaries.append(f"{len(high_conf)} fields with high confidence")
-            
-            # Add critic feedback summary if available
-            if critic_eval:
-                score = critic_eval.get("score", 0)
-                summaries.append(f"Quality score: {score:.2f}")
-                
-                # Include specific strengths if available
-                strengths = critic_eval.get("strengths", [])
-                if strengths:
-                    summaries.append(f"Strengths: {'; '.join(strengths[:2])}")
-            
-            if summaries:
-                return f"[{agent_name}] " + ". ".join(summaries)
-            return None
-            
-        except Exception as e:
-            logger.debug(f"Failed to generate summary for {agent_name}: {e}")
-            return None
     
     def get_graph_without_checkpointer(self):
         """Get a compiled graph without checkpointer for LangGraph Studio."""
@@ -814,6 +1061,19 @@ class FAIRifierLangGraphApp:
             state["execution_history"] = []
         if "reasoning_chain" not in state:
             state["reasoning_chain"] = []
+        if "context" not in state:
+            state["context"] = {}
+        
+        # [R] Retrieve planning memories before execution
+        session_id = state.get("session_id")
+        if self.mem0_service and session_id:
+            relevant_memories = self._retrieve_relevant_memories(
+                agent_name="Planner",
+                state=state,
+                session_id=session_id,
+                top_k=5
+            )
+            state["context"]["retrieved_memories"] = relevant_memories
         
         try:
             # Get parsed document info (if available)
@@ -890,6 +1150,36 @@ Return JSON in the following format:
             logger.info(f"✅ Workflow plan created: {plan.get('strategy', 'standard')}")
             logger.info(f"   Document type: {plan.get('document_type')}")
             logger.info(f"   Research domain: {plan.get('research_domain')}")
+            
+            # [W] Store planning insights (if valuable)
+            if self.mem0_service and session_id:
+                try:
+                    strategy = plan.get('strategy', '')
+                    doc_type = plan.get('document_type', '')
+                    domain = plan.get('research_domain', '')
+                    
+                    # Only store non-standard strategies or novel domain patterns
+                    if strategy not in ['standard', 'unknown'] or domain not in ['unknown', '']:
+                        insight = (
+                            f"[Planner] Strategy '{strategy}' for {doc_type} "
+                            f"in {domain}: "
+                            f"{plan.get('reasoning', '')[:100]}"
+                        )
+                        self.mem0_service.add(
+                            messages=[{"role": "assistant", "content": insight}],
+                            session_id=session_id,
+                            agent_id="Planner",
+                            metadata={
+                                "workflow_step": "Planner",
+                                "strategy": strategy,
+                                "document_type": doc_type,
+                                "research_domain": domain,
+                                "timestamp": datetime.now().isoformat()
+                            }
+                        )
+                        logger.info("💾 Stored planning insight")
+                except Exception as e:
+                    logger.warning(f"Planning memory storage failed: {e}")
             
         except Exception as e:
             logger.error(f"❌ Planning failed: {e}")

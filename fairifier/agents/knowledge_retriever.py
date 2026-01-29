@@ -166,6 +166,9 @@ class KnowledgeRetrieverAgent(BaseAgent):
             critic_feedback = feedback.get("critic_feedback")
             planner_instruction = feedback.get("planner_instruction")
             guidance_history = feedback.get("guidance_history") or []
+            prior_memory_context = self.format_retrieved_memories_for_prompt(
+                feedback.get("retrieved_memories") or []
+            )
             
             if critic_feedback:
                 self.log_execution(state, "🔄 Retrying with Critic feedback...")
@@ -190,7 +193,8 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 doc_info,
                 all_packages,
                 critic_feedback,
-                planner_instruction=planner_instruction
+                planner_instruction=planner_instruction,
+                prior_memory_context=prior_memory_context or None
             )
             self.log_execution(state, f"✅ LLM selected packages: {selected_package_names}")
             
@@ -505,3 +509,34 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 requested.append(keyword)
         
         return requested
+    
+    def get_memory_query_hint(self, state: FAIRifierState) -> Optional[str]:
+        """
+        Generate memory query hint for KnowledgeRetriever.
+        
+        Focuses on: domain-specific package recommendations, ontology preferences,
+        and field mappings learned from similar research domains.
+        
+        Args:
+            state: Current workflow state
+            
+        Returns:
+            Query hint string for memory retrieval, or None for default
+        """
+        doc_info = state.get("document_info", {})
+        domain = doc_info.get("research_domain", "")
+        keywords = doc_info.get("keywords", [])
+        
+        # Build domain description
+        domain_desc = f"{domain} research" if domain else "this research domain"
+        
+        # Include keywords for more specific query
+        if keywords:
+            # Use first 3 keywords for specificity without being too narrow
+            kw_str = ", ".join(keywords[:3])
+            return (
+                f"Recommended FAIR-DS packages, ontologies, and field mappings "
+                f"for {domain_desc} with topics: {kw_str}"
+            )
+        else:
+            return f"Recommended FAIR-DS packages and ontologies for {domain_desc}"
