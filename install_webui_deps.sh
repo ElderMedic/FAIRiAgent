@@ -1,5 +1,5 @@
 #!/bin/bash
-# 安装 WebUI 依赖（Streamlit 和 Gradio）
+# 安装 WebUI 依赖（Streamlit）
 
 echo "📦 Installing WebUI dependencies..."
 echo ""
@@ -18,12 +18,11 @@ if [[ -z "$CONDA_DEFAULT_ENV" ]] && [[ -z "$VIRTUAL_ENV" ]]; then
 fi
 
 # 安装
-pip install streamlit>=1.30.0 gradio>=4.0.0
+pip install streamlit>=1.30.0
 
 echo ""
 echo "✅ Installation complete!"
 echo ""
 echo "📋 You can now run:"
 echo "   ./start_streamlit.sh  # Start Streamlit UI"
-echo "   ./start_gradio.sh     # Start Gradio UI"
 

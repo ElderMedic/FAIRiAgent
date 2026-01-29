@@ -47,7 +47,7 @@ FAIRiAgent is a **CLI-first, multi-agent framework** that automatically extracts
 - 📊 **Standards-compliant**: FAIR-DS compatible output format
 - 🔍 **Evidence-based**: Every field includes evidence, confidence, and provenance
 - 🧠 **Intelligent**: LLM-as-Judge critic with rubric-driven quality assessment
-- 🎨 **User-friendly**: Dual Web UI (Streamlit + Gradio) for interactive use
+- 🎨 **User-friendly**: Streamlit Web UI for interactive use
 - 🔧 **Flexible**: Support for local models (Ollama) and cloud providers (OpenAI, Qwen, Anthropic)
 
 ### 📈 The Problem We Solve
@@ -83,7 +83,7 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 | 🤖 Multi-Agent Architecture | 🧑‍⚖️ LLM-as-Judge Critic | 🔍 LangSmith Integration |
 | 📄 PDF/Text Processing | 📈 Confidence Aggregator | 📝 JSON Line Logging |
 | 🧠 Knowledge Retrieval | 🔄 Self-Correction Loops | ⚙️ Config Management |
-| 🏷️ Evidence-based Fields | 🎨 Dual Web UI | 📋 Runtime Export |
+| 🏷️ Evidence-based Fields | 🎨 Streamlit Web UI | 📋 Runtime Export |
 
 </div>
 
@@ -101,7 +101,7 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 - 🧑‍⚖️ **LLM-as-Judge Critic**: Rubric-driven auditing with actionable guidance per agent
 - 📈 **Confidence Aggregator**: Blends critic scores, structural coverage, and validation health
 - 🔄 **Self-Correction**: Automatic retry with feedback from Critic agent
-- 🎨 **Dual Web UI**: Two complete versions - Streamlit (data analysis friendly) and Gradio (API + demo friendly)
+- 🎨 **Streamlit Web UI**: Interactive interface with real-time streaming and configuration management
 - 💬 **Real-time Streaming**: Chat-like interface with live progress updates
 - ⚙️ **Configuration Management**: Save and manage runtime configurations
 - 📋 **Runtime Config Export**: Automatic export of input, .env, and runtime configurations
@@ -362,27 +362,11 @@ python run_fairifier.py process document.txt --output-dir results/
 python run_fairifier.py config-info
 ```
 
-**Web UI Mode (Two Options Available):**
-
-<div align="center">
-
-| 🎨 **Streamlit UI** | 🚀 **Gradio UI** |
-|:---:|:---:|
-| Data analysis friendly | API + demo friendly |
-| Real-time streaming output | RESTful API |
-| Configuration management | Rapid prototyping |
-
-</div>
+**Web UI Mode:**
 
 ```bash
-# Option 1: Streamlit (data analysis friendly)
 ./start_streamlit.sh
 # Access: http://localhost:8501
-
-# Option 2: Gradio (API + demo friendly)
-./start_gradio.sh
-# Access: http://localhost:7860
-# API docs: http://localhost:7860/docs
 ```
 
 **LangGraph Studio (Development):**
@@ -660,8 +644,8 @@ Core dependencies:
 # Process document and generate FAIR metadata
 python run_fairifier.py process <document> [options]
 
-# Launch Web UI (Streamlit by default; use --gradio for Gradio)
-python run_fairifier.py ui [--gradio] [--port PORT]
+# Launch Web UI (Streamlit)
+python run_fairifier.py ui [--port PORT]
 
 # Show status for a run
 python run_fairifier.py status <project-id>
