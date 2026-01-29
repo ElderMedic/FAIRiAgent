@@ -14,9 +14,9 @@ if [ ! -f "fairifier/config.py" ]; then
 fi
 
 # Activate conda environment
-echo "📦 Activating test environment..."
+echo "📦 Activating FAIRiAgent environment..."
 eval "$(conda shell.bash hook)"
-mamba activate test || { echo "❌ Failed to activate 'test' environment"; exit 1; }
+mamba activate FAIRiAgent 2>/dev/null || conda activate FAIRiAgent 2>/dev/null || { echo "❌ Failed to activate 'FAIRiAgent' environment"; exit 1; }
 
 # Check if .env exists
 if [ ! -f ".env" ]; then
@@ -24,17 +24,23 @@ if [ ! -f ".env" ]; then
     echo "💡 Tip: Copy env.example to .env and configure it"
 else
     echo "✅ Found .env file"
-    # Load .env
-    export $(grep -v '^#' .env | xargs)
+    # Load .env (strip full-line and inline comments so export does not get invalid identifiers)
+    set -a
+    while IFS= read -r line; do
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+        line=$(printf '%s' "$line" | sed 's/[[:space:]]*#.*$//' | sed 's/[[:space:]]*$//')
+        [[ -n "$line" ]] && export "$line"
+    done < .env
+    set +a
 fi
 
 # Set LangSmith tracing
 export LANGCHAIN_TRACING_V2=true
-export LANGCHAIN_PROJECT=${LANGSMITH_PROJECT:-"fairifier-test"}
+export LANGCHAIN_PROJECT=${LANGSMITH_PROJECT:-"fairifier-quicktest"}
 
 echo ""
 echo "📋 Configuration:"
-echo "  • LLM Model: ${LLM_MODEL:-qwen3:30b}"
+echo "  • LLM Model: ${LLM_MODEL:-qwen3:32b}"
 echo "  • FAIR-DS API: ${FAIR_DS_API_URL:-http://localhost:8083}"
 echo "  • LangSmith Project: $LANGCHAIN_PROJECT"
 echo "  • LangSmith Tracing: ✅ Enabled"
