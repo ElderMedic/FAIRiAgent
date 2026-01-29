@@ -367,8 +367,27 @@ class JSONGeneratorAgent(BaseAgent):
         title = (
             doc_info.get("title")
             or doc_info.get("investigation_title")
-            or (doc_info.get("metadata_for_fair_principles") or {}).get("title") if isinstance(doc_info.get("metadata_for_fair_principles"), dict) else None
+            or doc_info.get("project_title")
+            or doc_info.get("study_title")
+            or doc_info.get("document_title")
         )
+        
+        # Check nested metadata_for_fair_principles
+        if not title:
+            fair_meta = doc_info.get("metadata_for_fair_principles")
+            if isinstance(fair_meta, dict):
+                title = fair_meta.get("title")
+        
+        # Extract title from summary if it looks like a title (short first sentence)
+        if not title and doc_info.get("summary"):
+            summary_text = doc_info["summary"]
+            if isinstance(summary_text, str):
+                # Try to extract first sentence as potential title
+                import re
+                first_sentence = re.split(r'[.!?]\s+', summary_text, maxsplit=1)[0]
+                if 10 <= len(first_sentence) <= 250:
+                    title = first_sentence.strip()
+        
         if not title and isinstance(doc_info.get("key_information"), list):
             for item in doc_info["key_information"]:
                 if isinstance(item, str) and 10 <= len(item) <= 200:
@@ -381,46 +400,85 @@ class JSONGeneratorAgent(BaseAgent):
             or doc_info.get("summary")
             or doc_info.get("description")
             or doc_info.get("investigation_description")
-            or (doc_info.get("metadata_for_fair_principles") or {}).get("abstract") if isinstance(doc_info.get("metadata_for_fair_principles"), dict) else None
+            or doc_info.get("project_abstract")
+            or doc_info.get("study_abstract")
         )
+        
+        # Check nested metadata_for_fair_principles
+        if not abstract:
+            fair_meta = doc_info.get("metadata_for_fair_principles")
+            if isinstance(fair_meta, dict):
+                abstract = fair_meta.get("abstract")
+        
         if not abstract and isinstance(doc_info.get("key_information"), list):
             for item in doc_info["key_information"]:
                 if isinstance(item, str) and len(item) > 200:
                     abstract = item
                     break
 
-        # Authors: direct list or personnel/consortium (normalize to list of strings)
-        authors = doc_info.get("authors")
-        if not authors and doc_info.get("personnel"):
-            authors = doc_info["personnel"] if isinstance(doc_info["personnel"], list) else [doc_info["personnel"]]
+        # Authors: direct list or personnel/consortium (normalize to list of dicts or strings)
+        authors = doc_info.get("authors") or doc_info.get("investigators") or doc_info.get("personnel")
+        
         if not authors and doc_info.get("consortium"):
             raw = doc_info["consortium"]
             authors = raw if isinstance(raw, list) else [raw]
+            
         if authors is None:
             authors = []
         if not isinstance(authors, list):
             authors = [authors] if authors else []
-        authors = [str(a) for a in authors if a]
+        
+        # Normalize authors: if they're dicts, keep as dicts; if strings, keep as strings
+        normalized_authors = []
+        for author in authors:
+            if author:  # Skip empty values
+                if isinstance(author, dict):
+                    # Keep dict structure, but ensure it has at least a 'name' field
+                    if 'name' in author or 'full_name' in author or any(k in author for k in ['first_name', 'last_name']):
+                        normalized_authors.append(author)
+                    else:
+                        # Dict without name fields, convert to string
+                        normalized_authors.append(str(author))
+                elif isinstance(author, str):
+                    normalized_authors.append(author)
+                else:
+                    normalized_authors.append(str(author))
+        authors = normalized_authors
 
         # Keywords: direct or use key_information if list of short strings
-        keywords = doc_info.get("keywords")
+        keywords = doc_info.get("keywords") or doc_info.get("tags") or doc_info.get("topics")
+        
         if not keywords and isinstance(doc_info.get("key_information"), list):
             short_strings = [x for x in doc_info["key_information"] if isinstance(x, str) and 0 < len(x) <= 150]
             if short_strings:
                 keywords = short_strings[:20]
+                
         if keywords is None:
             keywords = []
         if not isinstance(keywords, list):
             keywords = [keywords] if keywords else []
+        
+        # Clean keywords - convert any non-string items
+        keywords = [str(k) if not isinstance(k, str) else k for k in keywords if k]
 
         # Research domain: direct or from scientific_domain (dict with primary_field / subfields)
-        research_domain = doc_info.get("research_domain") or doc_info.get("domain")
-        if not research_domain and isinstance(doc_info.get("scientific_domain"), dict):
-            sd = doc_info["scientific_domain"]
-            primary = sd.get("primary_field") or sd.get("domain")
-            subfields = sd.get("subfields") or []
+        research_domain = (
+            doc_info.get("research_domain") 
+            or doc_info.get("domain") 
+            or doc_info.get("scientific_domain")
+            or doc_info.get("field_of_study")
+            or doc_info.get("research_area")
+        )
+        
+        # If research_domain is a dict, extract meaningful value
+        if isinstance(research_domain, dict):
+            sd = research_domain
+            primary = sd.get("primary_field") or sd.get("domain") or sd.get("field")
+            subfields = sd.get("subfields") or sd.get("subdomains") or []
             if primary:
-                research_domain = primary if not subfields else f"{primary} ({', '.join(subfields[:5])})"
+                research_domain = primary if not subfields else f"{primary} ({', '.join(str(s) for s in subfields[:5])})"
+            else:
+                research_domain = None
         if not research_domain and isinstance(doc_info.get("scientific_domain"), str):
             research_domain = doc_info["scientific_domain"]
 
