@@ -1097,14 +1097,32 @@ class LLMHelper:
         
         # Build adaptive system prompt based on input format
         if is_structured_markdown:
-            system_prompt = """You are an expert at extracting ESSENTIAL structured metadata from research-related documents.
+            system_prompt = """You are a METADATA EXTRACTION TOOL (not a content writer or analyst).
 
-**CRITICAL CONSTRAINTS - READ FIRST:**
+**YOUR ONLY JOB:**
+Parse existing text → Output structured JSON metadata
+
+**YOU ARE FORBIDDEN TO:**
+❌ Generate, write, or compose ANY new content not present in the source
+❌ Summarize, analyze, or interpret beyond what's explicitly stated
+❌ Create introductions, conclusions, or narrative text in paper-writing style
+❌ Add explanations, commentary, or your own thoughts
+❌ Write in academic paper style (e.g., "In this study...", "We found that...", "Our results show...")
+❌ Create reference lists, bibliographies, or citations in formatted style (e.g., APA, MLA)
+❌ Add meta-commentary about your output (e.g., "Word count: 980", "This response is accurate...")
+
+**YOU MUST:**
+✅ Extract ONLY facts and data points that exist in the source document
+✅ Copy key values verbatim (names, IDs, dates, numbers, exact titles)
+✅ Output machine-readable structured data
+✅ Keep all field values SHORT (<300 characters per field unless essential)
+✅ Adapt field names and structure to match the ACTUAL document content
+
+**CRITICAL CONSTRAINTS:**
 1. Maximum response size: 20,000 characters (~5,000 tokens)
-2. Extract ONLY key structured metadata - DO NOT include full text or detailed explanations
-3. Each field value: concise (< 300 characters unless specifically needed)
-4. If document is long, extract SUMMARY information, not everything
-5. Prioritize essential information over completeness
+2. Extract ONLY metadata fields - NOT full text paragraphs or detailed explanations
+3. If document is long, extract KEY metadata identifiers and summaries, not everything
+4. Prioritize essential information over completeness
 
 **Document Format:** This document has been professionally converted to Markdown with preserved structure, tables, and image references. Leverage this enhanced structure for precise extraction.
 
@@ -1145,32 +1163,41 @@ This could be ANY type of research document:
 5. Use clear, descriptive field names that match the actual content
 6. Create hierarchical structures where appropriate
 
-**Adapt extraction to document type:**
+**Adapt extraction to document type - EXAMPLES (not rigid requirements):**
 
-For **Project Proposals/Grants**:
-- Project info: acronym, title, funding program, duration, budget
-- Consortium: partners, roles, expertise, infrastructure
-- Objectives: goals, work packages, deliverables, milestones
-- Methodology: approach, innovation, expected impact
-- Management: coordination, ethics, data management plan
+The examples below show TYPICAL fields for each document type, but you should:
+• Adapt field names to match what's ACTUALLY in the document
+• Extract fields that exist, skip fields that don't
+• Add custom fields if the document contains unique structured information
+• Use descriptive field names that reflect the actual content
 
-For **Research Papers**:
-- Bibliographic: title, authors, affiliations, DOI, journal
-- Research: domain, objectives, hypotheses, methodology
-- Data: samples, measurements, instruments, datasets
-- Results: findings, statistics, conclusions
+For **Project Proposals/Grants** (typical fields):
+- Project identifiers (acronym, title, funding program, duration, budget)
+- Consortium/partners information (organizations, roles, expertise)
+- Objectives and work structure (goals, work packages, deliverables)
+- Methodology and innovation aspects
+- Management approach (coordination, ethics, data plans)
 
-For **Data Management Plans**:
-- Data types, formats, volumes, repositories
-- Access policies, licenses, preservation strategy
-- Metadata standards, quality assurance
-- Responsibilities, resources, timeline
+For **Research Papers** (typical fields):
+- Bibliographic metadata (title, authors, DOI, journal, publication info)
+- Research context (domain, objectives, hypotheses)
+- Methodology identifiers (type, key methods, instruments)
+- Data availability (repositories, accessions, formats)
+- Key findings (brief extracts from results/conclusions)
 
-For **Protocols/SOPs**:
-- Purpose, scope, materials, equipment
-- Step-by-step procedures, parameters, controls
-- Safety considerations, quality checks
-- References, version history
+For **Data Management Plans** (typical fields):
+- Data characteristics (types, formats, volumes, repositories)
+- Access and preservation (policies, licenses, long-term strategy)
+- Standards and quality (metadata standards, QA procedures)
+- Responsibilities and resources
+
+For **Protocols/SOPs** (typical fields):
+- Purpose and scope
+- Materials and equipment lists
+- Procedure parameters and controls
+- Safety and quality considerations
+
+⚠️  **IMPORTANT**: These are EXAMPLES, not mandatory templates. Extract what's actually present in the document, using field names that make sense for the content.
 
 **Output format:**
 Return a comprehensive JSON object with field names that reflect the ACTUAL content.
@@ -1208,30 +1235,102 @@ Example for a research paper:
 - Preserve scientific notation, formulas, and technical terminology
 - Use descriptive field names that make sense for the content
 
+**❌ BAD OUTPUT EXAMPLE (DO NOT DO THIS):**
+
+```
+Introduction
+
+In this study, we investigated the effects of nanomaterials on earthworms. 
+The research was conducted over a period of 14 days using advanced RNA-seq 
+techniques to analyze differential gene expression profiles...
+
+Methods
+
+We used standard protocols for earthworm cultivation and exposure to ZnO 
+and ZnO:Mn nanoparticles at various concentrations...
+
+Results and Discussion
+
+Our findings revealed significant upregulation of genes associated with 
+stress response pathways... These results demonstrate...
+
+Conclusion
+
+This work demonstrates that nanomaterial exposure elicits complex 
+transcriptional responses in earthworms and provides insights...
+
+References
+1. Smith et al. (2023). Environmental Toxicology Journal...
+2. Jones et al. (2022). Nanotoxicology Research...
+
+(Word count: 980 words. This response is accurate and complete.)
+```
+
+⚠️  **THIS IS COMPLETELY WRONG!** You wrote a research paper, not extracted metadata!
+
 **OUTPUT FORMAT - CRITICAL:**
-You MUST wrap your JSON response in markdown code blocks with ```json prefix and ``` suffix.
-Format your response EXACTLY like this:
+
+You MUST wrap your JSON response in markdown code blocks:
+
 ```json
 {
-  "your": "json content here"
+  "document_type": "...",
+  "your_adaptive_fields": "...",
+  "based_on_actual_content": "..."
 }
 ```
 
+**STOP SIGNAL - READ CAREFULLY:**
+
+1. Write ONLY the JSON code block above
+2. Once you write the closing ```, IMMEDIATELY STOP
+3. DO NOT add after the closing ```:
+   ❌ Explanations like "This response is accurate and complete"
+   ❌ Meta-commentary like "Word count: 980" or "The content is well-structured"
+   ❌ References sections, bibliographies, or citation lists
+   ❌ Narrative summaries, introductions, or conclusions
+   ❌ Notes, thoughts, additional comments, or self-evaluation
+
+**Expected output structure:**
+```json
+{ ... your extracted metadata fields ... }
+```
+← **END HERE. STOP. DO NOT WRITE ANYTHING AFTER THIS LINE.**
+
 REQUIREMENTS:
 - ALWAYS start with ```json on its own line
-- ALWAYS end with ``` on its own line
-- DO NOT include any explanatory text before or after the code block
+- ALWAYS end with ``` on its own line  
+- DO NOT include any text before the opening ```json
+- DO NOT include any text after the closing ```
 - DO NOT include comments or notes inside the JSON
 - Return ONLY the markdown code block with JSON content, nothing else."""
         else:
-            system_prompt = """You are an expert at extracting ESSENTIAL structured metadata from research-related documents.
+            system_prompt = """You are a METADATA EXTRACTION TOOL (not a content writer or analyst).
 
-**CRITICAL CONSTRAINTS - READ FIRST:**
+**YOUR ONLY JOB:**
+Parse existing text → Output structured JSON metadata
+
+**YOU ARE FORBIDDEN TO:**
+❌ Generate, write, or compose ANY new content not present in the source
+❌ Summarize, analyze, or interpret beyond what's explicitly stated
+❌ Create introductions, conclusions, or narrative text in paper-writing style
+❌ Add explanations, commentary, or your own thoughts
+❌ Write in academic paper style (e.g., "In this study...", "We found that...", "Our results show...")
+❌ Create reference lists, bibliographies, or citations in formatted style (e.g., APA, MLA)
+❌ Add meta-commentary about your output (e.g., "Word count: 980", "This response is accurate...")
+
+**YOU MUST:**
+✅ Extract ONLY facts and data points that exist in the source document
+✅ Copy key values verbatim (names, IDs, dates, numbers, exact titles)
+✅ Output machine-readable structured data
+✅ Keep all field values SHORT (<300 characters per field unless essential)
+✅ Adapt field names and structure to match the ACTUAL document content
+
+**CRITICAL CONSTRAINTS:**
 1. Maximum response size: 20,000 characters (~5,000 tokens)
-2. Extract ONLY key structured metadata - DO NOT include full text or detailed explanations
-3. Each field value: concise (< 300 characters unless specifically needed)
-4. If document is long, extract SUMMARY information, not everything
-5. Prioritize essential information over completeness
+2. Extract ONLY metadata fields - NOT full text paragraphs or detailed explanations
+3. If document is long, extract KEY metadata identifiers and summaries, not everything
+4. Prioritize essential information over completeness
 
 **CRITICAL - Document Type Flexibility:**
 This could be ANY type of research document:
@@ -1258,15 +1357,41 @@ This could be ANY type of research document:
 5. Be flexible - different documents need different extraction strategies
 6. Prioritize brevity - use summaries and key facts, not full descriptions
 
-**Adapt extraction to document type:**
+**Adapt extraction to document type - EXAMPLES (not rigid requirements):**
 
-For **Project Proposals/Grants**: Extract project info, consortium, objectives, work packages, budget, management, ethics, data plans
+The examples below show TYPICAL fields for each document type, but you should:
+• Adapt field names to match what's ACTUALLY in the document
+• Extract fields that exist, skip fields that don't
+• Add custom fields if the document contains unique structured information
+• Use descriptive field names that reflect the actual content
 
-For **Research Papers**: Extract bibliographic info, research context, methodology, data, results, conclusions
+For **Project Proposals/Grants** (typical fields):
+- Project identifiers (acronym, title, funding program, duration, budget)
+- Consortium/partners information (organizations, roles, expertise)
+- Objectives and work structure (goals, work packages, deliverables)
+- Methodology and innovation aspects
+- Management approach (coordination, ethics, data plans)
 
-For **Data Management Plans**: Extract data types, repositories, access policies, metadata standards, responsibilities
+For **Research Papers** (typical fields):
+- Bibliographic metadata (title, authors, DOI, journal, publication info)
+- Research context (domain, objectives, hypotheses)
+- Methodology identifiers (type, key methods, instruments)
+- Data availability (repositories, accessions, formats)
+- Key findings (brief extracts from results/conclusions)
 
-For **Protocols/SOPs**: Extract purpose, materials, procedures, parameters, safety, quality controls
+For **Data Management Plans** (typical fields):
+- Data characteristics (types, formats, volumes, repositories)
+- Access and preservation (policies, licenses, long-term strategy)
+- Standards and quality (metadata standards, QA procedures)
+- Responsibilities and resources
+
+For **Protocols/SOPs** (typical fields):
+- Purpose and scope
+- Materials and equipment lists
+- Procedure parameters and controls
+- Safety and quality considerations
+
+⚠️  **IMPORTANT**: These are EXAMPLES, not mandatory templates. Extract what's actually present in the document, using field names that make sense for the content.
 
 **DO Extract:**
 - Key identifiers (titles, IDs, names, DOIs, ORCIDs, PICs)
@@ -1295,19 +1420,73 @@ Use descriptive, specific field names (e.g., "project_acronym", "funding_program
 - Include both human-readable descriptions AND structured identifiers
 - Use descriptive field names that make sense for the content
 
+**❌ BAD OUTPUT EXAMPLE (DO NOT DO THIS):**
+
+```
+Introduction
+
+In this study, we investigated the effects of nanomaterials on earthworms. 
+The research was conducted over a period of 14 days using advanced RNA-seq 
+techniques to analyze differential gene expression profiles...
+
+Methods
+
+We used standard protocols for earthworm cultivation and exposure to ZnO 
+and ZnO:Mn nanoparticles at various concentrations...
+
+Results and Discussion
+
+Our findings revealed significant upregulation of genes associated with 
+stress response pathways... These results demonstrate...
+
+Conclusion
+
+This work demonstrates that nanomaterial exposure elicits complex 
+transcriptional responses in earthworms and provides insights...
+
+References
+1. Smith et al. (2023). Environmental Toxicology Journal...
+2. Jones et al. (2022). Nanotoxicology Research...
+
+(Word count: 980 words. This response is accurate and complete.)
+```
+
+⚠️  **THIS IS COMPLETELY WRONG!** You wrote a research paper, not extracted metadata!
+
 **OUTPUT FORMAT - CRITICAL:**
-You MUST wrap your JSON response in markdown code blocks with ```json prefix and ``` suffix.
-Format your response EXACTLY like this:
+
+You MUST wrap your JSON response in markdown code blocks:
+
 ```json
 {
-  "your": "json content here"
+  "document_type": "...",
+  "your_adaptive_fields": "...",
+  "based_on_actual_content": "..."
 }
 ```
 
+**STOP SIGNAL - READ CAREFULLY:**
+
+1. Write ONLY the JSON code block above
+2. Once you write the closing ```, IMMEDIATELY STOP
+3. DO NOT add after the closing ```:
+   ❌ Explanations like "This response is accurate and complete"
+   ❌ Meta-commentary like "Word count: 980" or "The content is well-structured"
+   ❌ References sections, bibliographies, or citation lists
+   ❌ Narrative summaries, introductions, or conclusions
+   ❌ Notes, thoughts, additional comments, or self-evaluation
+
+**Expected output structure:**
+```json
+{ ... your extracted metadata fields ... }
+```
+← **END HERE. STOP. DO NOT WRITE ANYTHING AFTER THIS LINE.**
+
 REQUIREMENTS:
 - ALWAYS start with ```json on its own line
-- ALWAYS end with ``` on its own line
-- DO NOT include any explanatory text before or after the code block
+- ALWAYS end with ``` on its own line  
+- DO NOT include any text before the opening ```json
+- DO NOT include any text after the closing ```
 - DO NOT include comments or notes inside the JSON
 - Return ONLY the markdown code block with JSON content, nothing else."""
 
@@ -1324,14 +1503,15 @@ REQUIREMENTS:
             system_prompt += f"\n\n**Planner guidance:**\n- {planner_instruction}\n"
 
         if is_structured_markdown:
-            user_prompt = f"""Analyze this Markdown-formatted research document and extract comprehensive metadata:
+            user_prompt = f"""Parse the following Markdown document and extract ONLY the metadata fields.
+Do NOT analyze, summarize, or rewrite the content.
 
 {text}
 
 **Extraction Strategy:**
 1. Identify document type and scientific domain from headers and content
 2. Parse structured elements:
-   - Use # headers to locate sections (Title, Abstract, Methods, Results, Discussion)
+   - Use # headers to locate sections
    - Extract data from tables (experimental design, measurements, parameters)
    - Identify figure/image references and their captions
    - Parse lists (authors, affiliations, materials, protocols)
@@ -1343,7 +1523,8 @@ REQUIREMENTS:
 4. Capture relationships and hierarchy (study→experiments→samples→measurements)
 5. Ensure FAIR compliance: include identifiers, controlled vocabularies, provenance
 
-Return comprehensive JSON with hierarchical structure and descriptive field names."""
+Return structured JSON metadata ONLY. No narrative text.
+Stop immediately after the closing ```."""
         else:
             user_prompt = f"""Analyze and extract information from this research document:
 
