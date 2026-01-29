@@ -47,6 +47,5 @@ python-dotenv>=1.0.0
 # Provides persistent semantic memory for context compression and retrieval
 # Requires Qdrant server running at localhost:6333
 # Enable with: MEM0_ENABLED=true in .env
-# Install with: pip install mem0ai qdrant-client
-# mem0ai>=1.0.0
-# qdrant-client>=1.7.0
+mem0ai>=1.0.0
+qdrant-client>=1.7.0
