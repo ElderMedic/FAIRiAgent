@@ -137,12 +137,10 @@ def _detect_environment() -> str:
     if os.getenv("EVALUATION_MODE") or "evaluation" in os.getcwd().lower():
         return "eval"
     
-    # Check for Streamlit / Gradio (avoid importing heavy libs)
+    # Check for Streamlit (avoid importing heavy libs)
     import importlib.util
     if importlib.util.find_spec("streamlit") is not None:
         return "ui-streamlit"
-    if importlib.util.find_spec("gradio") is not None:
-        return "ui-gradio"
     
     # Check for FastAPI/API mode
     if os.getenv("API_MODE") or "uvicorn" in os.getenv("_", ""):

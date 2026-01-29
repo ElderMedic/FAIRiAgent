@@ -1,9 +1,9 @@
-# Core dependencies
-langchain>=0.1.0
-langchain-community>=0.0.38
+# Core dependencies (aligned with working env: FAIRiAgent mamba)
+langchain>=1.0.3
+langchain-community>=0.3.30
 langchain-ollama>=1.0.0
-langchain-openai>=1.0.0
-langgraph>=0.0.65
+langchain-openai>=1.0.2
+langgraph>=1.0.7
 langgraph-checkpoint-sqlite>=1.0.0
 aiosqlite>=0.22.0
 langsmith>=0.1.0
@@ -18,14 +18,13 @@ playwright>=1.40.0
 beautifulsoup4>=4.12.0
 
 # API and CLI
-fastapi>=0.104.0
+fastapi>=0.104.0,<0.118
 uvicorn>=0.24.0
 python-multipart>=0.0.6
 click>=8.1.0
 
 # Web UI
-streamlit>=1.30.0
-gradio>=4.0.0
+streamlit>=1.28.0
 
 # Data handling
 pydantic>=2.5.0

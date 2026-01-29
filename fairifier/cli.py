@@ -492,46 +492,35 @@ async def _run_workflow(
 
 
 @cli.command()
-@click.option("--gradio", is_flag=True, help="Launch Gradio UI (default: Streamlit).")
 @click.option(
     "--port",
     type=int,
     default=None,
-    help="Port for Streamlit (default: 8501) or Gradio (default: 7860).",
+    help="Port for Streamlit (default: 8501).",
 )
-def ui(gradio: bool, port: Optional[int]):
-    """Launch the Web UI (Streamlit or Gradio)."""
+def ui(port: Optional[int]):
+    """Launch the Web UI (Streamlit)."""
     import subprocess
 
-    if gradio:
-        port = port or 7860
-        click.echo("🚀 Starting Gradio Web UI...")
-        click.echo(f"   Interface: http://localhost:{port}")
-        click.echo("   API docs:  http://localhost:{port}/docs")
-        subprocess.run(
-            [sys.executable, "fairifier/apps/ui/gradio_app.py"],
-            cwd=Path(__file__).resolve().parents[2],
-        )
-    else:
-        port = port or 8501
-        click.echo("🚀 Starting Streamlit Web UI...")
-        click.echo(f"   Interface: http://localhost:{port}")
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "streamlit",
-                "run",
-                "fairifier/apps/ui/streamlit_app.py",
-                "--server.port",
-                str(port),
-                "--server.address",
-                "0.0.0.0",
-                "--browser.gatherUsageStats",
-                "false",
-            ],
-            cwd=Path(__file__).resolve().parents[2],
-        )
+    port = port or 8501
+    click.echo("🚀 Starting Streamlit Web UI...")
+    click.echo(f"   Interface: http://localhost:{port}")
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "streamlit",
+            "run",
+            "fairifier/apps/ui/streamlit_app.py",
+            "--server.port",
+            str(port),
+            "--server.address",
+            "0.0.0.0",
+            "--browser.gatherUsageStats",
+            "false",
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+    )
 
 
 @cli.command()
