@@ -425,11 +425,31 @@ class CriticAgent(BaseAgent):
         
         prompt = (
             f"{system_prompt}\n\n"
+            f"**CRITICAL CONSTRAINTS:**\n"
+            f"1. Maximum response size: 3,000 characters\n"
+            f"2. Critique: < 200 characters\n"
+            f"3. Each issue: < 100 characters\n"
+            f"4. Each suggestion: < 150 characters\n\n"
             f"# Node: {node_key}\n"
             f"Goal: {node_rules.get('description', '')}\n\n"
             f"## Evaluation Context\n{evaluation_content}\n\n"
             f"## Rubric\n{rubric_block}\n\n"
-            "Use the JSON schema described in the system instructions."
+            f"**OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**\n"
+            f"Wrap your JSON in markdown code blocks:\n\n"
+            f"```json\n"
+            f"{{\n"
+            f'  "score": 0.0-1.0,\n'
+            f'  "critique": "brief summary < 200 chars",\n'
+            f'  "issues": ["issue1 < 100 chars"],\n'
+            f'  "suggestions": ["suggestion1 < 150 chars"]\n'
+            f"}}\n"
+            f"```\n\n"
+            f"REQUIREMENTS:\n"
+            f"- Line 1: ```json (alone)\n"
+            f"- Lines 2-N: Valid JSON only\n"
+            f"- Line N+1: ``` (alone)\n"
+            f"- NO text before/after block\n"
+            f"- NO comments in JSON"
         )
         
         from langchain_core.messages import HumanMessage

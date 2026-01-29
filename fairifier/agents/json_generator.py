@@ -359,6 +359,10 @@ class JSONGeneratorAgent(BaseAgent):
                 "research_domain": None
             }
 
+        # Handle nested structure: if doc_info has "metadata" key, extract it
+        if "metadata" in doc_info and isinstance(doc_info["metadata"], dict):
+            doc_info = doc_info["metadata"]
+
         # Title: direct or from common variants / first short key_information item
         title = (
             doc_info.get("title")

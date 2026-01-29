@@ -1,7 +1,7 @@
 """Base agent class for FAIRifier agents."""
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
 from datetime import datetime
 
@@ -25,8 +25,8 @@ class BaseAgent(ABC):
     
     def get_context_feedback(self, state: FAIRifierState) -> Dict[str, Any]:
         """
-        Extract feedback from context (critic feedback, human feedback, previous attempts)
-        This allows agents to adapt based on reflective feedback
+        Extract feedback from context (critic feedback, human feedback, previous attempts, memories)
+        This allows agents to adapt based on reflective feedback and retrieved memories.
         """
         context = state.get("context", {})
         planner_guidance = state.get("agent_guidance", {})
@@ -42,10 +42,27 @@ class BaseAgent(ABC):
             "previous_attempt": context.get("previous_attempt", None),
             "retry_count": context.get("retry_count", 0),
             "planner_instruction": planner_guidance.get(self.name),
-            "guidance_history": context.get("critic_guidance_history", {}).get(self.name, [])
+            "guidance_history": context.get("critic_guidance_history", {}).get(self.name, []),
+            # Include retrieved memories from mem0 (if available)
+            "retrieved_memories": context.get("retrieved_memories", [])
         }
         
         return feedback
+    
+    def get_memory_query_hint(self, state: FAIRifierState) -> Optional[str]:
+        """
+        Return a custom query hint for memory retrieval.
+        
+        Override in subclasses to provide agent-specific memory queries.
+        The hint is used to search for relevant memories before execution.
+        
+        Args:
+            state: Current workflow state
+            
+        Returns:
+            Custom query string for memory search, or None to use default query.
+        """
+        return None
     
     def log_execution(self, state: FAIRifierState, message: str, level: str = "info"):
         """Log agent execution with context."""

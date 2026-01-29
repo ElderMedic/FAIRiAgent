@@ -80,11 +80,13 @@ def _extract_json_from_markdown(content: str) -> str:
             while json_start < len(content) and content[json_start] in ['\n', '\r', ' ', '\t']:
                 json_start += 1
             
-            # Find the LAST ``` marker
-            end_idx = content.rfind("```")
+            # Find the NEXT ``` marker (close of FIRST code block, not the last one)
+            # CRITICAL FIX: Use find() instead of rfind() to get the FIRST closing marker
+            end_idx = content.find("```", json_start)
             if end_idx > json_start:
                 return content[json_start:end_idx].strip()
             else:
+                # No closing marker found, return rest of content
                 return content[json_start:].strip()
     
     # No markdown fences found, return as-is
@@ -1095,7 +1097,14 @@ class LLMHelper:
         
         # Build adaptive system prompt based on input format
         if is_structured_markdown:
-            system_prompt = """You are an expert at extracting structured information from ANY research-related document.
+            system_prompt = """You are an expert at extracting ESSENTIAL structured metadata from research-related documents.
+
+**CRITICAL CONSTRAINTS - READ FIRST:**
+1. Maximum response size: 20,000 characters (~5,000 tokens)
+2. Extract ONLY key structured metadata - DO NOT include full text or detailed explanations
+3. Each field value: concise (< 300 characters unless specifically needed)
+4. If document is long, extract SUMMARY information, not everything
+5. Prioritize essential information over completeness
 
 **Document Format:** This document has been professionally converted to Markdown with preserved structure, tables, and image references. Leverage this enhanced structure for precise extraction.
 
@@ -1111,9 +1120,22 @@ This could be ANY type of research document:
 
 **Your task:** 
 1. FIRST identify what type of document this is
-2. THEN extract ALL relevant information appropriate for that document type
+2. THEN extract ONLY the ESSENTIAL metadata appropriate for that document type
 3. DO NOT force a paper structure (title/abstract/authors) if it doesn't fit
 4. Adapt your extraction strategy to the actual content
+
+**DO Extract:**
+- Key identifiers (titles, IDs, names, DOIs)
+- Structured data (dates, numbers, categories)
+- Relationships (authors, affiliations, organizations)
+- Critical context (1-2 sentence summaries, not full paragraphs)
+
+**DO NOT Extract:**
+- Full paragraphs or text sections
+- Detailed explanations or background
+- Complete literature reviews
+- Methodology details beyond key parameters
+- Full result descriptions (only key findings)
 
 **Core principles:**
 1. Use headers to understand document structure and content organization
@@ -1202,7 +1224,14 @@ REQUIREMENTS:
 - DO NOT include comments or notes inside the JSON
 - Return ONLY the markdown code block with JSON content, nothing else."""
         else:
-            system_prompt = """You are an expert at extracting structured information from ANY research-related document.
+            system_prompt = """You are an expert at extracting ESSENTIAL structured metadata from research-related documents.
+
+**CRITICAL CONSTRAINTS - READ FIRST:**
+1. Maximum response size: 20,000 characters (~5,000 tokens)
+2. Extract ONLY key structured metadata - DO NOT include full text or detailed explanations
+3. Each field value: concise (< 300 characters unless specifically needed)
+4. If document is long, extract SUMMARY information, not everything
+5. Prioritize essential information over completeness
 
 **CRITICAL - Document Type Flexibility:**
 This could be ANY type of research document:
@@ -1216,16 +1245,18 @@ This could be ANY type of research document:
 
 **Your task:** 
 1. FIRST identify what type of document this is
-2. THEN extract ALL relevant information appropriate for that document type
+2. THEN extract ONLY the ESSENTIAL metadata appropriate for that document type
 3. DO NOT force a paper structure (title/abstract/authors) if it doesn't fit
 4. Adapt your extraction strategy to the actual content
+5. Be CONCISE - extract structured metadata, not full text
 
 **Core principles:**
 1. Understand the document type and purpose
-2. Identify what information is actually present and relevant
+2. Identify what ESSENTIAL information is actually present and relevant
 3. Use clear, descriptive field names that match the content
 4. Create hierarchical structures where appropriate
 5. Be flexible - different documents need different extraction strategies
+6. Prioritize brevity - use summaries and key facts, not full descriptions
 
 **Adapt extraction to document type:**
 
@@ -1237,6 +1268,20 @@ For **Data Management Plans**: Extract data types, repositories, access policies
 
 For **Protocols/SOPs**: Extract purpose, materials, procedures, parameters, safety, quality controls
 
+**DO Extract:**
+- Key identifiers (titles, IDs, names, DOIs, ORCIDs, PICs)
+- Structured data (dates, numbers, categories, classifications)
+- Relationships (authors, affiliations, organizations, partners)
+- Critical context (1-2 sentence summaries, not full paragraphs)
+- Essential parameters (with units)
+
+**DO NOT Extract:**
+- Full paragraphs or complete text sections
+- Detailed explanations or extensive background
+- Complete literature reviews or citations
+- Full methodology descriptions (only key parameters and methods)
+- Complete result descriptions (only key findings/conclusions)
+
 **Output format:**
 Return a JSON object with field names that reflect the ACTUAL content.
 DO NOT use generic "title/abstract/authors" if the document doesn't have them.
@@ -1244,6 +1289,7 @@ Use descriptive, specific field names (e.g., "project_acronym", "funding_program
 
 **Best practices:**
 - Include a "document_type" field to indicate what kind of document this is
+- Keep values concise - use summaries, not full text
 - Extract numerical data with units preserved
 - Capture hierarchical relationships naturally present in the document
 - Include both human-readable descriptions AND structured identifiers
@@ -1644,51 +1690,66 @@ REQUIREMENTS:
         
         system_prompt = """You are an expert at generating FAIR metadata from research documents.
 
+**CRITICAL CONSTRAINTS - READ FIRST:**
+1. Maximum response size: 50,000 characters (~12,000 tokens)
+2. Each field value: concise (< 500 characters)
+3. Each evidence: brief (< 200 characters)
+4. Use summaries, not full quotes or paragraphs
+
 **Your task:** For EACH AND EVERY metadata field in the list, extract or generate an appropriate value from the document.
 
 **CRITICAL REQUIREMENTS:**
 1. **MUST generate a value for ALL fields** - You must return a value for every single field in the provided list, no exceptions
-2. **Investigation-level fields** (e.g., investigation title, investigation description) - These are project-level metadata. Extract from document title, abstract, or generate from research context
-3. **Study-level fields** (e.g., study title, study description) - These describe the specific study. Extract from document title, abstract, methods, or results
-4. **Assay-level fields** - These describe measurement methods. Extract from methods section
-5. **Sample-level fields** - These describe biological material. Extract from methods or results
-6. **ObservationUnit-level fields** - These describe sampling sites. Extract from methods or environmental context
+2. **Investigation-level fields** - Project-level metadata. Extract from title/abstract or derive from context
+3. **Study-level fields** - Study description. Extract from title/abstract/methods/results
+4. **Assay-level fields** - Measurement methods. Extract from methods
+5. **Sample-level fields** - Biological material. Extract from methods/results
+6. **ObservationUnit-level fields** - Sampling sites. Extract from methods/environmental context
 
 **Principles:**
-1. Extract values directly from document when possible
-2. Generate appropriate values when information is implicit (e.g., investigation title can be derived from document title)
-3. Provide clear evidence/provenance for each value
+1. Extract values directly from document when possible - keep concise
+2. Generate appropriate values when information is implicit
+3. Provide brief evidence (not full quotes)
 4. Assign realistic confidence scores (0.0-1.0)
-5. If information truly isn't available, use "not specified" or null, but STILL include the field in your response
+5. If information truly isn't available, use "not specified" but STILL include the field
 
 **For each field, provide:**
 - field_name: MUST match exactly one of the field names in the provided list
-- value: The actual metadata value (be specific and accurate, or "not specified" if unavailable)
-- evidence: Where/how you determined this value (quote or describe the source)
-- confidence: Float 0.0-1.0 (1.0 = explicitly stated, 0.7-0.9 = strongly inferred, 0.4-0.6 = reasonably inferred, 0.0-0.3 = not available)
+- value: Concise metadata value (< 500 chars) - use summaries, not full text
+- evidence: Brief source location (< 200 chars) - e.g., "Methods section" not full quote
+- confidence: Float 0.0-1.0 (1.0 = explicit, 0.7-0.9 = strong inference, 0.4-0.6 = reasonable inference, 0.0-0.3 = not available)
 
 **IMPORTANT:** 
 - You MUST return a JSON array with exactly the same number of fields as provided in the input list
 - Do NOT skip any fields, even if information is limited
-- For investigation/study fields: If not explicitly stated, derive from document title, abstract, or research context
-- For fields with limited information, use "not specified" as the value but still include the field
+- For investigation/study fields: If not explicitly stated, derive from document title/abstract
+- For fields with limited information, use "not specified" but still include the field
+- Keep all values concise (< 500 chars each)
+- Keep all evidence brief (< 200 chars each)
 
-**OUTPUT FORMAT - CRITICAL:**
-You MUST wrap your JSON array response in markdown code blocks with ```json prefix and ``` suffix.
-Format your response EXACTLY like this:
+**OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**
+Wrap your JSON array in markdown code blocks EXACTLY like this:
+
 ```json
 [
-  "item1",
-  "item2"
+  {{
+    "field_name": "...",
+    "value": "concise value",
+    "evidence": "brief source",
+    "confidence": 0.X
+  }}
 ]
 ```
 
 REQUIREMENTS:
-- ALWAYS start with ```json on its own line
-- ALWAYS end with ``` on its own line
-- DO NOT include any explanatory text before or after the code block
-- DO NOT include comments or notes inside the JSON (no // comments in JSON)
-- Return ONLY the markdown code block with JSON array content, nothing else."""
+- Line 1: ```json (alone)
+- Lines 2-N: Valid JSON array only
+- Line N+1: ``` (alone)
+- NO text before the opening ```json
+- NO text after the closing ```
+- NO comments in JSON
+- Each value: < 500 characters
+- Each evidence: < 200 characters"""
 
         if critic_feedback:
             feedback_text = f"\n\n**Address these issues:**\n"
@@ -1746,24 +1807,31 @@ Fields by ISA hierarchy:
 8. **ObservationUnit-level fields** ({field_counts.get('observationunit', 0)} fields): Must generate values from methods or environmental context
 
 **For fields where information is not explicitly stated:**
-- Investigation/Study fields: Derive from document title, abstract, or research context (e.g., investigation title = document title, study title = document title)
-- Other fields: Use "not specified" as value but STILL include the field in your response
+- Investigation/Study fields: Derive from document title/abstract
+- Other fields: Use "not specified" but STILL include the field
 
-**OUTPUT FORMAT - CRITICAL:**
-Return ONLY valid JSON array. Prefer raw JSON without markdown code blocks.
-- DO NOT include explanatory text before or after the JSON
-- DO NOT include comments or notes (no // comments in JSON)
-- If you must use markdown, use ```json code blocks (but raw JSON is preferred)
-- Return ONLY the JSON array with EXACTLY {len(selected_fields)} fields:
+**OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**
+Wrap your JSON array in markdown code blocks:
+
+```json
 [
   {{
-    "field_name": "...",
-    "value": "...",
-    "evidence": "...",
+    "field_name": "exact_name",
+    "value": "concise value < 500 chars",
+    "evidence": "brief source < 200 chars",
     "confidence": 0.X
-  }},
-  ...
-]"""
+  }}
+]
+```
+
+REQUIREMENTS:
+- Line 1: ```json (alone)
+- Lines 2-N: Valid JSON array with EXACTLY {len(selected_fields)} fields
+- Line N+1: ``` (alone)
+- NO text before/after block
+- NO comments in JSON
+- Each value: < 500 characters
+- Each evidence: < 200 characters"""
 
         messages = [
             SystemMessage(content=system_prompt),

@@ -295,17 +295,56 @@ See [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md) for details.
 <details>
 <summary><b>Click to expand detailed installation steps</b></summary>
 
+**Core Installation:**
 ```bash
 # Clone the repository
 git clone <repository-url>
 cd FAIRiAgent
 
-# Install dependencies
+# Install core dependencies
 pip install -r requirements.txt
 
 # Optional: Install Web UI dependencies
 ./install_webui_deps.sh
 ```
+
+**Optional Features:**
+
+<details>
+<summary>🧠 Memory Layer (mem0 + Qdrant)</summary>
+
+Provides persistent semantic memory for context compression and retrieval across workflow sessions.
+
+```bash
+# Install mem0 dependencies
+pip install mem0ai qdrant-client
+
+# Start Qdrant vector database
+docker run -d -p 6333:6333 qdrant/qdrant
+
+# Enable in .env
+echo "MEM0_ENABLED=true" >> .env
+echo "MEM0_QDRANT_URL=http://localhost:6333" >> .env
+
+# Verify installation
+python -c "from fairifier.services import get_mem0_service; print('✓ mem0 available' if get_mem0_service() else '✗ mem0 unavailable')"
+```
+
+**Memory CLI Commands:**
+```bash
+# Check status
+fairifier memory status
+
+# List memories for a session
+fairifier memory list <session_id>
+
+# Clear memories for a session
+fairifier memory clear <session_id>
+```
+
+See [mem0 integration plan](docs/mem0_context_management_integration.md) for details.
+
+</details>
 
 </details>
 
