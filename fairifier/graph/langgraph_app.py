@@ -27,6 +27,7 @@ from ..agents.critic import CriticAgent
 from ..config import config
 from ..utils.llm_helper import get_llm_helper
 from ..utils.report_generator import WorkflowReportGenerator
+from ..utils.run_control import run_stop_requested, reset_run_stop_requested
 from ..services.mineru_client import MinerUClient, MinerUConversionError
 from ..services.confidence_aggregator import aggregate_confidence
 from ..tools.mineru_tools import create_mineru_convert_tool
@@ -380,6 +381,59 @@ class FAIRifierLangGraphApp:
         )
         return False
     
+    def _safe_get_domain(self, doc_info: Dict[str, Any]) -> str:
+        """Safely extract domain from document info, handling various formats.
+        
+        Domain field can be:
+        - A list of strings: ['ecotoxicology', 'nanotoxicology']
+        - A single string: 'ecotoxicology'
+        - Missing/None
+        - In different field names: 'scientific_domain' or 'research_domain'
+        
+        Returns the first valid domain string, or empty string if none found.
+        """
+        if not doc_info or not isinstance(doc_info, dict):
+            return ""
+        
+        # Try multiple possible field names
+        for field_name in ["scientific_domain", "research_domain", "domain"]:
+            domain_raw = doc_info.get(field_name)
+            
+            if not domain_raw:
+                continue
+            
+            # Handle list
+            if isinstance(domain_raw, list):
+                for item in domain_raw:
+                    if isinstance(item, str) and item.strip():
+                        return item.strip()
+            # Handle string
+            elif isinstance(domain_raw, str) and domain_raw.strip():
+                return domain_raw.strip()
+        
+        return ""
+    
+    def _safe_get_field(self, data: Any, *field_names: str, default: Any = None) -> Any:
+        """Safely get a field from nested data, trying multiple field names.
+        
+        Args:
+            data: Dictionary or other data structure to extract from
+            *field_names: Multiple field names to try in order
+            default: Default value if nothing found
+        
+        Returns:
+            First non-None value found, or default
+        """
+        if not isinstance(data, dict):
+            return default
+        
+        for field_name in field_names:
+            value = data.get(field_name)
+            if value is not None:
+                return value
+        
+        return default
+    
     def _extract_actionable_insight(
         self,
         agent_name: str,
@@ -405,23 +459,34 @@ class FAIRifierLangGraphApp:
             if agent_name == "KnowledgeRetriever" and decision == "ACCEPT":
                 knowledge = state.get("retrieved_knowledge", [])
                 doc_info = state.get("document_info", {})
-                domain = doc_info.get("research_domain", "") if doc_info else ""
+                domain = self._safe_get_domain(doc_info)
                 
                 logger.info(f"🔍 KR insight extraction: knowledge count={len(knowledge)}, domain='{domain}'")
                 
-                if knowledge:
-                    # Extract selected packages
+                if knowledge and isinstance(knowledge, list):
+                    # Extract selected packages (try multiple possible structures)
                     packages = set()
-                    for k in knowledge[:20]:
-                        if isinstance(k, dict):
-                            pkg = k.get("package_source") or k.get("metadata", {}).get("package", "")
-                            if pkg and pkg not in ["default"]:
+                    for k in knowledge[:30]:  # Check more items for robustness
+                        if not isinstance(k, dict):
+                            continue
+                        
+                        # Try multiple possible field names and structures
+                        pkg = (
+                            self._safe_get_field(k, "package_source", "package", "fair_ds_package") or
+                            self._safe_get_field(k.get("metadata", {}), "package", "package_name") or
+                            ""
+                        )
+                        
+                        # Clean and validate package name
+                        if isinstance(pkg, str):
+                            pkg = pkg.strip()
+                            if pkg and pkg.lower() not in ["default", "unknown", "none", ""]:
                                 packages.add(pkg)
                     
                     logger.info(f"   Extracted packages: {packages}")
                     
                     if packages:
-                        pkg_list = sorted(list(packages))[:4]
+                        pkg_list = sorted(list(packages))[:5]  # Top 5 packages
                         if domain:
                             insights.append(
                                 f"{domain} research requires FAIR-DS packages: {', '.join(pkg_list)}"
@@ -431,15 +496,39 @@ class FAIRifierLangGraphApp:
                                 f"FAIR-DS packages selected: {', '.join(pkg_list)}"
                             )
                     
-                    # Extract ontology usage
+                    # Extract ontology usage (more robust pattern matching)
                     ontologies = set()
-                    for k in knowledge[:20]:
-                        if isinstance(k, dict):
-                            onto = k.get("ontology_id", "")
-                            if onto and ":" in onto:
-                                prefix = onto.split(":")[0]
-                                if prefix in ["ENVO", "OBI", "EDAM", "NPO", "GO", "ECO", "CHEBI"]:
-                                    ontologies.add(prefix)
+                    for k in knowledge[:30]:
+                        if not isinstance(k, dict):
+                            continue
+                        
+                        # Try multiple fields for ontology info
+                        onto = (
+                            self._safe_get_field(k, "ontology_id", "ontology", "ontology_term") or
+                            self._safe_get_field(k, "value") or  # Sometimes ontology is in 'value' field
+                            ""
+                        )
+                        
+                        # Extract ontology prefix from various formats
+                        if isinstance(onto, str) and onto:
+                            # Handle formats like "ENVO:00001998" or "http://purl.obolibrary.org/obo/ENVO_00001998"
+                            if ":" in onto:
+                                prefix = onto.split(":")[0].split("/")[-1].upper()
+                            elif "/" in onto and "obo" in onto.lower():
+                                # Extract from URL format
+                                parts = onto.split("/")
+                                for part in parts:
+                                    if "_" in part:
+                                        prefix = part.split("_")[0].upper()
+                                        break
+                                else:
+                                    continue
+                            else:
+                                continue
+                            
+                            # Validate known ontology prefixes
+                            if prefix in ["ENVO", "OBI", "EDAM", "NPO", "GO", "ECO", "CHEBI", "UBERON", "PATO", "UO"]:
+                                ontologies.add(prefix)
                     
                     logger.info(f"   Extracted ontologies: {ontologies}")
                     
@@ -450,57 +539,95 @@ class FAIRifierLangGraphApp:
                         )
                     
                     # Add count insight if significant
-                    if len(knowledge) > 50:
-                        insights.append(
-                            f"Complex study requires {len(knowledge)} FAIR-DS metadata terms"
-                        )
+                    if len(knowledge) >= 50:
+                        if domain:
+                            insights.append(
+                                f"{domain} studies commonly require 50+ FAIR-DS metadata terms"
+                            )
+                        else:
+                            insights.append(
+                                f"Complex experimental studies commonly require 50+ FAIR-DS metadata terms"
+                            )
             
             # === JSONGenerator: Capture field mapping patterns ===
             elif agent_name == "JSONGenerator" and decision == "ACCEPT":
                 fields = state.get("metadata_fields", [])
                 doc_info = state.get("document_info", {})
-                domain = doc_info.get("research_domain", "") if doc_info else ""
+                domain = self._safe_get_domain(doc_info)
                 
                 logger.info(f"🔍 JG insight extraction: fields count={len(fields)}, domain='{domain}'")
                 
-                if fields:
-                    # Sample field-ontology mappings
+                if fields and isinstance(fields, list):
+                    # Sample field-ontology mappings (more robust)
                     mappings = []
-                    for f in fields[:20]:
-                        if isinstance(f, dict):
-                            field_name = f.get("field_name", "")
-                            onto_uri = f.get("ontology_uri", "")
-                            if onto_uri and ":" in onto_uri:
-                                prefix = onto_uri.split(":")[0].split("/")[-1]
-                                if field_name:
+                    for f in fields[:25]:
+                        if not isinstance(f, dict):
+                            continue
+                        
+                        field_name = self._safe_get_field(f, "field_name", "name", "label") or ""
+                        onto_uri = self._safe_get_field(f, "ontology_uri", "ontology", "ontology_id") or ""
+                        
+                        if isinstance(field_name, str) and isinstance(onto_uri, str):
+                            field_name = field_name.strip()
+                            onto_uri = onto_uri.strip()
+                            
+                            if onto_uri and field_name:
+                                # Extract ontology prefix from various formats
+                                prefix = ""
+                                if ":" in onto_uri:
+                                    prefix = onto_uri.split(":")[0].split("/")[-1].upper()
+                                elif "/" in onto_uri:
+                                    parts = onto_uri.split("/")
+                                    for part in parts:
+                                        if part.isupper() or "_" in part:
+                                            prefix = part.split("_")[0].upper() if "_" in part else part
+                                            break
+                                
+                                if prefix and len(prefix) <= 10:  # Reasonable prefix length
                                     mappings.append(f"{field_name}→{prefix}")
                     
                     logger.info(f"   Extracted mappings: {len(mappings)}")
                     
                     if mappings:
-                        sample = mappings[:4]
+                        sample = mappings[:5]
                         insights.append(
-                            f"Metadata field mappings discovered: {', '.join(sample)}"
+                            f"Metadata field mappings: {', '.join(sample)}"
                         )
                     
                     # ISA level distribution
                     isa_levels = {}
                     for f in fields:
                         if isinstance(f, dict):
-                            level = f.get("isa_level", "unknown")
-                            isa_levels[level] = isa_levels.get(level, 0) + 1
+                            level = self._safe_get_field(f, "isa_level", "level", default="unknown")
+                            if isinstance(level, str):
+                                level = level.strip().lower()
+                                isa_levels[level] = isa_levels.get(level, 0) + 1
                     
                     logger.info(f"   ISA levels: {isa_levels}")
                     
-                    if len(isa_levels) > 1:
-                        level_str = ", ".join([f"{k}:{v}" for k, v in sorted(isa_levels.items())[:3]])
-                        insights.append(f"Metadata spans ISA levels: {level_str}")
+                    # Only report ISA distribution if we have meaningful data
+                    if len(isa_levels) > 1 and "unknown" not in isa_levels or len(isa_levels.get("unknown", 0)) < len(fields) * 0.5:
+                        level_str = ", ".join([f"{k}:{v}" for k, v in sorted(isa_levels.items())[:4] if k != "unknown"])
+                        if level_str:
+                            insights.append(f"Metadata spans ISA levels: {level_str}")
                     
-                    # Total field count
-                    if len(fields) > 30:
-                        insights.append(
-                            f"Generated {len(fields)} FAIR-DS compliant metadata fields"
-                        )
+                    # Total field count with context
+                    if len(fields) >= 30:
+                        if len(fields) >= 70:
+                            complexity = "high-complexity"
+                        elif len(fields) >= 50:
+                            complexity = "medium-complexity"
+                        else:
+                            complexity = "standard-complexity"
+                        
+                        if domain:
+                            insights.append(
+                                f"{len(fields)} FAIR-DS compliant metadata fields represents a robust baseline for {complexity} {domain} studies"
+                            )
+                        else:
+                            insights.append(
+                                f"{len(fields)} FAIR-DS compliant metadata fields represents a robust baseline for {complexity} omics studies"
+                            )
             
             # === DocumentParser: Capture document patterns ===
             elif agent_name == "DocumentParser" and decision == "ACCEPT":
@@ -508,22 +635,103 @@ class FAIRifierLangGraphApp:
                 
                 logger.info(f"🔍 DP insight extraction: doc_info keys={list(doc_info.keys()) if doc_info else []}")
                 
-                if doc_info:
-                    doc_type = doc_info.get("document_type", "")
-                    domain = doc_info.get("research_domain", "")
-                    study_design = doc_info.get("study_design", "")
-                    organisms = doc_info.get("organisms", [])
+                if doc_info and isinstance(doc_info, dict):
+                    # Extract domain with robust field name handling
+                    domain = self._safe_get_domain(doc_info)
                     
-                    if domain and doc_type:
-                        insights.append(f"{domain} research typically uses {doc_type} format")
+                    # Extract document type
+                    doc_type = self._safe_get_field(doc_info, "document_type", "type", "doc_type") or ""
+                    if isinstance(doc_type, str):
+                        doc_type = doc_type.strip()
                     
-                    if study_design and len(study_design) > 10:
-                        insights.append(f"Study design pattern: {study_design[:100]}")
+                    logger.info(f"   DP extracted: domain='{domain}', doc_type='{doc_type}'")
                     
-                    if organisms and len(organisms) > 0:
-                        org_sample = organisms[:2] if isinstance(organisms, list) else []
-                        if org_sample:
-                            insights.append(f"Model organisms: {', '.join(org_sample)}")
+                    # Pattern 1: Document type by domain
+                    if domain and doc_type and len(doc_type) > 3:
+                        insights.append(f"{domain} research commonly uses {doc_type} documents")
+                    
+                    # Pattern 2: Experimental design (try multiple field names)
+                    exp_design = self._safe_get_field(
+                        doc_info, 
+                        "experimental_design", 
+                        "study_design", 
+                        "design"
+                    )
+                    
+                    if exp_design:
+                        # Handle both string and dict formats
+                        design_text = ""
+                        if isinstance(exp_design, dict):
+                            # Extract from nested structure
+                            design_type = self._safe_get_field(exp_design, "type", "design_type", "name")
+                            if design_type and isinstance(design_type, str):
+                                design_text = design_type.strip()
+                        elif isinstance(exp_design, str):
+                            design_text = exp_design.strip()
+                        
+                        logger.info(f"   DP design_text: '{design_text[:50]}'")
+                        
+                        # Look for common design patterns
+                        if design_text:
+                            design_lower = design_text.lower()
+                            if "time" in design_lower and ("series" in design_lower or "course" in design_lower or "resolved" in design_lower):
+                                if domain:
+                                    insights.append(f"{domain} studies commonly use time-resolved (time-series) experimental designs")
+                                else:
+                                    insights.append("Time-series experimental design is common for transcriptomics studies")
+                            elif "case" in design_lower and "control" in design_lower:
+                                insights.append(f"Case-control design pattern used in {domain if domain else 'research'}")
+                            elif "longitudinal" in design_lower:
+                                insights.append(f"Longitudinal study design pattern observed in {domain if domain else 'research'}")
+                            elif len(design_text) > 20:
+                                # Generic design insight if long enough description
+                                insights.append(f"Study design: {design_text[:80]}...")
+                    
+                    # Pattern 3: Model organisms (try multiple field names)
+                    organisms = self._safe_get_field(
+                        doc_info,
+                        "study_organism",
+                        "organisms",
+                        "organism",
+                        "model_organism"
+                    )
+                    
+                    if organisms:
+                        org_list = []
+                        
+                        # Handle various formats
+                        if isinstance(organisms, list):
+                            for org in organisms[:3]:  # Top 3 organisms
+                                if isinstance(org, str) and org.strip():
+                                    org_list.append(org.strip())
+                                elif isinstance(org, dict):
+                                    # Try to extract organism name from dict
+                                    org_name = self._safe_get_field(org, "name", "organism", "species")
+                                    if org_name and isinstance(org_name, str):
+                                        org_list.append(org_name.strip())
+                        elif isinstance(organisms, str) and organisms.strip():
+                            org_list.append(organisms.strip())
+                        elif isinstance(organisms, dict):
+                            org_name = self._safe_get_field(organisms, "name", "organism", "species")
+                            if org_name and isinstance(org_name, str):
+                                org_list.append(org_name.strip())
+                        
+                        logger.info(f"   DP organisms: {org_list}")
+                        
+                        if org_list:
+                            # Extract common names (earthworms, mice, etc.)
+                            for org in org_list:
+                                org_lower = org.lower()
+                                if domain:
+                                    insights.append(f"{org} is commonly used in {domain} research")
+                                else:
+                                    insights.append(f"{org} is a standard model organism")
+                                break  # Only add one organism insight to avoid clutter
+                    
+                    # Pattern 4: Research strategy/approach (if available)
+                    strategy = self._safe_get_field(doc_info, "research_strategy", "approach", "methodology")
+                    if strategy and isinstance(strategy, str) and len(strategy) > 20:
+                        insights.append(f"Research approach: {strategy[:80]}...")
             
             # === Repairs: what was fixed ===
             if decision == "ACCEPT" and attempt > 1:
@@ -1896,127 +2104,170 @@ Return JSON in the following format:
         return state
     
     async def run(
-        self, 
-        document_path: str, 
+        self,
+        document_path: str,
         project_id: str = None,
-        output_dir: str = None
+        output_dir: str = None,
+        resume: bool = False,
     ) -> Dict[str, Any]:
-        """Run the LangGraph workflow."""
+        """Run the LangGraph workflow. If resume=True, continue from last checkpoint."""
         if not project_id:
             project_id = f"fairifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        # Initialize state
-        initial_state = {
-            "document_path": document_path,
-            "document_content": "",
-            "document_conversion": {},
-            "output_dir": output_dir,  # Pass output directory for MinerU artifacts
-            "document_info": {},
-            "retrieved_knowledge": [],
-            "metadata_fields": [],
-            "validation_results": {},
-            "confidence_scores": {},
-            "needs_human_review": False,
-            "artifacts": {},
-            "human_interventions": {},
-            "execution_history": [],
-            "reasoning_chain": [],
-            "execution_plan": {},
-            "execution_summary": {},
-            "status": ProcessingStatus.PENDING.value,
-            "processing_start": datetime.now().isoformat(),
-            "processing_end": None,
-            "errors": [],
-            "agent_guidance": {},
-            "context": {
-                "parse_retry_count": 0,
-                "retrieve_retry_count": 0,
-                "generate_retry_count": 0
-            },
-            # Memory integration: session_id bound to thread_id for consistent resume
-            "session_id": project_id,
+
+        if resume and self._checkpointer_factory is None and self.checkpointer is None:
+            raise ValueError(
+                "Resume requires a persistent checkpointer (CHECKPOINTER_BACKEND=sqlite)."
+            )
+
+        from pathlib import Path
+        doc_name = Path(document_path or "").stem or project_id
+
+        # Build config (thread_id is required for checkpointing and resume)
+        mineru_status = "MinerU" if config.mineru_enabled else "PyMuPDF"
+        run_name = (
+            f"Resume: {project_id}"
+            if resume
+            else f"{doc_name} | {config.llm_provider}:{config.llm_model} | {mineru_status}"
+        )
+        langsmith_metadata = {
+            "document": doc_name,
+            "document_path": document_path or "",
+            "project_id": project_id,
+            "workflow_type": "langgraph",
+            "resume": resume,
+            "llm_provider": config.llm_provider,
+            "llm_model": config.llm_model,
+            "timestamp": datetime.now().isoformat(),
         }
-        
-        logger.info(f"🚀 Starting LangGraph Workflow (project: {project_id})")
-        
-        try:
-            # Prepare LangSmith metadata for better tracing
-            from pathlib import Path
-            doc_name = Path(document_path).stem
-            
-            # FAIR-compliant LangSmith project name
-            if config.enable_langsmith and getattr(config, 'langsmith_use_fair_naming', True):
-                from fairifier.utils.langsmith_helper import generate_fair_langsmith_project_name
-                fair_project = generate_fair_langsmith_project_name(
-                    environment=None,
-                    model_provider=config.llm_provider,
-                    model_name=config.llm_model,
-                    project_id=project_id,
-                )
-                os.environ["LANGCHAIN_PROJECT"] = fair_project
-                logger.info(f"📊 LangSmith: {fair_project}")
-            
-            # Build descriptive run name with key configs
-            mineru_status = "MinerU" if config.mineru_enabled else "PyMuPDF"
-            run_name = f"{doc_name} | {config.llm_provider}:{config.llm_model} | {mineru_status}"
-            
-            # Collect important configuration metadata
-            langsmith_metadata = {
-                "document": doc_name,
+        config_dict = {
+            "configurable": {"thread_id": project_id},
+            "run_name": run_name,
+            "metadata": langsmith_metadata,
+            "tags": [
+                "langgraph-workflow",
+                config.llm_provider,
+                mineru_status.lower(),
+                f"model:{config.llm_model}",
+            ],
+            "recursion_limit": 50,
+        }
+
+        if config.enable_langsmith and getattr(config, "langsmith_use_fair_naming", True):
+            from fairifier.utils.langsmith_helper import generate_fair_langsmith_project_name
+            fair_project = generate_fair_langsmith_project_name(
+                environment=None,
+                model_provider=config.llm_provider,
+                model_name=config.llm_model,
+                project_id=project_id,
+            )
+            os.environ["LANGCHAIN_PROJECT"] = fair_project
+            logger.info(f"📊 LangSmith: {fair_project}")
+
+        if resume:
+            logger.info(f"🔄 Resuming from checkpoint (project: {project_id})")
+        else:
+            logger.info(f"🚀 Starting LangGraph Workflow (project: {project_id})")
+        reset_run_stop_requested()
+
+        # Initial state only for non-resume; resume uses checkpoint state
+        initial_state = None
+        if not resume:
+            initial_state = {
                 "document_path": document_path,
-                "project_id": project_id,
-                "workflow_type": "langgraph",
-                "llm_provider": config.llm_provider,
-                "llm_model": config.llm_model,
-                "llm_temperature": config.llm_temperature,
-                "llm_max_tokens": config.llm_max_tokens,
-                "mineru_enabled": config.mineru_enabled,
-                "mineru_backend": config.mineru_backend if config.mineru_enabled else None,
-                "fair_ds_api": config.fair_ds_api_url,
-                "max_step_retries": config.max_step_retries,
-                "max_global_retries": config.max_global_retries,
-                "critic_accept_threshold_parser": config.critic_accept_threshold_document_parser,
-                "critic_accept_threshold_retriever": config.critic_accept_threshold_knowledge_retriever,
-                "critic_accept_threshold_generator": config.critic_accept_threshold_json_generator,
-                "timestamp": datetime.now().isoformat(),
+                "document_content": "",
+                "document_conversion": {},
+                "output_dir": output_dir,
+                "document_info": {},
+                "retrieved_knowledge": [],
+                "metadata_fields": [],
+                "validation_results": {},
+                "confidence_scores": {},
+                "needs_human_review": False,
+                "artifacts": {},
+                "human_interventions": {},
+                "execution_history": [],
+                "reasoning_chain": [],
+                "execution_plan": {},
+                "execution_summary": {},
+                "status": ProcessingStatus.PENDING.value,
+                "processing_start": datetime.now().isoformat(),
+                "processing_end": None,
+                "errors": [],
+                "agent_guidance": {},
+                "context": {
+                    "parse_retry_count": 0,
+                    "retrieve_retry_count": 0,
+                    "generate_retry_count": 0,
+                },
+                "session_id": project_id,
             }
-            
-            # Run workflow with enhanced LangSmith metadata
-            config_dict = {
-                "configurable": {"thread_id": project_id},
-                "run_name": run_name,
-                "metadata": langsmith_metadata,
-                "tags": [
-                    "langgraph-workflow",
-                    config.llm_provider,
-                    mineru_status.lower(),
-                    f"model:{config.llm_model}",
-                ],
-                # Set higher recursion limit to allow multiple retries across all agents
-                # Default is 25, we increase to 50 to support up to ~8 retries per agent
-                "recursion_limit": 50
-            }
-            
-            # Handle async checkpointer context if needed
+
+        try:
+            # Invoke with None on resume so the graph loads from checkpoint
+            input_state = initial_state if not resume else None
+            result = initial_state if initial_state is not None else {}
+
             if self._checkpointer_factory is not None:
-                # Use AsyncSqliteSaver with async context
                 logger.debug("Using AsyncSqliteSaver with async context management")
                 async with self._checkpointer_factory() as checkpointer:
-                    # Recompile workflow with the checkpointer instance
                     graph_structure = self._build_graph_structure()
                     workflow_with_cp = graph_structure.compile(checkpointer=checkpointer)
-                    result = await workflow_with_cp.ainvoke(initial_state, config=config_dict)
+                    async for state in workflow_with_cp.astream(
+                        input_state, config=config_dict, stream_mode="values"
+                    ):
+                        result = state
+                        if run_stop_requested():
+                            logger.warning(
+                                f"⏹ Run stopped by user (project: {project_id})"
+                            )
+                            result["status"] = ProcessingStatus.INTERRUPTED.value
+                            result.setdefault("errors", []).append(
+                                "Run stopped by user"
+                            )
+                            break
+                    if resume and not result and input_state is None:
+                        snap = workflow_with_cp.get_state(config_dict)
+                        if snap and getattr(snap, "values", None):
+                            result = dict(snap.values)
             else:
-                # Use pre-compiled workflow (sync checkpointer or none)
-                result = await self.workflow.ainvoke(initial_state, config=config_dict)
-            
-            logger.info(f"✅ LangGraph workflow completed (project: {project_id})")
-            
+                async for state in self.workflow.astream(
+                    input_state, config=config_dict, stream_mode="values"
+                ):
+                    result = state
+                    if run_stop_requested():
+                        logger.warning(
+                            f"⏹ Run stopped by user (project: {project_id})"
+                        )
+                        result["status"] = ProcessingStatus.INTERRUPTED.value
+                        result.setdefault("errors", []).append(
+                            "Run stopped by user"
+                        )
+                        break
+                if resume and not result and input_state is None:
+                    snap = self.workflow.get_state(config_dict)
+                    if snap and getattr(snap, "values", None):
+                        result = dict(snap.values)
+
+            if run_stop_requested():
+                logger.info(
+                    f"⏹ LangGraph workflow stopped by user (project: {project_id})"
+                )
+            else:
+                logger.info(
+                    f"✅ LangGraph workflow completed (project: {project_id})"
+                )
+
             return result
-            
+
         except Exception as e:
-            logger.error(f"❌ LangGraph workflow failed (project: {project_id}): {str(e)}")
-            initial_state["status"] = ProcessingStatus.FAILED.value
-            initial_state["errors"].append(str(e))
-            return initial_state
+            logger.error(
+                f"❌ LangGraph workflow failed (project: {project_id}): {str(e)}"
+            )
+            fallback = initial_state or {
+                "status": ProcessingStatus.FAILED.value,
+                "errors": [],
+            }
+            fallback["status"] = ProcessingStatus.FAILED.value
+            fallback.setdefault("errors", []).append(str(e))
+            return fallback
 

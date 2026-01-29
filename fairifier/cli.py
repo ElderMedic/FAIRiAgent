@@ -801,9 +801,10 @@ async def _resume_workflow(
         
         click.echo(f"🔄 Resuming from last checkpoint (Project ID: {project_id})\n")
         
-        # Resume: invoke with None (or minimal state) and same thread_id
-        # LangGraph will load last checkpoint and continue from there
-        result = await workflow.run(document_path, project_id, output_dir=str(output_path))
+        # Resume: run with resume=True so LangGraph loads last checkpoint and continues
+        result = await workflow.run(
+            document_path, project_id, output_dir=str(output_path), resume=True
+        )
         
         # Extract results (same as _run_workflow)
         status = result.get("status", "unknown")

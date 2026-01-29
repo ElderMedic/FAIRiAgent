@@ -16,6 +16,7 @@ class ProcessingStatus(Enum):
     REVIEWING = "reviewing"
     COMPLETED = "completed"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 class ConfidenceLevel(Enum):
