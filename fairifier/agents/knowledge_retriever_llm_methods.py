@@ -19,6 +19,7 @@ async def llm_select_relevant_packages(
     all_packages: List[Dict[str, Any]],
     critic_feedback: Optional[Dict[str, Any]] = None,
     planner_instruction: Optional[str] = None,
+    prior_memory_context: Optional[str] = None,
 ) -> List[str]:
     """
     LLM determines which FAIR-DS packages are relevant for this document.
@@ -145,6 +146,8 @@ REQUIREMENTS:
 - Line N+1: ``` (alone)
 - NO text before/after block
 - NO comments in JSON"""
+    if prior_memory_context:
+        user_prompt = prior_memory_context + "\n\n" + user_prompt
 
     messages = [
         SystemMessage(content=system_prompt),
@@ -416,7 +419,7 @@ REQUIREMENTS:
         HumanMessage(content=user_prompt)
     ]
     
-    response = await llm_helper.llm.ainvoke(messages)
+    response = await llm_helper._call_llm(messages, operation_name="Knowledge Retriever - field selection")
     content = response.content
     
     # Parse response

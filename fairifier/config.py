@@ -71,7 +71,7 @@ class FAIRifierConfig:
     llm_base_url: str = "http://localhost:11434"
     llm_api_key: Optional[str] = None  # For OpenAI/Qwen/Anthropic
     embedding_model: str = "nomic-embed-text"
-    llm_temperature: float = 0.5
+    llm_temperature: float = 0.3  # Recommended for structured extraction; keep consistent across configs (control variable)
     llm_max_tokens: int = 100000
     llm_enable_thinking: bool = False  # Enable thinking mode (requires streaming for some models)
     
@@ -141,10 +141,16 @@ class FAIRifierConfig:
     
     # Mem0 Memory Layer Configuration (Optional)
     # Provides persistent semantic memory for context compression and retrieval
+    # Mem0 uses its own LLM source (provider/model/base_url) independent of the main workflow LLM
     mem0_enabled: bool = False  # Off by default, opt-in feature
-    mem0_ollama_base_url: Optional[str] = None  # Defaults to llm_base_url if not set
+    mem0_strict: bool = False  # If True and mem0_enabled, raise when mem0 init fails
+    mem0_llm_provider: str = "ollama"  # mem0 LLM provider: ollama, openai, anthropic (mem0-supported only)
+    mem0_llm_model: Optional[str] = None  # mem0 LLM model (defaults to llm_model if not set)
+    mem0_ollama_base_url: Optional[str] = None  # Base URL for mem0 when provider=ollama
+    mem0_llm_base_url: Optional[str] = None  # Base URL for mem0 when provider=openai (e.g. OpenAI-compatible API)
+    mem0_llm_api_key: Optional[str] = None  # API key for mem0 when provider=openai or anthropic
     mem0_embedding_model: str = "nomic-embed-text"  # Ollama embedding model
-    mem0_llm_model: Optional[str] = None  # Defaults to llm_model if not set
+    mem0_embedding_dims: int = 768  # Vector dimension (nomic-embed-text=768; OpenAI ada-002=1536)
     mem0_qdrant_host: str = "localhost"  # Qdrant server host
     mem0_qdrant_port: int = 6333  # Qdrant server port
     mem0_collection_name: str = "fairifier_memories"  # Qdrant collection name
@@ -265,6 +271,14 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("FAIR_DS_API_URL"):
         config_instance.fair_ds_api_url = os.getenv("FAIR_DS_API_URL")
     
+    # Processing limits
+    if os.getenv("FAIRIFIER_MAX_DOCUMENT_SIZE_MB"):
+        config_instance.max_document_size_mb = int(os.getenv("FAIRIFIER_MAX_DOCUMENT_SIZE_MB"))
+    if os.getenv("FAIRIFIER_MAX_PROCESSING_TIME_MINUTES"):
+        config_instance.max_processing_time_minutes = int(os.getenv("FAIRIFIER_MAX_PROCESSING_TIME_MINUTES"))
+    if os.getenv("FAIRIFIER_MIN_CONFIDENCE_THRESHOLD"):
+        config_instance.min_confidence_threshold = float(os.getenv("FAIRIFIER_MIN_CONFIDENCE_THRESHOLD"))
+    
     # Retry configuration
     if os.getenv("FAIRIFIER_MAX_STEP_RETRIES"):
         config_instance.max_step_retries = int(os.getenv("FAIRIFIER_MAX_STEP_RETRIES"))
@@ -350,12 +364,26 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("MEM0_ENABLED"):
         enabled_value = os.getenv("MEM0_ENABLED").lower()
         config_instance.mem0_enabled = enabled_value in ("true", "1", "yes")
+    if os.getenv("MEM0_STRICT"):
+        strict_value = os.getenv("MEM0_STRICT").lower()
+        config_instance.mem0_strict = strict_value in ("true", "1", "yes")
     
+    if os.getenv("MEM0_LLM_PROVIDER"):
+        config_instance.mem0_llm_provider = os.getenv("MEM0_LLM_PROVIDER").lower()
+    if os.getenv("MEM0_LLM_BASE_URL"):
+        config_instance.mem0_llm_base_url = os.getenv("MEM0_LLM_BASE_URL")
+    if os.getenv("MEM0_LLM_API_KEY"):
+        config_instance.mem0_llm_api_key = os.getenv("MEM0_LLM_API_KEY")
     if os.getenv("MEM0_OLLAMA_BASE_URL"):
         config_instance.mem0_ollama_base_url = os.getenv("MEM0_OLLAMA_BASE_URL")
     
     if os.getenv("MEM0_EMBEDDING_MODEL"):
         config_instance.mem0_embedding_model = os.getenv("MEM0_EMBEDDING_MODEL")
+    if os.getenv("MEM0_EMBEDDING_DIMS"):
+        try:
+            config_instance.mem0_embedding_dims = int(os.getenv("MEM0_EMBEDDING_DIMS"))
+        except ValueError:
+            pass
     
     if os.getenv("MEM0_LLM_MODEL"):
         config_instance.mem0_llm_model = os.getenv("MEM0_LLM_MODEL")

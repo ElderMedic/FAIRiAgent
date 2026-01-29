@@ -36,6 +36,25 @@ from ..config import config
 logger = logging.getLogger(__name__)
 
 
+def estimate_tokens(text: str) -> int:
+    """
+    Estimate token count for a text string.
+    
+    Uses a simple heuristic: ~4 characters per token (works reasonably well for English).
+    For production use, consider using tiktoken library for accurate counts.
+    
+    Args:
+        text: Input text string
+        
+    Returns:
+        Estimated token count
+    """
+    if not text:
+        return 0
+    # Simple estimation: 1 token ≈ 4 characters (conservative for English)
+    return len(text) // 4
+
+
 def _extract_json_from_markdown(content: str) -> str:
     """Extract JSON content from markdown code blocks.
     
@@ -466,8 +485,12 @@ class LLMHelper:
     async def _call_llm(self, messages, stream_to_streamlit=None, operation_name="LLM Call"):
         """Helper method to call LLM with proper parameters.
         
-        Supports both thinking and non-thinking modes.
-        For Qwen models, enable_thinking is passed via extra_body as per official docs.
+        Thinking mode is controlled by config.llm_enable_thinking (LLM_ENABLE_THINKING env).
+        Provider-specific mapping:
+        - qwen: extra_body={"enable_thinking": bool} (DashScope/百炼)
+        - openai: extra_body={"enable_thinking": bool} (OpenAI-compatible backends, e.g. DashScope as openai)
+        - ollama: think=bool (Ollama /api/chat think parameter)
+        - anthropic: extra_body={"reasoning": {"enabled": bool}} (Claude Extended Thinking; may vary by API)
         
         Args:
             messages: List of messages to send to LLM
@@ -645,10 +668,14 @@ class LLMHelper:
                         pass
                     return result
         elif self.provider == "openai":
-            # For OpenAI provider, support streaming if requested
+            # OpenAI-compatible APIs: many backends (DashScope, Azure, etc.) accept enable_thinking via extra_body
+            # Official OpenAI may ignore unknown params; reasoning models (o1/o3) use different params
             if stream_to_streamlit:
                 try:
-                    llm_with_params = self.llm.bind(stream=True)
+                    llm_with_params = self.llm.bind(
+                        stream=True,
+                        extra_body={"enable_thinking": enable_thinking},
+                    )
                     content_parts = []
                     full_text = ""
                     
@@ -688,7 +715,8 @@ class LLMHelper:
                     return result
                 except Exception as e:
                     logger.warning(f"OpenAI streaming failed: {e}, falling back to regular call")
-                    result = await self.llm.ainvoke(messages)
+                    llm_with_params = self.llm.bind(extra_body={"enable_thinking": enable_thinking})
+                    result = await llm_with_params.ainvoke(messages)
                     
                     # Log LLM response
                     self._log_llm_response(result, messages, operation_name)
@@ -702,7 +730,8 @@ class LLMHelper:
                         pass
                     return result
             else:
-                result = await self.llm.ainvoke(messages)
+                llm_with_params = self.llm.bind(extra_body={"enable_thinking": enable_thinking})
+                result = await llm_with_params.ainvoke(messages)
                 
                 # Log LLM response
                 self._log_llm_response(result, messages, operation_name)
@@ -716,10 +745,11 @@ class LLMHelper:
                     pass
                 return result
         elif self.provider == "ollama":
-            # Ollama supports streaming
+            # Ollama: think=True enables model thinking (separate thinking/output); think=False direct output (official API)
+            # Same switch as config.llm_enable_thinking (LLM_ENABLE_THINKING env)
             if stream_to_streamlit:
                 try:
-                    llm_with_params = self.llm.bind(stream=True)
+                    llm_with_params = self.llm.bind(stream=True, think=enable_thinking)
                     content_parts = []
                     full_text = ""
                     
@@ -759,7 +789,8 @@ class LLMHelper:
                     return result
                 except Exception as e:
                     logger.warning(f"Ollama streaming failed: {e}, falling back to regular call")
-                    result = await self.llm.ainvoke(messages)
+                    llm_with_params = self.llm.bind(think=enable_thinking)
+                    result = await llm_with_params.ainvoke(messages)
                     
                     # Check if result is valid
                     if not result:
@@ -816,7 +847,8 @@ class LLMHelper:
                     return result
             else:
                 try:
-                    result = await self.llm.ainvoke(messages)
+                    llm_with_params = self.llm.bind(think=enable_thinking)
+                    result = await llm_with_params.ainvoke(messages)
                     
                     # Check if result is valid
                     if not result:
@@ -913,8 +945,33 @@ class LLMHelper:
                     logger.error(f"❌ Ollama call failed for {operation_name}: {e}")
                     logger.error(f"Provider: {self.provider}, Model: {self.model}, Base URL: {config.llm_base_url}")
                     raise
+        elif self.provider == "anthropic" or self.provider == "claude":
+            # Anthropic Claude Extended Thinking: reasoning.enabled / effort (API-specific)
+            # Pass extra_body so backends that support it can enable extended thinking
+            try:
+                llm_with_params = self.llm.bind(
+                    extra_body={"reasoning": {"enabled": enable_thinking}} if enable_thinking else {}
+                )
+                result = await llm_with_params.ainvoke(messages)
+            except Exception as e:
+                # Some Anthropic SDK/API versions may not support extra_body or different shape
+                logger.debug(f"Anthropic extra_body for thinking failed: {e}, using plain invoke")
+                result = await self.llm.ainvoke(messages)
+            
+            # Log LLM response
+            self._log_llm_response(result, messages, operation_name)
+            
+            # Add to Streamlit display if available
+            try:
+                from fairifier.apps.ui.streamlit_app import add_llm_response
+                content = result.content if hasattr(result, 'content') else str(result)
+                add_llm_response(operation_name, prompt_preview, content)
+            except (ImportError, AttributeError):
+                pass
+            
+            return result
         else:
-            # For other providers (anthropic), no special handling needed
+            # Unsupported or future provider: no thinking param
             result = await self.llm.ainvoke(messages)
             
             # Log LLM response
@@ -1007,7 +1064,8 @@ class LLMHelper:
         text: str, 
         critic_feedback: Optional[Dict[str, Any]] = None,
         is_structured_markdown: bool = False,
-        planner_instruction: Optional[str] = None
+        planner_instruction: Optional[str] = None,
+        prior_memory_context: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Extract structured information from document text using LLM.
@@ -1017,6 +1075,7 @@ class LLMHelper:
             text: Document text content
             critic_feedback: Optional feedback from Critic agent for improvement
             is_structured_markdown: If True, text is MinerU-converted Markdown with better structure
+            prior_memory_context: Optional compressed context from mem0 (saves tokens, more reflective)
             
         Returns:
             Dictionary containing extracted information
@@ -1538,6 +1597,9 @@ Think step by step:
 
 Extract all relevant information and return as JSON with clear, descriptive field names."""
 
+        if prior_memory_context:
+            user_prompt = prior_memory_context + "\n\n" + user_prompt
+
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt)
@@ -1850,7 +1912,8 @@ REQUIREMENTS:
         selected_fields: List[Dict[str, Any]],
         document_text: str,
         critic_feedback: Optional[Dict[str, Any]] = None,
-        planner_instruction: Optional[str] = None
+        planner_instruction: Optional[str] = None,
+        prior_memory_context: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Generate complete metadata for all selected fields.
@@ -1861,6 +1924,7 @@ REQUIREMENTS:
             selected_fields: Selected metadata fields
             document_text: Full document text (truncated)
             critic_feedback: Optional feedback for improvement
+            prior_memory_context: Optional compressed context from mem0 (saves tokens)
             
         Returns:
             List of metadata field dictionaries with values
@@ -2013,6 +2077,8 @@ REQUIREMENTS:
 - NO comments in JSON
 - Each value: < 500 characters
 - Each evidence: < 200 characters"""
+        if prior_memory_context:
+            user_prompt = prior_memory_context + "\n\n" + user_prompt
 
         messages = [
             SystemMessage(content=system_prompt),
