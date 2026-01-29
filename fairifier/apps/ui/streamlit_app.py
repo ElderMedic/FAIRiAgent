@@ -2,6 +2,7 @@
 
 import tempfile
 import os
+import threading
 from pathlib import Path
 import asyncio
 from datetime import datetime
@@ -14,6 +15,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 from fairifier.graph.langgraph_app import FAIRifierLangGraphApp
 from fairifier.config import config, apply_env_overrides
+from fairifier.utils.run_control import set_run_stop_requested
 
 # Check if we're running in Streamlit environment
 def _is_streamlit_context():
@@ -56,9 +58,169 @@ class StreamlitLogHandler(logging.Handler):
         """Get all logs as string."""
         return '\n'.join(self.log_buffer)
 
+
+def _load_result_from_output_folder(folder_path):
+    """Load a saved run from a local output folder and build a result dict for display.
+    Returns (result, project_id, output_path, project_name) or (None, None, None, None) on error.
+    WebUI-only; does not modify main framework.
+    """
+    path = Path(folder_path).resolve()
+    if not path.is_dir():
+        return None, None, None, None
+    try:
+        # Required files
+        workflow_report_path = path / "workflow_report.json"
+        runtime_config_path = path / "runtime_config.json"
+        metadata_json_path = path / "metadata_json.json"
+        if not workflow_report_path.exists() or not runtime_config_path.exists() or not metadata_json_path.exists():
+            return None, None, None, None
+        report = json.loads(workflow_report_path.read_text(encoding="utf-8"))
+        runtime = json.loads(runtime_config_path.read_text(encoding="utf-8"))
+        meta = json.loads(metadata_json_path.read_text(encoding="utf-8"))
+        runtime_info = runtime.get("runtime_info", {})
+        project_id = runtime_info.get("project_id", path.name)
+        output_path_str = runtime_info.get("output_path", str(path))
+        doc_path = runtime_info.get("document_path", "")
+        project_name = runtime_info.get("document_name") or (Path(doc_path).name if doc_path else path.name)
+        # Artifacts: metadata_json content (already have meta), validation_report, processing_log if present
+        metadata_json_str = metadata_json_path.read_text(encoding="utf-8")
+        artifacts = {"metadata_json": metadata_json_str}
+        if (path / "validation_report.txt").exists():
+            artifacts["validation_report"] = (path / "validation_report.txt").read_text(encoding="utf-8")
+        if (path / "processing_log.jsonl").exists():
+            artifacts["processing_log"] = (path / "processing_log.jsonl").read_text(encoding="utf-8")
+        # Execution history from timeline (minimal: agent_name, attempt, success, start_time, end_time)
+        execution_history = []
+        for t in report.get("timeline", []):
+            execution_history.append({
+                "agent_name": t.get("agent", "unknown"),
+                "attempt": t.get("attempt", 1),
+                "success": t.get("success", True),
+                "start_time": t.get("start_time", ""),
+                "end_time": t.get("end_time", ""),
+                "critic_evaluation": {},
+            })
+        # Confidence scores from quality_metrics (report uses critic_confidence etc.)
+        qm = report.get("quality_metrics", {})
+        confidence_scores = {
+            "critic": qm.get("critic_confidence", 0.0),
+            "structural": qm.get("structural_confidence", 0.0),
+            "validation": qm.get("validation_confidence", 0.0),
+            "overall": qm.get("overall_confidence", 0.0),
+        }
+        # Metadata fields: flatten isa_structure from metadata_json
+        metadata_fields = []
+        isa_structure = meta.get("isa_structure", {})
+        for _sheet_name, sheet_data in isa_structure.items():
+            if isinstance(sheet_data, dict) and "fields" in sheet_data:
+                for f in sheet_data["fields"]:
+                    if isinstance(f, dict):
+                        metadata_fields.append({
+                            "field_name": f.get("field_name", ""),
+                            "name": f.get("field_name", ""),
+                            "value": f.get("value", ""),
+                            "confidence": f.get("confidence", 0.5),
+                            "description": f.get("evidence", ""),
+                            "required": False,
+                        })
+        # Document info minimal (from metadata if available)
+        document_info = {}
+        if isa_structure.get("investigation", {}).get("fields"):
+            for f in isa_structure["investigation"]["fields"]:
+                if f.get("field_name") == "investigation title":
+                    document_info["title"] = f.get("value", "")
+                    break
+        exec_summary = report.get("execution_summary", {})
+        retry_analysis = report.get("retry_analysis", {})
+        result = {
+            "execution_summary": exec_summary,
+            "document_info": document_info,
+            "document_conversion": {},
+            "confidence_scores": confidence_scores,
+            "needs_human_review": exec_summary.get("needs_human_review", qm.get("needs_review", False)),
+            "execution_history": execution_history,
+            "quality_metrics": qm,
+            "metadata_fields": metadata_fields,
+            "artifacts": artifacts,
+            "workflow_report": report,
+            "output_dir": str(path),
+            "status": report.get("workflow_status", "completed"),
+            "global_retries_used": retry_analysis.get("global_retries_used", 0),
+            "errors": [],
+        }
+        return result, project_id, output_path_str, project_name
+    except Exception:
+        return None, None, None, None
+
+
+def _write_artifacts_to_output_path(result, output_path):
+    """Write result artifacts to output_path (mirrors CLI behavior). WebUI-only helper."""
+    path = Path(output_path) if not isinstance(output_path, Path) else output_path
+    path.mkdir(parents=True, exist_ok=True)
+    artifacts = result.get("artifacts", {})
+    extensions = {
+        "metadata_json": ".json",
+        "validation_report": ".txt",
+        "processing_log": ".jsonl",
+    }
+    for artifact_name, content in artifacts.items():
+        if not content:
+            continue
+        ext = extensions.get(artifact_name, ".json")
+        filename = f"{artifact_name}{ext}"
+        filepath = path / filename
+        text = content if isinstance(content, str) else json.dumps(content, indent=2, ensure_ascii=False)
+        filepath.write_text(text, encoding="utf-8")
+    try:
+        from fairifier.utils.llm_helper import get_llm_helper, save_llm_responses
+        llm_helper = get_llm_helper()
+        if llm_helper and getattr(llm_helper, "llm_responses", None):
+            save_llm_responses(path, llm_helper)
+    except Exception:
+        pass
+
+
 # Global variable to store chat container for LLM responses
 _streamlit_chat_container = None
 _streamlit_chat_messages = {}  # Store message containers by message_id
+
+# Run-in-background state (thread and result); used for Stop button
+_current_run = {
+    "thread": None,
+    "result": None,
+    "done": False,
+    "project_id": None,
+    "output_path": None,
+    "project_name": None,
+    "tmp_path": None,
+}
+
+def _run_workflow_worker(
+    file_path, project_id, output_path, project_name, tmp_path=None, resume=False
+):
+    """Run app.run() in a thread; store result in _current_run. If resume=True, continue from checkpoint."""
+    global _current_run
+    try:
+        app = FAIRifierLangGraphApp()
+        result = asyncio.run(
+            app.run(file_path, project_id, output_path, resume=resume)
+        )
+        _current_run["result"] = result
+    except Exception as e:
+        _current_run["result"] = {
+            "status": "failed",
+            "errors": [str(e)],
+            "execution_summary": {},
+            "artifacts": {},
+        }
+    finally:
+        _current_run["done"] = True
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
 
 def set_streamlit_chat_container(container):
     """Set the Streamlit chat container for LLM streaming output."""
@@ -264,7 +426,9 @@ def main():
     st.markdown("Automated generation of FAIR metadata from research documents")
     
     # Use tabs instead of sidebar dropdown
-    tab1, tab2, tab3, tab4 = st.tabs(["📄 Upload & Process", "⚙️ Configuration", "🔍 Review Results", "ℹ️ About"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📄 Upload & Process", "⚙️ Configuration", "🔍 Review Results", "🧠 Memory", "ℹ️ About"
+    ])
     
     with tab1:
         upload_and_process_page()
@@ -273,10 +437,100 @@ def main():
     with tab3:
         review_results_page()
     with tab4:
+        memory_page()
+    with tab5:
         about_page()
 
 def upload_and_process_page():
     import streamlit as st
+    global _current_run
+
+    # If a run is in progress, show status and Stop button (or handle completed run)
+    if st.session_state.get("run_in_progress") and _current_run.get("thread") is not None:
+        thread = _current_run["thread"]
+        if not thread.is_alive():
+            # Run finished (or was stopped)
+            result = _current_run.get("result")
+            project_id = _current_run.get("project_id")
+            output_path = _current_run.get("output_path")
+            project_name = _current_run.get("project_name")
+            st.session_state.run_in_progress = False
+            _current_run["thread"] = None
+            _current_run["done"] = False
+            _current_run["result"] = None
+            _current_run["project_id"] = None
+            _current_run["output_path"] = None
+            _current_run["project_name"] = None
+            _current_run["tmp_path"] = None
+            if result is not None and output_path:
+                st.session_state.last_result = result
+                st.session_state.project_id = project_id
+                st.session_state.project_name = project_name or ""
+                st.session_state.output_path = output_path
+                _write_artifacts_to_output_path(result, output_path)
+                st.success("Run finished.")
+                display_results(result)
+                # Offer resume when run was interrupted (LangGraph checkpoint resume)
+                if result.get("status") == "interrupted":
+                    st.markdown("---")
+                    st.info(
+                        "This run was stopped. You can resume from the last "
+                        "checkpoint (requires CHECKPOINTER_BACKEND=sqlite)."
+                    )
+                    if st.button("▶️ Resume run", type="primary", key="resume_run"):
+                        runtime_config_path = Path(output_path) / "runtime_config.json"
+                        document_path = None
+                        if runtime_config_path.exists():
+                            try:
+                                rc = json.loads(
+                                    runtime_config_path.read_text(encoding="utf-8")
+                                )
+                                document_path = rc.get("runtime_info", {}).get(
+                                    "document_path"
+                                )
+                            except Exception:
+                                pass
+                        if not document_path:
+                            st.error(
+                                "Could not find document_path in runtime_config.json. "
+                                "Cannot resume."
+                            )
+                        else:
+                            apply_env_overrides(config)
+                            from fairifier.utils.llm_helper import reset_llm_helper
+                            reset_llm_helper()
+                            setup_langsmith_from_session()
+                            _current_run["done"] = False
+                            _current_run["result"] = None
+                            _current_run["project_id"] = project_id
+                            _current_run["output_path"] = output_path
+                            _current_run["project_name"] = project_name or ""
+                            _current_run["tmp_path"] = None
+                            thread = threading.Thread(
+                                target=_run_workflow_worker,
+                                args=(
+                                    document_path,
+                                    project_id,
+                                    output_path,
+                                    project_name or "",
+                                    None,
+                                    True,
+                                ),
+                            )
+                            _current_run["thread"] = thread
+                            thread.start()
+                            st.session_state.run_in_progress = True
+                            st.rerun()
+            else:
+                st.warning("Run ended with no result.")
+        else:
+            st.subheader("📊 Processing Output & Logs")
+            st.info("🔄 Run in progress. Click **Stop run** to interrupt.")
+            if st.button("⏹ Stop run", type="secondary"):
+                set_run_stop_requested(True)
+                st.rerun()
+        return
+
     st.header("📄 Document Upload & Processing")
     
     # Default example file - try different possible names
@@ -342,372 +596,78 @@ def upload_and_process_page():
             process_document(uploaded_file, project_name)
 
 def process_document(uploaded_file, project_name):
-    """Process the uploaded document with real-time output display."""
+    """Start processing in a background thread so the UI can show a Stop button."""
     import streamlit as st
+    global _current_run
     from fairifier.config import apply_env_overrides, config
-    
-    # Apply configuration from session state before processing
+
     apply_env_overrides(config)
-    
-    # Reset LLMHelper to ensure it uses the latest config
     from fairifier.utils.llm_helper import reset_llm_helper
     reset_llm_helper()
-    
-    # Setup LangSmith tracing before processing
     setup_langsmith_from_session()
-    
-    # Create output containers
-    st.subheader("📊 Processing Output & Logs")
-    
-    # Create LLM chat interface (like ChatGPT) if enabled
-    enable_streaming = st.session_state.get("enable_streaming", True)
-    chat_container = None
-    if enable_streaming:
-        st.subheader("💬 Agent Chat (Real-time Streaming)")
-        
-        # Add CSS for chat interface
-        st.markdown("""
-        <style>
-        .chat-container {
-            max-height: 600px;
-            overflow-y: auto;
-            padding: 10px;
-            background: #f8f9fa;
-            border-radius: 10px;
-            border: 1px solid #e0e0e0;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        # Create chat container
-        chat_container = st.container()
-        with chat_container:
-            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-            chat_content = st.empty()
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Set the chat container
-        set_streamlit_chat_container(chat_content)
-        clear_chat_messages()
-    else:
-        # Clear container if streaming is disabled
-        set_streamlit_chat_container(None)
-        clear_chat_messages()
-    
-    # Create expandable sections for output and errors
-    with st.expander("📋 View Processing Logs", expanded=True):
-        output_container = st.empty()
-    
-    error_expander = st.expander("❌ Errors & Warnings", expanded=False)
-    error_container = error_expander.empty()
-    
-    status_container = st.empty()
-    
-    # Initialize log handler
-    log_handler = StreamlitLogHandler(output_container)
-    log_handler.setFormatter(logging.Formatter('%(asctime)s | %(name)s | %(levelname)s | %(message)s', datefmt='%H:%M:%S'))
-    
-    # Add handler to root logger
-    root_logger = logging.getLogger()
-    # Remove existing handlers to avoid duplicates
-    for handler in root_logger.handlers[:]:
-        if isinstance(handler, StreamlitLogHandler):
-            root_logger.removeHandler(handler)
-    root_logger.addHandler(log_handler)
-    root_logger.setLevel(logging.INFO)
-    
-    try:
-        # Save uploaded file temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp_file:
-            tmp_file.write(uploaded_file.getvalue())
-            tmp_path = tmp_file.name
-        
-        # Generate project ID
-        project_id = f"fairifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        # Set LangSmith project for this run
-        langsmith_project = st.session_state.get("langsmith_project", "fairifier-streamlit")
-        os.environ["LANGCHAIN_PROJECT"] = langsmith_project
-        
-        # Update status
-        status_container.info(f"🚀 Starting processing... Project ID: {project_id}")
-        
-        # Determine output directory
-        from fairifier.config import config
-        output_path = config.output_path / project_id
-        output_path.mkdir(parents=True, exist_ok=True)
-        # Save runtime configuration
-        from fairifier.utils.config_saver import save_runtime_config
-        config_file = save_runtime_config(tmp_path, project_id, output_path)
-        logging.info(f"💾 Saved runtime configuration to {config_file}")
-        
-        # Run LangGraph workflow
-        app = FAIRifierLangGraphApp()
-        result = asyncio.run(app.run(tmp_path, project_id))
-        
-        # Store result in session state
-        st.session_state.last_result = result
-        st.session_state.project_id = project_id
-        st.session_state.project_name = project_name or uploaded_file.name
-        st.session_state.output_path = str(output_path)
-        
-        # Check for errors
-        errors = result.get("errors", [])
-        if errors:
-            error_container.error("❌ Errors occurred during processing:")
-            for error in errors:
-                error_container.error(f"  - {error}")
-            error_expander.expanded = True  # Auto-expand if errors exist
-        
-        # Display LangSmith trace link if enabled
-        if st.session_state.get("langsmith_enabled", False):
-            langsmith_project = os.environ.get('LANGCHAIN_PROJECT', 'fairifier-streamlit')
-            langsmith_url = f"https://smith.langchain.com/"
-            st.info(f"🔗 View trace in LangSmith: [Open Dashboard]({langsmith_url})")
-            st.info(f"📊 Project: {langsmith_project} | Run ID: {project_id}")
-        
-        # Update status
-        status = result.get("status", "unknown")
-        if status == "completed":
-            status_container.success(f"✅ Processing completed! Status: {status.upper()}")
-        else:
-            status_container.warning(f"⚠️ Processing finished with status: {status.upper()}")
-        
-        # Display final logs
-        final_logs = log_handler.get_logs()
-        if final_logs:
-            output_container.code(final_logs, language='text')
-        
-        # Display all LLM responses
-        llm_responses = get_llm_responses()
-        if llm_responses:
-            with st.expander("💬 LLM API Responses", expanded=True):
-                for i, resp in enumerate(llm_responses, 1):
-                    st.markdown(f"### {i}. {resp['operation']} ({resp['timestamp']})")
-                    st.markdown("**Prompt Preview:**")
-                    st.code(resp['prompt_preview'], language='text')
-                    st.markdown("**Response:**")
-                    # Try to format as JSON if possible
-                    try:
-                        import json
-                        parsed = json.loads(resp['response'])
-                        st.json(parsed)
-                    except (json.JSONDecodeError, ValueError):
-                        # If not JSON, display as code
-                        st.code(resp['response'][:5000] + ("..." if len(resp['response']) > 5000 else ""), language='text')
-                    st.markdown("---")
-        else:
-            st.info("ℹ️ No LLM API calls were made during processing")
-        
-        # Display results
-        display_results(result)
-        
-    except Exception as e:
-        error_container.error(f"❌ Processing failed: {str(e)}")
-        import traceback
-        error_trace = traceback.format_exc()
-        error_container.code(error_trace, language='python')
-        status_container.error("❌ Processing failed")
-        error_expander.expanded = True  # Auto-expand on error
-        
-        # Also add to output logs
-        log_handler.emit(logging.LogRecord(
-            name="streamlit",
-            level=logging.ERROR,
-            pathname="",
-            lineno=0,
-            msg=f"Processing failed: {str(e)}\n{error_trace}",
-            args=(),
-            exc_info=None
-        ))
-    finally:
-        # Remove log handler
-        root_logger.removeHandler(log_handler)
-        
-        # Clean up temporary file
-        try:
-            if 'tmp_path' in locals():
-                os.unlink(tmp_path)
-        except:
-            pass
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp_file:
+        tmp_file.write(uploaded_file.getvalue())
+        tmp_path = tmp_file.name
+
+    project_id = f"fairifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    langsmith_project = st.session_state.get("langsmith_project", "fairifier-streamlit")
+    os.environ["LANGCHAIN_PROJECT"] = langsmith_project
+
+    output_path = config.output_path / project_id
+    output_path.mkdir(parents=True, exist_ok=True)
+    from fairifier.utils.config_saver import save_runtime_config
+    save_runtime_config(tmp_path, project_id, output_path)
+
+    _current_run["done"] = False
+    _current_run["result"] = None
+    _current_run["project_id"] = project_id
+    _current_run["output_path"] = str(output_path)
+    _current_run["project_name"] = project_name or uploaded_file.name
+    _current_run["tmp_path"] = tmp_path
+    thread = threading.Thread(
+        target=_run_workflow_worker,
+        args=(tmp_path, project_id, str(output_path), _current_run["project_name"], tmp_path),
+    )
+    _current_run["thread"] = thread
+    thread.start()
+    st.session_state.run_in_progress = True
+    st.rerun()
 
 def process_document_from_path(file_path, project_name):
-    """Process a document from file path (for example files) with real-time output display."""
+    """Start processing from file path in a background thread so the UI can show a Stop button."""
     import streamlit as st
+    global _current_run
     from fairifier.config import apply_env_overrides, config
-    
-    # Apply configuration from session state before processing
+
     apply_env_overrides(config)
-    
-    # Reset LLMHelper to ensure it uses the latest config
     from fairifier.utils.llm_helper import reset_llm_helper
     reset_llm_helper()
-    
-    # Setup LangSmith tracing before processing
     setup_langsmith_from_session()
-    
-    # Create output containers
-    st.subheader("📊 Processing Output & Logs")
-    
-    # Create LLM chat interface (like ChatGPT) if enabled
-    enable_streaming = st.session_state.get("enable_streaming", True)
-    chat_container = None
-    if enable_streaming:
-        st.subheader("💬 Agent Chat (Real-time Streaming)")
-        
-        # Add CSS for chat interface
-        st.markdown("""
-        <style>
-        .chat-container {
-            max-height: 600px;
-            overflow-y: auto;
-            padding: 10px;
-            background: #f8f9fa;
-            border-radius: 10px;
-            border: 1px solid #e0e0e0;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        # Create chat container
-        chat_container = st.container()
-        with chat_container:
-            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-            chat_content = st.empty()
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Set the chat container
-        set_streamlit_chat_container(chat_content)
-        clear_chat_messages()
-    else:
-        # Clear container if streaming is disabled
-        set_streamlit_chat_container(None)
-        clear_chat_messages()
-    
-    # Create expandable sections for output and errors
-    with st.expander("📋 View Processing Logs", expanded=True):
-        output_container = st.empty()
-    
-    error_expander = st.expander("❌ Errors & Warnings", expanded=False)
-    error_container = error_expander.empty()
-    
-    status_container = st.empty()
-    
-    # Initialize log handler
-    log_handler = StreamlitLogHandler(output_container)
-    log_handler.setFormatter(logging.Formatter('%(asctime)s | %(name)s | %(levelname)s | %(message)s', datefmt='%H:%M:%S'))
-    
-    # Add handler to root logger
-    root_logger = logging.getLogger()
-    # Remove existing handlers to avoid duplicates
-    for handler in root_logger.handlers[:]:
-        if isinstance(handler, StreamlitLogHandler):
-            root_logger.removeHandler(handler)
-    root_logger.addHandler(log_handler)
-    root_logger.setLevel(logging.INFO)
-    
-    try:
-        # Generate project ID
-        project_id = f"fairifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        # Determine output directory
-        from fairifier.config import config
-        output_path = config.output_path / project_id
-        output_path.mkdir(parents=True, exist_ok=True)
-        # Save runtime configuration
-        from fairifier.utils.config_saver import save_runtime_config
-        config_file = save_runtime_config(file_path, project_id, output_path)
-        logging.info(f"💾 Saved runtime configuration to {config_file}")
-        
-        # Set LangSmith project for this run
-        langsmith_project = st.session_state.get("langsmith_project", "fairifier-streamlit")
-        os.environ["LANGCHAIN_PROJECT"] = langsmith_project
-        
-        # Update status
-        status_container.info(f"🚀 Starting processing... Project ID: {project_id}")
-        
-        # Run LangGraph workflow
-        app = FAIRifierLangGraphApp()
-        result = asyncio.run(app.run(file_path, project_id))
-        
-        # Store result in session state
-        st.session_state.last_result = result
-        st.session_state.project_id = project_id
-        st.session_state.project_name = project_name or Path(file_path).name
-        st.session_state.output_path = str(output_path)
-        
-        # Check for errors
-        errors = result.get("errors", [])
-        if errors:
-            error_container.error("❌ Errors occurred during processing:")
-            for error in errors:
-                error_container.error(f"  - {error}")
-            error_expander.expanded = True  # Auto-expand if errors exist
-        
-        # Display LangSmith trace link if enabled
-        if st.session_state.get("langsmith_enabled", False):
-            langsmith_project = os.environ.get('LANGCHAIN_PROJECT', 'fairifier-streamlit')
-            langsmith_url = f"https://smith.langchain.com/"
-            st.info(f"🔗 View trace in LangSmith: [Open Dashboard]({langsmith_url})")
-            st.info(f"📊 Project: {langsmith_project} | Run ID: {project_id}")
-        
-        # Update status
-        status = result.get("status", "unknown")
-        if status == "completed":
-            status_container.success(f"✅ Processing completed! Status: {status.upper()}")
-        else:
-            status_container.warning(f"⚠️ Processing finished with status: {status.upper()}")
-        
-        # Display final logs
-        final_logs = log_handler.get_logs()
-        if final_logs:
-            output_container.code(final_logs, language='text')
-        
-        # Display all LLM responses
-        llm_responses = get_llm_responses()
-        if llm_responses:
-            with st.expander("💬 LLM API Responses", expanded=True):
-                for i, resp in enumerate(llm_responses, 1):
-                    st.markdown(f"### {i}. {resp['operation']} ({resp['timestamp']})")
-                    st.markdown("**Prompt Preview:**")
-                    st.code(resp['prompt_preview'], language='text')
-                    st.markdown("**Response:**")
-                    # Try to format as JSON if possible
-                    try:
-                        import json
-                        parsed = json.loads(resp['response'])
-                        st.json(parsed)
-                    except (json.JSONDecodeError, ValueError):
-                        # If not JSON, display as code
-                        st.code(resp['response'][:5000] + ("..." if len(resp['response']) > 5000 else ""), language='text')
-                    st.markdown("---")
-        else:
-            st.info("ℹ️ No LLM API calls were made during processing")
-        
-        # Display results
-        display_results(result)
-        
-    except Exception as e:
-        error_container.error(f"❌ Processing failed: {str(e)}")
-        import traceback
-        error_trace = traceback.format_exc()
-        error_container.code(error_trace, language='python')
-        status_container.error("❌ Processing failed")
-        error_expander.expanded = True  # Auto-expand on error
-        
-        # Also add to output logs
-        log_handler.emit(logging.LogRecord(
-            name="streamlit",
-            level=logging.ERROR,
-            pathname="",
-            lineno=0,
-            msg=f"Processing failed: {str(e)}\n{error_trace}",
-            args=(),
-            exc_info=None
-        ))
-    finally:
-        # Remove log handler
-        root_logger.removeHandler(log_handler)
+
+    project_id = f"fairifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    langsmith_project = st.session_state.get("langsmith_project", "fairifier-streamlit")
+    os.environ["LANGCHAIN_PROJECT"] = langsmith_project
+
+    output_path = config.output_path / project_id
+    output_path.mkdir(parents=True, exist_ok=True)
+    from fairifier.utils.config_saver import save_runtime_config
+    save_runtime_config(file_path, project_id, output_path)
+
+    _current_run["done"] = False
+    _current_run["result"] = None
+    _current_run["project_id"] = project_id
+    _current_run["output_path"] = str(output_path)
+    _current_run["project_name"] = project_name or Path(file_path).name
+    _current_run["tmp_path"] = None
+    thread = threading.Thread(
+        target=_run_workflow_worker,
+        args=(file_path, project_id, str(output_path), _current_run["project_name"], None),
+    )
+    _current_run["thread"] = thread
+    thread.start()
+    st.session_state.run_in_progress = True
+    st.rerun()
 
 def setup_langsmith_from_session():
     """Setup LangSmith tracing from session state."""
@@ -846,8 +806,51 @@ def review_results_page():
     import streamlit as st
     st.header("🔍 Review Results")
     
+    # Load saved run from local output folder (static view, like LangSmith trace)
+    st.subheader("📂 Load saved run")
+    st.caption("Select a run output folder to view its flow and results (e.g. output/20260129_174859).")
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    output_base = project_root / "output"
+    existing_runs = []
+    if output_base.is_dir():
+        for d in sorted(output_base.iterdir(), key=lambda x: x.name, reverse=True):
+            if d.is_dir() and (d / "workflow_report.json").exists():
+                existing_runs.append((d.name, str(d)))
+    folder_options = [" (choose or type path below)"] + [name for name, _ in existing_runs[:20]]
+    selected = st.selectbox(
+        "Recent runs (output folder)",
+        folder_options,
+        help="Pick a run from the list or type a path in the text field below.",
+    )
+    if selected == folder_options[0]:
+        default_path = existing_runs[0][1] if existing_runs else ""
+    else:
+        default_path = str(output_base / selected) if output_base.is_dir() else ""
+    folder_path = st.text_input(
+        "Output folder path",
+        value=default_path,
+        placeholder="e.g. output/20260129_174859 or absolute path",
+        help="Path to a run output directory containing workflow_report.json, runtime_config.json, metadata_json.json.",
+    )
+    if st.button("Load run"):
+        if folder_path and folder_path.strip():
+            result, proj_id, out_path, proj_name = _load_result_from_output_folder(folder_path.strip())
+            if result is not None:
+                st.session_state.last_result = result
+                st.session_state.project_id = proj_id
+                st.session_state.output_path = out_path
+                st.session_state.project_name = proj_name
+                st.success(f"Loaded run: {proj_name} ({proj_id}). Showing below.")
+                st.rerun()
+            else:
+                st.error("Failed to load run. Check that the folder contains workflow_report.json, runtime_config.json, and metadata_json.json.")
+        else:
+            st.warning("Enter an output folder path.")
+    
+    st.markdown("---")
+    
     if "last_result" not in st.session_state:
-        st.info("No results to review. Please process a document first.")
+        st.info("No results to review. Process a document in **Upload & Process**, or load a saved run above.")
         return
     
     result = st.session_state.last_result
@@ -927,6 +930,61 @@ def review_results_page():
         if st.button("💾 Save Changes"):
             st.session_state.last_result["metadata_fields"] = edited_fields
             st.success("Changes saved!")
+    
+    # Full run view: Summary, Execution History, Confidence, Metadata Fields, Artifacts (same as after a live run)
+    st.markdown("---")
+    st.subheader("Run flow and results")
+    display_results(result)
+    # Offer resume when viewing an interrupted run (LangGraph checkpoint resume)
+    if result.get("status") == "interrupted" and st.session_state.get("output_path"):
+        st.markdown("---")
+        st.info(
+            "This run was stopped. You can resume from the last checkpoint "
+            "(requires CHECKPOINTER_BACKEND=sqlite)."
+        )
+        if st.button("▶️ Resume run", type="primary", key="resume_run_review"):
+            output_path = st.session_state.output_path
+            project_id = st.session_state.get("project_id", "")
+            project_name = st.session_state.get("project_name", "")
+            runtime_config_path = Path(output_path) / "runtime_config.json"
+            document_path = None
+            if runtime_config_path.exists():
+                try:
+                    rc = json.loads(runtime_config_path.read_text(encoding="utf-8"))
+                    document_path = rc.get("runtime_info", {}).get("document_path")
+                except Exception:
+                    pass
+            if not document_path:
+                st.error(
+                    "Could not find document_path in runtime_config.json. Cannot resume."
+                )
+            else:
+                global _current_run
+                apply_env_overrides(config)
+                from fairifier.utils.llm_helper import reset_llm_helper
+                reset_llm_helper()
+                setup_langsmith_from_session()
+                _current_run["done"] = False
+                _current_run["result"] = None
+                _current_run["project_id"] = project_id
+                _current_run["output_path"] = output_path
+                _current_run["project_name"] = project_name
+                _current_run["tmp_path"] = None
+                thread = threading.Thread(
+                    target=_run_workflow_worker,
+                    args=(
+                        document_path,
+                        project_id,
+                        output_path,
+                        project_name,
+                        None,
+                        True,
+                    ),
+                )
+                _current_run["thread"] = thread
+                thread.start()
+                st.session_state.run_in_progress = True
+                st.rerun()
 
 def configuration_page():
     """Configuration page for .env parameters."""
@@ -1310,33 +1368,38 @@ def display_confidence_tab(result):
         critic_conf = confidence_scores.get("critic", 0.0)
         st.metric("Critic Confidence", f"{critic_conf:.2%}",
                   help="Confidence from Critic Agent evaluations")
-        
-        if quality_metrics.get("critic"):
-            with st.expander("Critic Details"):
-                critic_details = quality_metrics["critic"]
-                st.json(critic_details)
     
     with col2:
         structural_conf = confidence_scores.get("structural", 0.0)
         st.metric("Structural Confidence", f"{structural_conf:.2%}",
                   help="Based on field coverage and evidence presence")
-        
-        if quality_metrics.get("structural"):
-            with st.expander("Structural Details"):
-                structural_details = quality_metrics["structural"]
-                st.write(f"**Field Coverage:** {structural_details.get('field_coverage', 0):.2%}")
-                st.write(f"**Evidence Coverage:** {structural_details.get('evidence_coverage', 0):.2%}")
-                st.write(f"**Package Coverage:** {structural_details.get('package_coverage', 0):.2%}")
     
     with col3:
         validation_conf = confidence_scores.get("validation", 0.0)
         st.metric("Validation Confidence", f"{validation_conf:.2%}",
                   help="Based on schema validation and format compliance")
-        
-        if quality_metrics.get("validation"):
-            with st.expander("Validation Details"):
-                validation_details = quality_metrics["validation"]
-                st.json(validation_details)
+    
+    # Quality metrics (flat structure: critic_scores, field_completion_ratio, evidence_coverage_ratio, etc.)
+    if quality_metrics:
+        st.markdown("---")
+        st.markdown("### Quality Metrics Details")
+        flat_labels = {
+            "critic_scores": "Critic scores",
+            "field_completion_ratio": "Field completion ratio",
+            "evidence_coverage_ratio": "Evidence coverage ratio",
+            "avg_field_confidence": "Avg field confidence",
+            "validation_errors": "Validation errors",
+            "validation_warnings": "Validation warnings",
+        }
+        for key, label in flat_labels.items():
+            if key in quality_metrics:
+                val = quality_metrics[key]
+                if isinstance(val, (int, float)):
+                    st.write(f"**{label}:** {val:.2%}" if isinstance(val, float) and 0 <= val <= 1 else f"**{label}:** {val}")
+                else:
+                    st.write(f"**{label}:** {val}")
+        with st.expander("View All Quality Metrics (raw)"):
+            st.json(quality_metrics)
     
     # Confidence weights visualization
     st.markdown("---")
@@ -1354,14 +1417,6 @@ def display_confidence_tab(result):
     for idx, (name, weight) in enumerate(weights_data.items()):
         with [col1, col2, col3][idx]:
             st.metric(f"{name} Weight", f"{weight:.2f}")
-    
-    # Quality metrics details
-    if quality_metrics:
-        st.markdown("---")
-        st.markdown("### Quality Metrics Details")
-        
-        with st.expander("View All Quality Metrics"):
-            st.json(quality_metrics)
 
 
 def display_metadata_tab(result):
@@ -1613,6 +1668,119 @@ def display_artifacts_tab(result):
         st.caption("All artifacts have been saved to this directory")
 
 
+def memory_page():
+    """Memory tab: list and overview mem0 memories for a session (WebUI-only, uses existing mem0 APIs)."""
+    import streamlit as st
+    apply_env_overrides(config)
+    
+    st.header("🧠 Memory (mem0)")
+    st.markdown("View memory list and overview for a workflow session. Requires mem0 enabled and Qdrant running.")
+    
+    # Status block
+    st.subheader("Status")
+    st.write("**Mem0 enabled:**", "Yes" if config.mem0_enabled else "No")
+    mem0_service = None
+    try:
+        from fairifier.services.mem0_service import get_mem0_service
+        mem0_service = get_mem0_service()
+    except ImportError:
+        pass
+    if mem0_service and mem0_service.is_available():
+        st.success("Mem0 service is available.")
+        st.caption(f"Qdrant: {config.mem0_qdrant_host}:{config.mem0_qdrant_port} | Collection: {config.mem0_collection_name} | Embedding: {config.mem0_embedding_model}")
+    else:
+        if not config.mem0_enabled:
+            st.info("Mem0 is disabled. Set MEM0_ENABLED=true in .env to enable.")
+        else:
+            st.warning("Mem0 is enabled but service not available. Ensure Qdrant is running and mem0ai is installed.")
+    
+    # Session ID input
+    default_session = st.session_state.get("project_id", "")
+    session_id = st.text_input(
+        "Session ID (e.g. project ID from a run)",
+        value=default_session,
+        placeholder="e.g. fairifier_20260129_120000",
+        help="Use the project ID from a completed run to view that session's memories.",
+    )
+    
+    # Agent filter
+    agent_filter = st.selectbox(
+        "Filter by agent",
+        ["All", "DocumentParser", "KnowledgeRetriever", "JSONGenerator"],
+        help="Filter memory list by agent.",
+    )
+    agent_id_for_list = None if agent_filter == "All" else agent_filter
+    
+    # List memories
+    st.subheader("Memory List")
+    if st.button("List memories"):
+        if not session_id or not session_id.strip():
+            st.warning("Please enter a session ID.")
+        elif not mem0_service or not mem0_service.is_available():
+            st.warning("Mem0 is disabled or unavailable. Set MEM0_ENABLED=true and ensure Qdrant is running.")
+        else:
+            memories = mem0_service.list_memories(session_id.strip(), agent_id=agent_id_for_list)
+            if not memories:
+                st.info("No memories found for this session.")
+            else:
+                st.write(f"**Total:** {len(memories)} memories (showing up to 50)")
+                limit = 50
+                for i, m in enumerate(memories[:limit]):
+                    mem_id = m.get("id", "unknown")
+                    mem_id_short = (mem_id[:12] + "...") if len(str(mem_id)) > 12 else mem_id
+                    agent_id = m.get("agent_id") or m.get("metadata", {}).get("agent_id", "unknown")
+                    text = m.get("memory", "")
+                    text_preview = (text[:200] + "...") if len(text) > 200 else text
+                    meta = m.get("metadata", {})
+                    ts = meta.get("timestamp", "")[:19] if meta.get("timestamp") else ""
+                    with st.expander(f"ID: {mem_id_short} | Agent: {agent_id}" + (f" | {ts}" if ts else "")):
+                        st.write("**Memory:**", text_preview if len(text) <= 500 else text[:500] + "...")
+                        if ts:
+                            st.caption(f"Timestamp: {ts}")
+                if len(memories) > limit:
+                    st.caption(f"... and {len(memories) - limit} more.")
+    
+    # Generate overview
+    st.subheader("Memory Overview")
+    use_llm = st.checkbox("Use LLM summary", value=True, help="Generate natural language summary (slower). Uncheck for simple summary.")
+    if st.button("Generate overview"):
+        if not session_id or not session_id.strip():
+            st.warning("Please enter a session ID.")
+        elif not mem0_service or not mem0_service.is_available():
+            st.warning("Mem0 is disabled or unavailable.")
+        else:
+            with st.spinner("Generating overview..."):
+                overview = mem0_service.generate_memory_overview(session_id.strip(), use_llm=use_llm)
+            if "error" in overview:
+                st.error(overview["error"])
+            else:
+                st.write("**Total memories:**", overview.get("total_memories", 0))
+                if overview.get("agents"):
+                    st.write("**Agent activity:**")
+                    for ag, count in sorted(overview["agents"].items(), key=lambda x: -x[1]):
+                        st.write(f"  - {ag}: {count}")
+                if overview.get("themes"):
+                    st.write("**Key themes:**", ", ".join(overview["themes"]))
+                if overview.get("summary"):
+                    st.write("**Summary:**")
+                    st.write(overview["summary"])
+                if overview.get("memory_texts"):
+                    st.write("**Sample memories (first 5):**")
+                    for j, mem_text in enumerate(overview["memory_texts"][:5], 1):
+                        display_text = mem_text if len(mem_text) <= 80 else mem_text[:77] + "..."
+                        st.write(f"  {j}. {display_text}")
+    
+    # Clear session memories (optional)
+    st.subheader("Clear Session Memories")
+    confirm_clear = st.checkbox("I confirm I want to delete all memories for the session ID above", value=False, key="memory_clear_confirm")
+    if st.button("Clear session memories", disabled=not confirm_clear or not session_id or not session_id.strip()):
+        if not mem0_service or not mem0_service.is_available():
+            st.warning("Mem0 is not available.")
+        else:
+            deleted = mem0_service.delete_session_memories(session_id.strip())
+            st.success(f"Deleted {deleted} memories for session {session_id.strip()}.")
+
+
 def about_page():
     import streamlit as st
     st.header("ℹ️ About FAIRifier")
@@ -1620,43 +1788,44 @@ def about_page():
     st.markdown("""
     ## What is FAIRifier?
     
-    FAIRifier is an agentic framework that automatically generates FAIR (Findable, Accessible, 
-    Interoperable, Reusable) metadata from research documents.
+    FAIRifier is an agentic framework that automatically generates **FAIR-DS compatible JSON metadata**
+    from research documents, following FAIR (Findable, Accessible, Interoperable, Reusable) principles.
     
     ## Features
     
     - 📄 **Document Analysis**: Extracts key information from research papers and proposals
-    - 🧠 **Knowledge Enrichment**: Uses FAIR standards and ontologies to enhance metadata
-    - 🏷️ **Template Generation**: Creates structured metadata templates (JSON Schema, YAML)
-    - 🔗 **RDF Output**: Generates semantic web-compatible RDF graphs and RO-Crate packages
-    - ✅ **Validation**: Performs SHACL validation and quality assessment
-    - 👥 **Human-in-the-Loop**: Supports human review and editing of results
+    - 🧠 **Knowledge Enrichment**: Uses FAIR Data Station API and ontologies to enhance metadata
+    - 🏷️ **FAIR-DS Output**: Produces structured JSON metadata (no RDF/RO-Crate in main flow)
+    - ✅ **Validation**: Schema validation and quality assessment
+    - 👥 **Human-in-the-Loop**: Supports human review and editing of results in the WebUI
     
     ## Architecture
     
-    FAIRifier uses a multi-agent architecture built on LangGraph:
+    FAIRifier uses a LangGraph-based multi-agent pipeline:
     
-    1. **Document Parser**: Extracts structured information from documents
-    2. **Knowledge Retriever**: Enriches with FAIR standards and ontology terms
-    3. **Template Generator**: Creates metadata templates
-    4. **RDF Builder**: Generates RDF graphs and RO-Crate metadata
-    5. **Validator**: Performs quality assessment and validation
+    1. **read_file**: Loads document content (with optional MinerU conversion for PDFs)
+    2. **orchestrate**: Coordinates agents with Critic-in-the-loop:
+       - **Document Parser**: Extracts structured information from documents
+       - **Planner**: Plans workflow strategy and agent guidance
+       - **Knowledge Retriever**: Enriches with FAIR-DS packages and ontology terms
+       - **JSON Generator**: Produces FAIR-DS compatible JSON metadata
+       - **Critic**: Evaluates outputs and triggers retries when needed
+    3. **finalize**: Aggregates confidence, generates reports, and sets status
     
     ## Supported Standards
     
-    - MIxS (Minimum Information about any Sequence)
-    - PROV-O (Provenance Ontology)
-    - Schema.org
-    - RO-Crate (Research Object Crate)
-    - SHACL (Shapes Constraint Language)
+    - **FAIR-DS**: FAIR Data Station compatible metadata format
+    - **ISA-Tab style**: Investigation/Study/Assay–style field organization
+    - Schema validation and SHACL where applicable
     """)
     
     st.subheader("🛠️ Configuration")
     st.json({
+        "LLM Provider": config.llm_provider,
         "LLM Model": config.llm_model,
-        "Min Confidence": config.min_confidence_threshold,
-        "Default MIxS Package": config.default_mixs_package,
-        "Max Document Size": f"{config.max_document_size_mb}MB"
+        "Min Confidence Threshold": config.min_confidence_threshold,
+        "FAIR-DS API URL": config.fair_ds_api_url or "(not set)",
+        "Max Document Size (MB)": config.max_document_size_mb,
     })
 
 if __name__ == "__main__":

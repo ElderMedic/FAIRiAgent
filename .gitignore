@@ -282,3 +282,6 @@ evaluation/archive/logs/
 
 # MSc thesis project (private/internal documents)
 msc_thesis_project/
+
+# baselines
+evaluation/baselines/
