@@ -114,7 +114,8 @@ class FAIRifierLangGraphApp:
         Ensures proper cleanup of SQLite connections when using SqliteSaver.
         For AsyncSqliteSaver, LangGraph manages the lifecycle.
         """
-        if self._checkpointer_cm is not None:
+        cm = getattr(self, "_checkpointer_cm", None)
+        if cm is not None:
             try:
                 # Only try to close if it's a synchronous context manager
                 if hasattr(self._checkpointer_cm, '__exit__'):

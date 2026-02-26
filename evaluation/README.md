@@ -58,6 +58,8 @@ python scripts/run_batch_evaluation.py \
   --exclude-documents biorem
 ```
 
+**Note (v1.2.2+)**: Each run uses isolated memory (unique `--project-id` per run). This ensures consistent, independent evaluation. See [Memory System](#memory-system-v122) for details.
+
 ### 4. Run Analysis
 
 ```bash
@@ -189,6 +191,72 @@ Edit `analysis/config.py` to exclude specific models or documents from analysis:
 ### Model Display Names
 Customize model names in visualizations via `MODEL_DISPLAY_NAMES` in `analysis/config.py`.
 
+## Improved Analysis (2026-01-30)
+
+### Meeting Feedback Implementation
+
+Based on meeting feedback (2026-01-16), we implemented major evaluation improvements:
+
+**1. Success Criterion: 100% Mandatory Field Coverage**
+- Runs without all mandatory fields are not publication-ready
+- New evaluator: `evaluators/mandatory_coverage_evaluator.py`
+- Filters successful vs. failed runs
+
+**2. Field Presence Matrix**
+- Shows which fields are extracted by which models across runs
+- Highlights mandatory/recommended/optional categories
+- Identifies hallucinations (extra fields not in ground truth)
+- Visualizer: `analysis/visualizations/field_presence_matrix.py`
+
+**3. Stability-Completeness Trade-off Analysis**
+- Answers: "Why different terms when same completeness score?"
+- Core fields (100% presence) vs. variable fields
+- Pattern classification: IDEAL, CONSERVATIVE, EXPLORATORY, POOR
+- Analyzer: `analysis/analyzers/stability_completeness.py`
+
+**4. Package Selection Quality**
+- Evaluates if models make appropriate package choices
+- Domain-package alignment analysis
+- Analyzer: `analysis/analyzers/package_selection_quality.py`
+
+**5. Hallucination Detection**
+- Identifies extra fields (not in ground truth)
+- Categorizes: Legitimate, Near-miss, Hallucination
+- Per-model hallucination rates
+
+### Running Improved Analysis
+
+```bash
+# Run improved analysis on existing runs
+python evaluation/scripts/run_improved_analysis.py \
+  --runs-dir evaluation/runs/ollama_20260129 \
+  --ground-truth evaluation/datasets/annotated/ground_truth_filtered.json \
+  --output-dir evaluation/analysis/improved_output
+
+# Outputs:
+# - figures/ - Publication-ready visualizations
+# - tables/ - CSV data for supplementary materials  
+# - ANALYSIS_SUMMARY.md - Key findings and insights
+```
+
+**Generated Visualizations:**
+- Field presence matrices (with category coloring)
+- Stability-completeness scatter plots
+- Core fields summary by category
+- Model field coverage comparisons
+- Mandatory field consistency analysis
+- Document-level comparisons
+
+**For Paper:**
+- Focus on success rate (% runs meeting 100% mandatory criterion)
+- Field presence matrices show consensus vs. model-specific extraction
+- Stability analysis explains consistency patterns
+- Package selection demonstrates domain understanding
+
+See `evaluation/EVALUATION_IMPROVEMENT_PLAN.md` for complete specification.
+
+---
+
 ## Notes
 
 - All runs are organized by model and document: `runs/{model_name}/{document_id}/run_X/`
@@ -198,3 +266,53 @@ Customize model names in visualizations via `MODEL_DISPLAY_NAMES` in `analysis/c
   - `cli_output.txt`: CLI execution log
 - Analysis automatically discovers and aggregates all runs
 - Baseline comparisons are included when baseline runs are available
+
+---
+
+## Memory System (v1.2.2+)
+
+FAIRiAgent v1.2.2+ includes an intelligent memory system that learns from each workflow run. The system stores and retrieves:
+- Document patterns (organism types, experimental designs)
+- Workflow decisions (metadata packages, ontology selections)
+- Quality insights (what leads to high-quality metadata)
+
+### Memory Isolation in Evaluation (Default)
+
+By default, evaluation runs use **isolated memory** to ensure consistent, independent results:
+
+```python
+# Each run gets unique project-id (in run_batch_evaluation.py):
+--project-id f"eval_{config_name}_{doc_id}_run{run_idx}"
+
+# Example:
+#   eval_anthropic_earthworm_run1  ← Isolated memory
+#   eval_anthropic_earthworm_run2  ← Isolated memory
+```
+
+This ensures:
+- ✅ Each run starts fresh (no memory contamination)
+- ✅ Consistent baseline for comparison
+- ✅ Fair comparison across models and documents
+
+### Optional: Testing Memory Accumulation
+
+To test memory learning effects, modify project-id to share memory:
+
+```python
+# Edit run_batch_evaluation.py line 438:
+--project-id f"eval_{config_name}_{doc_id}"  # Shared across runs
+
+# This allows analyzing:
+#   - Run 1: Cold start (no memory)
+#   - Runs 2-10: Warm start (with accumulated knowledge)
+```
+
+### Expected Effects
+
+| Scenario | Memory | Expected Completeness |
+|----------|--------|---------------------|
+| **Cold Start** | Empty | 70-80% |
+| **Warm Start** | Accumulated | 75-85% |
+| **10+ Runs** | Rich | 80-90% |
+
+For more details, see `../docs/MEMORY_GUIDE.md` and `EVALUATION_UPDATE_v122.md`.
