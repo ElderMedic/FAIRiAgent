@@ -252,6 +252,9 @@ grant/
 evaluation/runs/
 evaluation/analysis/output/
 evaluation/analysis/output_*/
+evaluation/analysis/comprehensive_output/
+evaluation/analysis/improved_output_*/
+evaluation/run_completeness_check.json
 evaluation/datasets/raw/
 evaluation/*.log
 
