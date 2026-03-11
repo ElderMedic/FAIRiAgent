@@ -439,7 +439,46 @@ class LLMHelper:
         self.model = config.llm_model
         self.llm = self._initialize_llm()
         self.llm_responses = []  # Store all LLM interactions for debugging
-    
+        self._langfuse_handler = self._init_langfuse_handler()
+
+    def _init_langfuse_handler(self):
+        """Create a Langfuse CallbackHandler if Langfuse is enabled and installed."""
+        if not config.enable_langfuse:
+            return None
+        try:
+            from langfuse.langchain import CallbackHandler as LangfuseHandler
+            if not config.langfuse_public_key:
+                logger.warning(
+                    "Langfuse enabled but LANGFUSE_PUBLIC_KEY is missing; tracing disabled"
+                )
+                return None
+            # Langfuse v4 handler accepts public_key; secret_key/host are read from env.
+            handler = LangfuseHandler(public_key=config.langfuse_public_key)
+            logger.info("Langfuse observability enabled")
+            return handler
+        except ImportError:
+            logger.debug("langfuse package not installed; Langfuse tracing disabled")
+            return None
+        except Exception as exc:
+            logger.warning(f"Langfuse handler init failed: {exc}; tracing disabled")
+            return None
+
+    def _build_run_config(self) -> Optional[Dict[str, Any]]:
+        """Return a LangChain RunnableConfig with observability callbacks, or None."""
+        if self._langfuse_handler is None:
+            return None
+        return {"callbacks": [self._langfuse_handler]}
+
+    def flush_langfuse(self):
+        """Flush any pending Langfuse events (call before process exit)."""
+        if self._langfuse_handler is None:
+            return
+        try:
+            from langfuse import get_client
+            get_client().flush()
+        except Exception:
+            pass
+
     def _log_llm_response(self, result, messages, operation_name: str):
         """Helper method to log LLM response to llm_responses list.
         
@@ -498,6 +537,7 @@ class LLMHelper:
                                 If None, auto-detect if Streamlit container is available.
             operation_name: Name of the operation for display purposes.
         """
+        run_config = self._build_run_config()
         enable_thinking = config.llm_enable_thinking
         
         # Extract prompt preview for display
@@ -561,7 +601,7 @@ class LLMHelper:
                     content_parts = []
                     full_text = ""
                     
-                    async for chunk in llm_with_params.astream(messages):
+                    async for chunk in llm_with_params.astream(messages, config=run_config):
                         if hasattr(chunk, 'content') and chunk.content:
                             content = chunk.content
                             content_parts.append(content)
@@ -604,7 +644,7 @@ class LLMHelper:
                         llm_with_params = self.llm.bind(
                             extra_body={"enable_thinking": True if enable_thinking else False}
                         )
-                        result = await llm_with_params.ainvoke(messages)
+                        result = await llm_with_params.ainvoke(messages, config=run_config)
                         
                         # Log LLM response
                         self._log_llm_response(result, messages, operation_name)
@@ -619,7 +659,7 @@ class LLMHelper:
                         return result
                     except Exception as e2:
                         logger.warning(f"Non-streaming failed: {e2}, falling back to regular call")
-                        result = await self.llm.ainvoke(messages)
+                        result = await self.llm.ainvoke(messages, config=run_config)
                         
                         # Log LLM response
                         self._log_llm_response(result, messages, operation_name)
@@ -639,7 +679,7 @@ class LLMHelper:
                     llm_with_params = self.llm.bind(
                         extra_body={"enable_thinking": False}
                     )
-                    result = await llm_with_params.ainvoke(messages)
+                    result = await llm_with_params.ainvoke(messages, config=run_config)
                     
                     # Log LLM response
                     self._log_llm_response(result, messages, operation_name)
@@ -654,7 +694,7 @@ class LLMHelper:
                     return result
                 except Exception as e:
                     logger.warning(f"Failed to set enable_thinking=False via extra_body: {e}, using regular call")
-                    result = await self.llm.ainvoke(messages)
+                    result = await self.llm.ainvoke(messages, config=run_config)
                     
                     # Log LLM response
                     self._log_llm_response(result, messages, operation_name)
@@ -679,7 +719,7 @@ class LLMHelper:
                     content_parts = []
                     full_text = ""
                     
-                    async for chunk in llm_with_params.astream(messages):
+                    async for chunk in llm_with_params.astream(messages, config=run_config):
                         if hasattr(chunk, 'content') and chunk.content:
                             content = chunk.content
                             content_parts.append(content)
@@ -716,7 +756,7 @@ class LLMHelper:
                 except Exception as e:
                     logger.warning(f"OpenAI streaming failed: {e}, falling back to regular call")
                     llm_with_params = self.llm.bind(extra_body={"enable_thinking": enable_thinking})
-                    result = await llm_with_params.ainvoke(messages)
+                    result = await llm_with_params.ainvoke(messages, config=run_config)
                     
                     # Log LLM response
                     self._log_llm_response(result, messages, operation_name)
@@ -731,7 +771,7 @@ class LLMHelper:
                     return result
             else:
                 llm_with_params = self.llm.bind(extra_body={"enable_thinking": enable_thinking})
-                result = await llm_with_params.ainvoke(messages)
+                result = await llm_with_params.ainvoke(messages, config=run_config)
                 
                 # Log LLM response
                 self._log_llm_response(result, messages, operation_name)
@@ -753,7 +793,7 @@ class LLMHelper:
                     content_parts = []
                     full_text = ""
                     
-                    async for chunk in llm_with_params.astream(messages):
+                    async for chunk in llm_with_params.astream(messages, config=run_config):
                         if hasattr(chunk, 'content') and chunk.content:
                             content = chunk.content
                             content_parts.append(content)
@@ -790,7 +830,7 @@ class LLMHelper:
                 except Exception as e:
                     logger.warning(f"Ollama streaming failed: {e}, falling back to regular call")
                     llm_with_params = self.llm.bind(think=enable_thinking)
-                    result = await llm_with_params.ainvoke(messages)
+                    result = await llm_with_params.ainvoke(messages, config=run_config)
                     
                     # Check if result is valid
                     if not result:
@@ -848,7 +888,7 @@ class LLMHelper:
             else:
                 try:
                     llm_with_params = self.llm.bind(think=enable_thinking)
-                    result = await llm_with_params.ainvoke(messages)
+                    result = await llm_with_params.ainvoke(messages, config=run_config)
                     
                     # Check if result is valid
                     if not result:
@@ -952,11 +992,11 @@ class LLMHelper:
                 llm_with_params = self.llm.bind(
                     extra_body={"reasoning": {"enabled": enable_thinking}} if enable_thinking else {}
                 )
-                result = await llm_with_params.ainvoke(messages)
+                result = await llm_with_params.ainvoke(messages, config=run_config)
             except Exception as e:
                 # Some Anthropic SDK/API versions may not support extra_body or different shape
                 logger.debug(f"Anthropic extra_body for thinking failed: {e}, using plain invoke")
-                result = await self.llm.ainvoke(messages)
+                result = await self.llm.ainvoke(messages, config=run_config)
             
             # Log LLM response
             self._log_llm_response(result, messages, operation_name)
@@ -972,7 +1012,7 @@ class LLMHelper:
             return result
         else:
             # Unsupported or future provider: no thinking param
-            result = await self.llm.ainvoke(messages)
+            result = await self.llm.ainvoke(messages, config=run_config)
             
             # Log LLM response
             self._log_llm_response(result, messages, operation_name)

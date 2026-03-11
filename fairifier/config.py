@@ -125,6 +125,12 @@ class FAIRifierConfig:
     mineru_server_url: Optional[str] = "http://localhost:30000"
     mineru_timeout_seconds: int = 300
     
+    # Langfuse configuration (optional observability, parallel to LangSmith)
+    enable_langfuse: bool = False
+    langfuse_host: Optional[str] = None  # None = SDK default (cloud.langfuse.com)
+    langfuse_secret_key: Optional[str] = None
+    langfuse_public_key: Optional[str] = None
+    
     # LangSmith configuration
     langsmith_api_key: Optional[str] = None
     # Default project name (will be enhanced with FAIR naming scheme)
@@ -208,6 +214,20 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
 
     if os.getenv("LANGSMITH_ENDPOINT"):
         config_instance.langsmith_endpoint = os.getenv("LANGSMITH_ENDPOINT")
+
+    # Langfuse observability (optional, parallel to LangSmith)
+    if os.getenv("LANGFUSE_SECRET_KEY"):
+        config_instance.langfuse_secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+    if os.getenv("LANGFUSE_PUBLIC_KEY"):
+        config_instance.langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+    if os.getenv("LANGFUSE_HOST"):
+        config_instance.langfuse_host = os.getenv("LANGFUSE_HOST")
+    if os.getenv("LANGFUSE_ENABLE", "").strip().lower() in ("1", "true", "yes"):
+        config_instance.enable_langfuse = True
+    if config_instance.langfuse_secret_key and config_instance.langfuse_public_key:
+        config_instance.enable_langfuse = True
+    if os.getenv("LANGFUSE_DISABLE", "").strip().lower() in ("1", "true", "yes"):
+        config_instance.enable_langfuse = False
 
     # LLM provider configuration
     if os.getenv("LLM_PROVIDER"):

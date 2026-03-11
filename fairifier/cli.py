@@ -297,6 +297,12 @@ def process(
     else:
         click.echo("📊 LangSmith: ❌ Disabled")
     
+    if config.enable_langfuse:
+        host_label = config.langfuse_host or "cloud.langfuse.com"
+        click.echo(f"📊 Langfuse:  ✅ Enabled ({host_label})")
+    else:
+        click.echo("📊 Langfuse:  ❌ Disabled")
+    
     click.echo("=" * 70)
     click.echo()
     
@@ -481,6 +487,13 @@ async def _run_workflow(
         json_logger.error("workflow_failed", error=str(e), project_id=project_id)
         sys.exit(1)
     finally:
+        # Flush Langfuse events before exit
+        try:
+            llm_helper = get_llm_helper()
+            llm_helper.flush_langfuse()
+        except Exception:
+            pass
+        
         # Clean up .running file
         running_file = output_path / ".running"
         if running_file.exists():
@@ -890,6 +903,13 @@ async def _resume_workflow(
         click.echo(f"\n❌ Resume error: {str(e)}", err=True)
         sys.exit(1)
     finally:
+        # Flush Langfuse events before exit
+        try:
+            llm_helper = get_llm_helper()
+            llm_helper.flush_langfuse()
+        except Exception:
+            pass
+        
         # Clean up .running file
         if running_file.exists():
             running_file.unlink()
@@ -917,7 +937,8 @@ def config_info():
     click.echo(f"    • LangChain Tools: Enabled (v1.0+)")
     click.echo(f"    • FAIR-DS Tools: 5 tools (get_available_packages, get_package, get_terms, search_terms_for_fields, search_fields_in_packages)")
     click.echo(f"    • MinerU Tool: 1 tool (convert_document)")
-    click.echo(f"    • Observability: Full LangSmith tracing")
+    langfuse_status = "Enabled" if config.enable_langfuse else "Disabled"
+    click.echo(f"    • Observability: LangSmith {'Enabled' if config.enable_langsmith else 'Disabled'}, Langfuse {langfuse_status}")
 
 
 def _check_mineru_preflight() -> tuple[bool, str]:

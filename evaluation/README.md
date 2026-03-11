@@ -316,3 +316,36 @@ To test memory learning effects, modify project-id to share memory:
 | **10+ Runs** | Rich | 80-90% |
 
 For more details, see `../docs/MEMORY_GUIDE.md` and `EVALUATION_UPDATE_v122.md`.
+
+---
+
+## Langfuse Observability (Optional)
+
+Langfuse can be enabled alongside LangSmith to provide an additional observability layer during batch evaluation. Both local Ollama and API-based models are traced in the same way — no separate configuration needed.
+
+### Enable Langfuse for Evaluation Runs
+
+Set the following environment variables before running the batch scripts, or add them to your evaluation `.env` file:
+
+```bash
+# Required: Langfuse credentials
+export LANGFUSE_SECRET_KEY="sk-lf-..."
+export LANGFUSE_PUBLIC_KEY="pk-lf-..."
+
+# Optional: self-hosted Langfuse (default: cloud.langfuse.com)
+# export LANGFUSE_HOST="http://localhost:3000"
+```
+
+With these set, every `fairifier.cli process` call (including those launched by `run_batch_evaluation.py`) will send traces to Langfuse in addition to any LangSmith tracing.
+
+### Correlating Traces with Evaluation Results
+
+Each batch run now includes a `project_id` field in `eval_result.json` (e.g. `eval_anthropic_earthworm_run1`). The same identifier is passed as `--project-id` to the FAIRifier CLI and appears in LangSmith/Langfuse trace metadata, allowing you to link a specific evaluation run to its full LLM call trace.
+
+### Disabling Langfuse
+
+To turn off Langfuse without removing the env variables:
+
+```bash
+export LANGFUSE_DISABLE=1
+```
