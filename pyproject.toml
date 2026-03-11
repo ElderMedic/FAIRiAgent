@@ -44,6 +44,8 @@ advanced-doc = ["pytesseract", "pyld", "rocrate"]
 storage = ["sqlalchemy", "asyncpg", "minio"]
 # Optional monitoring
 monitoring = ["structlog", "prometheus-client"]
+# Optional observability (Langfuse tracing alongside LangSmith)
+observability = ["langfuse"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"

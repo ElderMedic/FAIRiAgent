@@ -422,6 +422,9 @@ class BatchEvaluationRunner:
         if not resolved_doc_path.exists():
             raise FileNotFoundError(f"Document not found: {doc_path}")
         
+        # Unique project_id used for both the CLI run and eval_result.json
+        pid = f"eval_{config_name}_{doc_id}_run{run_idx}"
+        
         # Run FAIRiAgent CLI exactly like manual execution
         # This ensures all configuration loading happens the same way
         start_time = datetime.now()
@@ -435,7 +438,7 @@ class BatchEvaluationRunner:
             str(resolved_doc_path),
             '--output-dir', str(doc_output_dir),
             '--env-file', str(config_path),
-            '--project-id', f"eval_{config_name}_{doc_id}_run{run_idx}"
+            '--project-id', pid
         ]
         
         # Run CLI command with full environment (preserve PATH and other env vars)
@@ -536,6 +539,7 @@ class BatchEvaluationRunner:
         
         result = {
             'success': success,
+            'project_id': pid,
             'document_id': doc_id,
             'config_name': config_name,
             'run_idx': run_idx,
