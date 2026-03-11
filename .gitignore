@@ -244,6 +244,9 @@ env.*
 !env.example
 !.env.example
 !docker/.env.example
+# Test env with LLM API key (copy from tests/.env.test.example)
+tests/.env.test
+.env.test
 
 # Grant documents (personal/sensitive)
 grant/

@@ -371,9 +371,9 @@ All defaults are production-ready:
 3. ✅ Ready for merge
 
 ### Before Merge
-- [ ] Update CHANGELOG.md
-- [ ] Create release notes
-- [ ] Update version in all places
+- [x] Update CHANGELOG (docs/CHANGELOG_DRAFT.md – Unreleased release readiness entry)
+- [x] Create release notes (same draft: DASHSCOPE_API_KEY, test fix, test config)
+- [x] Update version in all places (pyproject.toml=1.2.2, docs/README.md, docs/INDEX.md)
 
 ### After Merge
 - [ ] Create v1.1.0 tag
