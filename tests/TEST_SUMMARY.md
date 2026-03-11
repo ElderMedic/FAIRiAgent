@@ -1,8 +1,8 @@
 # Test Summary
 
-**Last Updated:** 2026-01-29  
+**Last Updated:** 2026-03-11  
 **Test Suite Status:** ✅ All tests passing  
-**Version:** 1.2.0.20260129
+**Version:** 1.2.2
 
 ---
 
@@ -18,6 +18,10 @@ This directory contains comprehensive tests for the FAIRiAgent agentic framework
 
 **Execution Time**: ~17-20 seconds  
 **Pass Rate**: 100% (155/155)
+
+### LLM configuration (tests that need a live LLM)
+
+Tests that call an LLM use **Qwen API** with model **qwen3.5-plus** by default. The API key is read from the system environment variable **`DASHSCOPE_API_KEY`** (or `LLM_API_KEY`). Optional: copy `tests/.env.test.example` to `tests/.env.test` to override provider/model; pytest loads `tests/.env.test` in `conftest.py` before any config import.
 
 ---
 

@@ -215,6 +215,9 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
 
     if os.getenv("LLM_API_KEY"):
         config_instance.llm_api_key = os.getenv("LLM_API_KEY")
+    # Qwen/DashScope: fallback to DASHSCOPE_API_KEY if LLM_API_KEY not set
+    if config_instance.llm_provider == "qwen" and not config_instance.llm_api_key:
+        config_instance.llm_api_key = os.getenv("DASHSCOPE_API_KEY")
 
     # Provider-specific base URL configuration
     # IMPORTANT: Each provider block should only set base_url for its own provider

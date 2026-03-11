@@ -1,5 +1,17 @@
 # Changelog Draft
 
+## [1.2.2] - 2026-03-11 – Release readiness (mem0 branch merge)
+
+### Changed
+- **LLM API key**: Qwen/DashScope provider now reads `DASHSCOPE_API_KEY` from the environment when `LLM_API_KEY` is not set (`fairifier/config.py`).
+- **Tests**: `test_langgraph_app_has_tool` disables mem0 via monkeypatch so the test does not require Ollama/Qdrant; all tests pass without local LLM services when mem0 is disabled.
+
+### Added
+- **Test LLM configuration**: Tests that need a live LLM use Qwen API with model `qwen3.5-plus`. Key is taken from system env `DASHSCOPE_API_KEY`. Optional `tests/.env.test` (from `tests/.env.test.example`) and `tests/conftest.py` loads it before config.
+- **.gitignore**: `tests/.env.test` and `.env.test` so API keys are not committed.
+
+---
+
 ## [1.2.2] - 2026-01-30
 
 ### 🎉 Major Features

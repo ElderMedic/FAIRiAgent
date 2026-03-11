@@ -94,13 +94,18 @@ def test_document_parser_has_tool():
         print("⚠️  DocumentParser.mineru_tool is None (MinerU not enabled)")
 
 
-def test_langgraph_app_has_tool():
-    """Test that LangGraph app has mineru_tool attribute."""
+def test_langgraph_app_has_tool(monkeypatch):
+    """Test that LangGraph app has mineru_tool attribute.
+    Disable mem0 so app init does not require Ollama/Qdrant.
+    """
     print("\n🧪 Testing LangGraph App Integration")
     print("=" * 60)
-    
+    import fairifier.config as config_module
+    monkeypatch.setattr(config_module.config, "mem0_enabled", False)
+    monkeypatch.setattr(config_module.config, "mem0_strict", False)
+
     from fairifier.graph.langgraph_app import FAIRifierLangGraphApp
-    
+
     app = FAIRifierLangGraphApp()
     
     # Check if tool exists (may be None if MinerU not enabled)

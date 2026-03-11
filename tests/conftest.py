@@ -1,5 +1,15 @@
 """Pytest configuration and shared fixtures for FAIRiAgent tests."""
 
+# Load test LLM env (Qwen API, qwen3.5-plus) before any fairifier config import
+from pathlib import Path
+try:
+    from dotenv import load_dotenv
+    _env_test = Path(__file__).resolve().parent / ".env.test"
+    if _env_test.exists():
+        load_dotenv(_env_test, override=True)
+except Exception:
+    pass
+
 import pytest
 
 

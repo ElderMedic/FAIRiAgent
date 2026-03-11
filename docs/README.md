@@ -1,7 +1,7 @@
 # 📚 Documentation / 文档
 
-**Version**: 1.2.0.20260129  
-**Last Updated**: 2026-01-29
+**Version**: 1.2.2  
+**Last Updated**: 2026-03-11
 
 Welcome to the FAIRiAgent documentation. Please select your preferred language:
 欢迎查阅 FAIRiAgent 文档。请选择您偏好的语言：

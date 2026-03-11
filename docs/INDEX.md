@@ -1,7 +1,7 @@
 # FAIRiAgent Documentation
 
 **Version**: 1.2.2  
-**Last Updated**: 2026-01-29
+**Last Updated**: 2026-03-11
 
 ---
 
