@@ -1,5 +1,9 @@
 # FAIRiAgent Evaluation - Final Results (Data Validated)
 
+> Legacy benchmark note:
+> This report summarizes the earlier multi-model benchmark campaign and remains useful for historical comparison.
+> For the newest workflow-oriented example and latest `qwen3.5-plus` validation runs, start from `evaluation/analysis/README.md` and the `qwen35_*` run directories.
+
 **Date**: 2026-01-30  
 **Framework**: Improved evaluation with 100% mandatory coverage criterion  
 **Status**: ✅ **DATA VERIFIED - READY FOR PUBLICATION**

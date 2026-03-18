@@ -20,6 +20,7 @@ async def llm_select_relevant_packages(
     critic_feedback: Optional[Dict[str, Any]] = None,
     planner_instruction: Optional[str] = None,
     prior_memory_context: Optional[str] = None,
+    priority_package_hints: Optional[List[str]] = None,
 ) -> List[str]:
     """
     LLM determines which FAIR-DS packages are relevant for this document.
@@ -79,8 +80,13 @@ async def llm_select_relevant_packages(
 
 **Selection principles:**
 1. Match packages to the research domain and sample type
-2. Select domain-specific packages based on actual API data above
-3. Select method-specific packages if applicable
+2. Prioritize packages that support publication-ready FAIR metadata: study identifiers, provenance, taxa, host/pathogen context, methods, and sample descriptors
+3. For project proposals, grants, or DMP-like documents, ensure investigation/study/project metadata is covered, not only assay/sample metadata
+4. Select domain-specific packages based on actual API data above
+5. Select method-specific packages only when explicitly supported by the document
+6. Avoid generic environmental or omics-heavy packages unless the document clearly justifies them
+7. Prefer precision over breadth when two packages provide overlapping coverage
+8. If the document concerns plant-pathogen or host-pathogen systems, strongly prefer plant/pathogen packages that capture host, pathogen, taxon, biosafety, and inoculation metadata
 4. Select at least 1 package. Choose as many as needed to fully cover the document's metadata requirements
 5. There is no upper limit - use your judgment to determine the optimal number of packages
 6. ONLY select from the packages listed above - these are real and current
@@ -121,12 +127,21 @@ Select at least 1 package. Choose as many as needed - there is no upper limit.""
     
     if planner_instruction:
         system_prompt += f"\n\n**Planner guidance:**\n- {planner_instruction}\n"
+    if priority_package_hints:
+        system_prompt += (
+            "\n\n**High-confidence package hints from domain heuristics:**\n- "
+            + ", ".join(priority_package_hints)
+            + "\nUse these hints unless the document clearly contradicts them."
+        )
 
     user_prompt = f"""Document information:
 {json.dumps(doc_info, indent=2, ensure_ascii=False)}
 
 Available FAIR-DS packages:
 {json.dumps(pkg_summary, indent=2)}
+
+Heuristic priority packages:
+{json.dumps(priority_package_hints or [], indent=2, ensure_ascii=False)}
 
 Select the relevant packages for this document.
 
@@ -157,6 +172,7 @@ REQUIREMENTS:
     try:
         logger.info("Calling LLM to select relevant packages...")
         response = await llm_helper._call_llm(messages, operation_name="Extract Package Terms")
+        package_lookup = {pkg["name"].lower(): pkg["name"] for pkg in all_packages}
         
         # Defensive checks
         if response is None:
@@ -202,12 +218,24 @@ REQUIREMENTS:
         selected_package_names = []
         for item in selected_items:
             if isinstance(item, str):
-                selected_package_names.append(item)
+                actual_name = package_lookup.get(item.lower())
+                if actual_name:
+                    selected_package_names.append(actual_name)
             elif isinstance(item, dict):
                 # LLM might return {"name": "pkg", "reason": "..."} format
                 pkg_name = item.get("name") or item.get("package") or item.get("package_name")
                 if pkg_name:
-                    selected_package_names.append(pkg_name)
+                    actual_name = package_lookup.get(str(pkg_name).lower())
+                    if actual_name:
+                        selected_package_names.append(actual_name)
+        
+        if priority_package_hints:
+            merged_selection = []
+            for package_name in priority_package_hints + selected_package_names:
+                actual_name = package_lookup.get(str(package_name).lower())
+                if actual_name and actual_name not in merged_selection:
+                    merged_selection.append(actual_name)
+            selected_package_names = merged_selection
         
         # If nothing selected, use top packages from API
         if not selected_package_names:
@@ -318,8 +346,9 @@ The FAIR-DS API provides two search mechanisms:
 1. Field is relevant to the document's content at the {isa_sheet} level
 2. Information for this field is likely present in the document
 3. Field adds value for FAIR data principles (findability, accessibility, interoperability, reusability)
-4. Balance between general and specific fields appropriate for {isa_sheet} level
-5. If a needed field is missing, you can request it by name for the system to search
+4. Prioritize publication-ready metadata such as identifiers, provenance, study design, taxa, geography, timepoints, host/pathogen context, and method descriptors when relevant
+5. Balance between general and specific fields appropriate for {isa_sheet} level
+6. If a needed field is missing, you can request it by name for the system to search
 
 **Think step by step:**
 1. What is the document about?
@@ -373,6 +402,7 @@ Select at least 5 fields. Choose as many as needed - there is no upper limit."""
 
     user_prompt = f"""Document context:
 - Title: {doc_info.get('title', '')}  # Full title - no truncation
+- Document type: {doc_info.get('document_type', '')}
 - Domain: {doc_info.get('research_domain', '')}
 - Keywords: {', '.join(doc_info.get('keywords', []))}  # All keywords - no truncation
 

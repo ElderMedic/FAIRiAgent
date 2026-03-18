@@ -1,6 +1,5 @@
 """Knowledge retrieval agent using FAIR Data Station API."""
 
-import json
 import logging
 from typing import Dict, Any, List, Optional
 from langsmith import traceable
@@ -182,6 +181,15 @@ class KnowledgeRetrieverAgent(BaseAgent):
             
             if planner_instruction:
                 self.log_execution(state, f"🧭 Planner guidance: {planner_instruction}")
+
+            priority_package_hints = self._infer_priority_packages(
+                doc_info, planner_instruction, available_package_names
+            )
+            if priority_package_hints:
+                self.log_execution(
+                    state,
+                    f"🧭 Publication/domain priority packages: {priority_package_hints}"
+                )
             
             self.log_execution(state, "🤖 Phase 1: LLM selecting relevant metadata packages...")
             
@@ -194,7 +202,8 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 all_packages,
                 critic_feedback,
                 planner_instruction=planner_instruction,
-                prior_memory_context=prior_memory_context or None
+                prior_memory_context=prior_memory_context or None,
+                priority_package_hints=priority_package_hints
             )
             self.log_execution(state, f"✅ LLM selected packages: {selected_package_names}")
             
@@ -291,6 +300,14 @@ class KnowledgeRetrieverAgent(BaseAgent):
             
             # Collect all terms to search (from LLM requests)
             all_terms_to_search = []
+            priority_search_terms = self._infer_priority_search_terms(
+                doc_info, planner_instruction
+            )
+            if priority_search_terms:
+                self.log_execution(
+                    state,
+                    f"🧭 Priority metadata search terms: {priority_search_terms}"
+                )
             
             # Use LLM to select optional fields for each ISA sheet
             for sheet in isa_sheets:
@@ -329,6 +346,9 @@ class KnowledgeRetrieverAgent(BaseAgent):
                             f"   🔍 {sheet}: LLM requested term search for: {terms_to_search}"
                         )
             
+            # Add deterministic publication/domain search hints before final FAIR-DS lookup.
+            all_terms_to_search = list(dict.fromkeys(priority_search_terms + all_terms_to_search))
+
             # Phase 4: Search for additional terms/fields if LLM requested (using tools)
             if all_terms_to_search and self.fair_ds_client:
                 self.log_execution(state, f"🔍 Phase 4: Searching for {len(all_terms_to_search)} additional terms...")
@@ -509,6 +529,152 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 requested.append(keyword)
         
         return requested
+
+    def _infer_priority_packages(
+        self,
+        doc_info: Dict[str, Any],
+        planner_instruction: Optional[str],
+        available_package_names: List[str]
+    ) -> List[str]:
+        """Infer high-confidence package hints from document domain and publication context."""
+        package_lookup = {name.lower(): name for name in available_package_names}
+        text = " ".join(
+            str(part)
+            for part in [
+                doc_info.get("title", ""),
+                doc_info.get("document_type", ""),
+                doc_info.get("research_domain", ""),
+                " ".join(doc_info.get("keywords", []) or []),
+                planner_instruction or "",
+            ]
+            if part
+        ).lower()
+
+        hints: List[str] = []
+
+        def add(package_name: str):
+            actual_name = package_lookup.get(package_name.lower())
+            if actual_name and actual_name not in hints:
+                hints.append(actual_name)
+
+        # Always bias toward core investigation/study coverage.
+        add("default")
+
+        if any(
+            keyword in text
+            for keyword in [
+                "plant", "crop", "potato", "tomato", "solanum", "miappe",
+                "plant pathology", "phytopathology"
+            ]
+        ):
+            add("miappe")
+            add("plant associated")
+            add("Plant Sample Checklist")
+            add("Crop Plant sample enhanced annotation checklist")
+
+        if any(
+            keyword in text
+            for keyword in [
+                "pathogen", "phytopathogen", "bacteria", "bacterial",
+                "quarantine pest", "clavibacter", "ralstonia", "infection",
+                "biosafety"
+            ]
+        ):
+            add("ENA prokaryotic pathogen minimal sample checklist")
+
+        if any(keyword in text for keyword in ["soil", "rhizosphere", "environmental samples"]):
+            add("soil")
+
+        if any(
+            keyword in text
+            for keyword in ["rna-seq", "rna seq", "transcriptomic", "transcriptome", "illumina"]
+        ):
+            add("Illumina")
+
+        if any(keyword in text for keyword in ["metabolomics", "metabolite", "metabolites"]):
+            add("Metabolomics")
+
+        if any(keyword in text for keyword in ["genome", "genomic", "gwas", "pangenome"]):
+            add("Genome")
+
+        if any(
+            keyword in text
+            for keyword in ["mag", "mags", "metagenome", "metagenomic", "mimags"]
+        ):
+            add("GSC MIMAGS")
+
+        return hints
+
+    def _infer_priority_search_terms(
+        self,
+        doc_info: Dict[str, Any],
+        planner_instruction: Optional[str]
+    ) -> List[str]:
+        """Infer metadata labels that matter for publication-ready FAIR outputs."""
+        text = " ".join(
+            str(part)
+            for part in [
+                doc_info.get("title", ""),
+                doc_info.get("document_type", ""),
+                doc_info.get("research_domain", ""),
+                " ".join(doc_info.get("keywords", []) or []),
+                planner_instruction or "",
+            ]
+            if part
+        ).lower()
+
+        terms: List[str] = []
+
+        def add(term: str):
+            if term not in terms:
+                terms.append(term)
+
+        # Core publication-grade identifiers and study descriptors.
+        for term in [
+            "investigation identifier",
+            "study identifier",
+            "study title",
+            "study description",
+            "sample identifier",
+            "sample description",
+            "observation unit identifier",
+        ]:
+            add(term)
+
+        if any(
+            keyword in text
+            for keyword in [
+                "project", "proposal", "grant", "horizon", "consortium",
+                "work package", "deliverable", "dmp", "data management"
+            ]
+        ):
+            for term in [
+                "project  name",
+                "collection date",
+                "geographic location (country and/or sea)",
+            ]:
+                add(term)
+
+        if any(
+            keyword in text
+            for keyword in [
+                "plant", "crop", "pathogen", "potato", "tomato",
+                "clavibacter", "ralstonia", "biosafety"
+            ]
+        ):
+            for term in [
+                "scientific name",
+                "ncbi taxonomy id",
+                "biosafety level",
+                "plant tissue type",
+                "pathogen isolate",
+                "pathogen type",
+                "sampling timepoint",
+                "time post inoculation",
+            ]:
+                add(term)
+
+        return terms
     
     def get_memory_query_hint(self, state: FAIRifierState) -> Optional[str]:
         """
