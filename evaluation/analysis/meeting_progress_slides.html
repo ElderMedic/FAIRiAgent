@@ -1,0 +1,1160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FAIRiAgent — FAIR Metadata Generation for Biological Data (Conference)</title>
+  <link href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #08111f;
+      --panel: rgba(13, 24, 42, 0.86);
+      --panel-soft: rgba(23, 38, 63, 0.72);
+      --border: rgba(148, 163, 184, 0.22);
+      --text: #edf2ff;
+      --muted: #a5b4d4;
+      --accent: #57d0ff;
+      --accent-2: #6cf2b4;
+      --accent-3: #ffd166;
+      --danger: #ff7a90;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Alegreya Sans", "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(87, 208, 255, 0.12), transparent 28%),
+        radial-gradient(circle at top right, rgba(108, 242, 180, 0.1), transparent 24%),
+        linear-gradient(140deg, #050a13 0%, #09101d 48%, #111c30 100%);
+      overflow: hidden;
+    }
+
+    .deck {
+      height: 100vh;
+      width: 100vw;
+      position: relative;
+    }
+
+    .topbar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 50;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 24px;
+      background: linear-gradient(180deg, rgba(4, 9, 18, 0.85), rgba(4, 9, 18, 0.2));
+      backdrop-filter: blur(12px);
+    }
+
+    .brand {
+      font-size: 0.95rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .brand strong {
+      color: var(--text);
+      font-size: 1rem;
+      letter-spacing: 0.05em;
+    }
+
+    .slide-counter {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .progress {
+      position: fixed;
+      top: 58px;
+      left: 24px;
+      right: 24px;
+      height: 4px;
+      z-index: 51;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      transition: width 0.35s ease;
+    }
+
+    .slides {
+      height: 100%;
+      width: 100%;
+      position: relative;
+    }
+
+    .slide {
+      position: absolute;
+      inset: 0;
+      padding: 80px 56px 64px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 24px;
+      opacity: 0;
+      transform: translateX(30px) scale(0.985);
+      pointer-events: none;
+      transition: opacity 0.35s ease, transform 0.35s ease;
+      overflow-y: auto;
+    }
+
+    .slide.active {
+      opacity: 1;
+      transform: translateX(0) scale(1);
+      pointer-events: auto;
+    }
+
+    .eyebrow {
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--accent);
+      font-size: 0.84rem;
+      margin-bottom: 8px;
+    }
+
+    h1, h2, h3, p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 2.6rem;
+      line-height: 1.1;
+      max-width: 22ch;
+    }
+
+    h2 {
+      font-size: 1.9rem;
+      line-height: 1.12;
+      margin-bottom: 6px;
+    }
+
+    .subtitle {
+      font-size: 1.18rem;
+      color: var(--muted);
+      max-width: 72ch;
+      line-height: 1.45;
+    }
+
+    .slide-grid {
+      display: grid;
+      gap: 20px;
+      min-height: 0;
+    }
+
+    .two-col {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .three-col {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .cards-2x2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-auto-rows: minmax(150px, 1fr);
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 22px 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .panel.soft {
+      background: var(--panel-soft);
+    }
+
+    .panel h3 {
+      font-size: 1.08rem;
+      color: var(--muted);
+      margin-bottom: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .metric {
+      padding: 18px 18px 16px;
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 8px;
+    }
+
+    .metric .value {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    .metric .delta {
+      margin-top: 6px;
+      font-size: 0.92rem;
+      color: var(--accent-2);
+    }
+
+    .bullet-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 6px;
+    }
+
+    .bullet {
+      position: relative;
+      padding-left: 30px;
+      color: var(--text);
+      line-height: 1.42;
+      font-size: 1.05rem;
+    }
+
+    .bullet::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0.42em;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 0 4px rgba(87, 208, 255, 0.12);
+    }
+
+    .chart-wrap {
+      position: relative;
+      width: 100%;
+      height: 320px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 18px;
+      margin-top: 8px;
+    }
+
+    .timeline-item {
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .timeline-item strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--accent-2);
+      font-size: 1rem;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(87, 208, 255, 0.08);
+      border: 1px solid rgba(87, 208, 255, 0.18);
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+
+    .footer-note {
+      color: var(--muted);
+      font-size: 0.92rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .controls {
+      position: fixed;
+      right: 24px;
+      bottom: 20px;
+      z-index: 60;
+      display: flex;
+      gap: 10px;
+    }
+
+    .btn {
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(9, 17, 31, 0.82);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 12px 16px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+    }
+
+    .btn:hover {
+      border-color: rgba(87, 208, 255, 0.36);
+    }
+
+    .toc {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 6px;
+    }
+
+    .toc button {
+      text-align: left;
+      font: inherit;
+      color: var(--text);
+      padding: 16px 18px;
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.035);
+      cursor: pointer;
+    }
+
+    .toc button small {
+      display: block;
+      color: var(--muted);
+      margin-top: 6px;
+      line-height: 1.35;
+    }
+
+    .quote {
+      font-size: 1.4rem;
+      line-height: 1.45;
+      color: var(--text);
+    }
+
+    .quote strong {
+      color: var(--accent-3);
+    }
+
+    .callout {
+      padding: 16px 18px;
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(108, 242, 180, 0.12), rgba(87, 208, 255, 0.1));
+      border: 1px solid rgba(108, 242, 180, 0.18);
+      line-height: 1.45;
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 10px;
+    }
+
+    .mini-card {
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .mini-card .big {
+      font-size: 1.55rem;
+      font-weight: 700;
+      margin-top: 6px;
+    }
+
+    .workflow-line {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 12px;
+    }
+
+    .workflow-step {
+      padding: 16px 18px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      position: relative;
+    }
+
+    .workflow-step::after {
+      content: "→";
+      position: absolute;
+      right: -14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted);
+      font-size: 1.4rem;
+    }
+
+    .workflow-step:last-child::after {
+      content: "";
+    }
+
+    .workflow-step strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--accent);
+    }
+
+    .small-note {
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+
+    .pillars {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 10px;
+    }
+
+    .pillar {
+      padding: 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .pillar strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--accent-3);
+    }
+
+    @media (max-width: 1200px) {
+      .slide {
+        padding: 80px 28px 64px;
+      }
+
+      h1 {
+        font-size: 2rem;
+      }
+
+      .two-col,
+      .three-col,
+      .cards-2x2,
+      .workflow-line,
+      .pillars,
+      .metric-row,
+      .toc,
+      .mini-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="deck">
+    <div class="topbar">
+      <div class="brand"><strong>FAIRiAgent</strong> — FAIR metadata generation for biological data</div>
+      <div class="slide-counter" id="slideCounter">1 / 11</div>
+    </div>
+    <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+
+    <div class="slides">
+      <section class="slide active">
+        <div>
+          <div class="eyebrow">FAIR Data Platform Conference</div>
+          <h1>Progress in FAIR metadata generation for biological research</h1>
+          <p class="subtitle">
+            An overview of our workflow for generating publication-ready metadata from research documents,
+            with emphasis on biological relevance, cross-lab usability, and next steps for bioremediation and plant-pathology use cases.
+          </p>
+        </div>
+        <div class="slide-grid two-col">
+          <div class="panel">
+            <h3>What we will cover</h3>
+            <div class="bullet-list">
+              <div class="bullet">Evidence from recent evaluations across ecological, biosensor, and plant-pathology study documents.</div>
+              <div class="bullet">Improvements in metadata extraction for complex, multi-entity documents aligned with publication and FAIR expectations.</div>
+              <div class="bullet">How we distinguish historical benchmarks from current workflow performance for transparent reporting.</div>
+              <div class="bullet">Guidance for non-computational users to interpret a single workflow result from start to finish.</div>
+            </div>
+          </div>
+          <div class="panel soft">
+            <h3>Headline outcomes</h3>
+            <div class="metric-row">
+              <div class="metric">
+                <div class="label">Overall score</div>
+                <div class="value">0.69</div>
+                <div class="delta">improved from 0.61</div>
+              </div>
+              <div class="metric">
+                <div class="label">Required metadata coverage</div>
+                <div class="value">81%</div>
+                <div class="delta">up from 73%</div>
+              </div>
+              <div class="metric">
+                <div class="label">Schema compliance (complex case)</div>
+                <div class="value">100%</div>
+                <div class="delta">up from 80%</div>
+              </div>
+              <div class="metric">
+                <div class="label">Focus</div>
+                <div class="value" style="font-size:1.1rem;">Biology-led</div>
+                <div class="delta">FAIR and reuse</div>
+              </div>
+            </div>
+            <div class="tag-row">
+              <span class="tag">FAIR metadata</span>
+              <span class="tag">Plant pathology</span>
+              <span class="tag">Bioremediation</span>
+              <span class="tag">User guidance</span>
+            </div>
+          </div>
+        </div>
+        <div class="footer-note">
+          <span>Use arrow keys or the buttons below to navigate.</span>
+          <span>FAIRiAgent — FAIR Data Platform Conference.</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div>
+          <div class="eyebrow">Outline</div>
+          <h2>Presentation structure</h2>
+          <p class="subtitle">You can jump between evidence, results, discussion, and field-testing plans depending on time and interest.</p>
+        </div>
+        <div class="panel">
+          <div class="toc">
+            <button data-target="2"><strong>1. Historical context</strong><small>Why earlier evaluations matter and what they established.</small></button>
+            <button data-target="3"><strong>2. Current workflow improvements</strong><small>Before/after results from our latest publication-oriented update.</small></button>
+            <button data-target="4"><strong>3. Document-level performance</strong><small>Comparison across ecological, biosensor, and plant-pathology documents.</small></button>
+            <button data-target="5"><strong>4. Interpreting one result</strong><small>How non-computational users can read a single workflow output.</small></button>
+            <button data-target="6"><strong>5. Case study</strong><small>A complex plant-pathogen document as a worked example.</small></button>
+            <button data-target="7"><strong>6. Discussion: metadata for FAIR biology</strong><small>Questions for the FAIR and biology community.</small></button>
+            <button data-target="8"><strong>7. Collaboration opportunities</strong><small>Expertise and materials we seek from the community.</small></button>
+            <button data-target="9"><strong>8. Bioremediation field testing</strong><small>Plans for validation in other labs and institutions.</small></button>
+            <button data-target="10"><strong>9. Next steps</strong><small>Proposed actions and closing question.</small></button>
+          </div>
+        </div>
+        <div class="footer-note">
+          <span>Click a section to jump there.</span>
+          <span>Discussion and next steps are in sections 6–9.</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div>
+          <div class="eyebrow">Historical context</div>
+          <h2>Earlier evaluations remain scientifically valuable</h2>
+          <p class="subtitle">They show what earlier systems could and could not achieve before our current workflow and set the baseline for today's results.</p>
+        </div>
+        <div class="slide-grid two-col">
+          <div class="panel">
+            <h3>Workflow completion (historical comparison)</h3>
+            <div class="chart-wrap"><canvas id="benchmarkChart"></canvas></div>
+          </div>
+          <div class="panel soft">
+            <h3>Why this history matters</h3>
+            <div class="bullet-list">
+              <div class="bullet">Iterative, multi-step workflows consistently outperform single-pass extraction for FAIR-style metadata.</div>
+              <div class="bullet">We keep earlier reports as historical comparison, not as the current state of the system.</div>
+              <div class="bullet">The shift in focus—from “which system performs best?” to “how do we improve difficult document types and real usability?”—reflects a maturation of the research question.</div>
+              <div class="bullet">Presenting this progression helps frame today's results for an academic audience.</div>
+            </div>
+            <div class="callout" style="margin-top:16px;">
+              Takeaway: <strong>structured, multi-step metadata workflows are necessary for FAIR alignment</strong>; document type and biological context strongly influence success.
+            </div>
+          </div>
+        </div>
+        <div class="footer-note">
+          <span>Details in project evaluation reports.</span>
+          <span>Context for today’s results.</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div>
+          <div class="eyebrow">Current results</div>
+          <h2>Publication-oriented update improved workflow performance</h2>
+          <p class="subtitle">These results reflect our latest changes aimed at publication-ready and FAIR-aligned metadata.</p>
+        </div>
+        <div class="slide-grid two-col">
+          <div class="panel">
+            <h3>Before vs after (publication-oriented update)</h3>
+            <div class="chart-wrap"><canvas id="improvementChart"></canvas></div>
+          </div>
+          <div class="panel soft">
+            <h3>What improved</h3>
+            <div class="mini-grid">
+              <div class="mini-card">
+                <div class="label">Overall score</div>
+                <div class="big">0.61 → 0.69</div>
+              </div>
+              <div class="mini-card">
+                <div class="label">Precision–recall balance</div>
+                <div class="big">0.49 → 0.58</div>
+              </div>
+              <div class="mini-card">
+                <div class="label">Schema compliance</div>
+                <div class="big">93% → 100%</div>
+              </div>
+              <div class="mini-card">
+                <div class="label">Required completeness</div>
+                <div class="big">73% → 81%</div>
+              </div>
+              <div class="mini-card">
+                <div class="label">Recommended completeness</div>
+                <div class="big">46% → 52%</div>
+              </div>
+              <div class="mini-card">
+                <div class="label">Review effort</div>
+                <div class="big">0.31 → 0.25</div>
+              </div>
+            </div>
+            <div class="bullet-list" style="margin-top: 18px;">
+              <div class="bullet">The largest gains are on the most difficult documents, not on already straightforward cases.</div>
+              <div class="bullet">The system is better at handling richer biological and project-style metadata, which matters for FAIR and reuse.</div>
+              <div class="bullet">Structural validity improved as well—outputs are more often schema-compliant and interpretable.</div>
+            </div>
+          </div>
+        </div>
+        <div class="footer-note">
+          <span>Comparison of evaluation runs before and after the update.</span>
+          <span>Key slide for “what changed” in the workflow.</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div>
+          <div class="eyebrow">Document-level performance</div>
+          <h2>Where the biological complexity challenge appears</h2>
+          <p class="subtitle">Performance is strong on some document types and still limited on the most complex, multi-entity cases.</p>
+        </div>
+        <div class="slide-grid two-col">
+          <div class="panel">
+            <h3>Completeness by document type</h3>
+            <div class="chart-wrap"><canvas id="documentChart"></canvas></div>
+          </div>
+          <div class="panel soft">
+            <h3>Interpretation</h3>
+            <div class="bullet-list">
+              <div class="bullet"><strong>Ecological study</strong> — required metadata is nearly complete; a stable example of a conventional study.</div>
+              <div class="bullet"><strong>Biosensor study</strong> — required fields are covered; assay-level details still benefit from biological expert review.</div>
+              <div class="bullet"><strong>Plant-pathogen (complex)</strong> — the hardest case; we moved from structurally incomplete to valid, interpretable output, with room to improve coverage.</div>
+            </div>
+            <div class="callout" style="margin-top:16px;">
+              Takeaway: <strong>document type matters</strong>. The workflow does best on standard study-like documents and faces greater difficulty when a single document combines project administration, host and pathogen biology, and multiple experimental contexts.
+            </div>
+          </div>
+        </div>
+        <div class="footer-note">
+          <span>Useful for discussing scope and biological complexity.</span>
+          <span>Focus on document classes and FAIR usability, not tool comparison.</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div>
+          <div class="eyebrow">Interpreting one result</div>
+          <h2>How non-computational users can read a workflow output</h2>
+          <p class="subtitle">A short guide for collaborators who need a clear, stepwise way to interpret a single run without technical details.</p>
+        </div>
+        <div class="panel">
+          <div class="workflow-line">
+            <div class="workflow-step">
+              <strong>1. Workflow report</strong>
+              Check whether the run completed, how many metadata fields were produced, and whether expert review is recommended.
+            </div>
+            <div class="workflow-step">
+              <strong>2. Generated metadata</strong>
+              Read the output by level: investigation, study, assay, sample, and observation unit (ISA-style structure).
+            </div>
+            <div class="workflow-step">
+              <strong>3. Evaluation summary</strong>
+              Use the evaluation summary to see required and overall completeness, and whether the output is schema-valid.
+            </div>
+            <div class="workflow-step">
+              <strong>4. Expert interpretation</strong>
+              Decide which suggested fields to accept, correct, or remove, with input from a domain expert where needed.
+            </div>
+          </div>
+          <div class="slide-grid two-col" style="margin-top: 20px;">
+            <div class="panel soft">
+              <h3>In plain language</h3>
+              <div class="bullet-list">
+                <div class="bullet">The workflow identifies the type of research document.</div>
+                <div class="bullet">It selects metadata templates that fit that document.</div>
+                <div class="bullet">It fills them with values and flags stronger vs weaker evidence.</div>
+                <div class="bullet">It checks whether the result is structurally complete enough for downstream use.</div>
+              </div>
+            </div>
+            <div class="panel soft">
+              <h3>What to check first</h3>
+              <div class="bullet-list">
+                <div class="bullet"><strong>Did the run complete?</strong></div>
+                <div class="bullet"><strong>Which fields are confirmed vs provisional?</strong></div>
+                <div class="bullet"><strong>Which metadata categories are present?</strong></div>
+                <div class="bullet"><strong>Which required fields are still missing?</strong></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="footer-note">
+          <span>Example outputs and step-by-step documentation are available in the project repository.</span>
+          <span>FAIRiAgent — FAIR Data Platform Conference.</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div>
+          <div class="eyebrow">Case study</div>
+          <h2>A complex plant-pathogen document as a worked example</h2>
+          <p class="subtitle">This document type is instructive because it is complex, realistic, and shows clear improvement in the latest workflow.</p>
+        </div>
+        <div class="slide-grid two-col">
+          <div class="panel">
+            <h3>Why this document type is instructive</h3>
+            <div class="bullet-list">
+              <div class="bullet">It is not a simple article; it combines project-level and biological metadata.</div>
+              <div class="bullet">It includes plant host, pathogen, and study-planning information in one document.</div>
+              <div class="bullet">The latest output now includes key fields that were missing before (e.g. study title and description, sample and observation-unit identifiers).</div>
+              <div class="bullet">It illustrates both current strengths and remaining gaps for biological interpretation.</div>
+            </div>
+            <div class="tag-row">
+              <span class="tag">Plant pathology</span>
+              <span class="tag">Proposal-style metadata</span>
+              <span class="tag">Multi-entity document</span>
+              <span class="tag">Discussion case</span>
+            </div>
+          </div>
+          <div class="panel soft">
+            <h3>What the current output shows</h3>
+            <div class="mini-grid">
+              <div class="mini-card">
+                <div class="label">Overall completeness</div>
+                <div class="big">35%</div>
+              </div>
+              <div class="mini-card">
+                <div class="label">Required completeness</div>
+                <div class="big">44%</div>
+              </div>
+              <div class="mini-card">
+                <div class="label">Schema compliance</div>
+                <div class="big">100%</div>
+              </div>
+            </div>
+            <div class="quote" style="margin-top:18px;">
+              The output is now <strong>structurally complete enough to review seriously</strong>, but still misses many biologically important plant, pathogen, and aggregate fields.
+            </div>
+            <div class="small-note" style="margin-top:18px;">
+              A useful question for the FAIR and biology community: which metadata entities and controlled vocabularies are genuinely required here—rather than whether the tool runs.
+            </div>
+          </div>
+        </div>
+        <div class="footer-note">
+          <span>Suitable for live demonstration using the workflow report and metadata output from this run.</span>
+          <span>FAIRiAgent — FAIR Data Platform Conference.</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div>
+          <div class="eyebrow">Discussion</div>
+          <h2>Metadata design for FAIR biology: questions for the community</h2>
+          <p class="subtitle">We welcome input from the FAIR and biology community on these topics.</p>
+        </div>
+        <div class="slide-grid cards-2x2">
+          <div class="panel">
+            <h3>Minimum publishable metadata</h3>
+            <div class="bullet-list">
+              <div class="bullet">For common study types in our domain, what is the minimum metadata set needed before a dataset becomes biologically reusable?</div>
+              <div class="bullet">Which fields are strictly required for publication or repository submission, and which are desirable but optional?</div>
+            </div>
+          </div>
+          <div class="panel">
+            <h3>Entity boundaries</h3>
+            <div class="bullet-list">
+              <div class="bullet">How should we separate sample, host, pathogen, observation unit, and aggregate/community in complex studies?</div>
+              <div class="bullet">Are there domain conventions in plant pathology and bioremediation we should adopt?</div>
+            </div>
+          </div>
+          <div class="panel">
+            <h3>Controlled vocabularies</h3>
+            <div class="bullet-list">
+              <div class="bullet">Which identifiers and vocabularies should be prioritized: taxonomy, environment, pollutant chemistry, host tissue, disease stage, treatment condition?</div>
+              <div class="bullet">Which are already standard practice in the lab, even if not formally documented?</div>
+            </div>
+          </div>
+          <div class="panel">
+            <h3>Source-of-truth materials</h3>
+            <div class="bullet-list">
+              <div class="bullet">Which documents hold the most reliable metadata in practice: papers, lab notebooks, sample sheets, repository templates, or project proposals?</div>
+              <div class="bullet">Which fields should never be inferred from narrative text alone?</div>
+            </div>
+          </div>
+        </div>
+        <div class="footer-note">
+          <span>These questions are intended to steer the discussion toward biology-driven metadata design.</span>
+          <span>We aim to keep the focus on FAIR usability rather than implementation details.</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div>
+          <div class="eyebrow">Collaboration opportunities</div>
+          <h2>Expertise and materials we seek from the community</h2>
+          <p class="subtitle">We are looking for expert criteria and representative materials to align our workflow with community practice.</p>
+        </div>
+        <div class="slide-grid two-col">
+          <div class="panel">
+            <h3>What we are looking for</h3>
+            <div class="timeline">
+              <div class="timeline-item">
+                <strong>1. A core checklist</strong>
+                A lab- or community-validated list of required, recommended, and optional fields for the most relevant study types.
+              </div>
+              <div class="timeline-item">
+                <strong>2. Example documents</strong>
+                A small set of representative inputs: papers, sample sheets, proposals, metadata templates, or repository drafts.
+              </div>
+              <div class="timeline-item">
+                <strong>3. Vocabulary priorities</strong>
+                Guidance on which identifiers to prioritize: taxonomy, environmental terms, chemical names, disease stages, host tissues.
+              </div>
+              <div class="timeline-item">
+                <strong>4. Expert review boundaries</strong>
+                Which fields can be checked quickly by a biologist and which need deeper bioinformatics or data stewardship review.
+              </div>
+            </div>
+          </div>
+          <div class="panel soft">
+            <h3>A question for the community</h3>
+            <div class="quote">
+              “Could we define a <strong>domain-specific metadata checklist</strong> for common study types and test whether the current workflow captures the fields that matter for publication and reuse?”
+            </div>
+            <div class="callout" style="margin-top:18px;">
+              For data stewards and biologists:
+              <br /><br />
+              <strong>Which fields would you check first before trusting a generated metadata record from a study like ours?</strong>
+            </div>
+          </div>
+        </div>
+        <div class="footer-note">
+          <span>We aim to leave with actionable, biology-led guidance.</span>
+          <span>Specific, expert-driven input is more valuable than general feedback.</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div>
+          <div class="eyebrow">Field testing</div>
+          <h2>Plans for validation in other institutions, with focus on bioremediation</h2>
+          <p class="subtitle">We aim to validate usability and biological relevance in realistic metadata-generation settings across labs and institutions.</p>
+        </div>
+        <div class="panel">
+          <div class="pillars">
+            <div class="pillar">
+              <strong>1. Select representative study types</strong>
+              Soil or sediment remediation, wastewater or sludge remediation, and plant-microbe remediation systems.
+            </div>
+            <div class="pillar">
+              <strong>2. Collect diverse inputs</strong>
+              Papers, sample sheets, field logs, experimental protocols, repository templates, and project proposals.
+            </div>
+            <div class="pillar">
+              <strong>3. Compare human vs system outputs</strong>
+              Measure completeness, biological correctness, review burden, and readiness for sharing or submission.
+            </div>
+            <div class="pillar">
+              <strong>4. Build a cross-lab consensus list</strong>
+              Identify metadata fields every lab agrees are essential and note the ones that depend on local practice.
+            </div>
+          </div>
+          <div class="slide-grid two-col" style="margin-top: 20px;">
+            <div class="panel soft">
+              <h3>Bioremediation-specific metadata to prioritize</h3>
+              <div class="bullet-list">
+                <div class="bullet">Pollutant identity and concentration</div>
+                <div class="bullet">Matrix type: soil, sediment, sludge, water, rhizosphere</div>
+                <div class="bullet">Treatment agent: microbial strain, consortium, plant species, amendment, carrier</div>
+                <div class="bullet">Timepoints, spatial context, environmental conditions, and controls</div>
+                <div class="bullet">Taxonomy and environmental terminology consistency</div>
+              </div>
+            </div>
+            <div class="panel soft">
+              <h3>Most important validation question</h3>
+              <div class="quote">
+                Does the generated metadata help an external lab understand <strong>what was treated, where, when, under which conditions, and with what biological system</strong>?
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="footer-note">
+          <span>Transition from internal evaluation to external use-case validation.</span>
+          <span>Suited to collaboration and field-study planning.</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div>
+          <div class="eyebrow">Next steps</div>
+          <h2>Proposed next steps and closing question</h2>
+          <p class="subtitle">We propose to focus on clear, science-led next steps rather than implementation details.</p>
+        </div>
+        <div class="slide-grid two-col">
+          <div class="panel">
+            <h3>Proposed next actions</h3>
+            <div class="bullet-list">
+              <div class="bullet">Agree on one or two priority study types for domain-specific metadata checklists.</div>
+              <div class="bullet">Select a small set of real documents for community or expert review.</div>
+              <div class="bullet">Define which metadata fields must be manually confirmed before data sharing or publication.</div>
+              <div class="bullet">Begin the first external bioremediation validation with a small, well-characterized dataset.</div>
+            </div>
+          </div>
+          <div class="panel soft">
+            <h3>Closing message</h3>
+            <div class="quote">
+              We now have enough evidence to move from “can a workflow generate metadata?” toward <strong>“which biological metadata standards and field definitions are actually usable across labs?”</strong>
+            </div>
+            <div class="callout" style="margin-top:18px;">
+              A question for the community:
+              <br /><br />
+              <strong>Which bioremediation scenario should we use first as the reference case for cross-lab metadata validation?</strong>
+            </div>
+          </div>
+        </div>
+        <div class="footer-note">
+          <span>FAIRiAgent — FAIR Data Platform Conference.</span>
+          <span>Thank you. We welcome questions and collaboration.</span>
+        </div>
+      </section>
+    </div>
+
+    <div class="controls">
+      <button class="btn" id="prevBtn">Previous</button>
+      <button class="btn" id="nextBtn">Next</button>
+    </div>
+  </div>
+
+  <script>
+    const slides = Array.from(document.querySelectorAll(".slide"));
+    const counter = document.getElementById("slideCounter");
+    const progressBar = document.getElementById("progressBar");
+    let currentSlide = 0;
+
+    function showSlide(index) {
+      currentSlide = Math.max(0, Math.min(index, slides.length - 1));
+      slides.forEach((slide, i) => slide.classList.toggle("active", i === currentSlide));
+      counter.textContent = `${currentSlide + 1} / ${slides.length}`;
+      progressBar.style.width = `${((currentSlide + 1) / slides.length) * 100}%`;
+      requestAnimationFrame(() => {
+        slides[currentSlide].querySelectorAll("canvas").forEach((c) => {
+          const chart = Chart.getChart(c);
+          if (chart) chart.resize();
+        });
+      });
+    }
+
+    document.getElementById("prevBtn").addEventListener("click", () => showSlide(currentSlide - 1));
+    document.getElementById("nextBtn").addEventListener("click", () => showSlide(currentSlide + 1));
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") {
+        event.preventDefault();
+        showSlide(currentSlide + 1);
+      }
+      if (event.key === "ArrowLeft" || event.key === "PageUp") {
+        event.preventDefault();
+        showSlide(currentSlide - 1);
+      }
+      if (event.key === "Home") showSlide(0);
+      if (event.key === "End") showSlide(slides.length - 1);
+    });
+
+    document.querySelectorAll(".toc button").forEach((button) => {
+      button.addEventListener("click", () => {
+        showSlide(Number(button.dataset.target));
+      });
+    });
+
+    const chartDefaults = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          labels: { color: "#edf2ff", font: { size: 12 } }
+        },
+        tooltip: {
+          backgroundColor: "rgba(9, 17, 31, 0.94)",
+          titleColor: "#edf2ff",
+          bodyColor: "#d9e2ff",
+          borderColor: "rgba(87, 208, 255, 0.3)",
+          borderWidth: 1
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: "#a5b4d4" },
+          grid: { color: "rgba(255,255,255,0.08)" }
+        },
+        y: {
+          ticks: { color: "#a5b4d4" },
+          grid: { color: "rgba(255,255,255,0.08)" }
+        }
+      }
+    };
+
+    new Chart(document.getElementById("benchmarkChart"), {
+      type: "bar",
+      data: {
+        labels: ["Qwen-Max (agentic)", "Qwen-Max (baseline)", "GPT-5.1 (baseline)", "Claude Haiku (baseline)", "DeepSeek-R1 (local)"],
+        datasets: [{
+          label: "Historical success rate",
+          data: [0.80, 0.45, 0.15, 0.10, 0.05],
+          backgroundColor: ["#57d0ff", "#3498db", "#2ecc71", "#e67e22", "#8e44ad"],
+          borderRadius: 10,
+          borderSkipped: false
+        }]
+      },
+      options: {
+        ...chartDefaults,
+        indexAxis: "y",
+        scales: {
+          x: {
+            min: 0,
+            max: 1,
+            ticks: {
+              color: "#a5b4d4",
+              callback: (value) => `${Math.round(value * 100)}%`
+            },
+            grid: { color: "rgba(255,255,255,0.08)" }
+          },
+          y: {
+            ticks: { color: "#edf2ff", font: { size: 12 } },
+            grid: { display: false }
+          }
+        },
+        plugins: {
+          ...chartDefaults.plugins,
+          legend: { display: false },
+          title: {
+            display: true,
+            text: "Workflow completion rate across models",
+            color: "#a5b4d4",
+            font: { size: 13 },
+            padding: { bottom: 12 }
+          }
+        }
+      }
+    });
+
+    new Chart(document.getElementById("improvementChart"), {
+      type: "bar",
+      data: {
+        labels: ["Aggregate", "Required", "Recommended", "F1", "Confidence"],
+        datasets: [
+          {
+            label: "Before",
+            data: [0.6085, 0.7306, 0.4596, 0.4886, 0.6627],
+            backgroundColor: "rgba(255, 122, 144, 0.65)",
+            borderRadius: 10
+          },
+          {
+            label: "After",
+            data: [0.6847, 0.8128, 0.5146, 0.5770, 0.7050],
+            backgroundColor: "rgba(108, 242, 180, 0.7)",
+            borderRadius: 10
+          }
+        ]
+      },
+      options: {
+        ...chartDefaults,
+        scales: {
+          x: {
+            ticks: { color: "#edf2ff" },
+            grid: { display: false }
+          },
+          y: {
+            min: 0,
+            max: 1,
+            ticks: {
+              color: "#a5b4d4",
+              callback: (value) => `${Math.round(value * 100)}%`
+            },
+            grid: { color: "rgba(255,255,255,0.08)" }
+          }
+        }
+      }
+    });
+
+    new Chart(document.getElementById("documentChart"), {
+      type: "radar",
+      data: {
+        labels: ["Earthworm overall", "Earthworm required", "Biosensor overall", "Biosensor required", "Pomato overall", "Pomato required"],
+        datasets: [
+          {
+            label: "Latest pub-fix workflow",
+            data: [0.8333, 1.0, 0.7949, 1.0, 0.3551, 0.4384],
+            borderColor: "#57d0ff",
+            backgroundColor: "rgba(87, 208, 255, 0.2)",
+            pointBackgroundColor: "#57d0ff",
+            pointRadius: 4
+          },
+          {
+            label: "Previous workflow",
+            data: [0.8095, 1.0, 0.7949, 1.0, 0.1495, 0.1918],
+            borderColor: "#ffd166",
+            backgroundColor: "rgba(255, 209, 102, 0.12)",
+            pointBackgroundColor: "#ffd166",
+            pointRadius: 4
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: chartDefaults.plugins,
+        scales: {
+          r: {
+            min: 0,
+            max: 1,
+            angleLines: { color: "rgba(255,255,255,0.1)" },
+            grid: { color: "rgba(255,255,255,0.1)" },
+            pointLabels: { color: "#edf2ff", font: { size: 12 } },
+            ticks: {
+              color: "#a5b4d4",
+              backdropColor: "transparent",
+              callback: (value) => `${Math.round(value * 100)}%`
+            }
+          }
+        }
+      }
+    });
+
+    showSlide(0);
+  </script>
+</body>
+</html>

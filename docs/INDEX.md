@@ -54,7 +54,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [Changelog](CHANGELOG_DRAFT.md) | Version history and changes |
+| [Changelog](CHANGELOG.md) | Version history and changes |
 | [Known Issues](en/KNOWN_ISSUES.md) | Current limitations and workarounds |
 
 ---

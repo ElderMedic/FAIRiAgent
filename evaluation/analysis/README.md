@@ -2,6 +2,171 @@
 
 Comprehensive, reusable analysis framework for FAIRiAgent evaluation results.
 
+## Current Status
+
+This folder contains both:
+
+- `legacy benchmark analysis` for the earlier multi-model comparison (`qwen_max`, `gpt-5.1`, `sonnet`, local Ollama models)
+- `current workflow-focused result inspection` for the latest `qwen3.5-plus` runs, especially:
+  - `evaluation/runs/qwen35_no_langfuse_eval_all/results/evaluation_results.json`
+  - `evaluation/runs/qwen35_no_langfuse_eval_all_pubfix/results/evaluation_results.json`
+  - `evaluation/runs/qwen35_pomato_publication_fix/`
+
+Use the older figures and reports for historical comparison.
+Use the latest `qwen35_*` runs when explaining the current workflow behavior.
+
+## Quick Start For Non-Computational Users
+
+If a user wants to understand "what happened in one run?" do **not** start from the full analysis code.
+Start from one concrete example result directory.
+
+### Recommended example
+
+Use:
+
+- `evaluation/runs/qwen35_pomato_publication_fix/`
+
+This is a good tutorial example because it shows:
+
+- a real scientific project/proposal-like document
+- a difficult plant-pathology use case
+- a complete workflow output
+- both extracted metadata and quality summary
+
+### Read the result in 3 steps
+
+```mermaid
+flowchart LR
+    A[workflow_report.json] --> B[metadata_json.json]
+    B --> C[evaluation_results.json or run comparison]
+```
+
+1. `workflow_report.json`
+
+- Read this first to answer:
+  - Did the workflow finish?
+  - How many fields were extracted?
+  - Which metadata packages were used?
+  - Does the result need human review?
+
+2. `metadata_json.json`
+
+- Read this second to answer:
+  - What metadata was actually generated?
+  - Which values are `confirmed` vs `provisional`?
+  - Which ISA levels are populated: `investigation`, `study`, `assay`, `sample`, `observationunit`?
+
+3. `evaluation_results.json`
+
+- Read this last when you want comparison:
+  - How complete is this result against ground truth?
+  - How much of the required metadata is covered?
+  - Is the result structurally valid?
+  - Is the updated workflow better than earlier runs?
+
+## Example Tutorial: How To Explain One Result
+
+### Step 1. Explain the input
+
+This example uses `pomato`, a complex plant-pathology and project-style document.
+It is harder than a standard paper because it mixes:
+
+- project administration
+- plant host information
+- pathogen information
+- multi-site experimental planning
+
+### Step 2. Explain what the workflow does
+
+Use this plain-language summary:
+
+```text
+Document in
+→ identify document type and important study context
+→ choose relevant metadata packages
+→ generate structured metadata
+→ review confidence and completeness
+```
+
+### Step 3. Show the first result summary
+
+In `workflow_report.json`, focus on only these fields:
+
+- `workflow_status`
+- `overall_confidence`
+- `metadata_overall_confidence`
+- `packages_used`
+- `total_fields`
+- `confirmed_fields`
+- `provisional_fields`
+
+For non-computational users, interpret them as:
+
+- `workflow_status`: whether the run finished normally
+- `overall_confidence`: overall trust in the run
+- `metadata_overall_confidence`: trust in the extracted metadata values
+- `packages_used`: which metadata templates/checklists were chosen
+- `confirmed/provisional`: which values are likely strong vs still need human checking
+
+### Step 4. Show the metadata itself
+
+Then open `metadata_json.json` and inspect it in this order:
+
+1. `investigation`
+2. `study`
+3. `assay`
+4. `sample`
+5. `observationunit`
+
+This is the easiest way for non-computational users to understand the result because it follows a research logic:
+
+- project
+- study
+- measurement
+- sample
+- unit/site/context
+
+### Step 5. Explain why evaluation matters
+
+Use `evaluation_results.json` only after showing the result itself.
+
+The most useful metrics for non-technical explanation are:
+
+- `required_completeness`: how much of the must-have metadata was captured
+- `overall_completeness`: how much of all expected metadata was captured
+- `schema_compliance_rate`: whether the output structure is valid
+- `overall_score`: overall quality judgment
+
+### Step 6. Use before/after comparison
+
+For a simple tutorial narrative, compare:
+
+- `evaluation/runs/qwen35_no_langfuse_eval_all/results/evaluation_results.json`
+- `evaluation/runs/qwen35_no_langfuse_eval_all_pubfix/results/evaluation_results.json`
+
+This shows that the newer workflow improved:
+
+- aggregate score
+- completeness
+- required-field coverage
+- schema compliance
+
+That comparison is easier for users to understand than model-family benchmarking.
+
+## Recommended Reading Paths
+
+### For a user who wants to understand one result
+
+1. `evaluation/runs/qwen35_pomato_publication_fix/workflow_report.json`
+2. `evaluation/runs/qwen35_pomato_publication_fix/metadata_json.json`
+3. `evaluation/runs/qwen35_no_langfuse_eval_all_pubfix/results/evaluation_results.json`
+
+### For a user who wants historical benchmark context
+
+1. `evaluation/reports/FINAL_EVALUATION_RESULTS.md`
+2. `evaluation/analysis/key_figures/evaluation_summary.png`
+3. `evaluation/analysis/key_figures/field_analysis_report.png`
+
 ## Architecture
 
 The analysis framework is designed to be:

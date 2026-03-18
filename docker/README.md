@@ -46,7 +46,7 @@ docker run --rm fairiagent:latest python run_fairifier.py --help
 
 ### Version History
 - See `DOCKER_VERSION_1.1.0-mem0.md` for version 1.1.0-mem0 details
-- See `CHANGELOG.md` in project root for full history
+- See `docs/CHANGELOG.md` for full history
 
 ## Configuration
 

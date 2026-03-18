@@ -1,4 +1,4 @@
-# Changelog Draft
+# Changelog
 
 ## [1.2.2] - 2026-03-11 – Release readiness (mem0 branch merge)
 

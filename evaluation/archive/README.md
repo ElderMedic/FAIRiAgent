@@ -12,6 +12,7 @@ This directory contains archived files that are no longer actively used but kept
 ## Contents
 
 ### Documentation
+- `ACTION_PLAN_LEGACY.md`: Legacy evaluation report (formerly `evaluation/ACTION_PLAN.md`)
 - `ANALYSIS_FAILURE_CLASSIFICATION.md`: Failure classification documentation
 - `ANALYSIS_REFACTORING.md`: Refactoring notes
 - `BASELINE_EVALUATION.md`: Baseline evaluation documentation
