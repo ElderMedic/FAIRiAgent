@@ -144,6 +144,10 @@ class FAIRifierConfig:
     # Options: "none" (stateless), "memory" (dev/test only), "sqlite" (production)
     checkpointer_backend: str = "sqlite"
     checkpoint_db_path: Path = project_root / "output" / ".checkpoints.db"
+
+    # Post-output static checks (CLI, after metadata_json.json is written)
+    validate_output_json: bool = True  # JSON syntax (json.load)
+    validate_output_json_fair_format: bool = True  # FAIR/ISA rules (same as SchemaValidator)
     
     # Mem0 Memory Layer Configuration (Optional)
     # Provides persistent semantic memory for context compression and retrieval
@@ -382,6 +386,19 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     
     if os.getenv("CHECKPOINT_DB_PATH"):
         config_instance.checkpoint_db_path = Path(os.getenv("CHECKPOINT_DB_PATH"))
+
+    # Post-output JSON / FAIR format checks (CLI)
+    if os.getenv("FAIRIFIER_VALIDATE_OUTPUT_JSON"):
+        v = os.getenv("FAIRIFIER_VALIDATE_OUTPUT_JSON").strip().lower()
+        config_instance.validate_output_json = v not in ("0", "false", "no", "off")
+    if os.getenv("FAIRIFIER_VALIDATE_OUTPUT_JSON_FAIR_FORMAT"):
+        v = os.getenv("FAIRIFIER_VALIDATE_OUTPUT_JSON_FAIR_FORMAT").strip().lower()
+        config_instance.validate_output_json_fair_format = v not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
     
     # Mem0 Memory Layer configuration
     if os.getenv("MEM0_ENABLED"):

@@ -649,7 +649,7 @@ class KnowledgeRetrieverAgent(BaseAgent):
             ]
         ):
             for term in [
-                "project  name",
+                "project name",
                 "collection date",
                 "geographic location (country and/or sea)",
             ]:

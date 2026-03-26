@@ -15,6 +15,7 @@ from .graph.langgraph_app import FAIRifierLangGraphApp
 from .config import config
 from .utils.json_logger import get_logger
 from .utils.llm_helper import get_llm_helper, save_llm_responses, check_ollama_model_available
+from .validation import check_metadata_json_output
 
 # LangSmith: config.apply_env_overrides() already set LANGCHAIN_TRACING_V2 and LANGCHAIN_PROJECT
 
@@ -134,6 +135,111 @@ def _resolve_project_id(project_id: str) -> Optional[Path]:
     return None
 
 
+def _post_write_metadata_json_checks(
+    output_path: Path,
+    *,
+    do_syntax: bool,
+    do_fair: bool,
+) -> None:
+    """After metadata_json.json is written: optional syntax + FAIR/ISA checks (warn + log only)."""
+    metadata_json_path = output_path / "metadata_json.json"
+    if not (do_syntax or do_fair):
+        return
+    if not metadata_json_path.exists():
+        return
+
+    parsed = None
+    try:
+        with open(metadata_json_path, "r", encoding="utf-8") as f:
+            parsed = json.load(f)
+    except json.JSONDecodeError as e:
+        if do_syntax:
+            click.echo(
+                f"\n⚠️  JSON syntax check failed for metadata_json.json: {e}",
+                err=True,
+            )
+            json_logger.warning(
+                "json_syntax_check",
+                file="metadata_json.json",
+                valid=False,
+                error=str(e),
+            )
+        elif do_fair:
+            click.echo(
+                f"\n⚠️  Cannot run FAIR format check (invalid JSON): {e}",
+                err=True,
+            )
+            json_logger.warning(
+                "fair_format_check",
+                skipped=True,
+                reason="invalid_json",
+                error=str(e),
+            )
+        return
+
+    if do_syntax:
+        click.echo("  ✓ JSON syntax check: metadata_json.json is valid JSON")
+        json_logger.info("json_syntax_check", file="metadata_json.json", valid=True)
+
+    if not do_fair:
+        return
+
+    if not isinstance(parsed, dict):
+        click.echo(
+            "\n⚠️  FAIR format check skipped: root JSON value is not an object.",
+            err=True,
+        )
+        json_logger.warning(
+            "fair_format_check",
+            skipped=True,
+            reason="root_not_object",
+        )
+        return
+
+    result = check_metadata_json_output(parsed)
+    err_preview = result["errors"][:10]
+    warn_preview = result["warnings"][:10]
+    json_logger.info(
+        "fair_format_check",
+        is_valid=result["is_valid"],
+        schema_compliance_rate=result["schema_compliance_rate"],
+        error_count=len(result["errors"]),
+        warning_count=len(result["warnings"]),
+        errors_preview=err_preview,
+        warnings_preview=warn_preview,
+        validations=result["validations"],
+    )
+
+    if result["is_valid"] and not result["warnings"]:
+        click.echo("  ✓ FAIR/ISA format check: PASS (no errors or warnings)")
+    elif result["is_valid"]:
+        click.echo(
+            f"  ⚠️  FAIR/ISA format check: PASS with {len(result['warnings'])} warning(s)"
+        )
+        for w in result["warnings"][:5]:
+            click.echo(f"      - {w}", err=True)
+        if len(result["warnings"]) > 5:
+            click.echo(
+                f"      ... and {len(result['warnings']) - 5} more (see logs)",
+                err=True,
+            )
+    else:
+        click.echo(
+            f"\n⚠️  FAIR/ISA format check: FAIL — {len(result['errors'])} error(s), "
+            f"{len(result['warnings'])} warning(s) (output file unchanged)",
+            err=True,
+        )
+        for msg in result["errors"][:8]:
+            click.echo(f"   - {msg}", err=True)
+        if len(result["errors"]) > 8:
+            click.echo(
+                f"   ... and {len(result['errors']) - 8} more (see processing_log.jsonl)",
+                err=True,
+            )
+        for w in result["warnings"][:3]:
+            click.echo(f"   (warn) {w}", err=True)
+
+
 def _is_process_running(pid: int) -> bool:
     """Check if a process with given PID is running (Linux/Mac compatible).
     
@@ -196,13 +302,27 @@ def cli(ctx: click.Context):
     is_flag=True,
     help="Print detailed processing steps.",
 )
+@click.option(
+    "--no-validate-json",
+    is_flag=True,
+    default=False,
+    help="Skip JSON syntax and FAIR/ISA format checks after saving metadata_json.json.",
+)
+@click.option(
+    "--no-validate-json-fair-format",
+    is_flag=True,
+    default=False,
+    help="Skip FAIR/ISA format check only (JSON syntax check still runs if enabled in config).",
+)
 def process(
     document_path: str,
     output_dir: Optional[str] = None,
     project_id: Optional[str] = None,
     env_file: Optional[str] = None,
     json_log: bool = True,
-    verbose: bool = False
+    verbose: bool = False,
+    no_validate_json: bool = False,
+    no_validate_json_fair_format: bool = False,
 ):
     """Process a document and generate FAIR-DS compatible metadata."""
     # Load custom .env file if provided (before importing config)
@@ -307,7 +427,17 @@ def process(
     click.echo()
     
     # Run workflow
-    asyncio.run(_run_workflow(document_path, output_path, project_id, verbose, langsmith_project))
+    asyncio.run(
+        _run_workflow(
+            document_path,
+            output_path,
+            project_id,
+            verbose,
+            langsmith_project,
+            no_validate_json=no_validate_json,
+            no_validate_json_fair_format=no_validate_json_fair_format,
+        )
+    )
 
 
 async def _run_workflow(
@@ -315,7 +445,10 @@ async def _run_workflow(
     output_path: Path,
     project_id: Optional[str] = None,
     verbose: bool = False,
-    langsmith_project: Optional[str] = None
+    langsmith_project: Optional[str] = None,
+    *,
+    no_validate_json: bool = False,
+    no_validate_json_fair_format: bool = False,
 ):
     """Run the FAIRifier workflow."""
     start_time = datetime.now()
@@ -437,6 +570,18 @@ async def _run_workflow(
                     click.echo(f"  ✓ {filename} ({size_kb:.1f} KB)")
                     json_logger.info("artifact_saved", filename=filename,
                                      size_bytes=len(content))
+
+        do_syntax = config.validate_output_json and not no_validate_json
+        do_fair = (
+            config.validate_output_json_fair_format
+            and not no_validate_json
+            and not no_validate_json_fair_format
+        )
+        if do_syntax or do_fair:
+            click.echo("\n🔍 Post-write metadata checks...")
+        _post_write_metadata_json_checks(
+            output_path, do_syntax=do_syntax, do_fair=do_fair
+        )
         
         # Save processing log
         log_file = output_path / "processing_log.jsonl"
