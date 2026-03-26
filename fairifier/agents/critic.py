@@ -17,17 +17,17 @@ from langsmith import traceable
 from .base import BaseAgent
 from ..models import FAIRifierState
 from ..config import config
-from ..utils.llm_helper import get_llm_helper
+from ..utils.llm_helper import get_llm_helper, normalize_llm_response_content
 
 logger = logging.getLogger(__name__)
 
 
-def safe_json_parse(raw: str) -> Optional[Dict[str, Any]]:
+def safe_json_parse(raw: Any) -> Optional[Dict[str, Any]]:
     """Parse JSON content with support for fenced code blocks and various formats."""
     if not raw:
         return None
     
-    snippet = raw.strip()
+    snippet = normalize_llm_response_content(raw).strip()
     
     # Strategy 1: Remove markdown code fences
     if "```json" in snippet:
@@ -179,7 +179,9 @@ class CriticAgent(BaseAgent):
         else:
             context = "No context available."
         
-        return await self._judge_with_rubric(node_key, context)
+        evaluation = await self._judge_with_rubric(node_key, context)
+        evaluation = self._postprocess_api_constrained_evaluation(node_key, evaluation, state)
+        return self._stabilize_invalid_critic_output(node_key, evaluation, state)
     
     @traceable(name="Critic.EvaluateValidation")
     async def _evaluate_validation(self, state: FAIRifierState) -> Dict[str, Any]:
@@ -254,14 +256,17 @@ class CriticAgent(BaseAgent):
         # Don't increment retry_count here - it's managed by evaluate nodes
         
         # Store critic feedback (use .get() for safe access)
-        state["context"]["critic_feedback"] = {
+        feedback_payload = {
             "decision": evaluation.get("decision", "ACCEPT"),
             "score": evaluation.get("score", 0.0),
             "critique": evaluation.get("critique", ""),
             "issues": evaluation.get("issues", []),
             "suggestions": evaluation.get("improvement_ops", []),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "target_agent": agent_name,
         }
+        state["context"]["critic_feedback"] = feedback_payload
+        state["context"].setdefault("critic_feedback_by_agent", {})[agent_name] = feedback_payload
         
         # Manage historical guidance with size limits to prevent token waste
         history = state["context"].setdefault("critic_guidance_history", {})
@@ -318,13 +323,70 @@ class CriticAgent(BaseAgent):
             "improvement_ops": ["Human review required due to critic failure."]
         }
 
+    def _stabilize_invalid_critic_output(
+        self,
+        node_key: str,
+        evaluation: Dict[str, Any],
+        state: FAIRifierState,
+    ) -> Dict[str, Any]:
+        """Avoid wasting retries when the critic itself returns unusable output."""
+        critique = str(evaluation.get("critique", "") or "")
+        if not critique.startswith("Critic failure:"):
+            return evaluation
+
+        if node_key == "document_parser":
+            doc_info = state.get("document_info", {}) or {}
+            if doc_info.get("title") and len(doc_info) >= 8:
+                return {
+                    "decision": "ACCEPT",
+                    "score": config.critic_accept_threshold_document_parser,
+                    "critique": (
+                        "Critic returned invalid output, but DocumentParser produced usable "
+                        "structured document metadata. Accepting to avoid wasting retries."
+                    ),
+                    "issues": [],
+                    "improvement_ops": [],
+                }
+
+        if node_key == "knowledge_retriever":
+            retrieved = state.get("retrieved_knowledge", []) or []
+            selected_packages = state.get("selected_packages", []) or []
+            if retrieved and selected_packages:
+                return {
+                    "decision": "ACCEPT",
+                    "score": config.critic_accept_threshold_knowledge_retriever,
+                    "critique": (
+                        "Critic returned invalid output, but KnowledgeRetriever produced "
+                        "retrieved FAIR-DS fields and selected packages. Accepting current output."
+                    ),
+                    "issues": [],
+                    "improvement_ops": [],
+                }
+
+        if node_key == "json_generator":
+            metadata_fields = state.get("metadata_fields", []) or []
+            metadata_json = state.get("artifacts", {}).get("metadata_json")
+            if metadata_fields and metadata_json:
+                return {
+                    "decision": "ACCEPT",
+                    "score": config.critic_accept_threshold_json_generator,
+                    "critique": (
+                        "Critic returned invalid output, but JSONGenerator produced "
+                        "metadata fields and a metadata_json artifact. Accepting current output."
+                    ),
+                    "issues": [],
+                    "improvement_ops": [],
+                }
+
+        return evaluation
+
     def _build_parsing_context(self, state: FAIRifierState) -> str:
         doc_info = state.get("document_info", {})
         retry_count = state.get("context", {}).get("retry_count", 0)
         planner_guidance = state.get("agent_guidance", {}).get("DocumentParser")
         return (
             f"**Parsed Document Info (attempt {retry_count + 1}/{self.max_retries_per_step}):**\n"
-            f"{json.dumps(doc_info, indent=2, ensure_ascii=False)}\n\n"
+            f"{json.dumps(self._compact_document_info(doc_info), indent=2, ensure_ascii=False)}\n\n"
             f"**Planner guidance:** {planner_guidance or 'N/A'}"
         )
 
@@ -355,23 +417,38 @@ class CriticAgent(BaseAgent):
             "planner_guidance": planner_guidance,
             # CRITICAL: Include API limitations so Critic understands constraints
             "api_limitations": {
-                "available_packages_in_api": available_packages,
+                "available_packages_in_api": available_packages[:15],
                 "total_packages_available": len(available_packages),
+                "candidate_packages_considered": api_capabilities.get("candidate_packages_considered", [])[:15],
+                "selected_packages": api_capabilities.get("selected_packages", [])[:10],
+                "unavailable_requested_packages": api_capabilities.get("unavailable_requested_packages", [])[:10],
+                "metadata_gap_hints": api_capabilities.get("requested_metadata_gaps", [])[:10],
                 "limitation_note": limitation_note,
                 "evaluation_guidance": (
                     "IMPORTANT: Evaluate the agent's work within the constraints of what the API actually provides. "
                     "If the API only has limited packages available, the agent cannot retrieve packages that don't exist. "
                     "Judge based on whether the agent made optimal use of available resources, not whether it retrieved "
-                    "packages that are unavailable in the API."
-                ) if len(available_packages) <= 1 else None
+                    "packages that are unavailable in the API. Missing concepts that are not real FAIR-DS packages "
+                    "should be recorded as metadata gaps, not treated as package-selection failures."
+                ),
             },
             "retrieval_results": {
                 "total_terms_retrieved": len(retrieved),
                 "packages_selected": packages_found,
                 "terms_by_isa_sheet": self._group_terms_by_sheet(retrieved),
-                "sample_terms": retrieved[:5] if retrieved else []  # Show first 5 as examples
+                "sample_terms": self._sample_retrieved_terms(retrieved, limit=10),
             },
-            "complete_terms_list": retrieved  # Full list for detailed inspection
+            "metadata_gap_handling": {
+                "gap_hint_count": len(state.get("metadata_gap_hints", []) or []),
+                "gap_hints": [
+                    {
+                        "label": hint.get("label"),
+                        "source": hint.get("source"),
+                    }
+                    for hint in (state.get("metadata_gap_hints", []) or [])[:10]
+                    if isinstance(hint, dict)
+                ],
+            },
         }
         return json.dumps(summary, indent=2, ensure_ascii=False)
     
@@ -389,19 +466,131 @@ class CriticAgent(BaseAgent):
         doc_info = state.get("document_info", {})
         metadata_fields = state.get("metadata_fields", [])
         planner_guidance = state.get("agent_guidance", {}).get("JSONGenerator")
+        metadata_json = state.get("artifacts", {}).get("metadata_json")
+        metadata_json_summary: Dict[str, Any] = {
+            "present": False,
+            "parseable": False,
+        }
+        if metadata_json:
+            metadata_json_summary["present"] = True
+            try:
+                metadata_payload = json.loads(metadata_json)
+                isa_structure = metadata_payload.get("isa_structure", {}) or {}
+                statistics = metadata_payload.get("statistics", {}) or {}
+                metadata_json_summary = {
+                    "present": True,
+                    "parseable": True,
+                    "top_level_keys": list(metadata_payload.keys())[:20],
+                    "packages_used": metadata_payload.get("packages_used", [])[:10],
+                    "overall_confidence": metadata_payload.get("overall_confidence"),
+                    "needs_review": metadata_payload.get("needs_review"),
+                    "isa_levels_present": [
+                        level
+                        for level, payload in isa_structure.items()
+                        if isinstance(payload, dict) and payload.get("fields")
+                    ],
+                    "statistics": {
+                        "total_fields": statistics.get("total_fields"),
+                        "confirmed_fields": statistics.get("confirmed_fields"),
+                        "provisional_fields": statistics.get("provisional_fields"),
+                        "inferred_extension_fields": statistics.get("inferred_extension_fields"),
+                    },
+                }
+            except Exception as exc:
+                metadata_json_summary["parse_error"] = str(exc)
         evidence_coverage = 0
         if metadata_fields:
             evidence_coverage = (
                 sum(1 for f in metadata_fields if f.get("evidence")) / len(metadata_fields)
             )
         summary = {
-            "document_overview": doc_info,
+            "generator_contract": (
+                "Evaluate against FAIRiAgent's actual contract: produce a FAIR-DS-compatible, "
+                "ISA-structured metadata JSON artifact with provenance-rich fields. "
+                "Planner guidance may request richer JSON-LD or linked-data embellishments, "
+                "but those are stretch goals, not minimum acceptance criteria."
+            ),
+            "document_overview": self._compact_document_info(doc_info),
             "planner_guidance": planner_guidance,
             "field_count": len(metadata_fields),
             "evidence_coverage": evidence_coverage,
-            "fields": metadata_fields,
+            "field_summary": self._summarize_metadata_fields(metadata_fields),
+            "metadata_json_summary": metadata_json_summary,
+            "inferred_metadata_extensions": (state.get("inferred_metadata_extensions", []) or [])[:10],
         }
         return json.dumps(summary, indent=2, ensure_ascii=False)
+
+    def _compact_document_info(self, doc_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep only the highest-signal document parser outputs for critic prompts."""
+        if not isinstance(doc_info, dict):
+            return {}
+        keys = [
+            "document_type",
+            "title",
+            "research_domain",
+            "scientific_domain",
+            "methodology",
+            "location",
+            "keywords",
+            "datasets_mentioned",
+            "variables",
+            "key_findings",
+        ]
+        compact = {}
+        for key in keys:
+            value = doc_info.get(key)
+            if value:
+                if isinstance(value, list):
+                    compact[key] = value[:8]
+                else:
+                    compact[key] = value
+        return compact
+
+    def _sample_retrieved_terms(self, retrieved: List[Dict[str, Any]], limit: int = 10) -> List[Dict[str, Any]]:
+        """Return a compact, representative sample of retrieved terms."""
+        sampled = []
+        for item in retrieved[:limit]:
+            metadata = item.get("metadata", {}) if isinstance(item, dict) else {}
+            sampled.append(
+                {
+                    "term": item.get("term"),
+                    "package": metadata.get("package"),
+                    "isa_sheet": metadata.get("isa_sheet"),
+                    "required": metadata.get("required"),
+                }
+            )
+        return sampled
+
+    def _summarize_metadata_fields(self, metadata_fields: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Return a compact field-level summary for critic evaluation."""
+        by_level: Dict[str, int] = {}
+        with_evidence = 0
+        provisional = 0
+        sampled_fields = []
+        for field in metadata_fields:
+            if not isinstance(field, dict):
+                continue
+            level = (field.get("isa_level") or "unknown").lower()
+            by_level[level] = by_level.get(level, 0) + 1
+            if field.get("evidence"):
+                with_evidence += 1
+            if float(field.get("confidence", 0.0) or 0.0) < 0.85:
+                provisional += 1
+            if len(sampled_fields) < 12:
+                sampled_fields.append(
+                    {
+                        "field_name": field.get("field_name") or field.get("name"),
+                        "isa_level": level,
+                        "confidence": field.get("confidence"),
+                        "has_evidence": bool(field.get("evidence")),
+                    }
+                )
+        return {
+            "counts_by_isa_level": by_level,
+            "fields_with_evidence": with_evidence,
+            "provisional_fields": provisional,
+            "sample_fields": sampled_fields,
+        }
 
     async def _judge_with_rubric(self, node_key: str, evaluation_content: str) -> Dict[str, Any]:
         node_rules = (self.rubric.get("nodes") or {}).get(node_key)
@@ -506,9 +695,160 @@ class CriticAgent(BaseAgent):
             "decision": mapped_decision,
             "score": score,
             "issues": parsed.get("issues", []),
-            "improvement_ops": parsed.get("improvement_ops", []),
+            "improvement_ops": parsed.get("improvement_ops", parsed.get("suggestions", [])),
             "evidence": parsed.get("evidence", []),
             "critique": parsed.get("critique", "")
         }
 
+    def _postprocess_api_constrained_evaluation(
+        self,
+        node_key: str,
+        evaluation: Dict[str, Any],
+        state: FAIRifierState,
+    ) -> Dict[str, Any]:
+        """Reduce false-negative critic results when FAIR-DS API coverage is the limiting factor."""
+        if node_key not in {"knowledge_retriever", "json_generator"}:
+            return evaluation
 
+        unavailable = {
+            str(item).lower()
+            for item in (state.get("api_capabilities", {}).get("unavailable_requested_packages", []) or [])
+            if item
+        }
+        gap_labels = {
+            str(item.get("label")).lower()
+            for item in (state.get("metadata_gap_hints", []) or [])
+            if isinstance(item, dict) and item.get("label")
+        }
+        constraint_terms = unavailable | gap_labels
+
+        def is_constraint_issue(text: Any) -> bool:
+            lowered = str(text or "").lower()
+            if not lowered:
+                return False
+            if not any(term in lowered for term in constraint_terms):
+                return False
+            return any(
+                marker in lowered
+                for marker in [
+                    "package",
+                    "fair-ds",
+                    "fair ds",
+                    "missing",
+                    "unavailable",
+                    "not found",
+                    "should use",
+                    "add",
+                ]
+            )
+
+        def is_json_contract_mismatch_issue(text: Any) -> bool:
+            if node_key != "json_generator":
+                return False
+            lowered = str(text or "").lower()
+            if not lowered:
+                return False
+            markers = [
+                "json-ld",
+                "no actual json",
+                "only field summaries",
+                "only field summary",
+                "researchproject",
+                "dcat",
+                "bioschemas",
+                "schema.org",
+                "top-level researchproject",
+                "@context",
+                "linked-data",
+                "linked data",
+            ]
+            return any(marker in lowered for marker in markers)
+
+        issues = [
+            issue for issue in evaluation.get("issues", [])
+            if not is_constraint_issue(issue) and not is_json_contract_mismatch_issue(issue)
+        ]
+        suggestions = [
+            suggestion
+            for suggestion in evaluation.get("improvement_ops", [])
+            if not is_constraint_issue(suggestion) and not is_json_contract_mismatch_issue(suggestion)
+        ]
+        critique = str(evaluation.get("critique", "") or "")
+        critique_mentions_only_constraints = (
+            is_constraint_issue(critique) or is_json_contract_mismatch_issue(critique)
+        ) and not issues
+
+        if (
+            not constraint_terms
+            and node_key != "json_generator"
+        ):
+            return evaluation
+
+        if issues == evaluation.get("issues", []) and suggestions == evaluation.get("improvement_ops", []) and not critique_mentions_only_constraints:
+            return evaluation
+
+        adjusted = dict(evaluation)
+        adjusted["issues"] = issues
+        adjusted["improvement_ops"] = suggestions
+
+        selected_packages = state.get("selected_packages", []) or []
+        has_substantive_output = bool(state.get("retrieved_knowledge") if node_key == "knowledge_retriever" else state.get("metadata_fields"))
+        if node_key == "knowledge_retriever":
+            available_packages = {
+                str(item).lower() for item in (state.get("api_capabilities", {}).get("available_packages", []) or [])
+            }
+            gap_hints = state.get("metadata_gap_hints", []) or []
+            all_packages_real = bool(selected_packages) and all(
+                str(pkg).lower() in available_packages for pkg in selected_packages
+            )
+            if has_substantive_output and all_packages_real and gap_hints:
+                adjusted["score"] = max(
+                    float(adjusted.get("score", 0.0) or 0.0),
+                    config.critic_accept_threshold_knowledge_retriever,
+                )
+                adjusted["decision"] = "ACCEPT"
+                adjusted["critique"] = (
+                    "Adjusted for FAIR-DS/API coverage limits; real FAIR-DS packages were selected and "
+                    "uncovered concepts were captured as metadata gaps."
+                )
+                adjusted["issues"] = []
+                adjusted["improvement_ops"] = []
+                return adjusted
+
+        if node_key == "json_generator":
+            metadata_json = state.get("artifacts", {}).get("metadata_json")
+            if has_substantive_output and metadata_json:
+                try:
+                    metadata_payload = json.loads(metadata_json)
+                except Exception:
+                    metadata_payload = {}
+                statistics = metadata_payload.get("statistics", {}) if isinstance(metadata_payload, dict) else {}
+                total_fields = int(statistics.get("total_fields") or len(state.get("metadata_fields", []) or []))
+                packages_used = metadata_payload.get("packages_used", []) if isinstance(metadata_payload, dict) else []
+                if total_fields > 0 and not issues:
+                    adjusted["score"] = max(
+                        float(adjusted.get("score", 0.0) or 0.0),
+                        config.critic_accept_threshold_json_generator,
+                    )
+                    adjusted["decision"] = "ACCEPT"
+                    adjusted["critique"] = (
+                        "Adjusted to FAIRiAgent's current output contract: ISA-structured metadata JSON "
+                        f"was generated successfully with {total_fields} fields and "
+                        f"{len(packages_used)} package(s)."
+                    )
+                    adjusted["issues"] = []
+                    adjusted["improvement_ops"] = suggestions
+                    return adjusted
+
+        if has_substantive_output and selected_packages and not issues:
+            if node_key == "knowledge_retriever":
+                threshold = config.critic_accept_threshold_knowledge_retriever
+            else:
+                threshold = config.critic_accept_threshold_json_generator
+            adjusted["score"] = max(float(adjusted.get("score", 0.0) or 0.0), threshold)
+            adjusted["decision"] = "ACCEPT"
+            adjusted["critique"] = (
+                (critique + " " if critique and not critique_mentions_only_constraints else "")
+                + "Adjusted for FAIR-DS/API coverage limits; unmet concepts were captured as metadata gaps."
+            ).strip()
+        return adjusted

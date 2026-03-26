@@ -1,6 +1,7 @@
 """Unit tests for Critic agent utility functions."""
 
 from fairifier.agents.critic import safe_json_parse
+from fairifier.utils.llm_helper import normalize_llm_response_content
 
 
 class TestSafeJsonParse:
@@ -87,3 +88,22 @@ class TestSafeJsonParse:
         assert parsed["details"]["issues"] == ["minor"]
         assert parsed["details"]["confidence"] == 0.9
 
+    def test_safe_json_parse_handles_anthropic_content_blocks(self):
+        """Anthropic-style content lists should normalize before JSON parsing."""
+        payload = [
+            {"type": "text", "text": "```json\n{\"score\": 0.88, \"issues\": []}\n```"},
+        ]
+        parsed = safe_json_parse(payload)
+        assert parsed is not None
+        assert parsed["score"] == 0.88
+        assert parsed["issues"] == []
+
+
+def test_normalize_llm_response_content_handles_block_list():
+    """Normalize list-based LLM outputs into plain text."""
+    payload = [
+        {"type": "text", "text": "hello"},
+        {"type": "thinking", "text": ""},
+        {"type": "text", "text": "world"},
+    ]
+    assert normalize_llm_response_content(payload) == "hello\nworld"

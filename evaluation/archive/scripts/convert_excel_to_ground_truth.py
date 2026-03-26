@@ -11,7 +11,7 @@ import argparse
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import pandas as pd
 
 
@@ -44,23 +44,33 @@ def convert_excel_to_ground_truth(
     excel_path: Path,
     pdf_path: Path,
     document_id: str,
-    annotator: str = "manual_annotation"
+    annotator: str = "manual_annotation",
+    *,
+    document_filename: Optional[str] = None,
+    domain: Optional[str] = None,
+    experiment_type: Optional[str] = None,
+    metadata_notes_extra: str = "",
 ) -> Dict[str, Any]:
     """
     Convert Excel/ISA-Tab file to ground truth format.
     
     Args:
         excel_path: Path to Excel file with ISA sheets
-        pdf_path: Path to corresponding PDF paper
+        pdf_path: Path to corresponding paper (used for default filename if document_filename unset)
         document_id: Unique identifier for this document
         annotator: Name/ID of annotator
+        document_filename: If set, used as basename under evaluation/datasets/raw/{document_id}/ (e.g. narrative .md)
+        domain: Override default metadata domain
+        experiment_type: Override default metadata experiment_type
+        metadata_notes_extra: Appended to metadata notes
         
     Returns:
         Ground truth document structure
     """
+    input_name = document_filename or pdf_path.name
     print(f"\n📄 Converting: {document_id}")
     print(f"   Excel: {excel_path.name}")
-    print(f"   PDF: {pdf_path.name}")
+    print(f"   Document file: {input_name}")
     
     # Load all sheets
     excel_file = pd.ExcelFile(excel_path)
@@ -72,6 +82,9 @@ def convert_excel_to_ground_truth(
     ground_truth_fields = []
     
     for sheet_name in sheet_names:
+        if sheet_name.strip().lower() == "help":
+            print(f"   ⚠️  Skipping non-ISA sheet: {sheet_name}")
+            continue
         # Read sheet
         df = pd.read_excel(excel_path, sheet_name=sheet_name)
         
@@ -124,17 +137,21 @@ def convert_excel_to_ground_truth(
                 "notes": f"Extracted from {sheet_name}"
             })
     
+    notes = (
+        f"Converted from ISA-Tab Excel: {excel_path.name}. "
+        f"{metadata_notes_extra}".strip()
+    )
     # Create ground truth document structure
     ground_truth_doc = {
         "document_id": document_id,
-        "document_path": f"evaluation/datasets/raw/{document_id}/{pdf_path.name}",
+        "document_path": f"evaluation/datasets/raw/{document_id}/{input_name}",
         "metadata": {
-            "domain": "metagenomics",  # Update this based on your papers
-            "experiment_type": "genomics_study",  # Update this based on your papers
+            "domain": domain or "metagenomics",
+            "experiment_type": experiment_type or "genomics_study",
             "annotation_date": datetime.now().strftime("%Y-%m-%d"),
             "annotator": annotator,
             "annotation_time_minutes": 0,  # Manual annotation from existing template
-            "notes": f"Converted from existing ISA-Tab Excel file: {excel_path.name}"
+            "notes": notes,
         },
         "ground_truth_fields": ground_truth_fields,
         "ground_truth_stats": {

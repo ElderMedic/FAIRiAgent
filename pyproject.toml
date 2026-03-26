@@ -13,6 +13,7 @@ packages = [{include = "fairifier"}]
 [tool.poetry.dependencies]
 python = ">=3.9,<3.14"
 # Core agentic framework (aligned with working env: langchain 1.0.x, langgraph 1.0.x)
+deepagents = ">=0.1.0"
 langgraph = ">=1.0.7,<3"
 langchain = ">=1.0.3,<3"
 langchain-community = ">=0.3.30"
@@ -46,6 +47,8 @@ storage = ["sqlalchemy", "asyncpg", "minio"]
 monitoring = ["structlog", "prometheus-client"]
 # Optional observability (Langfuse tracing alongside LangSmith)
 observability = ["langfuse"]
+# Optional science/research enrichment tools
+science = ["habanero", "ols-py", "pyeuropepmc", "pyalex", "semanticscholar", "biopython"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"

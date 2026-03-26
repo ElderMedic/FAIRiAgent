@@ -139,7 +139,7 @@ class EvaluationOrchestrator:
         judge_provider = os.getenv('EVAL_JUDGE_PROVIDER', 'anthropic')
         judge_config = {
             'provider': judge_provider,
-            'model': os.getenv('EVAL_JUDGE_MODEL', 'claude-sonnet-4'),
+            'model': os.getenv('EVAL_JUDGE_MODEL', 'claude-sonnet-4-6'),
             'api_key': os.getenv('EVAL_JUDGE_API_KEY') or os.getenv('LLM_API_KEY'),
             'temperature': os.getenv('EVAL_JUDGE_TEMPERATURE', '0.0')
         }
@@ -561,4 +561,3 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
-

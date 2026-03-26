@@ -25,7 +25,7 @@ from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
 from ..agents.json_generator import JSONGeneratorAgent
 from ..agents.critic import CriticAgent
 from ..config import config
-from ..utils.llm_helper import get_llm_helper
+from ..utils.llm_helper import get_llm_helper, normalize_llm_response_content
 from ..utils.report_generator import WorkflowReportGenerator
 from ..utils.run_control import run_stop_requested, reset_run_stop_requested
 from ..services.mineru_client import MinerUClient, MinerUConversionError
@@ -311,9 +311,10 @@ class FAIRifierLangGraphApp:
                 query = f"workflow for {domain or doc_type}"
             
             # Search with cross-agent support
+            memory_scope_id = state.get("memory_scope_id") or session_id
             memories = self.mem0_service.search(
                 query=query,
-                session_id=session_id,
+                session_id=memory_scope_id,
                 limit=top_k
             )
             
@@ -607,7 +608,10 @@ class FAIRifierLangGraphApp:
                     logger.info(f"   ISA levels: {isa_levels}")
                     
                     # Only report ISA distribution if we have meaningful data
-                    if len(isa_levels) > 1 and "unknown" not in isa_levels or len(isa_levels.get("unknown", 0)) < len(fields) * 0.5:
+                    if (
+                        (len(isa_levels) > 1 and "unknown" not in isa_levels)
+                        or isa_levels.get("unknown", 0) < len(fields) * 0.5
+                    ):
                         level_str = ", ".join([f"{k}:{v}" for k, v in sorted(isa_levels.items())[:4] if k != "unknown"])
                         if level_str:
                             insights.append(f"Metadata spans ISA levels: {level_str}")
@@ -905,6 +909,7 @@ class FAIRifierLangGraphApp:
                 # [W] Write memory with gating (only valuable insights)
                 if self.mem0_service and session_id:
                     try:
+                        memory_scope_id = state.get("memory_scope_id") or session_id
                         # Check if this output deserves memory storage
                         should_write = self._should_write_memory(
                             agent_name, state, critic_eval, attempt
@@ -924,7 +929,7 @@ class FAIRifierLangGraphApp:
                                             "role": "assistant",
                                             "content": insight
                                         }],
-                                        session_id=session_id,
+                                        session_id=memory_scope_id,
                                         agent_id=agent_name,
                                         metadata={
                                             "workflow_step": agent_name,
@@ -1341,8 +1346,8 @@ Return JSON in the following format:
             ]
             
             response = await self.llm_helper._call_llm(messages, operation_name="Plan Workflow")
-            content = response.content
-            
+            content = normalize_llm_response_content(getattr(response, "content", response))
+
             # Parse JSON response
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0].strip()
@@ -1363,6 +1368,7 @@ Return JSON in the following format:
             # [W] Store planning insights (if valuable)
             if self.mem0_service and session_id:
                 try:
+                    memory_scope_id = state.get("memory_scope_id") or session_id
                     strategy = plan.get('strategy', '')
                     doc_type = plan.get('document_type', '')
                     domain = plan.get('research_domain', '')
@@ -1376,7 +1382,7 @@ Return JSON in the following format:
                         )
                         self.mem0_service.add(
                             messages=[{"role": "assistant", "content": insight}],
-                            session_id=session_id,
+                            session_id=memory_scope_id,
                             agent_id="Planner",
                             metadata={
                                 "workflow_step": "Planner",
@@ -2179,8 +2185,10 @@ Return JSON in the following format:
                 "document_conversion": {},
                 "output_dir": output_dir,
                 "document_info": {},
+                "evidence_packets": [],
                 "retrieved_knowledge": [],
                 "metadata_fields": [],
+                "retrieval_cache": {},
                 "validation_results": {},
                 "confidence_scores": {},
                 "needs_human_review": False,
@@ -2201,6 +2209,7 @@ Return JSON in the following format:
                     "generate_retry_count": 0,
                 },
                 "session_id": project_id,
+                "memory_scope_id": config.memory_scope_id or project_id,
             }
 
         try:
@@ -2271,4 +2280,3 @@ Return JSON in the following format:
             fallback["status"] = ProcessingStatus.FAILED.value
             fallback.setdefault("errors", []).append(str(e))
             return fallback
-

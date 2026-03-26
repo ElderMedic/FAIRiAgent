@@ -42,7 +42,7 @@ class CorrectnessEvaluator:
     def _initialize_llm_judge(self):
         """Initialize LLM for semantic matching."""
         provider = self.judge_config.get('provider', 'anthropic')
-        model = self.judge_config.get('model', 'claude-sonnet-4')
+        model = self.judge_config.get('model', 'claude-sonnet-4-6')
         api_key = self.judge_config.get('api_key')
         temperature = float(self.judge_config.get('temperature', 0.0))
         
@@ -322,4 +322,3 @@ class CorrectnessEvaluator:
             'max_f1_score': max(f1_scores),
             'n_documents': len(per_document_results)
         }
-

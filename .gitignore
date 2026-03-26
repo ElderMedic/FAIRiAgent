@@ -240,6 +240,7 @@ docs/*_INTEGRATION_SUMMARY.md
 
 # Local developer memory (private, machine-specific)
 development/
+AGENTS.md
 
 # Environment files with secrets
 env.anthropic
@@ -260,6 +261,8 @@ grant/
 
 # Evaluation generated outputs
 evaluation/runs/
+evaluation/harness/private/
+evaluation/harness/runs/
 evaluation/analysis/output/
 evaluation/analysis/output_*/
 evaluation/analysis/comprehensive_output/
@@ -278,6 +281,8 @@ evaluation/config/**/*.env.*
 !evaluation/config/**/*.template
 !evaluation/config/**/*.example
 !evaluation/datasets/annotated/
+# Local-only ground truth (confidential project data; never push)
+evaluation/datasets/annotated/*.local.json
 !evaluation/datasets/DATASET_README.md
 !evaluation/analysis/analyzers/
 !evaluation/analysis/data_loaders/
@@ -298,3 +303,10 @@ msc_thesis_project/
 
 # baselines
 evaluation/baselines/
+
+# Local API key file
+api_keys.txt
+
+# Generated docs content list exports
+docs/**/*_content_list_v2.json
+docs/36811fe49edc448233013c77f2a105a7c3076037c6aa3973c8687ccc95a5eb24/

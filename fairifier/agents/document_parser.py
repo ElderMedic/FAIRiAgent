@@ -1,27 +1,34 @@
 """Document parsing agent for extracting research information from PDFs and text."""
 
 import logging
-import json
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 import fitz  # PyMuPDF
+from langchain_core.tools import tool
 from langsmith import traceable
 
 from .base import BaseAgent
+from .react_loop import ReactLoopMixin
+from .response_models import DocumentInfoResponse
 from ..models import FAIRifierState
 from ..config import config
+from ..skills import load_skill_files
+from ..services.evidence_packets import build_evidence_packets
+from ..services.retrieval_cache import get_cache_bucket
+from ..tools.science_tools import create_science_tools
 from ..utils.llm_helper import get_llm_helper
 from ..services.mineru_client import MinerUClient, MinerUConversionError
 from ..tools.mineru_tools import create_mineru_convert_tool
 
 
-class DocumentParserAgent(BaseAgent):
+class DocumentParserAgent(ReactLoopMixin, BaseAgent):
     """Agent for parsing research documents and extracting key information."""
     
     def __init__(self):
         super().__init__("DocumentParser")
         self.logger = logging.getLogger(__name__)
         self.llm_helper = get_llm_helper()
+        self._inner_dp_agent = None
         
         self.mineru_client: Optional[MinerUClient] = None
         self.mineru_tool = None
@@ -45,6 +52,134 @@ class DocumentParserAgent(BaseAgent):
             except Exception as exc:  # pragma: no cover - defensive
                 self.logger.warning("Failed to initialize MinerU client: %s", exc)
                 self.mineru_client = None
+
+    def _build_dp_inner_agent(
+        self,
+        *,
+        critic_feedback: Optional[Dict[str, Any]] = None,
+        planner_instruction: Optional[str] = None,
+        prior_memory_context: Optional[str] = None,
+        is_structured_markdown: bool = False,
+        science_cache: Optional[Dict[str, Any]] = None,
+    ):
+        """Create the deepagents-backed inner loop for document parsing."""
+        parser_science_tools = create_science_tools(cache_store=science_cache)
+
+        @tool
+        def analyze_document_outline(text: str) -> Dict[str, Any]:
+            """Extract a lightweight section outline from the document text."""
+            headings = []
+            for raw_line in text.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if line.startswith("#"):
+                    headings.append(line.lstrip("# ").strip())
+                elif len(line) < 120 and line.isupper():
+                    headings.append(line)
+            return {
+                "section_count": len(headings),
+                "sections": headings[:50],
+            }
+
+        @tool
+        async def focused_field_extraction(
+            section_text: str,
+            focus_fields: str = "",
+        ) -> Dict[str, Any]:
+            """Extract targeted metadata from a selected section."""
+            local_memory_context = prior_memory_context
+            if focus_fields:
+                extra_focus = f"Prioritize these fields if supported by the section: {focus_fields}"
+                local_memory_context = (
+                    f"{prior_memory_context}\n\n{extra_focus}"
+                    if prior_memory_context else extra_focus
+                )
+            extracted = await self.llm_helper.extract_document_info(
+                section_text,
+                critic_feedback=critic_feedback,
+                is_structured_markdown=is_structured_markdown,
+                planner_instruction=planner_instruction,
+                prior_memory_context=local_memory_context,
+            )
+            return extracted
+
+        system_prompt = (
+            "You are the internal DocumentParser loop for FAIRiAgent. "
+            "Read /workspace/document.md, use tools to inspect structure, and return "
+            "a concise structured metadata object that matches existing FAIRifier "
+            "document_info conventions such as document_type, title, abstract, "
+            "authors, keywords, research_domain, methodology, location, and coordinates."
+        )
+        subagents = [
+            {
+                "name": "section-analyst",
+                "description": "Inspect a single section and extract section-specific metadata.",
+                "system_prompt": (
+                    "You analyze one document section at a time. "
+                    "Stay concise and return factual metadata only."
+                ),
+                "tools": [focused_field_extraction],
+            }
+        ]
+        tools = [analyze_document_outline, focused_field_extraction, *parser_science_tools]
+        return self._build_react_agent(
+            tools=tools,
+            subagents=subagents,
+            response_format=DocumentInfoResponse,
+            system_prompt=system_prompt,
+            memory_files=self._get_memory_files(),
+        )
+
+    def _build_dp_seed_files(self, document_text: str) -> Dict[str, Any]:
+        """Build virtual files for the deepagents document parsing loop."""
+        seed_files: Dict[str, Any] = {}
+        document_file = self._maybe_create_file_data(document_text)
+        if document_file is not None:
+            seed_files["/workspace/document.md"] = document_file
+
+        agents_path = Path(config.project_root) / "AGENTS.md"
+        if agents_path.exists():
+            agent_file = self._maybe_create_file_data(agents_path.read_text(encoding="utf-8"))
+            if agent_file is not None:
+                seed_files["/AGENTS.md"] = agent_file
+
+        seed_files.update(load_skill_files(config.skills_dir))
+        return seed_files
+
+    def _structured_doc_info_to_dict(
+        self,
+        structured: DocumentInfoResponse,
+    ) -> Dict[str, Any]:
+        """Convert structured deepagents output into the repository state shape."""
+        doc_info_dict = structured.model_dump(exclude={"confidence"}, exclude_none=True)
+        return {
+            key: value for key, value in doc_info_dict.items()
+            if value not in (None, "", [], {})
+        }
+
+    def _count_non_empty_fields(self, doc_info_dict: Dict[str, Any]) -> int:
+        """Count meaningful fields in extracted document metadata."""
+        return sum(
+            1 for value in doc_info_dict.values()
+            if value and (
+                (isinstance(value, str) and value.strip()) or
+                (isinstance(value, (list, dict)) and len(value) > 0) or
+                (not isinstance(value, (str, list, dict)))
+            )
+        )
+
+    def _infer_document_source_type(
+        self,
+        is_mineru_content: bool,
+        document_path: str,
+    ) -> str:
+        """Label the evidence packet source type for downstream context engineering."""
+        if is_mineru_content:
+            return "mineru_markdown"
+        if document_path.endswith(".pdf"):
+            return "pdf_text"
+        return "text_file"
         
     @traceable(name="DocumentParser", tags=["agent", "parsing"])
     async def execute(self, state: FAIRifierState) -> FAIRifierState:
@@ -108,14 +243,55 @@ class DocumentParserAgent(BaseAgent):
                 )
             else:
                 self.log_execution(state, "🤖 Using LLM for intelligent, adaptive extraction...")
-            
-            doc_info_dict = await self.llm_helper.extract_document_info(
-                text, 
-                critic_feedback,
-                is_structured_markdown=is_mineru_content,
-                planner_instruction=planner_instruction,
-                prior_memory_context=prior_memory_context or None
+
+            doc_info_dict: Dict[str, Any] = {}
+            evidence_packets: List[Dict[str, Any]] = []
+            use_deep_parse = config.enable_deep_agents and (
+                is_mineru_content or config.llm_provider != "qwen" or len(text) <= 40000
             )
+            if config.enable_deep_agents and not use_deep_parse:
+                self.log_execution(
+                    state,
+                    "⏭️ Skipping deep ReAct parser for long unstructured Qwen input; using direct extraction for stability."
+                )
+
+            if use_deep_parse:
+                science_cache = get_cache_bucket(state, "science_tools")
+                task_desc = (
+                    "Parse /workspace/document.md and extract concise document metadata. "
+                    "Use tools when needed, preserve exact identifiers, and return only "
+                    "structured metadata compatible with FAIRifier downstream agents."
+                )
+                self._inner_dp_agent = self._build_dp_inner_agent(
+                    critic_feedback=critic_feedback,
+                    planner_instruction=planner_instruction,
+                    prior_memory_context=prior_memory_context or None,
+                    is_structured_markdown=is_mineru_content,
+                    science_cache=science_cache,
+                )
+                structured = await self._invoke_react_agent(
+                    self._inner_dp_agent,
+                    task_message=self._compose_task_message(state, task_desc),
+                    seed_files=self._build_dp_seed_files(text),
+                    thread_id=f"{state.get('session_id', 'default')}-dp-inner",
+                    state=state,
+                    scratchpad_name=self.name,
+                )
+                if structured:
+                    doc_info_dict = self._structured_doc_info_to_dict(structured)
+                    self.log_execution(
+                        state,
+                        f"🧠 Deep ReAct parser extracted {len(doc_info_dict)} fields"
+                    )
+
+            if self._count_non_empty_fields(doc_info_dict) < 3:
+                doc_info_dict = await self.llm_helper.extract_document_info(
+                    text,
+                    critic_feedback,
+                    is_structured_markdown=is_mineru_content,
+                    planner_instruction=planner_instruction,
+                    prior_memory_context=prior_memory_context or None
+                )
             
             # Remove raw_text if LLM included it (to avoid passing large text to subsequent agents)
             if "raw_text" in doc_info_dict:
@@ -123,14 +299,7 @@ class DocumentParserAgent(BaseAgent):
             
             # Check if extraction actually returned meaningful content
             # Count non-empty fields (flexible - works for any document type)
-            non_empty_fields = sum(
-                1 for v in doc_info_dict.values()
-                if v and (
-                    (isinstance(v, str) and v.strip()) or
-                    (isinstance(v, (list, dict)) and len(v) > 0) or
-                    (not isinstance(v, (str, list, dict)))
-                )
-            )
+            non_empty_fields = self._count_non_empty_fields(doc_info_dict)
             
             # Only consider extraction failed if we got almost nothing
             is_truly_empty = non_empty_fields < 3
@@ -173,7 +342,18 @@ class DocumentParserAgent(BaseAgent):
             
             # Store in state directly as dict (without raw_text - it's already in document_content)
             state["document_info"] = doc_info_dict
+            evidence_packets = build_evidence_packets(
+                doc_info_dict,
+                text,
+                source_type=self._infer_document_source_type(is_mineru_content, document_path),
+                max_packets=max(config.react_loop_document_parser_target_packets * 2, 12),
+            )
+            state["evidence_packets"] = evidence_packets
             self.log_execution(state, f"✅ Stored document_info in state with {len(state['document_info'])} fields")
+            self.log_execution(
+                state,
+                f"📦 Built {len(evidence_packets)} evidence packets for downstream agents"
+            )
             confidence = self._calculate_llm_confidence(doc_info_dict)
             
             self.update_confidence(state, "document_parsing", confidence)
@@ -203,6 +383,8 @@ class DocumentParserAgent(BaseAgent):
             # Ensure document_info exists even on error
             if "document_info" not in state:
                 state["document_info"] = {"title": "Unknown", "abstract": "", "authors": [], "keywords": []}
+            if "evidence_packets" not in state:
+                state["evidence_packets"] = []
         
         return state
     

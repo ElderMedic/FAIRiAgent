@@ -91,7 +91,7 @@ def evaluate_single_run(
         judge_provider = os.getenv('EVAL_JUDGE_PROVIDER', 'anthropic')
         llm_judge_config = {
             'provider': judge_provider,
-            'model': os.getenv('EVAL_JUDGE_MODEL', 'claude-sonnet-4'),
+            'model': os.getenv('EVAL_JUDGE_MODEL', 'claude-sonnet-4-6'),
             'api_key': os.getenv('EVAL_JUDGE_API_KEY') or os.getenv('LLM_API_KEY'),
             'temperature': float(os.getenv('EVAL_JUDGE_TEMPERATURE', '0.0'))
         }

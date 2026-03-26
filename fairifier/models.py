@@ -101,8 +101,14 @@ class FAIRifierState(TypedDict):
     
     # Processing stages
     document_info: Dict[str, Any]
+    evidence_packets: List[Dict[str, Any]]
     retrieved_knowledge: List[Dict[str, Any]]
     metadata_fields: List[Dict[str, Any]]  # FAIR-DS format fields
+    selected_packages: List[str]
+    metadata_gap_hints: List[Dict[str, Any]]
+    inferred_metadata_extensions: List[Dict[str, Any]]
+    api_capabilities: Dict[str, Any]
+    retrieval_cache: Dict[str, Any]
     
     # Validation and quality
     validation_results: Dict[str, Any]
@@ -127,6 +133,8 @@ class FAIRifierState(TypedDict):
     
     # Memory integration (optional, for mem0)
     session_id: Optional[str]  # For mem0 session scoping, bound to thread_id
+    memory_scope_id: Optional[str]  # Mem0 scope; defaults to session_id but can be shared across runs
+    react_scratchpad: Optional[Dict[str, Any]]  # Inner-loop telemetry for deepagents-backed agents
     
     # Metadata
     status: str

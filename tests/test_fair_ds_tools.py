@@ -82,6 +82,18 @@ class TestGetAvailablePackagesTool:
         
         mock_client.get_available_packages.assert_called_once_with(force_refresh=True)
 
+    def test_uses_runtime_cache(self, mock_client):
+        """Repeated lookups should use the provided cache_store."""
+        mock_client.get_available_packages.return_value = ["miappe", "soil"]
+        tools = create_fair_ds_tools(client=mock_client, cache_store={})
+
+        result1 = tools[0].invoke({"force_refresh": False})
+        result2 = tools[0].invoke({"force_refresh": False})
+
+        assert result1["data"] == ["miappe", "soil"]
+        assert result2["data"] == ["miappe", "soil"]
+        mock_client.get_available_packages.assert_called_once_with(force_refresh=False)
+
 
 class TestGetPackageTool:
     """Test get_package tool."""

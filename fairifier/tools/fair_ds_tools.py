@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 from langchain_core.tools import tool
 
+from ..services.retrieval_cache import get_cached_value, make_cache_key, store_cached_value
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,7 +21,7 @@ class FAIRDSToolResult:
     error: Optional[str] = None
 
 
-def create_fair_ds_tools(client=None) -> List:
+def create_fair_ds_tools(client=None, cache_store: Optional[Dict[str, Any]] = None) -> List:
     """Create FAIR Data Station API tools.
     
     Args:
@@ -49,6 +51,19 @@ def create_fair_ds_tools(client=None) -> List:
     
     # Closure variables for tools to access client
     _client = client
+
+    def _cached_tool_result(namespace: str, payload: Dict[str, Any], compute):
+        cache_key = None
+        if cache_store is not None:
+            cache_key = make_cache_key(namespace, payload)
+            cached = get_cached_value(cache_store, cache_key)
+            if cached is not None:
+                return cached
+
+        result = compute()
+        if cache_store is not None and cache_key is not None:
+            store_cached_value(cache_store, cache_key, result)
+        return result
     
     @tool
     def get_available_packages(force_refresh: bool = False) -> Dict[str, Any]:
@@ -68,12 +83,15 @@ def create_fair_ds_tools(client=None) -> List:
             }
         
         try:
-            packages = _client.get_available_packages(force_refresh=force_refresh)
-            return {
-                "success": True,
-                "data": packages,
-                "error": None
-            }
+            return _cached_tool_result(
+                "fairds:get_available_packages",
+                {"force_refresh": force_refresh},
+                lambda: {
+                    "success": True,
+                    "data": _client.get_available_packages(force_refresh=force_refresh),
+                    "error": None,
+                },
+            )
         except Exception as exc:
             logger.error("get_available_packages failed: %s", exc)
             return {
@@ -115,18 +133,25 @@ def create_fair_ds_tools(client=None) -> List:
             }
         
         try:
-            package = _client.get_package(package_name)
-            if package is None:
+            def _load_package():
+                package = _client.get_package(package_name)
+                if package is None:
+                    return {
+                        "success": False,
+                        "data": None,
+                        "error": f"Package '{package_name}' not found",
+                    }
                 return {
-                    "success": False,
-                    "data": None,
-                    "error": f"Package '{package_name}' not found"
+                    "success": True,
+                    "data": package,
+                    "error": None,
                 }
-            return {
-                "success": True,
-                "data": package,
-                "error": None
-            }
+
+            return _cached_tool_result(
+                "fairds:get_package",
+                {"package_name": package_name},
+                _load_package,
+            )
         except Exception as exc:
             logger.error("get_package('%s') failed: %s", package_name, exc)
             return {
@@ -153,12 +178,15 @@ def create_fair_ds_tools(client=None) -> List:
             }
         
         try:
-            terms = _client.get_terms(force_refresh=force_refresh)
-            return {
-                "success": True,
-                "data": terms,
-                "error": None
-            }
+            return _cached_tool_result(
+                "fairds:get_terms",
+                {"force_refresh": force_refresh},
+                lambda: {
+                    "success": True,
+                    "data": _client.get_terms(force_refresh=force_refresh),
+                    "error": None,
+                },
+            )
         except Exception as exc:
             logger.error("get_terms failed: %s", exc)
             return {
@@ -189,12 +217,15 @@ def create_fair_ds_tools(client=None) -> List:
             }
         
         try:
-            terms = _client.search_terms_for_fields(term_label, definition)
-            return {
-                "success": True,
-                "data": terms,
-                "error": None
-            }
+            return _cached_tool_result(
+                "fairds:search_terms_for_fields",
+                {"term_label": term_label, "definition": definition},
+                lambda: {
+                    "success": True,
+                    "data": _client.search_terms_for_fields(term_label, definition),
+                    "error": None,
+                },
+            )
         except Exception as exc:
             logger.error("search_terms_for_fields('%s') failed: %s", term_label, exc)
             return {
@@ -234,12 +265,15 @@ def create_fair_ds_tools(client=None) -> List:
             if package_names:
                 pkg_list = [p.strip() for p in package_names.split(",")]
             
-            fields = _client.search_fields_in_packages(field_label, pkg_list)
-            return {
-                "success": True,
-                "data": fields,
-                "error": None
-            }
+            return _cached_tool_result(
+                "fairds:search_fields_in_packages",
+                {"field_label": field_label, "package_names": pkg_list or []},
+                lambda: {
+                    "success": True,
+                    "data": _client.search_fields_in_packages(field_label, pkg_list),
+                    "error": None,
+                },
+            )
         except Exception as exc:
             logger.error("search_fields_in_packages('%s') failed: %s", field_label, exc)
             return {

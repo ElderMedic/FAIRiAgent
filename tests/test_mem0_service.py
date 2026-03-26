@@ -65,6 +65,31 @@ class TestBuildMem0Config:
         assert config["vector_store"]["config"]["port"] == 9999
         assert config["vector_store"]["config"]["collection_name"] == "custom_collection"
 
+    def test_build_config_openai_embedding(self):
+        """Test building config for an OpenAI-compatible embedding provider."""
+        try:
+            from fairifier.services.mem0_service import build_mem0_config
+        except ImportError:
+            pytest.skip("mem0 not installed")
+
+        config = build_mem0_config(
+            llm_provider="openai",
+            llm_model="qwen-flash",
+            llm_base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            llm_api_key="llm-key",
+            embedding_provider="openai",
+            embedding_model="text-embedding-v4",
+            embedding_base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            embedding_api_key="embed-key",
+            embedding_model_dims=1024,
+        )
+
+        assert config["embedder"]["provider"] == "openai"
+        assert config["embedder"]["config"]["model"] == "text-embedding-v4"
+        assert config["embedder"]["config"]["openai_base_url"].startswith("https://dashscope")
+        assert config["embedder"]["config"]["api_key"] == "embed-key"
+        assert config["vector_store"]["config"]["embedding_model_dims"] == 1024
+
 
 class TestMem0Service:
     """Test Mem0Service class."""
@@ -183,6 +208,28 @@ class TestMem0Service:
             agent_id="TestAgent",
             metadata=metadata
         )
+
+    @patch('mem0.Memory')
+    def test_add_skips_duplicate_messages(self, mock_memory):
+        """Test duplicate message writes are suppressed before reaching mem0."""
+        try:
+            from fairifier.services.mem0_service import Mem0Service
+        except ImportError:
+            pytest.skip("mem0 not installed")
+
+        mock_mem = MagicMock()
+        mock_mem.add.return_value = {"results": ["mem_id_1"]}
+        mock_memory.from_config.return_value = mock_mem
+
+        service = Mem0Service({"test": "config"})
+        messages = [{"role": "assistant", "content": "Repeated insight"}]
+
+        first = service.add(messages, "session_123", agent_id="TestAgent")
+        second = service.add(messages, "session_123", agent_id="TestAgent")
+
+        assert first["results"] == ["mem_id_1"]
+        assert second.get("skipped") == "duplicate_messages"
+        mock_mem.add.assert_called_once()
     
     @patch('mem0.Memory')
     def test_list_memories(self, mock_memory):
@@ -295,7 +342,10 @@ class TestMem0ConfigIntegration:
         required_fields = [
             'mem0_enabled',
             'mem0_ollama_base_url',
+            'mem0_embedding_provider',
             'mem0_embedding_model',
+            'mem0_embedding_base_url',
+            'mem0_embedding_api_key',
             'mem0_llm_model',
             'mem0_qdrant_host',
             'mem0_qdrant_port',
@@ -312,10 +362,66 @@ class TestMem0ConfigIntegration:
         config = FAIRifierConfig()
         
         assert config.mem0_enabled is False
+        assert config.mem0_embedding_provider == "ollama"
         assert config.mem0_embedding_model == "nomic-embed-text"
         assert config.mem0_qdrant_host == "localhost"
         assert config.mem0_qdrant_port == 6333
         assert config.mem0_collection_name == "fairifier_memories"
+
+
+def test_get_mem0_service_uses_dashscope_embeddings_for_qwen(monkeypatch):
+    """Qwen main LLM should map mem0 embeddings to DashScope-compatible OpenAI config."""
+    from fairifier.config import config as runtime_config
+    from fairifier.services.mem0_service import get_mem0_service, reset_mem0_service
+
+    reset_mem0_service()
+
+    original_values = {
+        "mem0_enabled": runtime_config.mem0_enabled,
+        "llm_provider": runtime_config.llm_provider,
+        "llm_model": runtime_config.llm_model,
+        "llm_base_url": runtime_config.llm_base_url,
+        "llm_api_key": runtime_config.llm_api_key,
+        "mem0_embedding_provider": runtime_config.mem0_embedding_provider,
+        "mem0_embedding_model": runtime_config.mem0_embedding_model,
+        "mem0_embedding_base_url": runtime_config.mem0_embedding_base_url,
+        "mem0_embedding_api_key": runtime_config.mem0_embedding_api_key,
+        "mem0_embedding_dims": runtime_config.mem0_embedding_dims,
+    }
+
+    monkeypatch.setattr(runtime_config, "mem0_enabled", True)
+    monkeypatch.setattr(runtime_config, "llm_provider", "qwen")
+    monkeypatch.setattr(runtime_config, "llm_model", "qwen-flash")
+    monkeypatch.setattr(
+        runtime_config,
+        "llm_base_url",
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    )
+    monkeypatch.setattr(runtime_config, "llm_api_key", "dashscope-key")
+    monkeypatch.setattr(runtime_config, "mem0_embedding_provider", "ollama")
+    monkeypatch.setattr(runtime_config, "mem0_embedding_model", "nomic-embed-text")
+    monkeypatch.setattr(runtime_config, "mem0_embedding_base_url", None)
+    monkeypatch.setattr(runtime_config, "mem0_embedding_api_key", None)
+    monkeypatch.setattr(runtime_config, "mem0_embedding_dims", 768)
+
+    with patch("fairifier.services.mem0_service.Mem0Service") as mock_service_cls:
+        mock_service = mock_service_cls.return_value
+        mock_service.is_available.return_value = True
+
+        service = get_mem0_service()
+
+        assert service is mock_service
+        mem0_config = mock_service_cls.call_args.args[0]
+        assert mem0_config["llm"]["provider"] == "openai"
+        assert mem0_config["embedder"]["provider"] == "openai"
+        assert mem0_config["embedder"]["config"]["model"] == "text-embedding-v4"
+        assert mem0_config["embedder"]["config"]["openai_base_url"].startswith("https://dashscope")
+        assert mem0_config["embedder"]["config"]["api_key"] == "dashscope-key"
+        assert mem0_config["vector_store"]["config"]["embedding_model_dims"] == 1024
+
+    for key, value in original_values.items():
+        monkeypatch.setattr(runtime_config, key, value)
+    reset_mem0_service()
 
 
 class TestMem0StateIntegration:
@@ -331,6 +437,8 @@ class TestMem0StateIntegration:
         
         assert 'session_id' in annotations
         assert 'Optional[str]' in str(annotations['session_id'])
+        assert 'memory_scope_id' in annotations
+        assert 'Optional[str]' in str(annotations['memory_scope_id'])
 
 
 class TestBaseAgentMemoryMethods:

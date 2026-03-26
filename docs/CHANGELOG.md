@@ -23,7 +23,7 @@
 - **Tests**: `test_langgraph_app_has_tool` disables mem0 via monkeypatch so the test does not require Ollama/Qdrant; all tests pass without local LLM services when mem0 is disabled.
 
 ### Added
-- **Test LLM configuration**: Tests that need a live LLM use Qwen API with model `qwen3.5-plus`. Key is taken from system env `DASHSCOPE_API_KEY`. Optional `tests/.env.test` (from `tests/.env.test.example`) and `tests/conftest.py` loads it before config.
+- **Test LLM configuration**: Tests that need a live LLM use Qwen API with model `qwen-flash`. Key is taken from system env `DASHSCOPE_API_KEY`. Optional `tests/.env.test` (from `tests/.env.test.example`) and `tests/conftest.py` loads it before config.
 - **.gitignore**: `tests/.env.test` and `.env.test` so API keys are not committed.
 
 ---
