@@ -5,7 +5,8 @@
 ### 1️⃣ 配置环境变量
 
 ```bash
-cd /Users/changlinke/Documents/Main/SSB/PhD/Research/FAIRiAgent
+cd /path/to/FAIRiAgent
+mamba activate FAIRiAgent
 
 # 复制配置文件
 cp env.example .env
@@ -61,7 +62,7 @@ curl http://localhost:8083/api/package
 
 ```bash
 # 激活环境
-mamba activate test
+mamba activate FAIRiAgent
 
 # 方式 1: 使用测试脚本（推荐）
 ./quick_test.sh
@@ -233,4 +234,3 @@ python -m fairifier.cli validate-document your_doc.txt
 4. ⚙️ 根据需要调整配置和阈值
 
 **祝测试顺利！** 🚀
-

@@ -434,9 +434,8 @@ Potential improvements (v1.3.0+):
 
 ## 🔗 Related Documentation
 
-- [MEM0_CONTEXT_ENGINEERING_INSIGHTS.md](MEM0_CONTEXT_ENGINEERING_INSIGHTS.md) - Context engineering principles
 - [MEM0_QUICKSTART.md](MEM0_QUICKSTART.md) - Mem0 installation and setup
-- [MEM0_INTEGRATION_SUMMARY.md](MEM0_INTEGRATION_SUMMARY.md) - Technical architecture
+- [MEMORY_GUIDE.md](MEMORY_GUIDE.md) - Memory usage and best practices
 
 ---
 

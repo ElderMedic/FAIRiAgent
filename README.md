@@ -116,7 +116,7 @@ FAIRiAgent/
 │   ├── services/       # External service clients
 │   ├── utils/          # Utilities and helpers
 │   └── apps/           # Web UI and API
-├── tests/              # Test suite (112 tests ✅)
+├── tests/              # Test suite (155 tests ✅)
 ├── kb/                 # Knowledge base
 ├── docs/               # Documentation
 ├── run_tests.py        # Test runner (cross-platform)
@@ -459,7 +459,7 @@ FAIRiAgent generates structured, evidence-based metadata in FAIR-DS compatible f
 
 ```json
 {
-  "fairifier_version": "V1.0.0.20260128_rc",
+  "fairifier_version": "V1.3.0",
   "generated_at": "2025-01-27T10:30:00",
   "document_source": "paper.pdf",
   "overall_confidence": 0.85,
@@ -734,7 +734,7 @@ python run_tests.py specific test_critic_utils.py
 ```
 
 **Test Statistics:**
-- ✅ 112 tests (93 unit + 19 integration)
+- ✅ 155 tests (148 unit + 7 integration)
 - ✅ All tests passing
 - ⚡ Fast tests: ~3s
 - 📊 Coverage: See `tests/README.md` for details
@@ -884,7 +884,7 @@ MIT License - Free for academic and research use.
 
 <div align="center">
 
-**🎯 FAIRiAgent V1.0.0.20260128_rc**  
+**🎯 FAIRiAgent v1.3.0**  
 *LangGraph-powered • Web UI-enabled • Standards-compliant*
 
 [⬆ Back to Top](#-fairiagent)
@@ -899,13 +899,9 @@ MIT License - Free for academic and research use.
 
 ---
 
-## 🔄 Recent Updates (V1.0.0.20260128_rc)
+## 🔄 Recent Updates (v1.3.0)
 
-- ✅ **LangGraph Integration**: Full LangGraph workflow with state persistence
-- ✅ **Streamlit Web UI**: Interactive web interface with real-time streaming
-- ✅ **Chat-like Streaming**: Real-time LLM response display with chat bubbles
-- ✅ **Configuration Management**: Web-based configuration with .env export
-- ✅ **Runtime Config Export**: Automatic export of all runtime configurations
-- ✅ **Multi-Provider Support**: Enhanced support for Ollama, OpenAI, Qwen, Anthropic
-- ✅ **LangGraph Studio**: Visual workflow debugging and development
-- ✅ **Improved Retry Logic**: Critic-based evaluation with automatic retry/escalation
+- ✅ **Langfuse Observability**: Added optional Langfuse tracing integration for richer run observability
+- ✅ **Post-output Metadata Validation**: Added validation checks after metadata JSON generation
+- ✅ **Release Readiness Refresh**: Updated release docs/changelog for merge to `main`
+- ✅ **Latest Test Run**: `155 passed, 4 skipped, 79 warnings` (~12s)

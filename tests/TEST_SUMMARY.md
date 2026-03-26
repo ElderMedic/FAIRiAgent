@@ -1,8 +1,8 @@
 # Test Summary
 
-**Last Updated:** 2026-03-11  
+**Last Updated:** 2026-03-26  
 **Test Suite Status:** ✅ All tests passing  
-**Version:** 1.2.2
+**Version:** 1.3.0
 
 ---
 
@@ -16,8 +16,12 @@ This directory contains comprehensive tests for the FAIRiAgent agentic framework
 | **Integration Tests** | 7 | ✅ Passing |
 | **Total** | **155** | ✅ **All Passing** |
 
-**Execution Time**: ~17-20 seconds  
+**Execution Time**: ~12 seconds  
 **Pass Rate**: 100% (155/155)
+
+**Additional Notes (latest run):**
+- 4 skipped tests are optional MinerU environment checks (service not running on `localhost:30000`)
+- 79 warnings are deprecation/runtime warnings (LangChain/Pydantic/SWIG) and do not fail tests
 
 ### LLM configuration (tests that need a live LLM)
 

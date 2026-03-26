@@ -282,7 +282,7 @@ class JSONGeneratorAgent(BaseAgent):
         
         # Build ISA-structured output - NO HARDCODED PACKAGE NAMES
         output = {
-            "fairifier_version": "V1.0.0.20260128_rc",
+            "fairifier_version": "V1.3.0",
             "generated_at": datetime.now().isoformat(),
             "document_source": state.get("document_path", ""),
             "overall_confidence": round(overall_confidence, 3),
@@ -665,4 +665,3 @@ class JSONGeneratorAgent(BaseAgent):
             return base_query
         else:
             return "FAIR metadata field mapping and value generation best practices"
-

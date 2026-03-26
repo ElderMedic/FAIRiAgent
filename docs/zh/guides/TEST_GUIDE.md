@@ -6,7 +6,7 @@
 
 #### 创建 `.env` 文件
 ```bash
-cd /Users/changlinke/Documents/Main/SSB/PhD/Research/FAIRiAgent
+cd /path/to/FAIRiAgent
 cp env.example .env
 ```
 
@@ -59,8 +59,8 @@ curl "http://localhost:8083/api/terms?label=temperature"
 
 ### 3. 激活环境
 ```bash
-mamba activate test
-cd /Users/changlinke/Documents/Main/SSB/PhD/Research/FAIRiAgent
+mamba activate FAIRiAgent
+cd /path/to/FAIRiAgent
 ```
 
 ---
@@ -137,10 +137,10 @@ EOF
 
 ```bash
 # 确保在项目根目录
-cd /Users/changlinke/Documents/Main/SSB/PhD/Research/FAIRiAgent
+cd /path/to/FAIRiAgent
 
 # 激活环境
-mamba activate test
+mamba activate FAIRiAgent
 
 # 设置 LangSmith 环境变量（如果没有 .env 文件）
 export LANGCHAIN_TRACING_V2=true
@@ -572,7 +572,7 @@ cat output_*/llm_responses.json | jq '.[] | select(.operation | startswith("crit
 # quick_test.sh - 快速测试脚本
 
 # 激活环境
-mamba activate test
+mamba activate FAIRiAgent
 
 # 设置环境变量
 export LANGCHAIN_TRACING_V2=true
@@ -600,4 +600,3 @@ echo "🔍 View in LangSmith: https://smith.langchain.com/"
 chmod +x quick_test.sh
 ./quick_test.sh
 ```
-

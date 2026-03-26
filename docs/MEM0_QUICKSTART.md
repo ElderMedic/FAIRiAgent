@@ -274,6 +274,5 @@ Both work together seamlessly - no conflicts.
 
 ## Next Steps
 
-- [Full Integration Plan](/.cursor/plans/mem0_context_management_integration_1c1148f7.plan.md)
 - [Configuration Reference](../env.example)
 - [API Documentation](../fairifier/services/mem0_service.py)
