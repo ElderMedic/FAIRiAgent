@@ -87,9 +87,9 @@ async def llm_select_relevant_packages(
 6. Avoid generic environmental or omics-heavy packages unless the document clearly justifies them
 7. Prefer precision over breadth when two packages provide overlapping coverage
 8. If the document concerns plant-pathogen or host-pathogen systems, strongly prefer plant/pathogen packages that capture host, pathogen, taxon, biosafety, and inoculation metadata
-4. Select at least 1 package. Choose as many as needed to fully cover the document's metadata requirements
-5. There is no upper limit - use your judgment to determine the optimal number of packages
-6. ONLY select from the packages listed above - these are real and current
+9. Select at least 1 package. Choose as many as needed to fully cover the document's metadata requirements
+10. There is no upper limit - use your judgment to determine the optimal number of packages
+11. ONLY select from the packages listed above - these are real and current
 
 **Think step by step:**
 1. What is the research domain? (genomics, ecology, plant science, etc.)
