@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.3.0] - 2026-03-26 – Observability and output validation release
+
+### Added
+- **Langfuse observability**: Added optional Langfuse tracing integration for end-to-end workflow observability, with test coverage for tracing configuration and behavior.
+- **Metadata JSON post-output validation**: Added post-generation schema/format validation checks for output metadata JSON to catch structural issues before finalization.
+
+### Changed
+- **Release documentation refresh**: Updated release-oriented documentation and changelog content for merge readiness.
+
+### Testing
+- **Automated tests**: `155 passed, 4 skipped, 79 warnings` (approx. 12s).
+- **Skipped tests**: 4 tests are optional MinerU-environment skips when `localhost:30000` service is unavailable.
+- **Environment validation**: `validate-document --env-only` confirms FAIR-DS API reachable and LLM configuration valid.
+
+---
+
 ## [1.2.2] - 2026-03-11 – Release readiness (mem0 branch merge)
 
 ### Changed
@@ -407,16 +423,9 @@ python run_fairifier.py process document.pdf
 
 ---
 
-### 🙏 Contributors
-
-- @ElderMedic - mem0 integration, testing, documentation
-
----
-
 ### 🔗 Links
 
 - [Full Changelog](CHANGELOG.md)
-- [mem0 Integration Plan](/.cursor/plans/mem0_context_management_integration_1c1148f7.plan.md)
 - [mem0 GitHub](https://github.com/mem0ai/mem0)
 - [Qdrant Documentation](https://qdrant.tech/documentation/)
 

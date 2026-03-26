@@ -1,7 +1,7 @@
 # FAIRiAgent Documentation
 
-**Version**: 1.2.2  
-**Last Updated**: 2026-03-11
+**Version**: 1.3.0  
+**Last Updated**: 2026-03-26
 
 ---
 
@@ -10,8 +10,8 @@
 | Document | Description |
 |----------|-------------|
 | [**README**](README.md) | Main documentation and getting started guide |
-| [Installation Guide](en/INSTALLATION.md) | Setup and installation instructions |
-| [Quick Start Guide](en/QUICKSTART.md) | Your first FAIR metadata generation |
+| [LLM Integration Guide](en/LLM_INTEGRATION_GUIDE.md) | Provider setup and model configuration |
+| [中文快速开始](zh/guides/QUICKSTART.md) | 中文上手指南 |
 
 ---
 
@@ -21,14 +21,14 @@
 | Document | Description |
 |----------|-------------|
 | [**Memory Management**](MEMORY_GUIDE.md) ⭐ | How to use the memory system |
-| [CLI Guide](en/CLI_GUIDE.md) | Command-line interface reference |
-| [Docker Guide](docker/README.md) | Running with Docker |
+| [Docker Guide](en/guides/DOCKER_DEPLOYMENT.md) | Running with Docker |
+| [LangGraph Studio Guide](en/guides/LANGGRAPH_STUDIO_SETUP.md) | Local Studio setup |
 
-### Memory Features (v1.2.2)
+### Memory Features (v1.3.0)
 | Document | Description |
 |----------|-------------|
 | [Memory Overview Guide](MEMORY_OVERVIEW_GUIDE.md) | ChatGPT-style memory summaries |
-| [Mem0 Integration](MEM0_INTEGRATION_SUMMARY.md) | Memory system overview |
+| [Mem0 Quick Start](MEM0_QUICKSTART.md) | Mem0 installation and setup |
 
 ---
 
@@ -37,15 +37,14 @@
 ### API & Configuration
 | Document | Description |
 |----------|-------------|
-| [API Guide](en/API_GUIDE.md) | REST API documentation |
-| [Configuration Guide](en/CONFIGURATION_GUIDE.md) | Settings and environment variables |
-| [Architecture Overview](en/ARCHITECTURE.md) | System architecture |
+| [FAIR-DS API Manual](en/development/FAIRDS_API_MANUAL.md) | REST API usage reference |
+| [Prompt Engineering Guide](en/development/PROMPT_ENGINEERING_GUIDE.md) | Prompt and context design |
+| [Architecture & Flow](en/ARCHITECTURE_AND_FLOW.md) | System architecture |
 
 ### Development Resources
 | Document | Description |
 |----------|-------------|
-| [Contributing Guide](CONTRIBUTING.md) | How to contribute |
-| [Testing Guide](en/development/TESTING_GUIDE.md) | Running and writing tests |
+| [Critic Rubric](en/development/critic_rubric.yaml) | Evaluation rubric source |
 | [LangSmith Guide](en/LANGSMITH_TESTING_GUIDE.md) | Tracing and monitoring |
 
 ---
@@ -55,7 +54,7 @@
 | Document | Description |
 |----------|-------------|
 | [Changelog](CHANGELOG.md) | Version history and changes |
-| [Known Issues](en/KNOWN_ISSUES.md) | Current limitations and workarounds |
+| [Test Guide (中文)](zh/guides/TEST_GUIDE.md) | 测试运行与排错 |
 
 ---
 
@@ -71,10 +70,6 @@
 
 ---
 
-**Total Documents**: ~15 core guides (simplified from 38+)  
+**Total Documents**: see repository `docs/` tree  
 **Navigation**: Use this index to find what you need  
 **Support**: See README.md for contact information
-
----
-
-_For development documentation, design specs, and test reports, see `.memory/development/` (local only)_

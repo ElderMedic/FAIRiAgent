@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="FAIRifier API",
     description="Automated FAIR metadata generation system",
-    version="1.0.0.20260128rc"
+    version="1.3.0"
 )
 
 # Add CORS middleware
@@ -69,7 +69,7 @@ async def root():
     """Root endpoint."""
     return {
         "message": "FAIRifier API",
-        "version": "0.1.0",
+        "version": "1.3.0",
         "description": "Automated FAIR metadata generation system"
     }
 
@@ -80,7 +80,7 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "0.1.0"
+        "version": "1.3.0"
     }
 
 
