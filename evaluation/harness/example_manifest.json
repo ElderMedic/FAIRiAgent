@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "case_id": "earthworm-private-example",
+      "document_path": "private/cases/earthworm.pdf",
+      "gold_path": "private/gold/earthworm.json",
+      "notes": "Example only. Real private fixtures live under gitignored paths."
+    }
+  ]
+}
