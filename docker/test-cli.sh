@@ -79,29 +79,25 @@ if ! docker image inspect ${IMAGE_NAME} > /dev/null 2>&1; then
     echo ""
 fi
 
+LLM_PROVIDER="${LLM_PROVIDER:-qwen}"
+FAIRIFIER_LLM_MODEL="${FAIRIFIER_LLM_MODEL:-qwen-flash}"
+QWEN_API_BASE_URL="${QWEN_API_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}"
+
 echo "📄 Processing: ${TEST_FILE}"
 echo "📂 Input directory: ${INPUT_DIR}"
 echo "📁 Output directory: ${OUTPUT_DIR}"
-echo "🤖 LLM Provider: ${LLM_PROVIDER:-ollama}"
-echo "🧠 Model: ${FAIRIFIER_LLM_MODEL:-qwen3:30b}"
+echo "🤖 LLM Provider: ${LLM_PROVIDER}"
+echo "🧠 Model: ${FAIRIFIER_LLM_MODEL}"
 echo ""
 
 # Determine Docker network configuration for Linux compatibility
 # On Linux, use --network host for better compatibility with local services
 if [ "$(uname)" = "Linux" ]; then
     # Use host network mode on Linux for direct access to localhost services
-    # This allows containers to access services on the host (Ollama, FAIR-DS) directly
+    # This allows containers to access services on the host directly
     DOCKER_NETWORK="--network host"
     DOCKER_EXTRA_HOSTS=""
-    
-    # With host network, use localhost URLs
-    if [ -n "${FAIRIFIER_LLM_BASE_URL}" ] && echo "${FAIRIFIER_LLM_BASE_URL}" | grep -q "host.docker.internal"; then
-        FAIRIFIER_LLM_BASE_URL=$(echo "${FAIRIFIER_LLM_BASE_URL}" | sed 's/host.docker.internal/localhost/g')
-    fi
-    if [ -n "${FAIRIFIER_LLM_BASE_URL}" ] && echo "${FAIRIFIER_LLM_BASE_URL}" | grep -q "localhost"; then
-        # Keep localhost for host network mode
-        :
-    fi
+
     if [ -n "${FAIR_DS_API_URL}" ] && echo "${FAIR_DS_API_URL}" | grep -q "host.docker.internal"; then
         FAIR_DS_API_URL=$(echo "${FAIR_DS_API_URL}" | sed 's/host.docker.internal/localhost/g')
     fi
@@ -116,13 +112,6 @@ else
 fi
 
 # Set default URLs if not provided
-if [ -z "${FAIRIFIER_LLM_BASE_URL}" ]; then
-    if [ "$(uname)" = "Linux" ]; then
-        FAIRIFIER_LLM_BASE_URL="http://localhost:11434"
-    else
-        FAIRIFIER_LLM_BASE_URL="http://host.docker.internal:11434"
-    fi
-fi
 if [ -z "${FAIR_DS_API_URL}" ]; then
     if [ "$(uname)" = "Linux" ]; then
         FAIR_DS_API_URL="http://localhost:8083"
@@ -132,7 +121,11 @@ if [ -z "${FAIR_DS_API_URL}" ]; then
 fi
 
 # Display final configuration
-echo "🔌 Ollama URL: ${FAIRIFIER_LLM_BASE_URL}"
+if [ "${LLM_PROVIDER}" = "qwen" ]; then
+    echo "🔌 Qwen API: ${QWEN_API_BASE_URL}"
+else
+    echo "🔌 LLM base URL: ${FAIRIFIER_LLM_BASE_URL}"
+fi
 echo "🔌 FAIR-DS API: ${FAIR_DS_API_URL}"
 echo ""
 echo "⏳ Processing document..."
@@ -144,9 +137,10 @@ docker run --rm \
     ${DOCKER_EXTRA_HOSTS} \
     -v "${INPUT_DIR}:/app/test-inputs:ro" \
     -v "${OUTPUT_DIR}:/app/output" \
-    -e LLM_PROVIDER="${LLM_PROVIDER:-ollama}" \
-    -e FAIRIFIER_LLM_MODEL="${FAIRIFIER_LLM_MODEL:-qwen3:30b}" \
-    -e FAIRIFIER_LLM_BASE_URL="${FAIRIFIER_LLM_BASE_URL}" \
+    -e LLM_PROVIDER="${LLM_PROVIDER}" \
+    -e FAIRIFIER_LLM_MODEL="${FAIRIFIER_LLM_MODEL}" \
+    -e FAIRIFIER_LLM_BASE_URL="${FAIRIFIER_LLM_BASE_URL:-}" \
+    -e QWEN_API_BASE_URL="${QWEN_API_BASE_URL}" \
     -e LLM_API_KEY="${LLM_API_KEY:-}" \
     -e LANGSMITH_API_KEY="${LANGSMITH_API_KEY:-}" \
     -e FAIR_DS_API_URL="${FAIR_DS_API_URL}" \

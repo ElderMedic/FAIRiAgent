@@ -1,27 +1,38 @@
 """Knowledge retrieval agent using FAIR Data Station API."""
 
 import logging
-from typing import Dict, Any, List, Optional
+import json
+import re
+from typing import Dict, Any, List, Optional, Tuple
+from langchain_core.tools import tool
 from langsmith import traceable
 
 from .base import BaseAgent
+from .react_loop import ReactLoopMixin
+from .response_models import KnowledgeResponse
 from ..models import FAIRifierState, KnowledgeItem
 from ..config import config
+from ..services.evidence_packets import build_evidence_context
+from ..skills import load_skill_files
 from ..services.fair_data_station import FAIRDataStationClient
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.llm_helper import get_llm_helper
 from . import knowledge_retriever_llm_methods as llm_methods
 from ..tools.fair_ds_tools import create_fair_ds_tools
+from ..tools.science_tools import create_science_tools
 
 logger = logging.getLogger(__name__)
 
 
-class KnowledgeRetrieverAgent(BaseAgent):
+class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
     """Agent for retrieving knowledge from FAIR Data Station."""
     
     def __init__(self):
         super().__init__("KnowledgeRetriever")
         self.llm_helper = get_llm_helper()
+        self._inner_kr_agent = None
+        self._fairds_runtime_cache: Dict[str, Any] = {}
+        self._science_runtime_cache: Dict[str, Any] = {}
         
         # Initialize FAIR-DS client if configured
         self.fair_ds_client = None
@@ -44,6 +55,179 @@ class KnowledgeRetrieverAgent(BaseAgent):
         # Create FAIR-DS tools (pass client for reuse)
         tools_list = create_fair_ds_tools(client=self.fair_ds_client)
         self.tools = {tool.name: tool for tool in tools_list}
+
+    def _build_runtime_tools(self, state: FAIRifierState) -> Dict[str, Any]:
+        """Build FAIR-DS tools backed by the current run cache."""
+        required_methods = (
+            "get_available_packages",
+            "get_package",
+            "get_terms",
+            "search_terms_for_fields",
+            "search_fields_in_packages",
+        )
+        if not self.fair_ds_client or not all(
+            hasattr(self.fair_ds_client, method) for method in required_methods
+        ):
+            return self.tools
+
+        retrieval_cache = state.setdefault("retrieval_cache", {})
+        state_bucket = retrieval_cache.get("fairds_tools")
+        if isinstance(state_bucket, dict) and state_bucket is not self._fairds_runtime_cache:
+            self._fairds_runtime_cache.update(state_bucket)
+        retrieval_cache["fairds_tools"] = self._fairds_runtime_cache
+        fairds_cache = self._fairds_runtime_cache
+        tools_list = create_fair_ds_tools(
+            client=self.fair_ds_client,
+            cache_store=fairds_cache,
+        )
+        return {tool.name: tool for tool in tools_list}
+
+    def _get_science_cache(self, state: FAIRifierState) -> Dict[str, Any]:
+        """Return a shared science-tool cache for the current agent run."""
+        retrieval_cache = state.setdefault("retrieval_cache", {})
+        state_bucket = retrieval_cache.get("science_tools")
+        if isinstance(state_bucket, dict) and state_bucket is not self._science_runtime_cache:
+            self._science_runtime_cache.update(state_bucket)
+        retrieval_cache["science_tools"] = self._science_runtime_cache
+        return self._science_runtime_cache
+
+    def _build_kr_inner_agent(
+        self,
+        *,
+        science_cache: Optional[Dict[str, Any]] = None,
+        default_candidate_packages: Optional[List[str]] = None,
+    ):
+        """Create the deepagents-backed inner loop for knowledge retrieval."""
+        science_tools = create_science_tools(cache_store=science_cache)
+
+        @tool
+        def list_packages() -> Dict[str, Any]:
+            """List FAIR-DS package names available through the configured API."""
+            return self.tools["get_available_packages"].invoke({"force_refresh": False})
+
+        @tool
+        def get_package_info(package_name: str) -> Dict[str, Any]:
+            """Fetch a FAIR-DS package and all of its fields."""
+            return self.tools["get_package"].invoke({"package_name": package_name})
+
+        @tool
+        def search_metadata_term(term_label: str, definition: str = "") -> Dict[str, Any]:
+            """Search FAIR-DS terms relevant to a metadata label."""
+            return self.tools["search_terms_for_fields"].invoke(
+                {"term_label": term_label, "definition": definition or None}
+            )
+
+        @tool
+        def search_package_fields(field_label: str, package_names: str = "") -> Dict[str, Any]:
+            """Search FAIR-DS package fields by label."""
+            scoped_package_names = package_names or ",".join(default_candidate_packages or [])
+            return self.tools["search_fields_in_packages"].invoke(
+                {
+                    "field_label": field_label,
+                    "package_names": scoped_package_names or None,
+                }
+            )
+
+        system_prompt = (
+            "You are the internal KnowledgeRetriever loop for FAIRiAgent. "
+            "Inspect /workspace/packages_summary.json and /workspace/doc_info.json, "
+            "use FAIR-DS and science tools when needed, and return selected_packages, "
+            "selected_optional_fields keyed by ISA sheet, terms_to_search, and metadata_gap_hints. "
+            "Favor package names and field labels that exist in FAIR-DS. "
+            "If a useful metadata concept is not represented as a real FAIR-DS package, do not invent "
+            "a package name; keep selected_packages constrained to real FAIR-DS packages and record the "
+            "uncovered concept in metadata_gap_hints instead."
+        )
+        subagents = [
+            {
+                "name": "package-selector",
+                "description": "Choose the minimal but sufficient FAIR-DS packages for the document.",
+                "system_prompt": (
+                    "Select real FAIR-DS packages only. Bias toward investigation/study completeness."
+                ),
+                "tools": [list_packages, get_package_info],
+            },
+            {
+                "name": "field-selector",
+                "description": "Choose high-value optional FAIR-DS fields per ISA sheet.",
+                "system_prompt": (
+                    "Return field labels exactly as they appear in FAIR-DS when possible."
+                ),
+                "tools": [get_package_info, search_metadata_term, search_package_fields],
+            },
+        ]
+        tools = [
+            list_packages,
+            get_package_info,
+            search_metadata_term,
+            search_package_fields,
+            *science_tools,
+        ]
+        return self._build_react_agent(
+            tools=tools,
+            subagents=subagents,
+            response_format=KnowledgeResponse,
+            system_prompt=system_prompt,
+            memory_files=self._get_memory_files(),
+        )
+
+    def _build_kr_seed_files(
+        self,
+        doc_info: Dict[str, Any],
+        pkg_summary: Dict[str, Any],
+        evidence_packets: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Build virtual files for the deepagents knowledge retrieval loop."""
+        seed_files: Dict[str, Any] = {}
+        packages_file = self._maybe_create_file_data(
+            json.dumps(pkg_summary, indent=2, ensure_ascii=False)
+        )
+        if packages_file is not None:
+            seed_files["/workspace/packages_summary.json"] = packages_file
+
+        doc_file = self._maybe_create_file_data(
+            json.dumps(doc_info, indent=2, ensure_ascii=False)
+        )
+        if doc_file is not None:
+            seed_files["/workspace/doc_info.json"] = doc_file
+
+        evidence_file = self._maybe_create_file_data(
+            json.dumps(evidence_packets or [], indent=2, ensure_ascii=False)
+        )
+        if evidence_file is not None:
+            seed_files["/workspace/evidence_packets.json"] = evidence_file
+
+        seed_files.update(load_skill_files(config.skills_dir))
+        return seed_files
+
+    def _select_optional_fields_from_structured(
+        self,
+        optional_fields: List[Dict[str, Any]],
+        preferred_labels: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Map deepagents-selected field labels back to real FAIR-DS field objects."""
+        if not preferred_labels:
+            return []
+
+        wanted = {label.strip().lower() for label in preferred_labels if label}
+        selected: List[Dict[str, Any]] = []
+        for field in optional_fields:
+            label = str(field.get("label", "")).strip().lower()
+            if label in wanted:
+                selected.append(field)
+        return selected
+
+    def _normalize_structured_field_map(
+        self,
+        structured_field_map: Dict[str, List[str]],
+    ) -> Dict[str, List[str]]:
+        """Normalize ISA sheet keys from model output to the lowercase runtime convention."""
+        normalized: Dict[str, List[str]] = {}
+        for sheet, labels in (structured_field_map or {}).items():
+            if not sheet:
+                continue
+            normalized[str(sheet).strip().lower()] = labels or []
+        return normalized
     
     def log_info(self, message: str):
         """Helper for logging without state."""
@@ -71,12 +255,19 @@ class KnowledgeRetrieverAgent(BaseAgent):
         self.log_execution(state, "🔍 Starting knowledge retrieval (LLM-driven ReAct)")
         
         try:
+            self.tools = self._build_runtime_tools(state)
             doc_info = state.get("document_info", {})
+            evidence_packets = state.get("evidence_packets", []) or []
             self.log_execution(state, f"📥 Received document_info with {len(doc_info)} fields")
             if doc_info:
                 self.log_execution(state, f"   Keys: {list(doc_info.keys())[:10]}...")
             else:
                 self.log_execution(state, "⚠️  WARNING: document_info is empty!", "warning")
+            if evidence_packets:
+                self.log_execution(
+                    state,
+                    f"📦 Received {len(evidence_packets)} evidence packets"
+                )
             knowledge_items = []
             
             # Fetch from FAIR-DS API (strict mode - no local fallback)
@@ -111,10 +302,66 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 self.update_confidence(state, "knowledge_retrieval", 0.0)
                 return state
             
-            # Step 2: Fetch fields from all packages (using tool)
-            self.log_execution(state, f"   📦 Fetching fields from {len(available_package_names)} packages...")
+            feedback = self.get_context_feedback(state)
+            critic_feedback = feedback.get("critic_feedback")
+            planner_instruction = feedback.get("planner_instruction")
+            guidance_history = feedback.get("guidance_history") or []
+            prior_memory_context = self.format_retrieved_memories_for_prompt(
+                feedback.get("retrieved_memories") or []
+            )
+            evidence_context = build_evidence_context(evidence_packets)
+            llm_context = "\n\n".join(
+                part for part in [prior_memory_context or None, evidence_context or None] if part
+            ) or None
+
+            priority_package_hints = self._infer_priority_packages(
+                doc_info, planner_instruction, available_package_names
+            )
+            guided_package_hints = self._extract_guided_package_names(
+                available_package_names,
+                critic_feedback=critic_feedback,
+                planner_instruction=planner_instruction,
+                guidance_history=guidance_history,
+            )
+            excluded_package_names = set()
+            if len(available_package_names) > 5:
+                excluded_package_names = self._infer_excluded_packages(
+                    doc_info,
+                    planner_instruction,
+                    available_package_names,
+                    evidence_packets,
+                )
+            candidate_package_names = self._build_candidate_package_names(
+                doc_info,
+                planner_instruction,
+                available_package_names,
+                evidence_packets,
+                priority_package_hints,
+                excluded_package_names,
+            )
+
+            if priority_package_hints:
+                self.log_execution(
+                    state,
+                    f"🧭 Publication/domain priority packages: {priority_package_hints}"
+                )
+            if guided_package_hints:
+                self.log_execution(
+                    state,
+                    f"🎯 Critic/planner-guided packages: {guided_package_hints}"
+                )
+            if excluded_package_names:
+                self.log_execution(
+                    state,
+                    f"🚫 Excluding domain-mismatched packages from first-pass retrieval: {sorted(excluded_package_names)}"
+                )
+
+            self.log_execution(
+                state,
+                f"   📦 Fetching fields from {len(candidate_package_names)}/{len(available_package_names)} candidate packages..."
+            )
             all_packages_metadata = []
-            for pkg_name in available_package_names:
+            for pkg_name in candidate_package_names:
                 pkg_result = self.tools["get_package"].invoke({"package_name": pkg_name})
                 if pkg_result["success"] and pkg_result["data"] and "metadata" in pkg_result["data"]:
                     fields = pkg_result["data"]["metadata"]
@@ -159,16 +406,6 @@ class KnowledgeRetrieverAgent(BaseAgent):
                     f"({pkg['mandatory_count']} mandatory, {pkg['optional_count']} optional)"
                 )
                 
-            # Use LLM for intelligent, adaptive analysis (required)
-            # Get critic feedback if this is a retry
-            feedback = self.get_context_feedback(state)
-            critic_feedback = feedback.get("critic_feedback")
-            planner_instruction = feedback.get("planner_instruction")
-            guidance_history = feedback.get("guidance_history") or []
-            prior_memory_context = self.format_retrieved_memories_for_prompt(
-                feedback.get("retrieved_memories") or []
-            )
-            
             if critic_feedback:
                 self.log_execution(state, "🔄 Retrying with Critic feedback...")
                 critique = critic_feedback.get("critique")
@@ -181,31 +418,102 @@ class KnowledgeRetrieverAgent(BaseAgent):
             
             if planner_instruction:
                 self.log_execution(state, f"🧭 Planner guidance: {planner_instruction}")
+            self.log_execution(state, "🤖 Phase 1: selecting relevant metadata packages...")
 
-            priority_package_hints = self._infer_priority_packages(
-                doc_info, planner_instruction, available_package_names
-            )
-            if priority_package_hints:
+            structured_knowledge: Optional[KnowledgeResponse] = None
+            if config.enable_deep_agents and self._should_skip_deep_react(candidate_package_names):
                 self.log_execution(
                     state,
-                    f"🧭 Publication/domain priority packages: {priority_package_hints}"
+                    "⏭️ Skipping deep ReAct package planner for broad Qwen candidate set; using direct LLM selection for budget/stability."
                 )
-            
-            self.log_execution(state, "🤖 Phase 1: LLM selecting relevant metadata packages...")
-            
-            # Phase 1: LLM selects relevant packages based on research type
-            self.log_execution(state, "   Calling LLM to select relevant packages...")
-            # Phase 1: LLM selects packages (no fallback - must succeed or retry)
-            selected_package_names = await llm_methods.llm_select_relevant_packages(
-                self.llm_helper,
-                doc_info,
-                all_packages,
-                critic_feedback,
-                planner_instruction=planner_instruction,
-                prior_memory_context=prior_memory_context or None,
-                priority_package_hints=priority_package_hints
-            )
-            self.log_execution(state, f"✅ LLM selected packages: {selected_package_names}")
+            elif config.enable_deep_agents:
+                self._inner_kr_agent = self._build_kr_inner_agent(
+                    science_cache=self._get_science_cache(state),
+                    default_candidate_packages=candidate_package_names,
+                )
+                pkg_summary = {
+                    "all_packages": all_packages,
+                    "available_package_names": candidate_package_names,
+                    "priority_package_hints": priority_package_hints,
+                }
+                task_desc = (
+                    "Plan FAIR-DS retrieval for /workspace/doc_info.json using "
+                    "/workspace/packages_summary.json and /workspace/evidence_packets.json. "
+                    "Return selected_packages, "
+                    "selected_optional_fields by ISA sheet, terms_to_search, and metadata_gap_hints. "
+                    "Only put real FAIR-DS package names in selected_packages."
+                )
+                evidence_context = build_evidence_context(evidence_packets)
+                if evidence_context:
+                    task_desc += "\nGround package and field choices in the provided evidence packets."
+                structured_result = await self._invoke_react_agent(
+                    self._inner_kr_agent,
+                    task_message=self._compose_task_message(state, task_desc),
+                    seed_files=self._build_kr_seed_files(
+                        doc_info,
+                        pkg_summary,
+                        evidence_packets=evidence_packets,
+                    ),
+                    thread_id=f"{state.get('session_id', 'default')}-kr-inner",
+                    state=state,
+                    scratchpad_name=self.name,
+                )
+                if structured_result:
+                    structured_knowledge = structured_result
+
+            # Phase 1 fallback: existing LLM package selector
+            structured_package_gap_hints: List[str] = []
+            if structured_knowledge and structured_knowledge.selected_packages:
+                raw_structured_packages = list(dict.fromkeys(structured_knowledge.selected_packages))
+                selected_package_names, structured_package_gap_hints = self._normalize_selected_packages(
+                    raw_structured_packages,
+                    available_package_names,
+                )
+                self.log_execution(
+                    state,
+                    f"🧠 Deep ReAct selected packages: {selected_package_names}"
+                )
+                if structured_package_gap_hints:
+                    self.log_execution(
+                        state,
+                        f"🧩 Deep ReAct metadata gaps (not FAIR-DS packages): {structured_package_gap_hints}"
+                    )
+            else:
+                self.log_execution(state, "   Calling LLM to select relevant packages...")
+                selected_package_names = await llm_methods.llm_select_relevant_packages(
+                    self.llm_helper,
+                    doc_info,
+                    all_packages,
+                    critic_feedback,
+                    planner_instruction=planner_instruction,
+                    prior_memory_context=llm_context,
+                    priority_package_hints=priority_package_hints
+                )
+                self.log_execution(state, f"✅ LLM selected packages: {selected_package_names}")
+
+            if excluded_package_names:
+                filtered_package_names = [
+                    name for name in selected_package_names
+                    if name not in excluded_package_names
+                ]
+                if filtered_package_names != selected_package_names:
+                    self.log_execution(
+                        state,
+                        f"🧹 Filtered excluded packages from selection: {sorted(set(selected_package_names) - set(filtered_package_names))}"
+                    )
+                    selected_package_names = filtered_package_names
+
+            selected_package_names = list(dict.fromkeys(selected_package_names))
+            if guided_package_hints:
+                merged_selected_packages: List[str] = []
+                for package_name in selected_package_names + guided_package_hints:
+                    if package_name not in merged_selected_packages:
+                        merged_selected_packages.append(package_name)
+                selected_package_names = merged_selected_packages
+            if not selected_package_names:
+                selected_package_names = priority_package_hints[:]
+            if not selected_package_names:
+                selected_package_names = candidate_package_names[:3]
             
             # Phase 2: Get all fields from selected packages, grouped by ISA sheet
             self.log_execution(state, "📦 Phase 2: Collecting fields from selected packages (by ISA sheet)...")
@@ -288,7 +596,7 @@ class KnowledgeRetrieverAgent(BaseAgent):
                                 )
             
             # Phase 3: Use LLM to intelligently select optional fields for each ISA sheet
-            self.log_execution(state, "🤖 Phase 3: LLM selecting relevant optional fields (by ISA sheet)...")
+            self.log_execution(state, "🤖 Phase 3: selecting relevant optional fields (by ISA sheet)...")
             
             # Collect all mandatory fields (from all ISA sheets)
             all_mandatory_fields = []
@@ -301,7 +609,7 @@ class KnowledgeRetrieverAgent(BaseAgent):
             # Collect all terms to search (from LLM requests)
             all_terms_to_search = []
             priority_search_terms = self._infer_priority_search_terms(
-                doc_info, planner_instruction
+                doc_info, planner_instruction, evidence_packets
             )
             if priority_search_terms:
                 self.log_execution(
@@ -309,58 +617,83 @@ class KnowledgeRetrieverAgent(BaseAgent):
                     f"🧭 Priority metadata search terms: {priority_search_terms}"
                 )
             
-            # Use LLM to select optional fields for each ISA sheet
+            structured_field_map = self._normalize_structured_field_map(
+                structured_knowledge.selected_optional_fields
+                if structured_knowledge else {}
+            )
+            structured_terms_to_search = (
+                structured_knowledge.terms_to_search
+                if structured_knowledge else []
+            )
+
+            # Use LLM/deepagents to select optional fields for each ISA sheet
             for sheet in isa_sheets:
                 optional_fields_for_sheet = fields_by_isa_sheet[sheet]["optional"]
                 if optional_fields_for_sheet:
-                    self.log_execution(
-                        state,
-                        f"   LLM selecting optional fields for {sheet} ({len(optional_fields_for_sheet)} available)..."
-                    )
-                    
-                    # Use LLM to intelligently select optional fields (no fallback)
-                    # Returns: {"selected_fields": [...], "terms_to_search": [...]}
-                    llm_result = await llm_methods.llm_select_fields_from_package(
-                        self.llm_helper,
-                        doc_info,
-                        sheet,  # ISA sheet level (investigation, study, assay, sample, observationunit)
-                        f"{sheet}_fields",  # Package name for logging
-                        fields_by_isa_sheet[sheet]["mandatory"],
-                        optional_fields_for_sheet,
-                        critic_feedback
-                    )
-                    
-                    selected_optional = llm_result.get("selected_fields", [])
-                    terms_to_search = llm_result.get("terms_to_search", [])
-                    
-                    final_selected_fields.extend(selected_optional)
-                    all_terms_to_search.extend(terms_to_search)
-                    
-                    self.log_execution(
-                        state,
-                        f"   ✅ {sheet}: LLM selected {len(selected_optional)} optional fields"
-                    )
-                    if terms_to_search:
+                    preferred_labels = structured_field_map.get(sheet, [])
+                    if preferred_labels:
+                        selected_optional = self._select_optional_fields_from_structured(
+                            optional_fields_for_sheet,
+                            preferred_labels,
+                        )
+                        terms_to_search = []
+                        final_selected_fields.extend(selected_optional)
                         self.log_execution(
                             state,
-                            f"   🔍 {sheet}: LLM requested term search for: {terms_to_search}"
+                            f"   🧠 {sheet}: Deep ReAct selected {len(selected_optional)} optional fields"
                         )
+                    else:
+                        self.log_execution(
+                            state,
+                            f"   LLM selecting optional fields for {sheet} ({len(optional_fields_for_sheet)} available)..."
+                        )
+                        llm_result = await llm_methods.llm_select_fields_from_package(
+                            self.llm_helper,
+                            doc_info,
+                            sheet,
+                            f"{sheet}_fields",
+                            fields_by_isa_sheet[sheet]["mandatory"],
+                            optional_fields_for_sheet,
+                            critic_feedback
+                        )
+
+                        selected_optional = llm_result.get("selected_fields", [])
+                        terms_to_search = llm_result.get("terms_to_search", [])
+                        final_selected_fields.extend(selected_optional)
+                        all_terms_to_search.extend(terms_to_search)
+
+                        self.log_execution(
+                            state,
+                            f"   ✅ {sheet}: LLM selected {len(selected_optional)} optional fields"
+                        )
+                        if terms_to_search:
+                            self.log_execution(
+                                state,
+                                f"   🔍 {sheet}: LLM requested term search for: {terms_to_search}"
+                            )
             
             # Add deterministic publication/domain search hints before final FAIR-DS lookup.
-            all_terms_to_search = list(dict.fromkeys(priority_search_terms + all_terms_to_search))
+            all_terms_to_search = list(
+                dict.fromkeys(priority_search_terms + structured_terms_to_search + all_terms_to_search)
+            )
 
             # Phase 4: Search for additional terms/fields if LLM requested (using tools)
             if all_terms_to_search and self.fair_ds_client:
                 self.log_execution(state, f"🔍 Phase 4: Searching for {len(all_terms_to_search)} additional terms...")
-                
+                term_search_outcomes: Dict[str, Dict[str, int]] = {}
                 for term in all_terms_to_search:
+                    term_key = str(term).strip().lower()
+                    if not term_key:
+                        continue
                     # Search using /api/terms endpoint (tool)
                     terms_search_result = self.tools["search_terms_for_fields"].invoke({
                         "term_label": term,
                         "definition": None
                     })
+                    term_hits = 0
                     if terms_search_result["success"] and terms_search_result["data"]:
                         found_terms = terms_search_result["data"]
+                        term_hits = len(found_terms)
                         self.log_execution(
                             state,
                             f"   📚 Found {len(found_terms)} terms matching '{term}'"
@@ -372,13 +705,16 @@ class KnowledgeRetrieverAgent(BaseAgent):
                     
                     # Also search across packages for fields with matching labels (tool)
                     # Convert list to comma-separated string for tool
-                    package_names_str = ",".join(available_package_names) if available_package_names else None
+                    search_scope_packages = list(dict.fromkeys(selected_package_names + priority_package_hints))
+                    package_names_str = ",".join(search_scope_packages) if search_scope_packages else None
                     fields_search_result = self.tools["search_fields_in_packages"].invoke({
                         "field_label": term,
                         "package_names": package_names_str
                     })
+                    field_hits = 0
                     if fields_search_result["success"] and fields_search_result["data"]:
                         found_fields = fields_search_result["data"]
+                        field_hits = len(found_fields)
                         self.log_execution(
                             state,
                             f"   📦 Found {len(found_fields)} fields matching '{term}' across packages"
@@ -389,6 +725,12 @@ class KnowledgeRetrieverAgent(BaseAgent):
                             if field.get("label") not in existing_labels:
                                 final_selected_fields.append(field)
                                 existing_labels.add(field.get("label"))
+                    term_search_outcomes[term_key] = {
+                        "terms_found": term_hits,
+                        "fields_found": field_hits,
+                    }
+            else:
+                term_search_outcomes = {}
             
             # Log final statistics
             total_mandatory = len(all_mandatory_fields)
@@ -438,12 +780,36 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 }
                 for item in knowledge_items
             ]
+            state["selected_packages"] = selected_package_names
+            metadata_gap_hints = self._build_metadata_gap_hints(
+                doc_info=doc_info,
+                evidence_packets=evidence_packets,
+                final_selected_fields=final_selected_fields,
+                planner_instruction=planner_instruction,
+                structured_gap_hints=(
+                    structured_package_gap_hints
+                    + (structured_knowledge.metadata_gap_hints if structured_knowledge else [])
+                ),
+                all_terms_to_search=all_terms_to_search,
+                term_search_outcomes=term_search_outcomes,
+                selected_package_names=selected_package_names,
+                available_package_names=available_package_names,
+            )
+            state["metadata_gap_hints"] = metadata_gap_hints
             
             # Store API capability info for Critic to understand limitations
             state["api_capabilities"] = {
                 "available_packages": available_package_names,
                 "total_packages_available": len(available_package_names),
+                "candidate_packages_considered": candidate_package_names,
+                "guided_packages_considered": guided_package_hints,
                 "packages_requested_by_planner": self._extract_requested_packages(planner_instruction),
+                "selected_packages": selected_package_names,
+                "unavailable_requested_packages": [
+                    hint["label"] for hint in metadata_gap_hints
+                    if hint.get("source") == "package_request"
+                ],
+                "requested_metadata_gaps": [hint["label"] for hint in metadata_gap_hints],
                 "packages_actually_available": all_packages,
                 "limitation_note": (
                     f"FAIR-DS API only has {len(available_package_names)} package(s) available: {available_package_names}. "
@@ -530,6 +896,128 @@ class KnowledgeRetrieverAgent(BaseAgent):
         
         return requested
 
+    def _normalize_selected_packages(
+        self,
+        requested_packages: List[str],
+        available_package_names: List[str],
+    ) -> Tuple[List[str], List[str]]:
+        """Resolve package requests to real FAIR-DS package names and surface unmapped requests."""
+        package_lookup = {name.lower(): name for name in available_package_names}
+        selected: List[str] = []
+        unmapped: List[str] = []
+        for package_name in requested_packages:
+            raw_name = str(package_name or "").strip()
+            if not raw_name:
+                continue
+            actual_name = package_lookup.get(raw_name.lower())
+            if actual_name:
+                if actual_name not in selected:
+                    selected.append(actual_name)
+            elif raw_name not in unmapped:
+                unmapped.append(raw_name)
+        return selected, unmapped
+
+    def _build_metadata_gap_hints(
+        self,
+        *,
+        doc_info: Dict[str, Any],
+        evidence_packets: List[Dict[str, Any]],
+        final_selected_fields: List[Dict[str, Any]],
+        planner_instruction: Optional[str],
+        structured_gap_hints: List[str],
+        all_terms_to_search: List[str],
+        term_search_outcomes: Dict[str, Dict[str, int]],
+        selected_package_names: List[str],
+        available_package_names: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Capture useful metadata concepts that FAIR-DS could not map directly."""
+        selected_labels = {
+            str(field.get("label", "")).strip().lower()
+            for field in final_selected_fields
+            if field.get("label")
+        }
+        selected_packages_lower = {pkg.lower() for pkg in selected_package_names}
+        available_packages_lower = {pkg.lower() for pkg in available_package_names}
+        doc_keys = {str(key).strip().lower() for key in doc_info.keys()}
+        hints: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def add_hint(
+            label: str,
+            *,
+            source: str,
+            reason: str,
+            confidence: float = 0.65,
+            packet: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            normalized = str(label or "").strip()
+            lowered = normalized.lower()
+            if not normalized or lowered in seen:
+                return
+            if lowered in selected_packages_lower or lowered in available_packages_lower:
+                return
+            if lowered in selected_labels:
+                return
+            seen.add(lowered)
+            hints.append(
+                {
+                    "label": normalized,
+                    "source": source,
+                    "status": "unmapped_to_fairds",
+                    "reason": reason,
+                    "confidence": round(max(0.3, min(confidence, 0.95)), 2),
+                    "packet_id": packet.get("packet_id") if packet else None,
+                    "supporting_value": packet.get("value") if packet else None,
+                    "supporting_evidence": packet.get("evidence_text") if packet else None,
+                }
+            )
+
+        for label in structured_gap_hints:
+            add_hint(
+                label,
+                source="package_request",
+                reason="The planner identified a useful metadata concept that is not a real FAIR-DS package.",
+                confidence=0.72,
+            )
+
+        for term in all_terms_to_search:
+            normalized = str(term or "").strip()
+            if not normalized:
+                continue
+            outcome = term_search_outcomes.get(normalized.lower(), {})
+            if outcome.get("terms_found", 0) == 0 and outcome.get("fields_found", 0) == 0:
+                add_hint(
+                    normalized,
+                    source="term_search",
+                    reason="The workflow searched FAIR-DS for this metadata concept but found no matching term or field.",
+                    confidence=0.68,
+                )
+
+        for packet in evidence_packets[:20]:
+            candidate = str(packet.get("field_candidate") or "").strip()
+            if not candidate:
+                continue
+            if candidate.lower() in doc_keys or candidate.lower() in selected_labels:
+                continue
+            add_hint(
+                candidate,
+                source="evidence_packet",
+                reason="DocumentParser extracted this candidate, but KnowledgeRetriever could not map it to FAIR-DS fields.",
+                confidence=float(packet.get("confidence") or 0.6),
+                packet=packet,
+            )
+
+        for requested in self._extract_requested_packages(planner_instruction):
+            if requested.lower() not in available_packages_lower and requested.lower() not in selected_labels:
+                add_hint(
+                    requested,
+                    source="planner_request",
+                    reason="Planner requested this domain concept, but FAIR-DS does not expose it as a package in the current API.",
+                    confidence=0.62,
+                )
+
+        return hints
+
     def _infer_priority_packages(
         self,
         doc_info: Dict[str, Any],
@@ -608,9 +1096,15 @@ class KnowledgeRetrieverAgent(BaseAgent):
     def _infer_priority_search_terms(
         self,
         doc_info: Dict[str, Any],
-        planner_instruction: Optional[str]
+        planner_instruction: Optional[str],
+        evidence_packets: Optional[List[Dict[str, Any]]] = None,
     ) -> List[str]:
         """Infer metadata labels that matter for publication-ready FAIR outputs."""
+        packet_values = " ".join(
+            str(packet.get("value", ""))
+            for packet in (evidence_packets or [])[:12]
+            if packet.get("value")
+        )
         text = " ".join(
             str(part)
             for part in [
@@ -618,6 +1112,7 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 doc_info.get("document_type", ""),
                 doc_info.get("research_domain", ""),
                 " ".join(doc_info.get("keywords", []) or []),
+                packet_values,
                 planner_instruction or "",
             ]
             if part
@@ -675,6 +1170,173 @@ class KnowledgeRetrieverAgent(BaseAgent):
                 add(term)
 
         return terms
+
+    def _infer_excluded_packages(
+        self,
+        doc_info: Dict[str, Any],
+        planner_instruction: Optional[str],
+        available_package_names: List[str],
+        evidence_packets: Optional[List[Dict[str, Any]]] = None,
+    ) -> set[str]:
+        """Infer package names that are clearly domain-mismatched for the current document."""
+        packet_values = " ".join(
+            str(packet.get("value", ""))
+            for packet in (evidence_packets or [])[:12]
+            if packet.get("value")
+        )
+        text = " ".join(
+            str(part)
+            for part in [
+                doc_info.get("title", ""),
+                doc_info.get("document_type", ""),
+                doc_info.get("research_domain", ""),
+                doc_info.get("scientific_domain", ""),
+                " ".join(doc_info.get("keywords", []) or []),
+                packet_values,
+                planner_instruction or "",
+            ]
+            if part
+        ).lower()
+
+        excludes: set[str] = set()
+
+        def has_keyword(*keywords: str) -> bool:
+            return any(re.search(r"\b" + re.escape(keyword) + r"\b", text) for keyword in keywords)
+
+        for package_name in available_package_names:
+            lower = package_name.lower()
+            if any(token in lower for token in ["human oral", "human vaginal", "human gut", "human skin", "human associated", "person"]):
+                if not has_keyword("human", "oral", "skin", "gut", "vaginal", "patient", "clinical"):
+                    excludes.add(package_name)
+            if any(token in lower for token in ["pig", "pig_", "pig "]):
+                if not has_keyword("pig", "swine", "porcine"):
+                    excludes.add(package_name)
+            if any(token in lower for token in ["plant sample checklist", "crop plant", "miappe", "plant associated"]):
+                if not has_keyword("plant", "crop", "leaf", "root", "stem", "seed", "pathology", "phytopathology"):
+                    excludes.add(package_name)
+        return excludes
+
+    def _extract_guided_package_names(
+        self,
+        available_package_names: List[str],
+        critic_feedback: Optional[Dict[str, Any]] = None,
+        planner_instruction: Optional[str] = None,
+        guidance_history: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Extract explicitly named FAIR-DS packages from planner/critic guidance."""
+        texts: List[str] = []
+        if planner_instruction:
+            texts.append(str(planner_instruction))
+        if critic_feedback:
+            texts.extend(str(item) for item in critic_feedback.get("issues", []) if item)
+            texts.extend(str(item) for item in critic_feedback.get("suggestions", []) if item)
+            critique = critic_feedback.get("critique")
+            if critique:
+                texts.append(str(critique))
+        if guidance_history:
+            texts.extend(str(item) for item in guidance_history if item)
+
+        combined_text = "\n".join(texts).lower()
+        guided_packages: List[str] = []
+        for package_name in available_package_names:
+            pattern = r"(?<![a-z0-9])" + re.escape(package_name.lower()) + r"(?![a-z0-9])"
+            if re.search(pattern, combined_text) and package_name not in guided_packages:
+                guided_packages.append(package_name)
+        return guided_packages
+
+    def _build_candidate_package_names(
+        self,
+        doc_info: Dict[str, Any],
+        planner_instruction: Optional[str],
+        available_package_names: List[str],
+        evidence_packets: Optional[List[Dict[str, Any]]],
+        priority_package_hints: List[str],
+        excluded_package_names: set[str],
+    ) -> List[str]:
+        """Build a small, high-signal candidate package set for first-pass retrieval."""
+        package_lookup = {name.lower(): name for name in available_package_names}
+        packet_values = " ".join(
+            str(packet.get("value", ""))
+            for packet in (evidence_packets or [])[:16]
+            if packet.get("value")
+        )
+        text = " ".join(
+            str(part)
+            for part in [
+                doc_info.get("title", ""),
+                doc_info.get("document_type", ""),
+                doc_info.get("research_domain", ""),
+                doc_info.get("scientific_domain", ""),
+                doc_info.get("methodology", ""),
+                " ".join(doc_info.get("keywords", []) or []),
+                packet_values,
+                planner_instruction or "",
+            ]
+            if part
+        ).lower()
+
+        candidates: List[str] = []
+
+        def add(package_name: str):
+            actual_name = package_lookup.get(package_name.lower())
+            if actual_name and actual_name not in excluded_package_names and actual_name not in candidates:
+                candidates.append(actual_name)
+
+        for package_name in priority_package_hints:
+            add(package_name)
+
+        if any(token in text for token in ["ecotoxic", "nanotoxic", "exposure", "soil", "earthworm", "sediment"]):
+            for package_name in ["soil", "sediment", "water", "miscellaneous natural or artificial environment"]:
+                add(package_name)
+
+        if any(token in text for token in ["rna-seq", "rna seq", "transcriptom", "illumina"]):
+            for package_name in ["Illumina", "Genome"]:
+                add(package_name)
+
+        if any(token in text for token in ["proteom"]):
+            add("Proteomics")
+        if any(token in text for token in ["metabolom"]):
+            add("Metabolomics")
+
+        stop_tokens = {
+            "checklist", "sample", "reporting", "standard", "pilot", "global",
+            "enhanced", "annotation", "associated", "default", "ena", "gsc",
+        }
+        lexical_scores: List[tuple[int, str]] = []
+        for package_name in available_package_names:
+            if package_name in excluded_package_names:
+                continue
+            tokens = [
+                token for token in package_name.lower().replace("-", " ").replace("_", " ").split()
+                if len(token) > 3 and token not in stop_tokens
+            ]
+            score = sum(1 for token in tokens if token in text)
+            if score > 0:
+                lexical_scores.append((score, package_name))
+
+        for _, package_name in sorted(lexical_scores, reverse=True):
+            add(package_name)
+            if len(candidates) >= 12:
+                break
+
+        if not candidates:
+            return [name for name in available_package_names if name not in excluded_package_names]
+
+        if len(candidates) < 4:
+            for package_name in available_package_names:
+                if package_name not in excluded_package_names:
+                    add(package_name)
+                if len(candidates) >= 6:
+                    break
+
+        return candidates
+
+    def _should_skip_deep_react(
+        self,
+        candidate_package_names: List[str],
+    ) -> bool:
+        """Skip expensive KR inner loops when they are unlikely to be stable or cost-effective."""
+        return config.llm_provider == "qwen" and len(candidate_package_names) >= 8
     
     def get_memory_query_hint(self, state: FAIRifierState) -> Optional[str]:
         """

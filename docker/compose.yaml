@@ -1,7 +1,4 @@
-version: '3.8'
-
 services:
-  # FAIRiAgent API Service
   fairifier-api:
     build:
       context: ..
@@ -9,25 +6,38 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # Optional: Vector database (if using Qdrant)
-      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
-      # FAIR-DS API (external service, not in docker compose)
-      - FAIR_DS_API_URL=${FAIR_DS_API_URL:-http://host.docker.internal:8083}
-      # LLM Configuration (set via .env file)
-      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
-      - FAIRIFIER_LLM_MODEL=${FAIRIFIER_LLM_MODEL:-}
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      # LangSmith (optional)
-      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
-      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-fairifier}
+      LLM_PROVIDER: ${LLM_PROVIDER:-qwen}
+      FAIRIFIER_LLM_MODEL: ${FAIRIFIER_LLM_MODEL:-qwen-flash}
+      QWEN_API_BASE_URL: ${QWEN_API_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_ENABLE_THINKING: ${LLM_ENABLE_THINKING:-false}
+      FAIRIFIER_ENABLE_DEEP_AGENTS: ${FAIRIFIER_ENABLE_DEEP_AGENTS:-true}
+      FAIR_DS_API_URL: ${FAIR_DS_API_URL:-http://host.docker.internal:8083}
+      CROSSREF_MAILTO: ${CROSSREF_MAILTO:-}
+      MINERU_ENABLED: ${MINERU_ENABLED:-false}
+      MINERU_SERVER_URL: ${MINERU_SERVER_URL:-http://host.docker.internal:30000}
+      CHECKPOINTER_BACKEND: ${CHECKPOINTER_BACKEND:-sqlite}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      MEM0_ENABLED: ${MEM0_ENABLED:-false}
+      MEM0_QDRANT_HOST: ${MEM0_QDRANT_HOST:-qdrant}
+      MEM0_QDRANT_PORT: ${MEM0_QDRANT_PORT:-6333}
+      MEM0_EMBEDDING_PROVIDER: ${MEM0_EMBEDDING_PROVIDER:-openai}
+      MEM0_EMBEDDING_MODEL: ${MEM0_EMBEDDING_MODEL:-text-embedding-v4}
+      MEM0_EMBEDDING_BASE_URL: ${MEM0_EMBEDDING_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
+      MEM0_EMBEDDING_API_KEY: ${MEM0_EMBEDDING_API_KEY:-}
+      MEM0_EMBEDDING_DIMS: ${MEM0_EMBEDDING_DIMS:-1024}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-fairifier}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ../output:/app/output
       - ../kb:/app/kb
+      - ../examples:/app/examples:ro
     depends_on:
       - qdrant
     restart: unless-stopped
 
-  # Vector database (optional - only if using Qdrant)
   qdrant:
     image: qdrant/qdrant:v1.7.0
     ports:

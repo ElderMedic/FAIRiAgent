@@ -5,6 +5,7 @@ the API and retrieve data from the database.
 """
 
 import pytest
+from unittest.mock import MagicMock
 from fairifier.services.fair_data_station import (
     FAIRDataStationClient,
     FAIRDataStationUnavailable,
@@ -56,6 +57,31 @@ class TestFAIRDataStationConnection:
 
 class TestFAIRDataStationTermsAPI:
     """Test FAIR-DS Terms API endpoints."""
+
+    def test_search_terms_for_fields_skips_null_term_entries(self):
+        """Null entries in /api/terms payload should be ignored, not crash parsing."""
+        client = FAIRDataStationClient(base_url="http://example.test", timeout=2)
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "total": 2,
+            "terms": {
+                "environmental medium": None,
+                "geographic location": {
+                    "label": "geographic location",
+                    "definition": "Location of sampling",
+                    "url": "http://example.org/geo",
+                },
+            },
+        }
+        client._session = MagicMock()
+        client._session.get.return_value = response
+
+        terms = client.search_terms_for_fields("location")
+
+        assert len(terms) == 1
+        assert terms[0]["term_name"] == "geographic location"
+        assert terms[0]["label"] == "geographic location"
 
     @pytest.mark.integration
     def test_get_all_terms(self, fair_ds_client):
@@ -190,6 +216,25 @@ class TestFAIRDataStationPackageAPI:
         
         # Should return None or empty dict, not raise exception
         assert package is None or package == {} or len(package) == 0
+
+    def test_get_package_uses_client_cache(self):
+        """Repeated package lookups should reuse the client-side package cache."""
+        client = FAIRDataStationClient(base_url="http://example.test", timeout=2)
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "packageName": "soil",
+            "itemCount": 1,
+            "metadata": [{"label": "soil type"}],
+        }
+        client._session = MagicMock()
+        client._session.get.return_value = response
+
+        package1 = client.get_package("soil")
+        package2 = client.get_package("soil")
+
+        assert package1 == package2
+        client._session.get.assert_called_once()
 
 
 class TestFAIRDataStationDataIntegrity:

@@ -25,7 +25,7 @@ This directory contains comprehensive tests for the FAIRiAgent agentic framework
 
 ### LLM configuration (tests that need a live LLM)
 
-Tests that call an LLM use **Qwen API** with model **qwen3.5-plus** by default. The API key is read from the system environment variable **`DASHSCOPE_API_KEY`** (or `LLM_API_KEY`). Optional: copy `tests/.env.test.example` to `tests/.env.test` to override provider/model; pytest loads `tests/.env.test` in `conftest.py` before any config import.
+Tests that call an LLM use **Qwen API** with model **`qwen-flash`** by default. The API key is read from the system environment variable **`DASHSCOPE_API_KEY`** (or `LLM_API_KEY`). Optional: copy `tests/.env.test.example` to `tests/.env.test` to override provider/model; pytest loads `tests/.env.test` in `conftest.py` before any config import.
 
 ---
 

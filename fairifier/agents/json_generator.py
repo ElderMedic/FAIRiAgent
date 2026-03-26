@@ -8,6 +8,7 @@ from langsmith import traceable
 from .base import BaseAgent
 from ..models import FAIRifierState, MetadataField
 from ..config import config
+from ..services.evidence_packets import build_evidence_context
 from ..utils.llm_helper import get_llm_helper
 
 
@@ -27,6 +28,10 @@ class JSONGeneratorAgent(BaseAgent):
             doc_info = state.get("document_info", {})
             knowledge_items = state.get("retrieved_knowledge", [])
             document_text = state.get("document_content", "")
+            evidence_packets = state.get("evidence_packets", []) or []
+            metadata_gap_hints = state.get("metadata_gap_hints", []) or []
+            evidence_context = build_evidence_context(evidence_packets, max_packets=20, max_chars=3200)
+            document_context = evidence_context or document_text
             
             self.log_execution(
                 state, 
@@ -60,7 +65,7 @@ class JSONGeneratorAgent(BaseAgent):
                 f"from KnowledgeRetriever (already filtered for relevance)"
             )
             metadata_fields = await self._generate_with_llm(
-                doc_info, knowledge_items, document_text, critic_feedback, planner_instruction,
+                doc_info, knowledge_items, document_context, critic_feedback, planner_instruction,
                 prior_memory_context=prior_memory_context or None
             )
             self.log_execution(
@@ -72,6 +77,11 @@ class JSONGeneratorAgent(BaseAgent):
             state["metadata_fields"] = [
                 self._field_to_dict(field) for field in metadata_fields
             ]
+            state["inferred_metadata_extensions"] = self._build_inferred_metadata_extensions(
+                metadata_gap_hints,
+                doc_info,
+                evidence_packets,
+            )
             
             # Generate final JSON output
             json_output = self._generate_json_output(
@@ -254,7 +264,9 @@ class JSONGeneratorAgent(BaseAgent):
             "confidence": field.confidence,
             "origin": field.origin,
             "package_source": field.package_source,
-            "status": field.status
+            "status": field.status,
+            "isa_sheet": field.isa_sheet,
+            "isa_level": field.isa_sheet,
         }
     
     def _generate_json_output(
@@ -317,6 +329,17 @@ class JSONGeneratorAgent(BaseAgent):
             
             # Document information summary (compact view; derived from flexible LLM extraction)
             "document_info": self._build_document_info_compact(doc_info),
+            "evidence_packets_summary": {
+                "count": len(state.get("evidence_packets", []) or []),
+                "fields": sorted(
+                    {
+                        packet.get("field_candidate")
+                        for packet in (state.get("evidence_packets", []) or [])
+                        if packet.get("field_candidate")
+                    }
+                )[:20],
+            },
+            "inferred_metadata_extensions": state.get("inferred_metadata_extensions", []),
             
             # Statistics
             "statistics": {
@@ -327,7 +350,8 @@ class JSONGeneratorAgent(BaseAgent):
                 "sample_fields": len(fields_by_level.get("sample", [])),
                 "observationunit_fields": len(fields_by_level.get("observationunit", [])),
                 "confirmed_fields": sum(1 for f in fields if f.status == "confirmed"),
-                "provisional_fields": sum(1 for f in fields if f.status == "provisional")
+                "provisional_fields": sum(1 for f in fields if f.status == "provisional"),
+                "inferred_extension_fields": len(state.get("inferred_metadata_extensions", [])),
             },
             
             # Confidence breakdown
@@ -344,8 +368,104 @@ class JSONGeneratorAgent(BaseAgent):
                 output["warnings"].append(
                     f"Low confidence for field '{field.field_name}': {field.confidence:.2f}"
                 )
+
+        if state.get("inferred_metadata_extensions"):
+            output["warnings"].append(
+                f"{len(state['inferred_metadata_extensions'])} metadata extensions were inferred outside the current FAIR-DS package set."
+            )
         
         return output
+
+    def _build_inferred_metadata_extensions(
+        self,
+        metadata_gap_hints: List[Dict[str, Any]],
+        doc_info: Dict[str, Any],
+        evidence_packets: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Build a lightweight extension block for metadata concepts not covered by FAIR-DS."""
+        extensions: List[Dict[str, Any]] = []
+        for hint in metadata_gap_hints[:20]:
+            label = str(hint.get("label") or "").strip()
+            if not label:
+                continue
+            packet = self._select_supporting_packet(label, evidence_packets, hint)
+            value, evidence, confidence = self._infer_extension_value(label, doc_info, packet, hint)
+            extensions.append(
+                {
+                    "field_name": label,
+                    "value": value,
+                    "evidence": evidence,
+                    "confidence": confidence,
+                    "status": "provisional_extension",
+                    "reason": hint.get("reason"),
+                    "source": hint.get("source"),
+                    "fairds_status": "not_covered_by_current_package_set",
+                }
+            )
+        return extensions
+
+    def _select_supporting_packet(
+        self,
+        label: str,
+        evidence_packets: List[Dict[str, Any]],
+        hint: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Pick the most relevant evidence packet for a metadata gap hint."""
+        requested_packet_id = hint.get("packet_id")
+        if requested_packet_id:
+            for packet in evidence_packets:
+                if packet.get("packet_id") == requested_packet_id:
+                    return packet
+
+        label_tokens = {
+            token for token in label.lower().replace("-", " ").replace("_", " ").split()
+            if len(token) > 2
+        }
+        best_packet: Optional[Dict[str, Any]] = None
+        best_score = 0
+        for packet in evidence_packets[:30]:
+            haystack = " ".join(
+                str(packet.get(key, ""))
+                for key in ["field_candidate", "value", "evidence_text", "section"]
+            ).lower()
+            score = sum(1 for token in label_tokens if token in haystack)
+            if score > best_score:
+                best_score = score
+                best_packet = packet
+        return best_packet
+
+    def _infer_extension_value(
+        self,
+        label: str,
+        doc_info: Dict[str, Any],
+        packet: Optional[Dict[str, Any]],
+        hint: Dict[str, Any],
+    ) -> tuple[str, str, float]:
+        """Infer a provisional value for a metadata extension without an extra LLM call."""
+        normalized_label = label.lower().strip()
+        for key, value in doc_info.items():
+            if str(key).lower().strip() == normalized_label and value:
+                return str(value), f"DocumentParser field: {key}", 0.78
+
+        if packet:
+            packet_value = packet.get("value") or packet.get("supporting_value")
+            packet_evidence = packet.get("evidence_text") or packet.get("supporting_evidence") or packet.get("section")
+            if packet_value:
+                return (
+                    str(packet_value),
+                    str(packet_evidence or "Evidence packet"),
+                    round(min(float(packet.get("confidence") or 0.6), 0.82), 2),
+                )
+
+        support = hint.get("supporting_value") or hint.get("supporting_evidence")
+        if support:
+            return str(support), str(hint.get("supporting_evidence") or "KnowledgeRetriever metadata gap hint"), round(min(float(hint.get("confidence") or 0.55), 0.75), 2)
+
+        return (
+            "not explicitly captured in FAIR-DS package set",
+            "Planner/KnowledgeRetriever identified this metadata concept but FAIR-DS had no direct package/field match",
+            round(min(float(hint.get("confidence") or 0.45), 0.65), 2),
+        )
 
     def _build_document_info_compact(self, doc_info: Dict[str, Any]) -> Dict[str, Any]:
         """

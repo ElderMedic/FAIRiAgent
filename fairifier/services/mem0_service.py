@@ -11,6 +11,8 @@ checkpointer for workflow state persistence.
 
 from typing import List, Dict, Any, Optional
 import logging
+import hashlib
+import json
 
 # LangSmith tracing (optional)
 try:
@@ -99,12 +101,14 @@ class Mem0Service:
             self.memory = Memory.from_config(config)
             self.enabled = True
             self._config = config
+            self._seen_message_fingerprints: set[str] = set()
             logger.info("Mem0 service initialized successfully")
         except Exception as e:
             self._init_error = e
             self.memory = None
             self.enabled = False
             self._config = config
+            self._seen_message_fingerprints = set()
             # Optional feature: log as WARNING with clear one-liner; full detail at DEBUG
             short_msg = str(e).split("\n")[0].strip() if str(e) else repr(e)
             logger.warning(
@@ -179,18 +183,52 @@ class Mem0Service:
             return {}
         
         try:
+            normalized_messages = [
+                {
+                    "role": str(msg.get("role", "")).strip(),
+                    "content": str(msg.get("content", "")).strip(),
+                }
+                for msg in messages
+                if isinstance(msg, dict) and str(msg.get("content", "")).strip()
+            ]
+            if not normalized_messages:
+                logger.debug("Skipping mem0 add with empty/blank messages for session=%s agent=%s", session_id, agent_id)
+                return {"results": [], "skipped": "empty_messages"}
+
+            fingerprint = self._fingerprint_messages(normalized_messages, session_id, agent_id)
+            if fingerprint in self._seen_message_fingerprints:
+                logger.debug("Skipping duplicate mem0 add for session=%s agent=%s", session_id, agent_id)
+                return {"results": [], "skipped": "duplicate_messages"}
+
             result = self.memory.add(
-                messages=messages,
+                messages=normalized_messages,
                 user_id=session_id,
                 agent_id=agent_id,
                 metadata=metadata or {}
             )
+            self._seen_message_fingerprints.add(fingerprint)
             added_count = len(result.get("results", []))
             logger.debug(f"Added {added_count} memories for session={session_id}, agent={agent_id}")
             return result
         except Exception as e:
             logger.warning(f"Memory add failed: {e}")
             return {}
+
+    def _fingerprint_messages(
+        self,
+        messages: List[Dict[str, str]],
+        session_id: str,
+        agent_id: Optional[str],
+    ) -> str:
+        """Create a stable fingerprint for duplicate write suppression."""
+        payload = {
+            "session_id": session_id,
+            "agent_id": agent_id or "",
+            "messages": messages,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
     
     def list_memories(
         self, 
@@ -532,8 +570,10 @@ def build_mem0_config(
     llm_model: str = "qwen3:30b",
     llm_base_url: str = "http://localhost:11434",
     llm_api_key: Optional[str] = None,
+    embedding_provider: str = "ollama",
     embedding_model: str = "nomic-embed-text",
     embedding_base_url: str = None,
+    embedding_api_key: Optional[str] = None,
     embedding_model_dims: int = 768,
     qdrant_host: str = "localhost",
     qdrant_port: int = 6333,
@@ -555,8 +595,10 @@ def build_mem0_config(
         llm_model: LLM model name for fact extraction
         llm_base_url: Base URL for LLM API (used for ollama or openai base)
         llm_api_key: API key for openai/anthropic (optional for ollama)
+        embedding_provider: Embedder provider (ollama, openai, azure_openai, etc.)
         embedding_model: Embedding model name
         embedding_base_url: Base URL for embedding API (defaults to llm_base_url)
+        embedding_api_key: API key for openai-compatible embedding APIs
         embedding_model_dims: Vector dimension from embedder (default 768 for nomic-embed-text)
         qdrant_host: Qdrant server host
         qdrant_port: Qdrant server port
@@ -591,17 +633,28 @@ def build_mem0_config(
             "ollama_base_url": llm_base_url,
         }
 
+    if embedding_provider == "openai":
+        embedder_config = {
+            "model": embedding_model,
+            "embedding_dims": embedding_model_dims,
+            "openai_base_url": embedding_base_url,
+        }
+        if embedding_api_key:
+            embedder_config["api_key"] = embedding_api_key
+    else:
+        embedder_config = {
+            "model": embedding_model,
+            "ollama_base_url": embedding_base_url,
+        }
+
     return {
         "llm": {
             "provider": llm_provider,
             "config": llm_config,
         },
         "embedder": {
-            "provider": "ollama",
-            "config": {
-                "model": embedding_model,
-                "ollama_base_url": embedding_base_url,
-            }
+            "provider": embedding_provider,
+            "config": embedder_config,
         },
         "vector_store": {
             "provider": "qdrant",
@@ -654,15 +707,49 @@ def get_mem0_service() -> Optional[Mem0Service]:
             mem0_llm_base = config.mem0_llm_base_url or config.mem0_ollama_base_url or config.llm_base_url
             mem0_llm_api_key = config.mem0_llm_api_key
             mem0_llm_model = config.mem0_llm_model or config.llm_model
+
+        embedding_provider = config.mem0_embedding_provider
+        embedding_model = config.mem0_embedding_model
+        embedding_base_url = (
+            config.mem0_embedding_base_url
+            or config.mem0_ollama_base_url
+            or config.mem0_llm_base_url
+            or config.llm_base_url
+        )
+        embedding_api_key = config.mem0_embedding_api_key or mem0_llm_api_key
+        embedding_dims = config.mem0_embedding_dims
+
+        # Qwen/DashScope does not expose Ollama embeddings. When the project is already
+        # using DashScope and mem0 embedder settings are still on defaults, switch mem0
+        # embeddings to the OpenAI-compatible DashScope embeddings API.
+        if (
+            config.llm_provider == "qwen"
+            and embedding_provider == "ollama"
+            and embedding_model == "nomic-embed-text"
+            and embedding_dims == 768
+        ):
+            embedding_provider = "openai"
+            embedding_model = "text-embedding-v4"
+            embedding_dims = 1024
+            embedding_base_url = config.llm_base_url
+            embedding_api_key = config.llm_api_key
+            logger.info(
+                "Main LLM is Qwen (DashScope); mem0 embeddings will use openai-compatible API "
+                "(model=%s, dims=%s)",
+                embedding_model,
+                embedding_dims,
+            )
         
         mem0_config = build_mem0_config(
             llm_provider=mem0_llm_provider,
             llm_model=mem0_llm_model,
             llm_base_url=mem0_llm_base,
             llm_api_key=mem0_llm_api_key,
-            embedding_model=config.mem0_embedding_model,
-            embedding_base_url=config.mem0_ollama_base_url or config.llm_base_url,
-            embedding_model_dims=config.mem0_embedding_dims,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            embedding_base_url=embedding_base_url,
+            embedding_api_key=embedding_api_key,
+            embedding_model_dims=embedding_dims,
             qdrant_host=config.mem0_qdrant_host,
             qdrant_port=config.mem0_qdrant_port,
             collection_name=config.mem0_collection_name,

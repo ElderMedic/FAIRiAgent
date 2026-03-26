@@ -1,5 +1,5 @@
 # FAIRiAgent Dockerfile
-# Multi-purpose Dockerfile supporting CLI and API modes
+# Supports API serving by default and CLI execution via docker run overrides.
 
 FROM python:3.11-slim
 
@@ -61,6 +61,7 @@ RUN if python -c "import playwright" 2>/dev/null; then \
 # Copy application code
 COPY fairifier/ ./fairifier/
 COPY kb/ ./kb/
+COPY examples/ ./examples/
 COPY docs/en/development/critic_rubric.yaml ./docs/en/development/critic_rubric.yaml
 COPY run_fairifier.py .
 COPY langgraph.json .
@@ -73,13 +74,12 @@ RUN mkdir -p output logs
 EXPOSE 8000
 
 # Add healthcheck (for API mode)
-# For CLI mode, run with: docker run --no-healthcheck ...
+# For one-shot CLI usage, run with: docker run --no-healthcheck ...
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/docs 2>/dev/null || exit 1
+    CMD curl -f http://localhost:8000/health 2>/dev/null || exit 1
 
-# Set default command (can be overridden)
-# Examples:
-#   docker run fairiagent                                    # Run API (default)
-#   docker run fairiagent python run_fairifier.py --help    # Show help
-#   docker run fairiagent python run_fairifier.py process document.pdf  # CLI
-CMD ["python", "run_fairifier.py", "api"]
+# Default to production-style API serving in container.
+# Override at runtime for CLI commands, for example:
+#   docker run --rm fairiagent:latest python run_fairifier.py --help
+#   docker run --rm fairiagent:latest python run_fairifier.py process /app/examples/inputs/earthworm_4n_paper_bioRxiv.pdf
+CMD ["python", "-m", "uvicorn", "fairifier.apps.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

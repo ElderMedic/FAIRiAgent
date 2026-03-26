@@ -269,23 +269,30 @@ flowchart TD
 git clone <repository-url>
 cd FAIRiAgent
 
-# 2. Install dependencies
+# 2. Activate the recommended local environment
+mamba activate FAIRiAgent
+# conda activate FAIRiAgent  # fallback
+
+# 3. Install/update dependencies if needed
 pip install -r requirements.txt
 
-# 3. Process your first document!
+# 4. Process your first document
 python run_fairifier.py process examples/inputs/your_document.pdf
 ```
 
 ### 🐳 Docker Quick Start
 
 ```bash
-# Using Docker Compose (includes all services)
+# Using Docker Compose (API + optional Qdrant)
 cd docker
-docker-compose up -d
+cp ../env.example .env
+# Edit .env and set your LLM / FAIR-DS values first
+docker compose up -d
 
 # Access at:
 # - API: http://localhost:8000
-# - UI: http://localhost:8501
+# - Health: http://localhost:8000/health
+# - Qdrant: http://localhost:6333
 ```
 
 See [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md) for details.
@@ -325,6 +332,10 @@ docker run -d -p 6333:6333 qdrant/qdrant
 # Enable in .env
 echo "MEM0_ENABLED=true" >> .env
 echo "MEM0_QDRANT_URL=http://localhost:6333" >> .env
+echo "MEM0_EMBEDDING_PROVIDER=openai" >> .env
+echo "MEM0_EMBEDDING_MODEL=text-embedding-v4" >> .env
+echo "MEM0_EMBEDDING_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1" >> .env
+echo "MEM0_EMBEDDING_DIMS=1024" >> .env
 
 # Verify installation
 python -c "from fairifier.services import get_mem0_service; print('✓ mem0 available' if get_mem0_service() else '✗ mem0 unavailable')"
@@ -333,16 +344,16 @@ python -c "from fairifier.services import get_mem0_service; print('✓ mem0 avai
 **Memory CLI Commands:**
 ```bash
 # Check status
-fairifier memory status
+python run_fairifier.py memory status
 
 # List memories for a session
-fairifier memory list <session_id>
+python run_fairifier.py memory list <session_id>
 
 # Clear memories for a session
-fairifier memory clear <session_id>
+python run_fairifier.py memory clear <session_id>
 ```
 
-See [mem0 integration plan](docs/mem0_context_management_integration.md) for details.
+See [Mem0 Quick Start](docs/MEM0_QUICKSTART.md) and [Memory Guide](docs/MEMORY_GUIDE.md) for details.
 
 </details>
 
@@ -381,14 +392,16 @@ langgraph dev
 
 **Environment Variables (.env file):**
 ```bash
-# LLM Provider (Ollama/OpenAI/Qwen/Anthropic)
-LLM_PROVIDER=ollama  # or "openai", "qwen", or "anthropic"
-FAIRIFIER_LLM_MODEL=llama3  # Model name
-FAIRIFIER_LLM_BASE_URL=http://localhost:11434  # For Ollama
-LLM_API_KEY=your_key  # For OpenAI/Qwen/Anthropic
-LLM_TEMPERATURE=0.5
-LLM_MAX_TOKENS=100000
+# LLM Provider (recommended: DashScope Qwen)
+LLM_PROVIDER=qwen
+FAIRIFIER_LLM_MODEL=qwen-flash
+QWEN_API_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+LLM_API_KEY=your_key
+LLM_TEMPERATURE=0.3
+LLM_MAX_TOKENS=8192
 LLM_ENABLE_THINKING=false  # For Qwen models
+# Conservative budget guardrails are on by default; only flip this for intentional high-cost runs
+# FAIRIFIER_ALLOW_EXPENSIVE_RUNS=true
 
 # FAIR Data Station (optional)
 FAIR_DS_API_URL=http://localhost:8083
@@ -396,6 +409,12 @@ FAIR_DS_API_URL=http://localhost:8083
 # LangSmith (optional)
 LANGSMITH_API_KEY=your_key
 LANGSMITH_PROJECT=fairifier-testing
+
+# Deep inner loops
+FAIRIFIER_ENABLE_DEEP_AGENTS=true
+
+# Crossref polite pool contact
+CROSSREF_MAILTO=your-email@example.org
 
 # Checkpointer (workflow state persistence)
 # Options: none (stateless), memory (dev/test only), sqlite (production)
@@ -644,11 +663,14 @@ Core dependencies:
 # Process document and generate FAIR metadata
 python run_fairifier.py process <document> [options]
 
-# Launch Web UI (Streamlit)
-python run_fairifier.py ui [--port PORT]
+# Run the API wrapper
+python run_fairifier.py api
 
 # Show status for a run
 python run_fairifier.py status <project-id>
+
+# Resume an interrupted run
+python run_fairifier.py resume <project-id>
 
 # Show current configuration
 python run_fairifier.py config-info
@@ -659,6 +681,9 @@ python run_fairifier.py validate-document --env-only   # environment only, no do
 
 # Check MinerU service availability
 python run_fairifier.py check-mineru [-v]
+
+# Memory tools
+python run_fairifier.py memory status
 ```
 
 **Process options:**
@@ -696,9 +721,8 @@ Then open http://localhost:8501 in your browser.
 # Test basic functionality (CLI)
 python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf
 
-# Test with all features (FAIR-DS integration)
-python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf \
-  --fair-ds-url http://localhost:8083
+# Pre-flight environment validation
+python run_fairifier.py validate-document --env-only
 
 # Test web UI
 python run_fairifier.py ui

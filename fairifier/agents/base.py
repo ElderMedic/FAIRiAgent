@@ -30,7 +30,16 @@ class BaseAgent(ABC):
         """
         context = state.get("context", {})
         planner_guidance = state.get("agent_guidance", {})
-        critic_feedback = context.get("critic_feedback")
+        critic_feedback = None
+        critic_feedback_by_agent = context.get("critic_feedback_by_agent", {})
+        if isinstance(critic_feedback_by_agent, dict):
+            critic_feedback = critic_feedback_by_agent.get(self.name)
+        if not critic_feedback:
+            fallback_feedback = context.get("critic_feedback")
+            if isinstance(fallback_feedback, dict):
+                target_agent = fallback_feedback.get("target_agent")
+                if target_agent in (None, self.name):
+                    critic_feedback = fallback_feedback
         if critic_feedback:
             critic_feedback = critic_feedback.copy()
             history = context.get("critic_guidance_history", {}).get(self.name, [])

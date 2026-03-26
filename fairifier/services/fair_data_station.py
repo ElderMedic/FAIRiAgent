@@ -17,6 +17,32 @@ class FAIRDataStationUnavailable(RuntimeError):
     """Raised when the FAIR Data Station API cannot be reached."""
 
 
+def _normalize_terms_payload(raw_terms: Any) -> Dict[str, Dict[str, Any]]:
+    """Normalize FAIR-DS term payloads into a dict of term-name -> term-info."""
+    normalized: Dict[str, Dict[str, Any]] = {}
+
+    if isinstance(raw_terms, dict):
+        for term_name, term_info in raw_terms.items():
+            if not isinstance(term_info, dict):
+                continue
+            normalized[str(term_name)] = term_info
+        return normalized
+
+    if isinstance(raw_terms, list):
+        for index, term_info in enumerate(raw_terms):
+            if not isinstance(term_info, dict):
+                continue
+            term_name = (
+                term_info.get("term_name")
+                or term_info.get("name")
+                or term_info.get("label")
+                or f"term_{index}"
+            )
+            normalized[str(term_name)] = term_info
+
+    return normalized
+
+
 class FAIRDataStationClient:
     """Thin HTTP client for FAIR Data Station metadata endpoints.
     
@@ -43,6 +69,7 @@ class FAIRDataStationClient:
         self._packages_cache: Optional[List[Dict[str, Any]]] = None
         self._terms_cache: Optional[Dict[str, Dict[str, Any]]] = None
         self._available_packages_cache: Optional[List[str]] = None
+        self._package_detail_cache: Dict[str, Dict[str, Any]] = {}
 
     def is_available(self) -> bool:
         """Return True if the FAIR Data Station API responds."""
@@ -77,7 +104,7 @@ class FAIRDataStationClient:
                 data = response.json()
                 # API returns {"total": N, "terms": {...}}
                 if isinstance(data, dict) and "terms" in data:
-                    self._terms_cache = data["terms"]
+                    self._terms_cache = _normalize_terms_payload(data["terms"])
                     logger.info(f"✅ Fetched {data.get('total', len(self._terms_cache))} terms from FAIR-DS API")
                     return self._terms_cache
                     
@@ -121,7 +148,7 @@ class FAIRDataStationClient:
             if response.status_code == 200:
                 data = response.json()
                 if isinstance(data, dict) and "terms" in data:
-                    terms = data["terms"]
+                    terms = _normalize_terms_payload(data["terms"])
                     logger.info(f"✅ Found {data.get('total', len(terms))} terms matching filters")
                     return terms
                     
@@ -184,7 +211,7 @@ class FAIRDataStationClient:
         self._available_packages_cache = []
         return self._available_packages_cache
 
-    def get_package(self, package_name: str) -> Optional[Dict[str, Any]]:
+    def get_package(self, package_name: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         """Get a specific package with all its metadata fields.
         
         Args:
@@ -207,6 +234,9 @@ class FAIRDataStationClient:
                 ]
             }
         """
+        if not force_refresh and package_name in self._package_detail_cache:
+            return self._package_detail_cache[package_name]
+
         try:
             response = self._session.get(
                 f"{self._base_url}/api/package",
@@ -217,6 +247,7 @@ class FAIRDataStationClient:
             if response.status_code == 200:
                 data = response.json()
                 if isinstance(data, dict) and "metadata" in data:
+                    self._package_detail_cache[package_name] = data
                     logger.info(
                         f"✅ Fetched package '{package_name}' with "
                         f"{data.get('itemCount', len(data['metadata']))} fields"

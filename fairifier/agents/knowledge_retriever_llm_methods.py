@@ -10,6 +10,8 @@ import logging
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from fairifier.utils.llm_helper import normalize_llm_response_content
+
 logger = logging.getLogger(__name__)
 
 
@@ -181,7 +183,7 @@ REQUIREMENTS:
             logger.warning(f"Using default packages from API (fallback): {default_packages}")
             return default_packages
         
-        content = getattr(response, 'content', None)
+        content = normalize_llm_response_content(getattr(response, 'content', None))
         
         # Check if response is empty or None
         if not content or (isinstance(content, str) and not content.strip()):
@@ -229,20 +231,25 @@ REQUIREMENTS:
                     if actual_name:
                         selected_package_names.append(actual_name)
         
-        if priority_package_hints:
-            merged_selection = []
-            for package_name in priority_package_hints + selected_package_names:
-                actual_name = package_lookup.get(str(package_name).lower())
-                if actual_name and actual_name not in merged_selection:
-                    merged_selection.append(actual_name)
-            selected_package_names = merged_selection
-        
         # If nothing selected, use top packages from API
         if not selected_package_names:
-            logger.warning("LLM selected no packages, using top packages from API")
-            default_packages = [pkg["name"] for pkg in all_packages[:3]]
-            logger.info(f"Using default packages from API: {default_packages}")
-            selected_package_names = default_packages
+            fallback_packages: List[str] = []
+            for package_name in priority_package_hints or []:
+                actual_name = package_lookup.get(str(package_name).lower())
+                if actual_name and actual_name not in fallback_packages:
+                    fallback_packages.append(actual_name)
+
+            if fallback_packages:
+                logger.warning(
+                    "LLM selected no packages, using heuristic priority package fallback: %s",
+                    fallback_packages,
+                )
+                selected_package_names = fallback_packages
+            else:
+                logger.warning("LLM selected no packages, using top packages from API")
+                default_packages = [pkg["name"] for pkg in all_packages[:3]]
+                logger.info(f"Using default packages from API: {default_packages}")
+                selected_package_names = default_packages
         
         logger.info(f"LLM selected packages: {selected_package_names}")
         logger.info(f"Reasoning: {(result.get('reasoning', '') if isinstance(result, dict) else '')[:200]}")
@@ -450,14 +457,21 @@ REQUIREMENTS:
     ]
     
     response = await llm_helper._call_llm(messages, operation_name="Knowledge Retriever - field selection")
-    content = response.content
-    
+    content = normalize_llm_response_content(getattr(response, "content", None))
+
+    if not content or not content.strip():
+        logger.warning("LLM returned empty response for field selection; selecting no optional fields")
+        return {
+            "selected_fields": [],
+            "terms_to_search": [],
+        }
+
     # Parse response
     if "```json" in content:
         content = content.split("```json")[1].split("```")[0].strip()
     elif "```" in content:
         content = content.split("```")[1].split("```")[0].strip()
-    
+
     result = json.loads(content)
     # Handle LLM returning a list (e.g. phi4) instead of {"selected_fields": [...], "terms_to_search": [...]}
     if isinstance(result, list):

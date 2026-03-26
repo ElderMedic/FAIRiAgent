@@ -62,6 +62,7 @@ class FAIRifierConfig:
     schemas_path: Path = kb_path / "schemas" 
     shapes_path: Path = kb_path / "shapes"
     output_path: Path = project_root / "output"  # Default, will be overridden with timestamp in CLI
+    skills_dir: Path = project_root / "fairifier" / "skills"
     
     # LLM Configuration
     # Providers: "ollama", "openai", "qwen", or "anthropic" (claude)
@@ -72,21 +73,22 @@ class FAIRifierConfig:
     llm_api_key: Optional[str] = None  # For OpenAI/Qwen/Anthropic
     embedding_model: str = "nomic-embed-text"
     llm_temperature: float = 0.3  # Recommended for structured extraction; keep consistent across configs (control variable)
-    llm_max_tokens: int = 100000
+    llm_max_tokens: int = 8192  # Conservative default for test/dev cost control
     llm_enable_thinking: bool = False  # Enable thinking mode (requires streaming for some models)
+    enable_deep_agents: bool = True  # Use deepagents inner loops when dependency is available
     
     # Document parsing context limits (characters)
     # Modern LLMs support 200K+ tokens (~800K chars), these limits are conservative
-    max_doc_context_markdown: int = 600000  # For MinerU-converted Markdown (150K tokens)
-    max_doc_context_text: int = 500000      # For raw text/PDF extraction (125K tokens)
+    max_doc_context_markdown: int = 200000  # Conservative default to cap input-token cost in test/dev
+    max_doc_context_text: int = 120000      # Conservative default to cap input-token cost in test/dev
     
     # Processing limits
     max_document_size_mb: int = 50
     max_processing_time_minutes: int = 10
     
     # Retry configuration
-    max_step_retries: int = 2  # Maximum retries per step before escalation
-    max_global_retries: int = 5  # Maximum total retries across all steps
+    max_step_retries: int = 1  # Conservative default for test/dev token control
+    max_global_retries: int = 2  # Conservative default for test/dev token control
     
     # Confidence thresholds
     min_confidence_threshold: float = 0.75
@@ -117,6 +119,7 @@ class FAIRifierConfig:
     # FAIR Data Station API URL (default: local)
     fair_ds_api_url: Optional[str] = "http://localhost:8083"
     qdrant_url: Optional[str] = None  # Vector database (optional)
+    crossref_mailto: Optional[str] = None  # Contact email for polite Crossref API usage
     
     # Document conversion (MinerU)
     mineru_enabled: bool = False
@@ -124,6 +127,14 @@ class FAIRifierConfig:
     mineru_backend: str = "vlm-http-client"
     mineru_server_url: Optional[str] = "http://localhost:30000"
     mineru_timeout_seconds: int = 300
+
+    # Deep agent inner-loop contracts
+    react_loop_max_iterations: int = 4
+    react_loop_max_tool_calls: int = 12
+    react_loop_document_parser_target_fields: int = 6
+    react_loop_document_parser_target_packets: int = 8
+    react_loop_knowledge_retriever_target_packages: int = 4
+    react_loop_knowledge_retriever_target_optional_fields: int = 12
     
     # Langfuse configuration (optional observability, parallel to LangSmith)
     enable_langfuse: bool = False
@@ -159,11 +170,15 @@ class FAIRifierConfig:
     mem0_ollama_base_url: Optional[str] = None  # Base URL for mem0 when provider=ollama
     mem0_llm_base_url: Optional[str] = None  # Base URL for mem0 when provider=openai (e.g. OpenAI-compatible API)
     mem0_llm_api_key: Optional[str] = None  # API key for mem0 when provider=openai or anthropic
+    mem0_embedding_provider: str = "ollama"  # Embedder provider: ollama or openai-compatible API
     mem0_embedding_model: str = "nomic-embed-text"  # Ollama embedding model
+    mem0_embedding_base_url: Optional[str] = None  # Base URL for openai-compatible embedding APIs
+    mem0_embedding_api_key: Optional[str] = None  # API key for openai-compatible embedding APIs
     mem0_embedding_dims: int = 768  # Vector dimension (nomic-embed-text=768; OpenAI ada-002=1536)
     mem0_qdrant_host: str = "localhost"  # Qdrant server host
     mem0_qdrant_port: int = 6333  # Qdrant server port
     mem0_collection_name: str = "fairifier_memories"  # Qdrant collection name
+    memory_scope_id: Optional[str] = None  # Override mem0 scope independently from project_id/thread_id
     
     def __post_init__(self):
         """Create necessary directories."""
@@ -171,6 +186,7 @@ class FAIRifierConfig:
         self.kb_path.mkdir(exist_ok=True)
         self.schemas_path.mkdir(exist_ok=True)
         self.shapes_path.mkdir(exist_ok=True)
+        self.skills_dir.mkdir(parents=True, exist_ok=True)
         
         # Ensure checkpoint DB parent directory exists if using sqlite
         if self.checkpointer_backend == "sqlite":
@@ -183,14 +199,28 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("FAIRIFIER_LLM_MODEL"):
         config_instance.llm_model = os.getenv("FAIRIFIER_LLM_MODEL")
     else:
-        # Use model from config file
-        config_instance.llm_model = "qwen3:30b"
+        requested_provider = (os.getenv("LLM_PROVIDER") or config_instance.llm_provider or "").lower()
+        if requested_provider == "qwen":
+            config_instance.llm_model = "qwen-flash"
+        else:
+            config_instance.llm_model = "qwen3:30b"
 
     if os.getenv("FAIRIFIER_LLM_BASE_URL"):
         config_instance.llm_base_url = os.getenv("FAIRIFIER_LLM_BASE_URL")
+    if os.getenv("FAIRIFIER_SKILLS_DIR"):
+        config_instance.skills_dir = Path(os.getenv("FAIRIFIER_SKILLS_DIR"))
+    if os.getenv("FAIRIFIER_ENABLE_DEEP_AGENTS"):
+        value = os.getenv("FAIRIFIER_ENABLE_DEEP_AGENTS").strip().lower()
+        config_instance.enable_deep_agents = value in ("1", "true", "yes", "on")
+    if os.getenv("REACT_LOOP_MAX_ITERATIONS"):
+        config_instance.react_loop_max_iterations = int(os.getenv("REACT_LOOP_MAX_ITERATIONS"))
+    if os.getenv("REACT_LOOP_MAX_TOOL_CALLS"):
+        config_instance.react_loop_max_tool_calls = int(os.getenv("REACT_LOOP_MAX_TOOL_CALLS"))
 
     if os.getenv("QDRANT_URL"):
         config_instance.qdrant_url = os.getenv("QDRANT_URL")
+    if os.getenv("CROSSREF_MAILTO"):
+        config_instance.crossref_mailto = os.getenv("CROSSREF_MAILTO")
 
     if os.getenv("LANGSMITH_API_KEY"):
         config_instance.langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
@@ -416,6 +446,12 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.mem0_llm_api_key = os.getenv("MEM0_LLM_API_KEY")
     if os.getenv("MEM0_OLLAMA_BASE_URL"):
         config_instance.mem0_ollama_base_url = os.getenv("MEM0_OLLAMA_BASE_URL")
+    if os.getenv("MEM0_EMBEDDING_PROVIDER"):
+        config_instance.mem0_embedding_provider = os.getenv("MEM0_EMBEDDING_PROVIDER").lower()
+    if os.getenv("MEM0_EMBEDDING_BASE_URL"):
+        config_instance.mem0_embedding_base_url = os.getenv("MEM0_EMBEDDING_BASE_URL")
+    if os.getenv("MEM0_EMBEDDING_API_KEY"):
+        config_instance.mem0_embedding_api_key = os.getenv("MEM0_EMBEDDING_API_KEY")
     
     if os.getenv("MEM0_EMBEDDING_MODEL"):
         config_instance.mem0_embedding_model = os.getenv("MEM0_EMBEDDING_MODEL")
@@ -452,6 +488,40 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     
     if os.getenv("MEM0_COLLECTION_NAME"):
         config_instance.mem0_collection_name = os.getenv("MEM0_COLLECTION_NAME")
+    if os.getenv("FAIRIFIER_MEMORY_SCOPE_ID"):
+        config_instance.memory_scope_id = os.getenv("FAIRIFIER_MEMORY_SCOPE_ID")
+
+
+def apply_budget_guardrails(config_instance: FAIRifierConfig):
+    """Apply conservative token/cost guardrails unless explicitly disabled.
+
+    This protects local testing from stale high-budget .env settings.
+    Set FAIRIFIER_ALLOW_EXPENSIVE_RUNS=true to opt out.
+    """
+    allow_expensive = os.getenv("FAIRIFIER_ALLOW_EXPENSIVE_RUNS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if allow_expensive:
+        return
+
+    config_instance.llm_max_tokens = min(config_instance.llm_max_tokens, 8192)
+    config_instance.max_doc_context_markdown = min(
+        config_instance.max_doc_context_markdown, 200000
+    )
+    config_instance.max_doc_context_text = min(
+        config_instance.max_doc_context_text, 120000
+    )
+    config_instance.max_step_retries = min(config_instance.max_step_retries, 1)
+    config_instance.max_global_retries = min(config_instance.max_global_retries, 2)
+    config_instance.react_loop_max_iterations = min(
+        config_instance.react_loop_max_iterations, 4
+    )
+    config_instance.react_loop_max_tool_calls = min(
+        config_instance.react_loop_max_tool_calls, 12
+    )
 
 
 # Global config instance
@@ -459,3 +529,4 @@ config = FAIRifierConfig()
 
 # Apply environment overrides
 apply_env_overrides(config)
+apply_budget_guardrails(config)

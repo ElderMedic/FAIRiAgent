@@ -2,9 +2,23 @@
 
 ## Summary
 
-**Total Documents**: 3  
-**Created**: 2025-11-21  
-**Location**: `evaluation/datasets/annotated/ground_truth_v1.json`
+**Tracked multi-document ground truth**: `evaluation/datasets/annotated/ground_truth_filtered.json` — 3 documents (`earthworm`, `biosensor`, `pomato`). Raw inputs under `evaluation/datasets/raw/` are gitignored.
+
+**Confidential / local-only** (`document_id: biorem`): narrative and ground truth are **not** committed to public remotes; see [Confidential evaluation assets (biorem)](#confidential-evaluation-assets-biorem) below.
+
+## Confidential evaluation assets (biorem)
+
+- **Do not distribute** narrative content, Excel templates, or `.local.json` ground truth publicly.
+- **Paths (all gitignored except scripts)**: place `BIOREM_Metadata.xlsx` and generated `BIOREM_study_narrative.md` / `BIOREM_study_narrative.pdf` under `evaluation/datasets/raw/biorem/`. Ground truth JSON: `evaluation/datasets/annotated/ground_truth_biorem.local.json` (ignored via `*.local.json`).
+- **Regenerate after template changes** (from repo root, FAIRiAgent env):
+  - `python evaluation/scripts/build_biorem_study_narrative.py --excel evaluation/datasets/raw/biorem/BIOREM_Metadata.xlsx --output evaluation/datasets/raw/biorem/BIOREM_study_narrative.md`
+  - `python evaluation/scripts/md_to_pdf_simple.py evaluation/datasets/raw/biorem/BIOREM_study_narrative.md evaluation/datasets/raw/biorem/BIOREM_study_narrative.pdf`
+  - `python evaluation/scripts/export_biorem_ground_truth_local.py`
+- **Evaluate** with `--ground-truth evaluation/datasets/annotated/ground_truth_biorem.local.json` (and your usual run flags). Optional: Pandoc can replace `md_to_pdf_simple.py` if installed locally.
+
+---
+
+**Legacy note**: Older docs referred to `ground_truth_v1.json`; the active combined file is `ground_truth_filtered.json`.
 
 ## Papers Included
 
@@ -22,12 +36,10 @@
 - **Source**: Manually curated ISA-Tab Excel file
 - **ISA Coverage**: investigation(8), study(4), assay(13), sample(14), observationunit(4)
 
-### 3. 📄 BIOREM
-- **File**: `raw/biorem/BIOREM_appendix2.pdf`
-- **Metadata**: Converted from FAIRiAgent output (`output/20251116_185736/`)
-- **Fields**: 51 total (6 required, 51 recommended)
-- **Source**: High-confidence FAIRiAgent extraction (confidence > 0.5, status = confirmed)
-- **ISA Coverage**: investigation(6), study(9), assay(13), sample(23)
+### 3. 📄 Pomato
+- **Input**: Markdown under `raw/pomato/` (MinerU output path as in `ground_truth_filtered.json`)
+- **Source**: Internal multi-scenario plant-pathology style annotation (see JSON `metadata.notes`)
+- **Use**: Same evaluation flow as other tracked documents; details omitted here for brevity
 
 ## Conversion Process
 
@@ -37,12 +49,8 @@
 - Field names from column headers, values from first non-null row
 - Multiple rows treated as acceptable variations
 
-### BIOREM
-- Converted from existing FAIRiAgent output using `add_biorem_to_ground_truth.py`
-- Only included fields with:
-  - `status: "confirmed"`
-  - `confidence > 0.5`
-- Evidence and confidence preserved from original extraction
+### Confidential `biorem` (local)
+- Built from the expert Excel template via `evaluation/scripts/export_biorem_ground_truth_local.py` and `evaluation/archive/scripts/convert_excel_to_ground_truth.py` (skips non-ISA `Help` sheet). Narrative MD is generated with `build_biorem_study_narrative.py`. Not part of the tracked `ground_truth_filtered.json` file.
 
 ## Data Quality
 

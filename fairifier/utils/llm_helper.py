@@ -35,6 +35,8 @@ from ..config import config
 
 logger = logging.getLogger(__name__)
 
+QWEN_MAX_TOKENS_LIMIT = 65536
+
 
 def estimate_tokens(text: str) -> int:
     """
@@ -431,6 +433,181 @@ def _parse_json_with_fallback(content: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _to_string_list(value: Any) -> List[str]:
+    """Normalize scalar/list/dict values into a compact list of strings."""
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, list):
+        items: List[str] = []
+        for item in value:
+            items.extend(_to_string_list(item))
+        return [item for item in items if item]
+    if isinstance(value, dict):
+        name = value.get("name") or value.get("title") or value.get("label")
+        if name:
+            return [str(name).strip()]
+        compact = ", ".join(
+            f"{k}: {v}" for k, v in value.items() if v not in (None, "", [], {})
+        )
+        return [compact] if compact else []
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def normalize_llm_response_content(content: Any) -> str:
+    """Normalize provider-specific response payloads into a plain text string.
+
+    Anthropic and some other SDKs may expose `response.content` as a list of
+    typed blocks instead of a single string. This helper extracts the textual
+    parts so downstream JSON parsing logic can stay provider-agnostic.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    parts.append(text)
+                continue
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+                continue
+            text = getattr(item, "text", None) or getattr(item, "content", None)
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+        return "\n".join(parts).strip()
+    if isinstance(content, dict):
+        text = content.get("text") or content.get("content")
+        if isinstance(text, str):
+            return text.strip()
+    text = str(content).strip()
+    return text
+
+
+def _normalize_authors(value: Any) -> List[str]:
+    """Normalize author payloads into a list of author names."""
+    authors: List[str] = []
+    for item in _to_string_list(value):
+        if item and item not in authors:
+            authors.append(item)
+    return authors
+
+
+def _first_non_empty(*values: Any) -> Any:
+    """Return the first non-empty value from the provided candidates."""
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _normalize_extracted_document_info(doc_info: Dict[str, Any]) -> Dict[str, Any]:
+    """Map adaptive LLM extraction output back to FAIRifier's compact document_info shape."""
+    if not isinstance(doc_info, dict):
+        return {}
+
+    source = doc_info.get("metadata") if isinstance(doc_info.get("metadata"), dict) else doc_info
+    bibliographic = source.get("bibliographic_metadata")
+    bibliographic = bibliographic if isinstance(bibliographic, dict) else {}
+    experimental = source.get("experimental_design")
+    experimental = experimental if isinstance(experimental, dict) else {}
+    data_availability = source.get("data_availability")
+    data_availability = data_availability if isinstance(data_availability, dict) else {}
+
+    canonical = {
+        "document_type": _first_non_empty(source.get("document_type"), source.get("type")),
+        "title": _first_non_empty(
+            source.get("title"),
+            source.get("document_title"),
+            source.get("study_title"),
+            bibliographic.get("title"),
+        ),
+        "abstract": _first_non_empty(
+            source.get("abstract"),
+            source.get("summary"),
+            source.get("description"),
+            source.get("study_summary"),
+        ),
+        "authors": _first_non_empty(source.get("authors"), bibliographic.get("authors")),
+        "keywords": _first_non_empty(source.get("keywords"), source.get("topics"), source.get("tags")),
+        "research_domain": _first_non_empty(
+            source.get("research_domain"),
+            source.get("domain"),
+            source.get("field_of_study"),
+            source.get("research_area"),
+        ),
+        "scientific_domain": source.get("scientific_domain"),
+        "methodology": _first_non_empty(
+            source.get("methodology"),
+            source.get("methods"),
+            source.get("analysis_workflow"),
+            experimental.get("methodology"),
+            experimental.get("analysis_workflow"),
+            experimental.get("workflow"),
+        ),
+        "location": _first_non_empty(
+            source.get("location"),
+            bibliographic.get("location"),
+            experimental.get("location"),
+        ),
+        "coordinates": _first_non_empty(source.get("coordinates"), experimental.get("coordinates")),
+        "doi": _first_non_empty(source.get("doi"), bibliographic.get("doi"), bibliographic.get("DOI")),
+        "journal": _first_non_empty(source.get("journal"), bibliographic.get("journal"), bibliographic.get("publisher")),
+        "publication_date": _first_non_empty(
+            source.get("publication_date"),
+            bibliographic.get("publication_date"),
+            bibliographic.get("published"),
+        ),
+        "datasets_mentioned": _first_non_empty(
+            source.get("datasets_mentioned"),
+            source.get("repositories"),
+            data_availability.get("repositories"),
+            data_availability.get("datasets"),
+            data_availability.get("accessions"),
+        ),
+        "instruments": _first_non_empty(source.get("instruments"), experimental.get("instruments")),
+        "variables": _first_non_empty(
+            source.get("variables"),
+            experimental.get("variables"),
+            experimental.get("measurements"),
+        ),
+        "key_findings": _first_non_empty(
+            source.get("key_findings"),
+            source.get("findings"),
+            source.get("study_objectives"),
+            source.get("main_results"),
+        ),
+    }
+
+    normalized: Dict[str, Any] = {}
+    for key, value in canonical.items():
+        if value in (None, "", [], {}):
+            continue
+        if key == "authors":
+            authors = _normalize_authors(value)
+            if authors:
+                normalized[key] = authors
+        elif key in {"keywords", "datasets_mentioned", "instruments", "variables", "key_findings"}:
+            values = _to_string_list(value)
+            if values:
+                normalized[key] = values
+        else:
+            normalized[key] = value
+
+    if "scientific_domain" not in normalized and isinstance(source.get("scientific_domain"), str):
+        normalized["scientific_domain"] = source["scientific_domain"]
+
+    merged = dict(source)
+    merged.update(normalized)
+    return {k: v for k, v in merged.items() if v not in (None, "", [], {})}
+
+
 class LLMHelper:
     """Helper class for LLM interactions."""
     
@@ -469,6 +646,22 @@ class LLMHelper:
             return None
         return {"callbacks": [self._langfuse_handler]}
 
+    def _resolved_max_tokens(self) -> Optional[int]:
+        """Normalize provider-specific max token settings before API calls."""
+        max_tokens = config.llm_max_tokens
+        if max_tokens is None or max_tokens <= 0:
+            return None
+
+        if self.provider == "qwen" and max_tokens > QWEN_MAX_TOKENS_LIMIT:
+            logger.warning(
+                "Configured llm_max_tokens=%s exceeds DashScope Qwen limit; clamping to %s",
+                max_tokens,
+                QWEN_MAX_TOKENS_LIMIT,
+            )
+            return QWEN_MAX_TOKENS_LIMIT
+
+        return max_tokens
+
     def flush_langfuse(self):
         """Flush any pending Langfuse events (call before process exit)."""
         if self._langfuse_handler is None:
@@ -494,6 +687,7 @@ class LLMHelper:
                 content = result.content
             elif hasattr(result, '__str__'):
                 content = str(result)
+            content = normalize_llm_response_content(content)
             
             if content is None:
                 logger.warning(f"Could not extract content from LLM result for {operation_name}")
@@ -708,14 +902,12 @@ class LLMHelper:
                         pass
                     return result
         elif self.provider == "openai":
-            # OpenAI-compatible APIs: many backends (DashScope, Azure, etc.) accept enable_thinking via extra_body
-            # Official OpenAI may ignore unknown params; reasoning models (o1/o3) use different params
+            # Official OpenAI does not accept DashScope-style enable_thinking in extra_body.
+            # Keep this path provider-clean and let Qwen/OpenAI-compatible backends use
+            # the dedicated qwen provider instead.
             if stream_to_streamlit:
                 try:
-                    llm_with_params = self.llm.bind(
-                        stream=True,
-                        extra_body={"enable_thinking": enable_thinking},
-                    )
+                    llm_with_params = self.llm.bind(stream=True)
                     content_parts = []
                     full_text = ""
                     
@@ -755,8 +947,7 @@ class LLMHelper:
                     return result
                 except Exception as e:
                     logger.warning(f"OpenAI streaming failed: {e}, falling back to regular call")
-                    llm_with_params = self.llm.bind(extra_body={"enable_thinking": enable_thinking})
-                    result = await llm_with_params.ainvoke(messages, config=run_config)
+                    result = await self.llm.ainvoke(messages, config=run_config)
                     
                     # Log LLM response
                     self._log_llm_response(result, messages, operation_name)
@@ -770,8 +961,7 @@ class LLMHelper:
                         pass
                     return result
             else:
-                llm_with_params = self.llm.bind(extra_body={"enable_thinking": enable_thinking})
-                result = await llm_with_params.ainvoke(messages, config=run_config)
+                result = await self.llm.ainvoke(messages, config=run_config)
                 
                 # Log LLM response
                 self._log_llm_response(result, messages, operation_name)
@@ -1044,7 +1234,7 @@ class LLMHelper:
                 model=self.model,
                 base_url=config.llm_base_url,
                 temperature=config.llm_temperature,
-                num_predict=config.llm_max_tokens,  # Limit output tokens to prevent infinite generation
+                num_predict=self._resolved_max_tokens(),  # Limit output tokens to prevent runaway generation
             )
         elif self.provider == "openai":
             if ChatOpenAI is None:
@@ -1060,7 +1250,7 @@ class LLMHelper:
                 api_key=config.llm_api_key,
                 base_url=base_url,  # None uses default OpenAI API
                 temperature=config.llm_temperature,
-                max_tokens=config.llm_max_tokens,  # Limit output tokens
+                max_tokens=self._resolved_max_tokens(),  # Limit output tokens
             )
         elif self.provider == "qwen":
             if ChatOpenAI is None:
@@ -1078,7 +1268,7 @@ class LLMHelper:
                 api_key=config.llm_api_key,
                 base_url=base_url,
                 temperature=config.llm_temperature,
-                max_tokens=config.llm_max_tokens,  # Limit output tokens
+                max_tokens=self._resolved_max_tokens(),  # DashScope rejects values above provider limit
             )
         elif self.provider == "anthropic" or self.provider == "claude":
             if ChatAnthropic is None:
@@ -1090,7 +1280,7 @@ class LLMHelper:
                 model=self.model,
                 api_key=config.llm_api_key,
                 temperature=config.llm_temperature,
-                max_tokens=config.llm_max_tokens,  # Limit output tokens
+                max_tokens=self._resolved_max_tokens(),  # Limit output tokens
             )
         else:
             raise ValueError(
@@ -1625,17 +1815,41 @@ Do NOT analyze, summarize, or rewrite the content.
 Return structured JSON metadata ONLY. No narrative text.
 Stop immediately after the closing ```."""
         else:
-            user_prompt = f"""Analyze and extract information from this research document:
+            user_prompt = f"""Extract compact metadata from this research document.
 
-{text}
+Return ONLY a markdown JSON code block with a concise object that stays close to this schema:
 
-Think step by step:
-1. What type of document is this? (research paper, dataset description, protocol, etc.)
-2. What scientific domain does it belong to?
-3. What key information does it contain?
-4. What metadata would be most valuable for FAIR data principles?
+```json
+{{
+  "document_type": "...",
+  "title": "...",
+  "abstract": "...",
+  "authors": ["..."],
+  "keywords": ["..."],
+  "research_domain": "...",
+  "scientific_domain": "...",
+  "methodology": "...",
+  "location": "...",
+  "coordinates": "...",
+  "doi": "...",
+  "journal": "...",
+  "publication_date": "...",
+  "datasets_mentioned": ["..."],
+  "instruments": ["..."],
+  "variables": ["..."],
+  "key_findings": ["..."]
+}}
+```
 
-Extract all relevant information and return as JSON with clear, descriptive field names."""
+Rules:
+- Keep values concise and factual.
+- Prefer this flat schema over nested sections.
+- If a field is unknown, omit it.
+- Do not add commentary before or after the JSON block.
+
+Document:
+
+{text}"""
 
         if prior_memory_context:
             user_prompt = prior_memory_context + "\n\n" + user_prompt
@@ -1667,8 +1881,9 @@ Extract all relevant information and return as JSON with clear, descriptive fiel
             doc_info = _parse_json_with_fallback(content)
             
             if doc_info:
-                logger.info(f"✅ Extracted document info with {len(doc_info)} fields")
-                return doc_info
+                normalized_doc_info = _normalize_extracted_document_info(doc_info)
+                logger.info(f"✅ Extracted document info with {len(normalized_doc_info)} fields")
+                return normalized_doc_info
             else:
                 # All parsing strategies failed - this is a critical error
                 logger.error(f"❌ Failed to parse LLM response as JSON after all fallback strategies")
@@ -1969,10 +2184,90 @@ REQUIREMENTS:
         Returns:
             List of metadata field dictionaries with values
         """
+        if not selected_fields:
+            return []
+
         # Truncate document text
         if len(document_text) > 6000:
             document_text = document_text[:6000] + "\n[... truncated ...]"
-        
+
+        batches = self._split_metadata_generation_batches(selected_fields)
+        if len(batches) > 1:
+            logger.info(
+                "Generating metadata in %s batches for %s fields (%s provider, model=%s)",
+                len(batches),
+                len(selected_fields),
+                self.provider,
+                self.model,
+            )
+
+        all_metadata: List[Dict[str, Any]] = []
+        for batch_index, batch in enumerate(batches, start=1):
+            batch_label = f"{batch_index}/{len(batches)}"
+            logger.info(
+                "Generating metadata batch %s with %s fields",
+                batch_label,
+                len(batch),
+            )
+            batch_metadata = await self._generate_complete_metadata_with_fallback(
+                document_info=document_info,
+                selected_fields=batch,
+                document_text=document_text,
+                critic_feedback=critic_feedback,
+                planner_instruction=planner_instruction,
+                prior_memory_context=prior_memory_context,
+                batch_label=batch_label,
+            )
+            all_metadata.extend(self._reconcile_metadata_batch(batch, batch_metadata))
+
+        logger.info(
+            "Generated metadata for %s fields across %s batch(es)",
+            len(all_metadata),
+            len(batches),
+        )
+        return all_metadata
+
+    def _metadata_generation_batch_size(self) -> int:
+        """Return a conservative batch size for metadata generation."""
+        provider = (self.provider or "").lower()
+        model = (self.model or "").lower()
+
+        if provider in {"anthropic", "claude"}:
+            return 18
+        if provider == "ollama":
+            if "9b" in model or "8b" in model:
+                return 10
+            if "35b" in model or "32b" in model or "30b" in model:
+                return 16
+            return 12
+        if provider == "qwen":
+            return 20
+        if provider == "openai":
+            return 24
+        return 16
+
+    def _split_metadata_generation_batches(
+        self,
+        selected_fields: List[Dict[str, Any]],
+    ) -> List[List[Dict[str, Any]]]:
+        """Split large metadata generation requests into smaller, stabler batches."""
+        batch_size = max(1, self._metadata_generation_batch_size())
+        return [
+            selected_fields[idx: idx + batch_size]
+            for idx in range(0, len(selected_fields), batch_size)
+        ]
+
+    def _build_metadata_generation_messages(
+        self,
+        document_info: Dict[str, Any],
+        selected_fields: List[Dict[str, Any]],
+        document_text: str,
+        critic_feedback: Optional[Dict[str, Any]] = None,
+        planner_instruction: Optional[str] = None,
+        prior_memory_context: Optional[str] = None,
+        batch_label: Optional[str] = None,
+    ):
+        """Build prompt messages for one metadata-generation batch."""
         system_prompt = """You are an expert at generating FAIR metadata from research documents.
 
 **CRITICAL CONSTRAINTS - READ FIRST:**
@@ -2068,7 +2363,11 @@ REQUIREMENTS:
         
         # Count fields per ISA sheet
         field_counts = {sheet: len(fields_by_isa[sheet]) for sheet in isa_sheets}
-        
+
+        batch_note = ""
+        if batch_label:
+            batch_note = f"\nCurrent batch: {batch_label}. Only return fields from this batch.\n"
+
         user_prompt = f"""Document information:
 {json.dumps(document_info, indent=2, ensure_ascii=False)}
 
@@ -2080,6 +2379,7 @@ Metadata fields to populate (TOTAL: {len(selected_fields)} fields):
 
 Fields by ISA hierarchy:
 {json.dumps(field_counts, indent=2)}
+{batch_note}
 
 **CRITICAL REQUIREMENTS:**
 1. You MUST return a JSON array with EXACTLY {len(selected_fields)} fields - one for each field in the list above
@@ -2120,41 +2420,53 @@ REQUIREMENTS:
         if prior_memory_context:
             user_prompt = prior_memory_context + "\n\n" + user_prompt
 
-        messages = [
+        return [
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt)
         ]
-        
+
+    async def _generate_complete_metadata_batch(
+        self,
+        document_info: Dict[str, Any],
+        selected_fields: List[Dict[str, Any]],
+        document_text: str,
+        critic_feedback: Optional[Dict[str, Any]] = None,
+        planner_instruction: Optional[str] = None,
+        prior_memory_context: Optional[str] = None,
+        batch_label: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Generate one batch of metadata fields with a single LLM call."""
+        messages = self._build_metadata_generation_messages(
+            document_info=document_info,
+            selected_fields=selected_fields,
+            document_text=document_text,
+            critic_feedback=critic_feedback,
+            planner_instruction=planner_instruction,
+            prior_memory_context=prior_memory_context,
+            batch_label=batch_label,
+        )
+
         try:
             response = await self._call_llm(messages, operation_name="Generate Complete Metadata")
-            content = getattr(response, 'content', None) if response else None
-            
-            # Check if response is empty
-            if not content or len(str(content).strip()) == 0:
+            content = normalize_llm_response_content(
+                getattr(response, 'content', None) if response else None
+            )
+
+            if not content.strip():
                 error_msg = f"LLM returned empty response. Provider: {self.provider}, Model: {self.model}"
                 logger.error(f"❌ {error_msg}")
                 raise ValueError(error_msg)
-            
-            # Note: LLM response is automatically logged by _call_llm
-            
-            if not content or not content.strip():
-                logger.warning("LLM returned empty response for generate_complete_metadata")
-                return [
-                    {
-                        "field_name": f.get("name", ""),
-                        "value": "",
-                        "evidence": "LLM returned empty response",
-                        "confidence": 0.0
-                    }
-                    for f in selected_fields[:10]
-                ]
-            
+
             content = _extract_json_from_markdown(content)
             metadata = json.loads(content)
-            
-            logger.info(f"Generated metadata for {len(metadata)} fields")
+
+            logger.info(
+                "Generated metadata for %s fields in batch %s",
+                len(metadata) if isinstance(metadata, list) else 1,
+                batch_label or "1/1",
+            )
             return metadata if isinstance(metadata, list) else [metadata]
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM response as JSON: {e}")
             logger.error(f"Response content: {content[:500]}")
@@ -2162,6 +2474,127 @@ REQUIREMENTS:
         except Exception as e:
             logger.error(f"Error generating metadata: {e}")
             raise  # Re-raise to trigger retry mechanism
+
+    async def _generate_complete_metadata_with_fallback(
+        self,
+        document_info: Dict[str, Any],
+        selected_fields: List[Dict[str, Any]],
+        document_text: str,
+        critic_feedback: Optional[Dict[str, Any]] = None,
+        planner_instruction: Optional[str] = None,
+        prior_memory_context: Optional[str] = None,
+        batch_label: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Generate metadata, recursively splitting a failing batch when needed."""
+        try:
+            return await self._generate_complete_metadata_batch(
+                document_info=document_info,
+                selected_fields=selected_fields,
+                document_text=document_text,
+                critic_feedback=critic_feedback,
+                planner_instruction=planner_instruction,
+                prior_memory_context=prior_memory_context,
+                batch_label=batch_label,
+            )
+        except Exception as exc:
+            if len(selected_fields) <= 1:
+                logger.warning(
+                    "Metadata generation failed for single-field batch %s; using placeholder. Error: %s",
+                    batch_label or "1/1",
+                    exc,
+                )
+                return self._build_placeholder_metadata_batch(
+                    selected_fields,
+                    reason=str(exc),
+                )
+
+            midpoint = max(1, len(selected_fields) // 2)
+            left_fields = selected_fields[:midpoint]
+            right_fields = selected_fields[midpoint:]
+            logger.warning(
+                "Metadata batch %s failed for %s fields; splitting into %s + %s. Error: %s",
+                batch_label or "1/1",
+                len(selected_fields),
+                len(left_fields),
+                len(right_fields),
+                exc,
+            )
+            left = await self._generate_complete_metadata_with_fallback(
+                document_info=document_info,
+                selected_fields=left_fields,
+                document_text=document_text,
+                critic_feedback=critic_feedback,
+                planner_instruction=planner_instruction,
+                prior_memory_context=prior_memory_context,
+                batch_label=f"{batch_label or '1/1'}-a",
+            )
+            right = await self._generate_complete_metadata_with_fallback(
+                document_info=document_info,
+                selected_fields=right_fields,
+                document_text=document_text,
+                critic_feedback=critic_feedback,
+                planner_instruction=planner_instruction,
+                prior_memory_context=prior_memory_context,
+                batch_label=f"{batch_label or '1/1'}-b",
+            )
+            return left + right
+
+    def _build_placeholder_metadata_batch(
+        self,
+        selected_fields: List[Dict[str, Any]],
+        reason: str,
+    ) -> List[Dict[str, Any]]:
+        """Build low-confidence placeholders when a field batch cannot be generated."""
+        placeholder_reason = reason[:180] if reason else "LLM generation failed"
+        return [
+            {
+                "field_name": field.get("name", ""),
+                "value": "not specified",
+                "evidence": f"Generation fallback: {placeholder_reason}",
+                "confidence": 0.0,
+            }
+            for field in selected_fields
+        ]
+
+    def _reconcile_metadata_batch(
+        self,
+        selected_fields: List[Dict[str, Any]],
+        metadata: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Ensure every expected field in a batch has exactly one generated output."""
+        by_name: Dict[str, Dict[str, Any]] = {}
+        for item in metadata or []:
+            if not isinstance(item, dict):
+                continue
+            field_name = str(item.get("field_name", "")).strip()
+            if field_name and field_name not in by_name:
+                by_name[field_name] = item
+
+        reconciled: List[Dict[str, Any]] = []
+        missing_fields: List[str] = []
+        for field in selected_fields:
+            expected_name = str(field.get("name", "")).strip()
+            if expected_name in by_name:
+                reconciled.append(by_name[expected_name])
+            else:
+                missing_fields.append(expected_name)
+                reconciled.append(
+                    {
+                        "field_name": expected_name,
+                        "value": "not specified",
+                        "evidence": "LLM omitted field in batch response",
+                        "confidence": 0.0,
+                    }
+                )
+
+        if missing_fields:
+            logger.warning(
+                "Metadata batch omitted %s fields; inserted placeholders: %s",
+                len(missing_fields),
+                missing_fields[:10],
+            )
+
+        return reconciled
     
     @traceable(name="LLM.EvaluateQuality")
     async def evaluate_quality(
@@ -2420,4 +2853,3 @@ def save_llm_responses(output_path: Path, llm_helper: Optional[LLMHelper] = None
         json.dump(llm_helper.llm_responses, f, indent=2, ensure_ascii=False)
     
     logger.info(f"Saved {len(llm_helper.llm_responses)} LLM responses to {responses_file}")
-
