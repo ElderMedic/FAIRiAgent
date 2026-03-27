@@ -65,12 +65,12 @@ class FAIRifierConfig:
     skills_dir: Path = project_root / "fairifier" / "skills"
     
     # LLM Configuration
-    # Providers: "ollama", "openai", "qwen", or "anthropic" (claude)
+    # Providers: "ollama", "openai", "qwen", "gemini", or "anthropic" (claude)
     llm_provider: str = "ollama"
     llm_model: str = "qwen3:30b"  # Model name
-    # For Ollama/Qwen (OpenAI-compatible APIs)
+    # For Ollama/Qwen (OpenAI-compatible APIs). Gemini/Anthropic use provider defaults.
     llm_base_url: str = "http://localhost:11434"
-    llm_api_key: Optional[str] = None  # For OpenAI/Qwen/Anthropic
+    llm_api_key: Optional[str] = None  # For OpenAI/Qwen/Gemini/Anthropic
     embedding_model: str = "nomic-embed-text"
     llm_temperature: float = 0.3  # Recommended for structured extraction; keep consistent across configs (control variable)
     llm_max_tokens: int = 8192  # Conservative default for test/dev cost control
@@ -195,13 +195,25 @@ class FAIRifierConfig:
 
 def apply_env_overrides(config_instance: FAIRifierConfig):
     """Apply environment variable overrides to a config instance."""
+    def _normalize_provider(raw: Optional[str]) -> str:
+        value = (raw or "").strip().lower()
+        if value == "google":
+            return "gemini"
+        if value == "claude":
+            return "anthropic"
+        return value
+
     # Ensure correct model name is used
     if os.getenv("FAIRIFIER_LLM_MODEL"):
         config_instance.llm_model = os.getenv("FAIRIFIER_LLM_MODEL")
     else:
-        requested_provider = (os.getenv("LLM_PROVIDER") or config_instance.llm_provider or "").lower()
+        requested_provider = _normalize_provider(
+            os.getenv("LLM_PROVIDER") or config_instance.llm_provider
+        )
         if requested_provider == "qwen":
             config_instance.llm_model = "qwen-flash"
+        elif requested_provider == "gemini":
+            config_instance.llm_model = "gemini-3.1-pro-preview"
         else:
             config_instance.llm_model = "qwen3:30b"
 
@@ -265,13 +277,22 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
 
     # LLM provider configuration
     if os.getenv("LLM_PROVIDER"):
-        config_instance.llm_provider = os.getenv("LLM_PROVIDER").lower()
+        config_instance.llm_provider = _normalize_provider(os.getenv("LLM_PROVIDER"))
+    else:
+        config_instance.llm_provider = _normalize_provider(config_instance.llm_provider)
 
     if os.getenv("LLM_API_KEY"):
         config_instance.llm_api_key = os.getenv("LLM_API_KEY")
     # Qwen/DashScope: fallback to DASHSCOPE_API_KEY if LLM_API_KEY not set
     if config_instance.llm_provider == "qwen" and not config_instance.llm_api_key:
         config_instance.llm_api_key = os.getenv("DASHSCOPE_API_KEY")
+    # Gemini: prefer GOOGLE_API_KEY, then GEMINI_API_KEY
+    if config_instance.llm_provider == "gemini" and not config_instance.llm_api_key:
+        config_instance.llm_api_key = (
+            os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        )
+    if config_instance.llm_provider == "gemini" and config_instance.llm_model == "gemini-3.1-pro":
+        config_instance.llm_model = "gemini-3.1-pro-preview"
 
     # Provider-specific base URL configuration
     # IMPORTANT: Each provider block should only set base_url for its own provider
@@ -302,6 +323,10 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         else:
             # Default OpenAI API endpoint
             config_instance.llm_base_url = "https://api.openai.com/v1"
+
+    # Google Gemini - official SDK/API endpoint, custom base_url not used here
+    elif config_instance.llm_provider == "gemini":
+        config_instance.llm_base_url = None
     
     # Anthropic Claude - uses official API, no custom base_url needed
     elif config_instance.llm_provider == "anthropic":

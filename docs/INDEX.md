@@ -1,7 +1,7 @@
 # FAIRiAgent Documentation
 
 **Version**: 1.3.0  
-**Last Updated**: 2026-03-26
+**Last Updated**: 2026-03-27
 
 ---
 
@@ -12,6 +12,7 @@
 | [**README**](README.md) | Main documentation and getting started guide |
 | [LLM Integration Guide](en/LLM_INTEGRATION_GUIDE.md) | Provider setup and model configuration |
 | [中文快速开始](zh/guides/QUICKSTART.md) | 中文上手指南 |
+| [Mem0 快速开始（中文）](zh/guides/MEM0_QUICKSTART.md) | 记忆层中文快速上手 |
 
 ---
 

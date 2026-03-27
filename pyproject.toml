@@ -18,6 +18,7 @@ langgraph = ">=1.0.7,<3"
 langchain = ">=1.0.3,<3"
 langchain-community = ">=0.3.30"
 langchain-openai = ">=1.0.2"
+langchain-google-genai = ">=2.1.0"
 # Document processing
 pymupdf = ">=1.23.0"
 # RDF and semantic web

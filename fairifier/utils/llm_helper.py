@@ -2,7 +2,7 @@
 LLM Helper - Centralized LLM interaction utilities.
 
 Provides a unified interface for working with different LLM providers
-(Ollama, OpenAI, Anthropic) and common LLM operations.
+(Ollama, OpenAI, Qwen, Gemini, Anthropic) and common LLM operations.
 """
 
 import json
@@ -30,6 +30,11 @@ try:
     from langchain_anthropic import ChatAnthropic
 except ImportError:
     ChatAnthropic = None
+
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+except ImportError:
+    ChatGoogleGenerativeAI = None
 
 from ..config import config
 
@@ -612,7 +617,7 @@ class LLMHelper:
     """Helper class for LLM interactions."""
     
     def __init__(self):
-        self.provider = config.llm_provider
+        self.provider = "gemini" if config.llm_provider == "google" else config.llm_provider
         self.model = config.llm_model
         self.llm = self._initialize_llm()
         self.llm_responses = []  # Store all LLM interactions for debugging
@@ -721,7 +726,8 @@ class LLMHelper:
         Thinking mode is controlled by config.llm_enable_thinking (LLM_ENABLE_THINKING env).
         Provider-specific mapping:
         - qwen: extra_body={"enable_thinking": bool} (DashScope/百炼)
-        - openai: extra_body={"enable_thinking": bool} (OpenAI-compatible backends, e.g. DashScope as openai)
+        - openai: no provider-specific thinking payload
+        - gemini: no provider-specific thinking payload (basic integration path)
         - ollama: think=bool (Ollama /api/chat think parameter)
         - anthropic: extra_body={"reasoning": {"enabled": bool}} (Claude Extended Thinking; may vary by API)
         
@@ -901,10 +907,10 @@ class LLMHelper:
                     except (ImportError, AttributeError):
                         pass
                     return result
-        elif self.provider == "openai":
+        elif self.provider in {"openai", "gemini", "google"}:
             # Official OpenAI does not accept DashScope-style enable_thinking in extra_body.
-            # Keep this path provider-clean and let Qwen/OpenAI-compatible backends use
-            # the dedicated qwen provider instead.
+            # Gemini also uses its official SDK path here without provider-specific
+            # thinking payloads. Keep both provider-clean.
             if stream_to_streamlit:
                 try:
                     llm_with_params = self.llm.bind(stream=True)
@@ -946,7 +952,11 @@ class LLMHelper:
                         pass
                     return result
                 except Exception as e:
-                    logger.warning(f"OpenAI streaming failed: {e}, falling back to regular call")
+                    logger.warning(
+                        "%s streaming failed: %s, falling back to regular call",
+                        self.provider,
+                        e,
+                    )
                     result = await self.llm.ainvoke(messages, config=run_config)
                     
                     # Log LLM response
@@ -1224,6 +1234,7 @@ class LLMHelper:
         - ollama: Local Ollama instance (default)
         - openai: OpenAI API (gpt-4, gpt-3.5-turbo, etc.)
         - qwen: Alibaba Cloud Qwen API (OpenAI-compatible)
+        - gemini: Google Gemini API
         - anthropic: Anthropic Claude API
         """
         if self.provider == "ollama":
@@ -1270,6 +1281,22 @@ class LLMHelper:
                 temperature=config.llm_temperature,
                 max_tokens=self._resolved_max_tokens(),  # DashScope rejects values above provider limit
             )
+        elif self.provider in {"gemini", "google"}:
+            if ChatGoogleGenerativeAI is None:
+                raise ImportError(
+                    "langchain_google_genai not installed. Install with: pip install langchain-google-genai"
+                )
+            if not config.llm_api_key:
+                raise ValueError(
+                    "Gemini API key is required for Gemini provider. Set LLM_API_KEY, GOOGLE_API_KEY, or GEMINI_API_KEY."
+                )
+            logger.info("Initializing Gemini LLM: %s", self.model)
+            return ChatGoogleGenerativeAI(
+                model=self.model,
+                google_api_key=config.llm_api_key,
+                temperature=config.llm_temperature,
+                max_output_tokens=self._resolved_max_tokens(),
+            )
         elif self.provider == "anthropic" or self.provider == "claude":
             if ChatAnthropic is None:
                 raise ImportError("langchain_anthropic not installed. Install with: pip install langchain-anthropic")
@@ -1285,7 +1312,7 @@ class LLMHelper:
         else:
             raise ValueError(
                 f"Unsupported LLM provider: {self.provider}. "
-                f"Supported providers: ollama, openai, qwen, anthropic (claude)"
+                f"Supported providers: ollama, openai, qwen, gemini, anthropic (claude)"
             )
     
     @traceable(name="LLM.ExtractDocumentInfo")

@@ -52,8 +52,7 @@ evaluation/runs/
 evaluation/analysis/output/
 evaluation/datasets/raw/
 
-# Examples (can be mounted if needed)
-examples/
+# Keep examples in image for CLI smoke tests and demo processing paths.
 
 # Docker files (don't copy into itself)
 docker/

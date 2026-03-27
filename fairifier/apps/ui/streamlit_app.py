@@ -1050,8 +1050,8 @@ def configuration_page():
     with col1:
         llm_provider = st.selectbox(
             "LLM Provider",
-            ["qwen", "openai", "ollama", "anthropic"],
-            index=["qwen", "openai", "ollama", "anthropic"].index(st.session_state["llm_provider"]) if st.session_state["llm_provider"] in ["qwen", "openai", "ollama", "anthropic"] else 0,
+            ["qwen", "gemini", "openai", "ollama", "anthropic"],
+            index=["qwen", "gemini", "openai", "ollama", "anthropic"].index(st.session_state["llm_provider"]) if st.session_state["llm_provider"] in ["qwen", "gemini", "openai", "ollama", "anthropic"] else 0,
             help="LLM provider to use",
             key="config_llm_provider"
         )

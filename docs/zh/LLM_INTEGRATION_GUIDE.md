@@ -1,150 +1,170 @@
-# LLM集成使用指南
+# LLM 集成指南
 
 ## 概述
 
-FAIRifier项目现已集成大语言模型(LLM)支持，可以使用OpenAI GPT模型或Claude模型来增强各个agent的智能处理能力。
+FAIRiAgent 当前支持以下 LLM 提供商：
 
-## 配置设置
+- `ollama`：本地模型
+- `openai`
+- `qwen`
+- `gemini`
+- `anthropic`
 
-### 1. 环境变量配置
+不同提供商共享同一套 FAIRiAgent workflow，主要差别在于 API Key、模型名和少量 provider-specific 配置。
 
-在使用前，需要设置相应的API密钥：
+## 核心环境变量
+
+推荐在 `.env` 中配置：
 
 ```bash
-# 使用OpenAI (推荐)
-export OPENAI_API_KEY="your-openai-api-key"
-export FAIRIFIER_LLM_PROVIDER="openai"
-export FAIRIFIER_LLM_MODEL="gpt-4o-mini"  # 或 "gpt-4", "gpt-3.5-turbo"
-
-# 或使用Claude
-export CLAUDE_API_KEY="your-claude-api-key"
-export FAIRIFIER_LLM_PROVIDER="claude"
-export FAIRIFIER_LLM_MODEL="claude-3-haiku-20240307"  # 或其他Claude模型
+LLM_PROVIDER=qwen
+FAIRIFIER_LLM_MODEL=qwen-flash
+LLM_API_KEY=your_api_key_here
+FAIRIFIER_LLM_BASE_URL=http://localhost:11434
 ```
 
-### 2. 配置文件设置
+说明：
 
-也可以直接修改 `fairifier/config.py` 文件：
+- `FAIRIFIER_LLM_BASE_URL` 主要给 `ollama` 和 OpenAI-compatible 接口使用。
+- `gemini` 和 `anthropic` 使用官方 SDK/API，不依赖自定义 base URL。
+- `LANGSMITH_API_KEY` 是可选项，仅在需要 tracing 时使用。
 
-```python
-# LLM Configuration
-llm_provider: str = "openai"  # "openai", "claude", or "ollama"
-llm_model: str = "gpt-4o-mini"  # 模型名称
-openai_api_key: Optional[str] = "your-api-key"
-claude_api_key: Optional[str] = "your-api-key"
+## 各提供商配置示例
+
+### Ollama
+
+```bash
+LLM_PROVIDER=ollama
+FAIRIFIER_LLM_MODEL=qwen3:30b
+FAIRIFIER_LLM_BASE_URL=http://localhost:11434
 ```
 
-## LLM增强功能
+### OpenAI
 
-### 1. DocumentParserAgent
-- **功能增强**: 使用LLM智能解析科学文档，提取结构化信息
-- **改进点**: 
-  - 更准确的标题、摘要、作者提取
-  - 智能识别研究领域和方法论
-  - 自动识别数据集、仪器和变量
+```bash
+LLM_PROVIDER=openai
+FAIRIFIER_LLM_MODEL=gpt-5.4
+LLM_API_KEY=your_openai_api_key
+```
 
-### 2. KnowledgeRetrieverAgent
-- **功能增强**: 使用LLM进行智能知识检索和匹配
-- **改进点**:
-  - 智能选择合适的MIxS包
-  - 基于文档内容选择相关的可选字段
-  - 识别相关的本体术语
+### Qwen
 
-### 3. TemplateGeneratorAgent
-- **功能增强**: 使用LLM生成更智能、更准确的元数据模板
-- **改进点**:
-  - 生成基于研究内容的真实示例值
-  - 智能推断字段的数据类型和必要性
-  - 建议额外的FAIR数据相关字段
+```bash
+LLM_PROVIDER=qwen
+FAIRIFIER_LLM_MODEL=qwen-flash
+LLM_API_KEY=your_dashscope_api_key
 
-## 使用方法
+# 也可以使用别名：
+# DASHSCOPE_API_KEY=your_dashscope_api_key
+```
 
-### 1. 安装依赖
+### Gemini
+
+```bash
+LLM_PROVIDER=gemini
+FAIRIFIER_LLM_MODEL=gemini-3.1-pro-preview
+
+# 推荐使用以下别名之一：
+GOOGLE_API_KEY=your_google_api_key
+# 或
+GEMINI_API_KEY=your_google_api_key
+
+# 通用方式也可以：
+# LLM_API_KEY=your_google_api_key
+```
+
+### Anthropic
+
+```bash
+LLM_PROVIDER=anthropic
+FAIRIFIER_LLM_MODEL=claude-sonnet-4-6
+LLM_API_KEY=your_anthropic_api_key
+```
+
+## 安装
+
+先安装项目依赖：
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 设置API密钥
+Gemini 支持依赖 `langchain-google-genai`，该依赖已经加入项目配置。
+
+## 快速测试
 
 ```bash
-export OPENAI_API_KEY="your-openai-api-key"
+cp env.example .env
+# 编辑 .env
+
+python run_fairifier.py process examples/inputs/test_document.txt
 ```
 
-### 3. 运行系统
+如果想交互式使用：
 
 ```bash
-python run_fairifier.py examples/inputs/test_document.txt
+python run_fairifier.py ui
 ```
 
-## 模型选择建议
+当前 Streamlit UI 配置页支持：
 
-### OpenAI模型
-- **gpt-4o-mini**: 推荐，性价比高，处理速度快
-- **gpt-4**: 最高质量，但成本较高
-- **gpt-3.5-turbo**: 成本最低，但质量稍逊
+- Qwen
+- Gemini
+- OpenAI
+- Ollama
+- Anthropic
 
-### Claude模型
-- **claude-3-haiku-20240307**: 快速且经济
-- **claude-3-sonnet-20240229**: 平衡性能和成本
-- **claude-3-opus-20240229**: 最高质量
+## 推荐设置
 
-## 错误处理
+- 结构化抽取建议保持 `LLM_TEMPERATURE=0.3`
+- 开发测试可优先考虑：
+  - `qwen-flash`
+  - `gemini-3.1-pro-preview`
+  - 本地 Ollama 模型
+- 只有在需要 tracing 和调试时再配置 `LANGSMITH_API_KEY`
 
-系统具有完善的错误处理机制：
+## 常见问题
 
-1. **LLM调用失败**: 自动回退到基于规则的处理方法
-2. **JSON解析失败**: 使用正则表达式作为备选方案
-3. **API限制**: 自动重试和速率限制处理
+### 提供商名称不识别
 
-## 性能优化
+请使用以下之一：
 
-1. **批处理**: 将多个字段批量发送给LLM处理
-2. **文本截断**: 长文档自动截断以避免token限制
-3. **缓存**: 相同输入的结果会被缓存
+- `ollama`
+- `openai`
+- `qwen`
+- `gemini`
+- `anthropic`
 
-## 成本控制
+内部还支持两个别名：
 
-1. **使用gpt-4o-mini**: 推荐用于生产环境
-2. **设置max_tokens限制**: 控制响应长度
-3. **文本预处理**: 去除无关内容减少token使用
+- `google` -> `gemini`
+- `claude` -> `anthropic`
 
-## 示例输出
+### Gemini API Key 未生效
 
-使用LLM后，系统能够生成更准确的元数据：
+请设置以下任一变量：
 
-```json
-{
-  "project_name": "Marine Microbiome Diversity Study",
-  "investigation_type": "metagenome",
-  "env_biome": "marine biome [ENVO:00000447]",
-  "sample_collect_device": "CTD rosette",
-  "depth": "150",
-  "temp": "4.2",
-  "collection_date": "2023-08-15"
-}
-```
+- `GOOGLE_API_KEY`
+- `GEMINI_API_KEY`
+- `LLM_API_KEY`
 
-## 故障排除
+### Qwen API Key 未生效
 
-### 常见问题
+请设置以下任一变量：
 
-1. **API密钥错误**: 检查环境变量设置
-2. **模型不存在**: 确认模型名称正确
-3. **网络连接问题**: 检查网络连接和防火墙设置
-4. **Token限制**: 减少输入文本长度或增加max_tokens
+- `LLM_API_KEY`
+- `DASHSCOPE_API_KEY`
 
-### 日志查看
+### base URL 应该怎么理解
 
-系统会记录详细的日志信息：
+- `ollama`：使用 `FAIRIFIER_LLM_BASE_URL`
+- `openai`：可选自定义 base URL，不设置时走官方 API
+- `qwen`：走 Qwen/DashScope 的 OpenAI-compatible 配置路径
+- `gemini` 和 `anthropic`：走官方 SDK/API 路径，不需要自定义 base URL
 
-```bash
-# 查看agent执行日志
-tail -f fairifier.log
-```
+## 相关文档
 
-## 下一步
-
-1. 考虑集成更多模型提供商（如Azure OpenAI）
-2. 添加模型性能监控和评估
-3. 实现更细粒度的提示工程优化
+- [文档首页](../README.md)
+- [中文快速开始](guides/QUICKSTART.md)
+- [Mem0 快速开始（中文）](guides/MEM0_QUICKSTART.md)
+- [英文 LLM 指南](../en/LLM_INTEGRATION_GUIDE.md)

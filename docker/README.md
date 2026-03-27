@@ -10,12 +10,29 @@ This directory contains the container build, compose stack, and smoke-test scrip
 docker build -t fairiagent:latest -f Dockerfile .
 ```
 
+### Build and publish to GitHub Container Registry (same repo)
+
+```bash
+# Authenticate once (requires gh auth login done locally)
+gh auth token | docker login ghcr.io -u ElderMedic --password-stdin
+
+# Build tags
+docker build -f Dockerfile \
+  -t ghcr.io/eldermedic/fairiagent:latest \
+  -t ghcr.io/eldermedic/fairiagent:1.3.0 \
+  .
+
+# Push tags
+docker push ghcr.io/eldermedic/fairiagent:latest
+docker push ghcr.io/eldermedic/fairiagent:1.3.0
+```
+
 ### Run the API with Docker Compose
 
 ```bash
 cd docker
 cp ../env.example .env
-# Edit .env and set at least: LLM_PROVIDER, FAIRIFIER_LLM_MODEL, LLM_API_KEY
+# Edit .env and set at least: LLM_PROVIDER, FAIRIFIER_LLM_MODEL, and provider key
 docker compose up -d
 docker compose logs -f fairifier-api
 ```
@@ -31,10 +48,9 @@ Services exposed by the compose stack:
 docker run --rm \
   -v "$(pwd)/output:/app/output" \
   -v "$(pwd)/examples:/app/examples:ro" \
-  -e LLM_PROVIDER=qwen \
-  -e FAIRIFIER_LLM_MODEL=qwen-flash \
-  -e QWEN_API_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1 \
-  -e LLM_API_KEY=your_dashscope_key \
+  -e LLM_PROVIDER=gemini \
+  -e FAIRIFIER_LLM_MODEL=gemini-3.1-pro-preview \
+  -e GEMINI_API_KEY=your_gemini_key \
   -e FAIR_DS_API_URL=http://host.docker.internal:8083 \
   fairiagent:latest \
   python run_fairifier.py process /app/examples/inputs/earthworm_4n_paper_bioRxiv.pdf
@@ -47,6 +63,11 @@ For the current project setup, the container defaults assume:
 - `FAIRIFIER_LLM_MODEL=qwen-flash`
 - `LLM_ENABLE_THINKING=false`
 - `FAIRIFIER_ENABLE_DEEP_AGENTS=true`
+
+Common API key variables accepted by container config:
+- `LLM_API_KEY` (generic)
+- `DASHSCOPE_API_KEY` (Qwen fallback)
+- `GOOGLE_API_KEY` or `GEMINI_API_KEY` (Gemini fallback)
 
 Optional mem0 settings for API embeddings:
 

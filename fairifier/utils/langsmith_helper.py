@@ -42,7 +42,7 @@ def generate_fair_langsmith_project_name(
     Args:
         environment: Execution environment (cli, api, ui, eval, test, dev)
                     If None, auto-detected from context
-        model_provider: LLM provider (ollama, openai, anthropic, qwen)
+        model_provider: LLM provider (ollama, openai, anthropic, qwen, gemini)
                        If None, read from env or config
         model_name: Model name (e.g., qwen3:8b, gpt-4o, claude-3-5-sonnet)
                    If None, read from env or config
@@ -294,7 +294,7 @@ def parse_fair_project_name(project_name: str) -> dict:
     # Skip "fairifier" prefix
     idx = 1
     
-    providers = ["ollama", "openai", "anthropic", "qwen"]
+    providers = ["ollama", "openai", "anthropic", "qwen", "gemini"]
     if idx < len(parts) and parts[idx] not in providers:
         result["environment"] = parts[idx]
         idx += 1
