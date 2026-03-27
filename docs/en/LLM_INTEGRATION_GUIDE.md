@@ -2,154 +2,168 @@
 
 ## Overview
 
-The FAIRiAgent project integrates Large Language Model (LLM) support, enabling the use of OpenAI GPT models or Anthropic Claude models to enhance the intelligent processing capabilities of each agent.
+FAIRiAgent supports the following LLM providers:
 
-## Configuration
+- `ollama` for local models
+- `openai`
+- `qwen`
+- `gemini`
+- `anthropic`
 
-### 1. Environment Variables
+The same workflow can be used across providers. The main differences are how API keys and model names are configured.
 
-Before use, set the corresponding API keys in your environment or `.env` file:
+## Core Environment Variables
+
+Use these variables in `.env` or your shell:
 
 ```bash
-# Use OpenAI (Recommended)
-export OPENAI_API_KEY="your-openai-api-key"
-export LLM_PROVIDER="openai"
-export FAIRIFIER_LLM_MODEL="gpt-4o-mini"  # or "gpt-4", "gpt-3.5-turbo"
-
-# Use Claude
-export ANTHROPIC_API_KEY="your-anthropic-api-key"
-export LLM_PROVIDER="anthropic"
-export FAIRIFIER_LLM_MODEL="claude-3-haiku-20240307"  # or other Claude models
-
-# Use Ollama (Local)
-export LLM_PROVIDER="ollama"
-export FAIRIFIER_LLM_BASE_URL="http://localhost:11434"
-export FAIRIFIER_LLM_MODEL="llama3"
+LLM_PROVIDER=qwen
+FAIRIFIER_LLM_MODEL=qwen-flash
+LLM_API_KEY=your_api_key_here
+FAIRIFIER_LLM_BASE_URL=http://localhost:11434
 ```
 
-### 2. Configuration File
+Notes:
 
-You can also modify the `fairifier/config.py` file directly:
+- `FAIRIFIER_LLM_BASE_URL` is mainly used for `ollama` and OpenAI-compatible endpoints.
+- `gemini` and `anthropic` use their official SDK/API endpoints and ignore `FAIRIFIER_LLM_BASE_URL`.
+- `LANGSMITH_API_KEY` is optional and only needed if you want tracing.
 
-```python
-# LLM Configuration
-llm_provider: str = "openai"  # "openai", "anthropic", or "ollama"
-llm_model: str = "gpt-4o-mini"  # Model name
-llm_api_key: Optional[str] = "your-api-key"
+## Provider Examples
+
+### Ollama
+
+```bash
+LLM_PROVIDER=ollama
+FAIRIFIER_LLM_MODEL=qwen3:30b
+FAIRIFIER_LLM_BASE_URL=http://localhost:11434
 ```
 
-## LLM Enhanced Features
+### OpenAI
 
-### 1. DocumentParserAgent
-- **Enhancement**: Uses LLM to intelligently parse scientific documents and extract structured information.
-- **Improvements**: 
-  - More accurate extraction of title, abstract, and authors.
-  - Intelligent identification of research domains and methodologies.
-  - Automatic identification of datasets, instruments, and variables.
+```bash
+LLM_PROVIDER=openai
+FAIRIFIER_LLM_MODEL=gpt-5.4
+LLM_API_KEY=your_openai_api_key
+```
 
-### 2. KnowledgeRetrieverAgent
-- **Enhancement**: Uses LLM for intelligent knowledge retrieval and matching.
-- **Improvements**:
-  - Intelligent selection of appropriate MIxS packages.
-  - Selection of relevant optional fields based on document content.
-  - Identification of relevant ontology terms.
+### Qwen
 
-### 3. JSONGeneratorAgent
-- **Enhancement**: Uses LLM to generate smarter, more accurate metadata templates and values.
-- **Improvements**:
-  - Generates realistic example values based on research content.
-  - Intelligently infers data types and necessity of fields.
-  - Suggests additional FAIR data-related fields.
+```bash
+LLM_PROVIDER=qwen
+FAIRIFIER_LLM_MODEL=qwen-flash
+LLM_API_KEY=your_dashscope_api_key
+# Optional fallback alias used by the app:
+# DASHSCOPE_API_KEY=your_dashscope_api_key
+```
 
-## Usage
+### Gemini
 
-### 1. Install Dependencies
+```bash
+LLM_PROVIDER=gemini
+FAIRIFIER_LLM_MODEL=gemini-3.1-pro-preview
+
+# Preferred aliases:
+GOOGLE_API_KEY=your_google_api_key
+# or
+GEMINI_API_KEY=your_google_api_key
+
+# Generic key also works:
+# LLM_API_KEY=your_google_api_key
+```
+
+### Anthropic
+
+```bash
+LLM_PROVIDER=anthropic
+FAIRIFIER_LLM_MODEL=claude-sonnet-4-6
+LLM_API_KEY=your_anthropic_api_key
+```
+
+## Install Requirements
+
+Install the project dependencies first:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Set API Keys
+Gemini support also relies on `langchain-google-genai`, which is already included in `pyproject.toml`.
+
+## Quick Test
 
 ```bash
-export OPENAI_API_KEY="your-openai-api-key"
-```
+cp env.example .env
+# edit .env
 
-### 3. Run System
-
-```bash
 python run_fairifier.py process examples/inputs/test_document.txt
 ```
 
-## Model Selection Recommendations
+For interactive use:
 
-### OpenAI Models
-- **gpt-4o-mini**: Recommended. High cost-performance ratio, fast processing speed.
-- **gpt-4**: Highest quality, but higher cost.
-- **gpt-3.5-turbo**: Lowest cost, but slightly lower quality.
-
-### Claude Models
-- **claude-3-haiku**: Fast and economical.
-- **claude-3-sonnet**: Balanced performance and cost.
-- **claude-3-opus**: Highest quality.
-
-## Error Handling
-
-The system has robust error handling mechanisms:
-
-1. **LLM Call Failure**: Automatically falls back to rule-based processing methods (if available) or retries.
-2. **JSON Parsing Failure**: Uses regex as a fallback solution to extract JSON from LLM responses.
-3. **API Limits**: Automatic retry and rate limit handling.
-
-## Performance Optimization
-
-1. **Batching**: Multiple fields are batched and sent to LLM for processing.
-2. **Text Truncation**: Long documents are intelligently truncated to avoid token limits while preserving key sections.
-3. **Caching**: Results for the same inputs are cached.
-
-## Cost Control
-
-1. **Use gpt-4o-mini**: Recommended for production environments.
-2. **Set max_tokens limit**: Control response length.
-3. **Text Preprocessing**: Remove irrelevant content to reduce token usage.
-
-## Example Output
-
-With LLM integration, the system generates more accurate metadata:
-
-```json
-{
-  "project_name": "Marine Microbiome Diversity Study",
-  "investigation_type": "metagenome",
-  "env_biome": "marine biome [ENVO:00000447]",
-  "sample_collect_device": "CTD rosette",
-  "depth": "150",
-  "temp": "4.2",
-  "collection_date": "2023-08-15"
-}
+```bash
+python run_fairifier.py ui
 ```
+
+The Streamlit UI configuration page supports:
+
+- Qwen
+- Gemini
+- OpenAI
+- Ollama
+- Anthropic
+
+## Recommended Defaults
+
+- Structured extraction: keep `LLM_TEMPERATURE=0.3`
+- Development and local testing:
+  - `qwen-flash`
+  - `gemini-3.1-pro-preview`
+  - local Ollama models if you want offline/local runs
+- Use `LANGSMITH_API_KEY` only when you want tracing and debugging
 
 ## Troubleshooting
 
-### Common Issues
+### Provider not recognized
 
-1. **API Key Error**: Check environment variable settings.
-2. **Model Not Found**: Confirm the model name is correct.
-3. **Network Connection Issues**: Check network connection and firewall settings.
-4. **Token Limits**: Reduce input text length or increase `max_tokens`.
+Use one of:
 
-### Viewing Logs
+- `ollama`
+- `openai`
+- `qwen`
+- `gemini`
+- `anthropic`
 
-The system records detailed log information. Use the `--json-log` flag for structured logging.
+Aliases normalized internally:
 
-```bash
-# View processing logs
-tail -f processing_log.jsonl
-```
+- `google` -> `gemini`
+- `claude` -> `anthropic`
 
-## Next Steps
+### Gemini API key not found
 
-1. Consider integrating more model providers (e.g., Azure OpenAI).
-2. Add model performance monitoring and evaluation.
-3. Implement finer-grained prompt engineering optimizations.
+Set one of:
 
+- `GOOGLE_API_KEY`
+- `GEMINI_API_KEY`
+- `LLM_API_KEY`
+
+### Qwen API key not found
+
+Set one of:
+
+- `LLM_API_KEY`
+- `DASHSCOPE_API_KEY`
+
+### Base URL confusion
+
+- `ollama`: uses `FAIRIFIER_LLM_BASE_URL`
+- `openai`: optional custom base URL, otherwise official API
+- `qwen`: uses Qwen/DashScope-compatible endpoint handling
+- `gemini` and `anthropic`: official SDK/API path, no custom base URL needed
+
+## Related Pages
+
+- [Main Docs Index](../README.md)
+- [Chinese LLM Guide](../zh/LLM_INTEGRATION_GUIDE.md)
+- [Chinese Quick Start](../zh/guides/QUICKSTART.md)
+- [Mem0 Quick Start](../MEM0_QUICKSTART.md)

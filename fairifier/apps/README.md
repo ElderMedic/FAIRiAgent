@@ -28,7 +28,7 @@ python run_fairifier.py ui
 ### Configuration
 
 The web UI includes a configuration page where you can:
-- Set LLM provider (Ollama, OpenAI, Qwen, Anthropic)
+- Set LLM provider (Ollama, OpenAI, Qwen, Gemini, Anthropic)
 - Configure LLM parameters (model, temperature, max tokens, etc.)
 - Set up LangSmith tracing
 - Configure FAIR-DS API

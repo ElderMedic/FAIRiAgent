@@ -28,6 +28,15 @@ LLM_API_KEY=your_dashscope_key
 FAIR_DS_API_URL=http://host.docker.internal:8083
 ```
 
+Gemini example:
+
+```bash
+LLM_PROVIDER=gemini
+FAIRIFIER_LLM_MODEL=gemini-3.1-pro-preview
+GEMINI_API_KEY=your_gemini_key
+FAIR_DS_API_URL=http://host.docker.internal:8083
+```
+
 Start the stack:
 
 ```bash
@@ -57,6 +66,23 @@ docker run --rm \
   -e FAIR_DS_API_URL=http://host.docker.internal:8083 \
   fairiagent:latest \
   python run_fairifier.py process /app/examples/inputs/earthworm_4n_paper_bioRxiv.pdf
+```
+
+## Publish to GitHub Container Registry (GHCR)
+
+For repository `ElderMedic/FAIRiAgent`, publish to:
+`ghcr.io/eldermedic/fairiagent`
+
+```bash
+gh auth token | docker login ghcr.io -u ElderMedic --password-stdin
+
+docker build -f Dockerfile \
+  -t ghcr.io/eldermedic/fairiagent:latest \
+  -t ghcr.io/eldermedic/fairiagent:1.3.0 \
+  .
+
+docker push ghcr.io/eldermedic/fairiagent:latest
+docker push ghcr.io/eldermedic/fairiagent:1.3.0
 ```
 
 ## Mem0 in Docker

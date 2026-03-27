@@ -48,7 +48,7 @@ FAIRiAgent is a **CLI-first, multi-agent framework** that automatically extracts
 - 🔍 **Evidence-based**: Every field includes evidence, confidence, and provenance
 - 🧠 **Intelligent**: LLM-as-Judge critic with rubric-driven quality assessment
 - 🎨 **User-friendly**: Streamlit Web UI for interactive use
-- 🔧 **Flexible**: Support for local models (Ollama) and cloud providers (OpenAI, Qwen, Anthropic)
+- 🔧 **Flexible**: Support for local models (Ollama) and cloud providers (OpenAI, Qwen, Gemini, Anthropic)
 
 ### 📈 The Problem We Solve
 
@@ -94,7 +94,7 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 - 🧠 **Knowledge Retrieval**: Integrate with FAIR Data Station API (59 packages, 892 terms) and local knowledge base
 - 🏷️ **Evidence-based Fields**: Every field includes evidence, confidence, origin, and package source
 - 📊 **JSON-only Output**: FAIR-DS compatible metadata format (no RDF/RO-Crate)
-- 🎛️ **Multi-Model Support**: Ollama (local) / OpenAI / Qwen / Anthropic
+- 🎛️ **Multi-Model Support**: Ollama (local) / OpenAI / Qwen / Gemini / Anthropic
 
 ### 🚀 Advanced Features
 
@@ -861,6 +861,7 @@ Detailed documentation is available in the [docs/](docs/README.md) directory.
 - **Guides**
   - [LangGraph Studio Setup](docs/en/guides/LANGGRAPH_STUDIO_SETUP.md) – Local development environment
   - [Quick Start (中文)](docs/zh/guides/QUICKSTART.md) – Quick start guide in Chinese
+  - [Mem0 快速开始 (中文)](docs/zh/guides/MEM0_QUICKSTART.md) – Memory layer quick start in Chinese
   - [Test Guide (中文)](docs/zh/guides/TEST_GUIDE.md) – Test guide in Chinese
 - **Development**
   - [FAIR-DS API Manual](docs/en/development/FAIRDS_API_MANUAL.md) – API analysis

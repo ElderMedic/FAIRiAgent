@@ -24,9 +24,6 @@ BRIEF_PATH = (
     REPO_ROOT
     / "development/UNLOCK_SCIENCE_MEETING_SLIDES_BRIEF_2026-03-26.md"
 )
-MEMORY_AGGREGATES = (
-    REPO_ROOT / "evaluation/harness/private/runs/memory_harness_phase1_live/memory_harness_aggregates.csv"
-)
 OUTPUT_DIR = (
     REPO_ROOT / "evaluation/harness/private/reports/presentation_figures_2026-03-26"
 )
@@ -76,6 +73,19 @@ def _setup_theme() -> None:
 
 def _load_curated() -> Dict:
     return json.loads(CURATED_JSON.read_text(encoding="utf-8"))
+
+
+def _pick_memory_aggregates() -> Path | None:
+    candidates = [
+        REPO_ROOT
+        / "evaluation/harness/private/runs/memory_harness_local_qwen9b_earthworm_r2b/memory_harness_aggregates.csv",
+        REPO_ROOT
+        / "evaluation/harness/private/runs/memory_harness_phase1_live/memory_harness_aggregates.csv",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
 
 
 def _artifacts_by_id(curated: Dict) -> Dict[str, Dict]:
@@ -441,8 +451,99 @@ def make_traceability_stack(manifest: Dict) -> None:
     }
 
 
+def make_historical_benchmark_chart(artifacts: Dict[str, Dict], manifest: Dict) -> None:
+    rows = [
+        artifacts["legacy_qwen_max_agentic_aggregate"],
+        artifacts["legacy_gpt51_baseline_aggregate"],
+    ]
+    labels = ["qwen_max\nagentic", "gpt-5.1\nbaseline"]
+    success = [rows[0]["success_rate"], rows[1]["success_rate"]]
+    coverage = [rows[0]["mandatory_coverage"], rows[1]["mandatory_coverage"]]
+    x = np.arange(len(labels))
+    width = 0.34
+
+    fig, ax = plt.subplots(figsize=(12.5, 7.0))
+    ax.bar(x - width / 2, success, width=width, label="Success rate", color=COLORS["teal"], zorder=3)
+    ax.bar(x + width / 2, coverage, width=width, label="Mandatory coverage", color=COLORS["amber"], zorder=3)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylim(0, 1.0)
+    ax.set_ylabel("Score")
+    ax.set_title("Historical Benchmark: Workflow Design Changes the Ceiling")
+    for xi, v in zip(x - width / 2, success):
+        ax.text(xi, v + 0.03, f"{v:.2f}", ha="center", fontweight="bold")
+    for xi, v in zip(x + width / 2, coverage):
+        ax.text(xi, v + 0.03, f"{v:.2f}", ha="center", fontweight="bold")
+    ax.legend(frameon=False, loc="upper right")
+    fig.text(
+        0.07,
+        0.05,
+        "Use as secondary support only. The workflow versions differ from the current branch, but the historical campaign still shows the same structural lesson: "
+        "one-shot prompting underperforms iterative, FAIR-aware workflows on publication-ready metadata tasks.",
+        fontsize=10.5,
+        color=COLORS["peat"],
+    )
+
+    manifest["fig07_historical_benchmark"] = {
+        "title": "Historical benchmark support figure",
+        "files": _save(fig, "fig07_historical_benchmark"),
+        "supports_slide": None,
+    }
+
+
+def make_local_model_ladder(manifest: Dict) -> None:
+    models = ["qwen3.5:9b", "qwen3.5:35b", "qwen3.5 historic"]
+    runtime = [209.1, 522.8, 171.3]
+    fields = [46, 74, 80]
+    confidence = [0.8560, 0.7718, 0.8530]
+    colors = [COLORS["rose"], COLORS["moss"], COLORS["teal"]]
+
+    fig, ax1 = plt.subplots(figsize=(13.33, 7.5))
+    x = np.arange(len(models))
+    bars = ax1.bar(x, runtime, color=colors, edgecolor=COLORS["deep_teal"], linewidth=1.3, zorder=3)
+    ax1.set_ylabel("Runtime (seconds)")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(models)
+    ax1.set_title("Local Model Ladder on Pomato: Speed, Coverage, and Review Burden")
+
+    ax2 = ax1.twinx()
+    ax2.plot(x, fields, color=COLORS["amber"], marker="o", linewidth=2.5, label="Total fields", zorder=4)
+    ax2.plot(x, confidence, color=COLORS["deep_teal"], marker="D", linewidth=2.0, label="Overall confidence", zorder=4)
+    ax2.set_ylabel("Fields / confidence")
+    ax2.set_ylim(0, max(fields) * 1.25)
+
+    for bar, rt in zip(bars, runtime):
+        ax1.text(bar.get_x() + bar.get_width() / 2, rt + 12, f"{rt:.0f}s", ha="center", fontweight="bold")
+    for xi, f in zip(x, fields):
+        ax2.text(xi, f + 3, f"{f}", ha="center", color=COLORS["amber"], fontweight="bold")
+
+    legend_handles = [
+        Patch(facecolor=COLORS["rose"], edgecolor=COLORS["deep_teal"], label="9B runtime"),
+        Patch(facecolor=COLORS["moss"], edgecolor=COLORS["deep_teal"], label="35B runtime"),
+        Patch(facecolor=COLORS["teal"], edgecolor=COLORS["deep_teal"], label="historic qwen3.5 runtime"),
+        Line2D([0], [0], color=COLORS["amber"], marker="o", linewidth=2.5, label="Total fields"),
+        Line2D([0], [0], color=COLORS["deep_teal"], marker="D", linewidth=2.0, label="Overall confidence"),
+    ]
+    ax1.legend(handles=legend_handles, frameon=False, loc="upper left")
+    fig.text(
+        0.07,
+        0.05,
+        "These are not all directly ground-truth-scored under the latest harness. Use them to show that local models are viable for reproducible demos, "
+        "but trade speed, field breadth, and output cleanliness differently on the hardest case.",
+        fontsize=10.5,
+        color=COLORS["peat"],
+    )
+
+    manifest["fig08_local_model_ladder"] = {
+        "title": "Local model comparison on pomato",
+        "files": _save(fig, "fig08_local_model_ladder"),
+        "supports_slide": None,
+    }
+
+
 def make_memory_chart_if_available(manifest: Dict) -> None:
-    if not MEMORY_AGGREGATES.exists():
+    memory_aggregates = _pick_memory_aggregates()
+    if memory_aggregates is None:
         manifest["fig06_memory_effects"] = {
             "title": "Memory harness panel",
             "status": "pending",
@@ -451,9 +552,9 @@ def make_memory_chart_if_available(manifest: Dict) -> None:
         }
         return
 
-    rows = list(csv.DictReader(MEMORY_AGGREGATES.read_text(encoding="utf-8").splitlines()))
+    rows = list(csv.DictReader(memory_aggregates.read_text(encoding="utf-8").splitlines()))
     # Focus on qwen-flash first if present.
-    candidates = [row for row in rows if row["config_name"] == "presentation_qwen_flash"]
+    candidates = [row for row in rows if row["config_name"] in {"presentation_qwen_flash", "local_memory_qwen35_9b"}]
     if not candidates:
         candidates = rows
     docs = []
@@ -490,6 +591,7 @@ def make_memory_chart_if_available(manifest: Dict) -> None:
     manifest["fig06_memory_effects"] = {
         "title": "Memory harness effects chart",
         "files": _save(fig, "fig06_memory_effects"),
+        "source": str(memory_aggregates),
         "supports_slide": None,
     }
 
@@ -544,6 +646,8 @@ def main() -> None:
     make_isa_heatmap(manifest)
     make_pomato_frontier_tradeoff(artifacts, manifest)
     make_traceability_stack(manifest)
+    make_historical_benchmark_chart(artifacts, manifest)
+    make_local_model_ladder(manifest)
     make_memory_chart_if_available(manifest)
     write_supporting_files(manifest)
     print(f"Generated figures in {OUTPUT_DIR}")

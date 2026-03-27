@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 
 .DS_Store
+.gitignore
 
 # Temporary files and local memory
 .memory/
@@ -257,6 +258,18 @@ tests/.env.test
 .env.test
 
 # Grant documents (personal/sensitive)
+
+# Local presentation assets and generated media
+docs/*.pptx
+docs/~$*.pptx
+docs/*.png
+docs/*.jpg
+docs/*.jpeg
+
+# Generated analysis outputs and local organization artifacts
+evaluation/analysis/output/
+evaluation/analysis/key_figures/
+evaluation/harness/organized/
 grant/
 
 # Evaluation generated outputs

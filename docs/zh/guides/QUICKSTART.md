@@ -1,4 +1,4 @@
-# 🚀 快速开始 - CLI 测试
+# 🚀 快速开始
 
 ## 最简单的测试步骤
 
@@ -19,18 +19,36 @@ vim .env
 code .env
 ```
 
-**必需配置（在 .env 中）：**
+**最小配置（写在 `.env` 中）：**
 ```bash
-# LangSmith（必需）
-LANGSMITH_API_KEY=lsv2_pt_your_actual_key_here
-LANGSMITH_PROJECT=fairifier-test
-
-# LLM
+# LLM（最少需要一个 provider）
 LLM_PROVIDER=ollama
-LLM_MODEL=qwen3:8b
+FAIRIFIER_LLM_MODEL=qwen3:8b
 
 # FAIR-DS
 FAIR_DS_API_URL=http://localhost:8083
+
+# LangSmith（可选）
+# LANGSMITH_API_KEY=your_langsmith_key
+# LANGSMITH_PROJECT=fairifier-test
+```
+
+**常见 provider 示例：**
+```bash
+# Qwen
+LLM_PROVIDER=qwen
+FAIRIFIER_LLM_MODEL=qwen-flash
+LLM_API_KEY=your_dashscope_api_key
+
+# Gemini
+LLM_PROVIDER=gemini
+FAIRIFIER_LLM_MODEL=gemini-3.1-pro-preview
+GOOGLE_API_KEY=your_google_api_key
+
+# Anthropic
+LLM_PROVIDER=anthropic
+FAIRIFIER_LLM_MODEL=claude-sonnet-4-6
+LLM_API_KEY=your_anthropic_api_key
 ```
 
 ### 2️⃣ 启动依赖服务
@@ -70,6 +88,24 @@ mamba activate FAIRiAgent
 # 方式 2: 直接使用 CLI
 python -m fairifier.cli process examples/inputs/test_document.txt --verbose
 ```
+
+### 4️⃣ 可选：启用记忆层（mem0）
+
+如果你想测试 session memory / persistent memory：
+
+```bash
+# 安装依赖
+pip install mem0ai qdrant-client
+
+# 启动 Qdrant
+docker run -d -p 6333:6333 qdrant/qdrant
+
+# 在 .env 中启用
+MEM0_ENABLED=true
+MEM0_QDRANT_URL=http://localhost:6333
+```
+
+详细说明见：[Mem0 快速开始](MEM0_QUICKSTART.md)
 
 ---
 
@@ -114,7 +150,7 @@ cat output_test_*/processing_log.jsonl | head -20
 cat output_test_*/llm_responses.json | jq '.[0]'
 ```
 
-### 在 LangSmith 查看
+### 在 LangSmith 查看（可选）
 1. 打开浏览器访问：https://smith.langchain.com/
 2. 登录你的账号
 3. 选择项目：`fairifier-test`
@@ -232,5 +268,6 @@ python -m fairifier.cli validate-document your_doc.txt
 2. 🔍 在 LangSmith 深入分析 LLM 的决策过程
 3. 📝 尝试处理你的真实研究文档
 4. ⚙️ 根据需要调整配置和阈值
+5. 🧠 如果要测试记忆能力，继续阅读 `MEM0_QUICKSTART.md`
 
 **祝测试顺利！** 🚀

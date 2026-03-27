@@ -1,7 +1,7 @@
 # 📚 Documentation / 文档
 
 **Version**: 1.3.0  
-**Last Updated**: 2026-03-26
+**Last Updated**: 2026-03-27
 
 Welcome to the FAIRiAgent documentation. Please select your preferred language:
 欢迎查阅 FAIRiAgent 文档。请选择您偏好的语言：
@@ -36,6 +36,7 @@ Welcome to the FAIRiAgent documentation. Please select your preferred language:
 
 ### 核心文档 (Core)
 - [**LLM 集成指南**](zh/LLM_INTEGRATION_GUIDE.md): 如何配置和使用不同的 LLM 提供商。
+- [**Mem0 快速开始**](zh/guides/MEM0_QUICKSTART.md): mem0 记忆层的中文快速上手说明。
 
 ### 指南 (Guides)
 - [**快速开始 (Quick Start)**](zh/guides/QUICKSTART.md): 快速上手安装和运行指南。
