@@ -2,17 +2,18 @@
 Mem0 Memory Service for FAIRiAgent multi-agent system.
 
 Provides persistent semantic memory for context compression and retrieval
-across the workflow session. Uses Ollama for embeddings and Qdrant for
-vector storage.
-
-This is an opt-in feature that complements (not replaces) the SQLite
-checkpointer for workflow state persistence.
+across the workflow session. The service performs runtime health checks and
+can auto-configure embedding/model backends when local dependencies are absent.
 """
 
 from typing import List, Dict, Any, Optional
 import logging
 import hashlib
 import json
+import subprocess
+import time
+from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
 
 # LangSmith tracing (optional)
 try:
@@ -669,6 +670,233 @@ def build_mem0_config(
     }
 
 
+_LOCAL_HOST_ALIASES = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+
+
+def _is_local_host(host: str) -> bool:
+    return (host or "").strip().lower() in _LOCAL_HOST_ALIASES
+
+
+def _http_get_json(url: str, timeout_seconds: int = 2) -> Optional[Dict[str, Any]]:
+    req = url if "://" in url else f"http://{url}"
+    try:
+        with urlopen(req, timeout=max(timeout_seconds, 1)) as response:
+            payload = response.read().decode("utf-8", errors="replace")
+            return json.loads(payload) if payload else {}
+    except (HTTPError, URLError, TimeoutError, ValueError):
+        return None
+
+
+def _is_http_endpoint_reachable(url: str, timeout_seconds: int = 2) -> bool:
+    req = url if "://" in url else f"http://{url}"
+    try:
+        with urlopen(req, timeout=max(timeout_seconds, 1)) as response:
+            return 200 <= getattr(response, "status", 200) < 500
+    except HTTPError as exc:
+        # HTTP errors still indicate endpoint reachability.
+        return 400 <= exc.code < 500
+    except (URLError, TimeoutError):
+        return False
+
+
+def _is_qdrant_available(host: str, port: int, timeout_seconds: int = 2) -> bool:
+    return _is_http_endpoint_reachable(
+        f"http://{host}:{port}/collections",
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _is_ollama_available(base_url: Optional[str], timeout_seconds: int = 2) -> bool:
+    if not base_url:
+        return False
+    normalized = base_url.rstrip("/")
+    return _is_http_endpoint_reachable(
+        f"{normalized}/api/tags",
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _ollama_has_model(base_url: Optional[str], model_name: str, timeout_seconds: int = 2) -> bool:
+    if not base_url or not model_name:
+        return False
+    payload = _http_get_json(f"{base_url.rstrip('/')}/api/tags", timeout_seconds=timeout_seconds)
+    if not payload:
+        return False
+    candidates = set()
+    for item in payload.get("models", []):
+        name = (item or {}).get("name")
+        model = (item or {}).get("model")
+        if name:
+            candidates.add(str(name))
+        if model:
+            candidates.add(str(model))
+    return any(
+        c == model_name
+        or c.startswith(f"{model_name}:")
+        or model_name.startswith(f"{c}:")
+        for c in candidates
+    )
+
+
+def _docker_available() -> bool:
+    try:
+        check = subprocess.run(
+            ["docker", "version"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=8,
+        )
+        return check.returncode == 0
+    except Exception:
+        return False
+
+
+def _try_auto_start_qdrant(
+    host: str,
+    port: int,
+    container_name: str,
+    timeout_seconds: int = 20,
+) -> bool:
+    if not _is_local_host(host):
+        logger.warning(
+            "Qdrant host '%s' is not local; auto-start skipped for safety.",
+            host,
+        )
+        return False
+
+    if not _docker_available():
+        logger.warning("Docker not available; cannot auto-start local Qdrant container.")
+        return False
+
+    resolved_name = container_name if port == 6333 else f"{container_name}-{port}"
+    check_running = subprocess.run(
+        ["docker", "ps", "--filter", f"name=^/{resolved_name}$", "--format", "{{.Names}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if resolved_name in check_running.stdout.splitlines():
+        return True
+
+    check_exists = subprocess.run(
+        ["docker", "ps", "-a", "--filter", f"name=^/{resolved_name}$", "--format", "{{.Names}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    if resolved_name in check_exists.stdout.splitlines():
+        start_cmd = ["docker", "start", resolved_name]
+    else:
+        start_cmd = [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            resolved_name,
+            "--restart",
+            "unless-stopped",
+            "-p",
+            f"{port}:6333",
+            "qdrant/qdrant:latest",
+        ]
+
+    start = subprocess.run(
+        start_cmd,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if start.returncode != 0:
+        logger.warning(
+            "Failed to auto-start Qdrant via Docker (%s): %s",
+            " ".join(start_cmd),
+            (start.stderr or start.stdout or "unknown error").strip().splitlines()[0],
+        )
+        return False
+
+    deadline = time.time() + max(timeout_seconds, 1)
+    while time.time() < deadline:
+        if _is_qdrant_available(host, port, timeout_seconds=2):
+            logger.info("Auto-started local Qdrant container '%s' on port %s.", resolved_name, port)
+            return True
+        time.sleep(0.5)
+    logger.warning("Qdrant container started but did not become healthy within %ss.", timeout_seconds)
+    return False
+
+
+def _infer_api_llm_profile(config: Any) -> Optional[Dict[str, Optional[str]]]:
+    if config.llm_provider in {"qwen", "openai"} and config.llm_api_key:
+        return {
+            "provider": "openai",
+            "model": config.llm_model,
+            "base_url": config.llm_base_url,
+            "api_key": config.llm_api_key,
+        }
+    if config.llm_provider == "anthropic" and config.llm_api_key:
+        return {
+            "provider": "anthropic",
+            "model": config.llm_model,
+            "base_url": None,
+            "api_key": config.llm_api_key,
+        }
+    if config.mem0_llm_api_key:
+        provider = config.mem0_llm_provider if config.mem0_llm_provider in {"openai", "anthropic"} else "openai"
+        return {
+            "provider": provider,
+            "model": config.mem0_llm_model or config.llm_model,
+            "base_url": config.mem0_llm_base_url or config.llm_base_url,
+            "api_key": config.mem0_llm_api_key,
+        }
+    return None
+
+
+def _infer_api_embedding_profile(
+    config: Any,
+    mem0_llm_provider: str,
+    mem0_llm_base: Optional[str],
+    mem0_llm_api_key: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    if config.llm_provider == "qwen" and config.llm_api_key and config.llm_base_url:
+        return {
+            "provider": "openai",
+            "model": "text-embedding-v4",
+            "base_url": config.llm_base_url,
+            "api_key": config.llm_api_key,
+            "dims": 1024,
+        }
+    if config.llm_provider == "openai" and config.llm_api_key:
+        return {
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "base_url": config.llm_base_url or "https://api.openai.com/v1",
+            "api_key": config.llm_api_key,
+            "dims": 1536,
+        }
+    if config.mem0_embedding_api_key and (config.mem0_embedding_base_url or mem0_llm_base):
+        return {
+            "provider": "openai",
+            "model": config.mem0_embedding_model or "text-embedding-3-small",
+            "base_url": config.mem0_embedding_base_url or mem0_llm_base,
+            "api_key": config.mem0_embedding_api_key,
+            "dims": config.mem0_embedding_dims or 1536,
+        }
+    if mem0_llm_provider == "openai" and mem0_llm_api_key and mem0_llm_base:
+        return {
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "base_url": mem0_llm_base,
+            "api_key": mem0_llm_api_key,
+            "dims": 1536,
+        }
+    return None
+
+
 def get_mem0_service() -> Optional[Mem0Service]:
     """Get the global Mem0Service instance.
     
@@ -686,20 +914,20 @@ def get_mem0_service() -> Optional[Mem0Service]:
     # Import config here to avoid circular imports
     try:
         from ..config import config
-        
+
         if not config.mem0_enabled:
             logger.debug("Mem0 is disabled in configuration")
             return None
-        
-        # When main workflow uses Qwen (DashScope), mem0 has no "qwen" provider; use openai
-        # provider with OpenAI-compatible API (same base URL, API key, and model as main workflow).
+
+        # mem0 supports ollama/openai/anthropic only.
+        # For Qwen main workflow (OpenAI-compatible DashScope), route mem0 LLM via openai provider.
         if config.llm_provider == "qwen":
             mem0_llm_provider = "openai"
             mem0_llm_base = config.llm_base_url
             mem0_llm_api_key = config.llm_api_key
-            mem0_llm_model = config.llm_model  # Use main workflow model (e.g. qwen-plus-latest); DashScope has no "qwen3:32b"
+            mem0_llm_model = config.llm_model
             logger.debug(
-                "Main LLM is Qwen (DashScope); mem0 will use openai provider with OpenAI-compatible API (model=%s)",
+                "Main LLM is Qwen (DashScope); mem0 LLM will use openai-compatible API (model=%s).",
                 mem0_llm_model,
             )
         else:
@@ -719,9 +947,7 @@ def get_mem0_service() -> Optional[Mem0Service]:
         embedding_api_key = config.mem0_embedding_api_key or mem0_llm_api_key
         embedding_dims = config.mem0_embedding_dims
 
-        # Qwen/DashScope does not expose Ollama embeddings. When the project is already
-        # using DashScope and mem0 embedder settings are still on defaults, switch mem0
-        # embeddings to the OpenAI-compatible DashScope embeddings API.
+        # Compatibility default: qwen + default ollama embedding settings -> DashScope embedding API.
         if (
             config.llm_provider == "qwen"
             and embedding_provider == "ollama"
@@ -734,12 +960,101 @@ def get_mem0_service() -> Optional[Mem0Service]:
             embedding_base_url = config.llm_base_url
             embedding_api_key = config.llm_api_key
             logger.info(
-                "Main LLM is Qwen (DashScope); mem0 embeddings will use openai-compatible API "
-                "(model=%s, dims=%s)",
+                "Mem0 embedding default switched to API profile for Qwen (model=%s, dims=%s).",
                 embedding_model,
                 embedding_dims,
             )
-        
+
+        if config.mem0_auto_setup:
+            timeout = max(int(config.mem0_healthcheck_timeout_seconds or 2), 1)
+
+            # Health-check vector DB and try auto-start for local Qdrant.
+            qdrant_ready = _is_qdrant_available(
+                config.mem0_qdrant_host,
+                config.mem0_qdrant_port,
+                timeout_seconds=timeout,
+            )
+            if not qdrant_ready and config.mem0_auto_start_qdrant:
+                qdrant_ready = _try_auto_start_qdrant(
+                    host=config.mem0_qdrant_host,
+                    port=config.mem0_qdrant_port,
+                    container_name=config.mem0_qdrant_container_name,
+                    timeout_seconds=max(timeout * 6, 8),
+                )
+            if not qdrant_ready:
+                msg = (
+                    "Mem0 preflight failed: Qdrant is unreachable at "
+                    f"{config.mem0_qdrant_host}:{config.mem0_qdrant_port}."
+                )
+                if config.mem0_strict:
+                    raise RuntimeError(msg)
+                logger.warning("%s Memory layer will be skipped for this run.", msg)
+                return None
+
+            # If mem0 LLM points to local Ollama but service is down, auto-fallback to API profile.
+            if mem0_llm_provider == "ollama":
+                ollama_ok = _is_ollama_available(mem0_llm_base, timeout_seconds=timeout)
+                if not ollama_ok:
+                    llm_fallback = _infer_api_llm_profile(config)
+                    if llm_fallback:
+                        mem0_llm_provider = llm_fallback["provider"]  # type: ignore[index]
+                        mem0_llm_model = llm_fallback["model"] or mem0_llm_model  # type: ignore[index]
+                        mem0_llm_base = llm_fallback["base_url"] or mem0_llm_base  # type: ignore[index]
+                        mem0_llm_api_key = llm_fallback["api_key"] or mem0_llm_api_key  # type: ignore[index]
+                        logger.info(
+                            "Mem0 LLM fallback activated: provider=%s, model=%s",
+                            mem0_llm_provider,
+                            mem0_llm_model,
+                        )
+                    else:
+                        msg = (
+                            "Mem0 preflight failed: Ollama is unreachable and no API-based mem0 LLM "
+                            "credentials are available."
+                        )
+                        if config.mem0_strict:
+                            raise RuntimeError(msg)
+                        logger.warning("%s Memory layer will be skipped for this run.", msg)
+                        return None
+
+            # If embedder uses local Ollama but service/model is unavailable, switch to API embeddings.
+            if embedding_provider == "ollama":
+                ollama_ok = _is_ollama_available(embedding_base_url, timeout_seconds=timeout)
+                model_ok = ollama_ok and _ollama_has_model(
+                    embedding_base_url,
+                    embedding_model,
+                    timeout_seconds=timeout,
+                )
+                if not ollama_ok or not model_ok:
+                    embedding_fallback = _infer_api_embedding_profile(
+                        config,
+                        mem0_llm_provider=mem0_llm_provider,
+                        mem0_llm_base=mem0_llm_base,
+                        mem0_llm_api_key=mem0_llm_api_key,
+                    )
+                    if embedding_fallback:
+                        embedding_provider = embedding_fallback["provider"]
+                        embedding_model = embedding_fallback["model"]
+                        embedding_base_url = embedding_fallback["base_url"]
+                        embedding_api_key = embedding_fallback["api_key"]
+                        embedding_dims = int(embedding_fallback["dims"])
+                        reason = "ollama_unreachable" if not ollama_ok else "embedding_model_missing"
+                        logger.info(
+                            "Mem0 embedding fallback activated (%s): provider=%s, model=%s, dims=%s",
+                            reason,
+                            embedding_provider,
+                            embedding_model,
+                            embedding_dims,
+                        )
+                    else:
+                        msg = (
+                            "Mem0 preflight failed: Ollama embedding backend unavailable and no "
+                            "API embedding fallback credentials detected."
+                        )
+                        if config.mem0_strict:
+                            raise RuntimeError(msg)
+                        logger.warning("%s Memory layer will be skipped for this run.", msg)
+                        return None
+
         mem0_config = build_mem0_config(
             llm_provider=mem0_llm_provider,
             llm_model=mem0_llm_model,
@@ -754,24 +1069,21 @@ def get_mem0_service() -> Optional[Mem0Service]:
             qdrant_port=config.mem0_qdrant_port,
             collection_name=config.mem0_collection_name,
         )
-        
+
         _mem0_service = Mem0Service(mem0_config)
-        
         if not _mem0_service.is_available():
             if config.mem0_strict:
                 err = getattr(_mem0_service, "_init_error", None) or RuntimeError(
-                    "Mem0 was enabled (MEM0_ENABLED=true) but failed to initialize."
+                    "Mem0 was enabled but failed to initialize."
                 )
                 _mem0_service = None
                 raise err
-            logger.info(
-                "Mem0 not available (optional). Workflow continues without memory layer."
-            )
+            logger.info("Mem0 unavailable after setup. Workflow continues without memory layer.")
             _mem0_service = None
             return None
-        
+
         return _mem0_service
-        
+
     except ImportError as e:
         logger.warning("mem0 optional: mem0ai package not installed: %s", e)
         return None

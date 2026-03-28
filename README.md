@@ -321,13 +321,16 @@ pip install -r requirements.txt
 <summary>🧠 Memory Layer (mem0 + Qdrant)</summary>
 
 Provides persistent semantic memory for context compression and retrieval across workflow sessions.
+FAIRiAgent now performs preflight checks on each run and can:
+- auto-start local Qdrant via Docker (when `MEM0_AUTO_START_QDRANT=true`)
+- auto-fallback from local Ollama embeddings to API embeddings when available
 
 ```bash
 # Install mem0 dependencies
 pip install mem0ai qdrant-client
 
-# Start Qdrant vector database
-docker run -d -p 6333:6333 qdrant/qdrant
+# Optional: start Qdrant manually (auto-start is enabled by default)
+docker run -d --name fairiagent-qdrant -p 6333:6333 qdrant/qdrant
 
 # Enable in .env
 echo "MEM0_ENABLED=true" >> .env

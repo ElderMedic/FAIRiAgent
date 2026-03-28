@@ -163,8 +163,12 @@ class FAIRifierConfig:
     # Mem0 Memory Layer Configuration (Optional)
     # Provides persistent semantic memory for context compression and retrieval
     # Mem0 uses its own LLM source (provider/model/base_url) independent of the main workflow LLM
-    mem0_enabled: bool = False  # Off by default, opt-in feature
+    mem0_enabled: bool = True  # On by default; auto health-check + graceful fallback
     mem0_strict: bool = False  # If True and mem0_enabled, raise when mem0 init fails
+    mem0_auto_setup: bool = True  # Detect dependencies and auto-adjust mem0 runtime profile
+    mem0_auto_start_qdrant: bool = True  # Auto-start local Qdrant via Docker when unreachable
+    mem0_qdrant_container_name: str = "fairiagent-qdrant"
+    mem0_healthcheck_timeout_seconds: int = 2
     mem0_llm_provider: str = "ollama"  # mem0 LLM provider: ollama, openai, anthropic (mem0-supported only)
     mem0_llm_model: Optional[str] = None  # mem0 LLM model (defaults to llm_model if not set)
     mem0_ollama_base_url: Optional[str] = None  # Base URL for mem0 when provider=ollama
@@ -462,6 +466,21 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("MEM0_STRICT"):
         strict_value = os.getenv("MEM0_STRICT").lower()
         config_instance.mem0_strict = strict_value in ("true", "1", "yes")
+    if os.getenv("MEM0_AUTO_SETUP"):
+        auto_setup_value = os.getenv("MEM0_AUTO_SETUP").lower()
+        config_instance.mem0_auto_setup = auto_setup_value in ("true", "1", "yes")
+    if os.getenv("MEM0_AUTO_START_QDRANT"):
+        auto_qdrant_value = os.getenv("MEM0_AUTO_START_QDRANT").lower()
+        config_instance.mem0_auto_start_qdrant = auto_qdrant_value in ("true", "1", "yes")
+    if os.getenv("MEM0_QDRANT_CONTAINER_NAME"):
+        config_instance.mem0_qdrant_container_name = os.getenv("MEM0_QDRANT_CONTAINER_NAME")
+    if os.getenv("MEM0_HEALTHCHECK_TIMEOUT_SECONDS"):
+        try:
+            config_instance.mem0_healthcheck_timeout_seconds = int(
+                os.getenv("MEM0_HEALTHCHECK_TIMEOUT_SECONDS")
+            )
+        except ValueError:
+            pass
     
     if os.getenv("MEM0_LLM_PROVIDER"):
         config_instance.mem0_llm_provider = os.getenv("MEM0_LLM_PROVIDER").lower()
