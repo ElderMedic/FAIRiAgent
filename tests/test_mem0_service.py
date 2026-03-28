@@ -341,6 +341,10 @@ class TestMem0ConfigIntegration:
         
         required_fields = [
             'mem0_enabled',
+            'mem0_auto_setup',
+            'mem0_auto_start_qdrant',
+            'mem0_qdrant_container_name',
+            'mem0_healthcheck_timeout_seconds',
             'mem0_ollama_base_url',
             'mem0_embedding_provider',
             'mem0_embedding_model',
@@ -361,7 +365,9 @@ class TestMem0ConfigIntegration:
         
         config = FAIRifierConfig()
         
-        assert config.mem0_enabled is False
+        assert config.mem0_enabled is True
+        assert config.mem0_auto_setup is True
+        assert config.mem0_auto_start_qdrant is True
         assert config.mem0_embedding_provider == "ollama"
         assert config.mem0_embedding_model == "nomic-embed-text"
         assert config.mem0_qdrant_host == "localhost"
@@ -378,6 +384,7 @@ def test_get_mem0_service_uses_dashscope_embeddings_for_qwen(monkeypatch):
 
     original_values = {
         "mem0_enabled": runtime_config.mem0_enabled,
+        "mem0_auto_setup": runtime_config.mem0_auto_setup,
         "llm_provider": runtime_config.llm_provider,
         "llm_model": runtime_config.llm_model,
         "llm_base_url": runtime_config.llm_base_url,
@@ -403,6 +410,7 @@ def test_get_mem0_service_uses_dashscope_embeddings_for_qwen(monkeypatch):
     monkeypatch.setattr(runtime_config, "mem0_embedding_base_url", None)
     monkeypatch.setattr(runtime_config, "mem0_embedding_api_key", None)
     monkeypatch.setattr(runtime_config, "mem0_embedding_dims", 768)
+    monkeypatch.setattr(runtime_config, "mem0_auto_setup", False)
 
     with patch("fairifier.services.mem0_service.Mem0Service") as mock_service_cls:
         mock_service = mock_service_cls.return_value
@@ -418,6 +426,104 @@ def test_get_mem0_service_uses_dashscope_embeddings_for_qwen(monkeypatch):
         assert mem0_config["embedder"]["config"]["openai_base_url"].startswith("https://dashscope")
         assert mem0_config["embedder"]["config"]["api_key"] == "dashscope-key"
         assert mem0_config["vector_store"]["config"]["embedding_model_dims"] == 1024
+
+    for key, value in original_values.items():
+        monkeypatch.setattr(runtime_config, key, value)
+    reset_mem0_service()
+
+
+def test_get_mem0_service_fallbacks_embedding_when_ollama_unavailable(monkeypatch):
+    """When Ollama embedder is unavailable, mem0 should auto-fallback to API embeddings."""
+    from fairifier.config import config as runtime_config
+    from fairifier.services.mem0_service import get_mem0_service, reset_mem0_service
+
+    reset_mem0_service()
+    original_values = {
+        "mem0_enabled": runtime_config.mem0_enabled,
+        "mem0_auto_setup": runtime_config.mem0_auto_setup,
+        "mem0_strict": runtime_config.mem0_strict,
+        "llm_provider": runtime_config.llm_provider,
+        "llm_model": runtime_config.llm_model,
+        "llm_base_url": runtime_config.llm_base_url,
+        "llm_api_key": runtime_config.llm_api_key,
+        "mem0_embedding_provider": runtime_config.mem0_embedding_provider,
+        "mem0_embedding_model": runtime_config.mem0_embedding_model,
+        "mem0_embedding_dims": runtime_config.mem0_embedding_dims,
+        "mem0_qdrant_host": runtime_config.mem0_qdrant_host,
+        "mem0_qdrant_port": runtime_config.mem0_qdrant_port,
+        "mem0_auto_start_qdrant": runtime_config.mem0_auto_start_qdrant,
+    }
+
+    monkeypatch.setattr(runtime_config, "mem0_enabled", True)
+    monkeypatch.setattr(runtime_config, "mem0_auto_setup", True)
+    monkeypatch.setattr(runtime_config, "mem0_strict", False)
+    monkeypatch.setattr(runtime_config, "llm_provider", "qwen")
+    monkeypatch.setattr(runtime_config, "llm_model", "qwen-flash")
+    monkeypatch.setattr(runtime_config, "llm_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+    monkeypatch.setattr(runtime_config, "llm_api_key", "dashscope-key")
+    monkeypatch.setattr(runtime_config, "mem0_embedding_provider", "ollama")
+    monkeypatch.setattr(runtime_config, "mem0_embedding_model", "nomic-embed-text")
+    monkeypatch.setattr(runtime_config, "mem0_embedding_dims", 768)
+    monkeypatch.setattr(runtime_config, "mem0_qdrant_host", "localhost")
+    monkeypatch.setattr(runtime_config, "mem0_qdrant_port", 6333)
+    monkeypatch.setattr(runtime_config, "mem0_auto_start_qdrant", False)
+
+    with patch("fairifier.services.mem0_service._is_qdrant_available", return_value=True), \
+         patch("fairifier.services.mem0_service._is_ollama_available", return_value=False), \
+         patch("fairifier.services.mem0_service.Mem0Service") as mock_service_cls:
+        mock_service = mock_service_cls.return_value
+        mock_service.is_available.return_value = True
+
+        service = get_mem0_service()
+
+        assert service is mock_service
+        mem0_config = mock_service_cls.call_args.args[0]
+        assert mem0_config["embedder"]["provider"] == "openai"
+        assert mem0_config["embedder"]["config"]["model"] == "text-embedding-v4"
+        assert mem0_config["vector_store"]["config"]["embedding_model_dims"] == 1024
+
+    for key, value in original_values.items():
+        monkeypatch.setattr(runtime_config, key, value)
+    reset_mem0_service()
+
+
+def test_get_mem0_service_attempts_qdrant_autostart(monkeypatch):
+    """If Qdrant is down, auto-setup should try to start local Qdrant before init."""
+    from fairifier.config import config as runtime_config
+    from fairifier.services.mem0_service import get_mem0_service, reset_mem0_service
+
+    reset_mem0_service()
+    original_values = {
+        "mem0_enabled": runtime_config.mem0_enabled,
+        "mem0_auto_setup": runtime_config.mem0_auto_setup,
+        "mem0_auto_start_qdrant": runtime_config.mem0_auto_start_qdrant,
+        "mem0_qdrant_host": runtime_config.mem0_qdrant_host,
+        "mem0_qdrant_port": runtime_config.mem0_qdrant_port,
+        "mem0_embedding_provider": runtime_config.mem0_embedding_provider,
+        "mem0_embedding_model": runtime_config.mem0_embedding_model,
+        "mem0_ollama_base_url": runtime_config.mem0_ollama_base_url,
+    }
+
+    monkeypatch.setattr(runtime_config, "mem0_enabled", True)
+    monkeypatch.setattr(runtime_config, "mem0_auto_setup", True)
+    monkeypatch.setattr(runtime_config, "mem0_auto_start_qdrant", True)
+    monkeypatch.setattr(runtime_config, "mem0_qdrant_host", "localhost")
+    monkeypatch.setattr(runtime_config, "mem0_qdrant_port", 6333)
+    monkeypatch.setattr(runtime_config, "mem0_embedding_provider", "ollama")
+    monkeypatch.setattr(runtime_config, "mem0_embedding_model", "nomic-embed-text")
+    monkeypatch.setattr(runtime_config, "mem0_ollama_base_url", "http://localhost:11434")
+
+    with patch("fairifier.services.mem0_service._is_qdrant_available", side_effect=[False, True]), \
+         patch("fairifier.services.mem0_service._try_auto_start_qdrant", return_value=True) as start_mock, \
+         patch("fairifier.services.mem0_service._is_ollama_available", return_value=True), \
+         patch("fairifier.services.mem0_service._ollama_has_model", return_value=True), \
+         patch("fairifier.services.mem0_service.Mem0Service") as mock_service_cls:
+        mock_service = mock_service_cls.return_value
+        mock_service.is_available.return_value = True
+
+        service = get_mem0_service()
+        assert service is mock_service
+        start_mock.assert_called_once()
 
     for key, value in original_values.items():
         monkeypatch.setattr(runtime_config, key, value)
