@@ -22,6 +22,7 @@ import {
   type SystemStatus,
 } from '../api/client';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { buildAppRoute } from '../utils/session';
 import './InteriorPages.css';
 
 const LLM_PROVIDERS = [
@@ -344,7 +345,7 @@ export default function Config() {
         configOverrides: hasOverrides ? config : undefined,
         demo: !!demoMode,
       });
-      navigate(`/run/${result.project_id}`);
+      navigate(buildAppRoute(`/run/${result.project_id}`));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project');
       setSubmitting(false);

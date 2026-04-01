@@ -1,28 +1,41 @@
-import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { Download, CheckCircle2, XCircle, ArrowLeft, FileDown, RefreshCw } from 'lucide-react';
-import { api, type ProjectResponse, type ArtifactInfo } from '../api/client';
+import { useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Download,
+  FileDown,
+  RefreshCw,
+  Square,
+  XCircle,
+} from 'lucide-react';
+import { api, type ArtifactInfo, type ProjectResponse } from '../api/client';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { buildAppRoute } from '../utils/session';
+import './InteriorPages.css';
 
-function ScoreCard({ label, score }: { label: string; score: number }) {
+function formatSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatSummaryValue(value: unknown) {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function scoreToneClass(score: number) {
   const pct = Math.round(score * 100);
-  const color =
-    pct >= 80 ? 'text-success' : pct >= 50 ? 'text-warning' : 'text-error';
+  if (pct >= 80) return 'result-score-card--success';
+  if (pct >= 50) return 'result-score-card--warning';
+  return 'result-score-card--error';
+}
 
-  return (
-    <div className="bg-surface-secondary rounded-xl p-4 border border-border">
-      <p className="text-xs text-text-tertiary mb-1 capitalize">{label.replace(/_/g, ' ')}</p>
-      <p className={`text-2xl font-bold ${color}`}>{pct}%</p>
-      <div className="mt-2 h-1.5 bg-surface-tertiary rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-700 ${
-            pct >= 80 ? 'bg-success' : pct >= 50 ? 'bg-warning' : 'bg-error'
-          }`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-    </div>
-  );
+function scoreLabel(label: string) {
+  return label.replace(/_/g, ' ');
 }
 
 export default function Result() {
@@ -58,188 +71,262 @@ export default function Result() {
 
   if (loading) {
     return (
-      <div
-        className="min-h-screen pt-24 pb-16 px-6 bg-surface-secondary flex flex-col items-center justify-center gap-3"
-        role="status"
-        aria-live="polite"
-      >
-        <RefreshCw className="w-6 h-6 text-primary animate-spin" aria-hidden />
-        <span className="text-sm text-text-secondary">Loading results…</span>
+      <div className="page-frame">
+        <div className="page-shell result-empty-state" role="status" aria-live="polite">
+          <RefreshCw className="w-6 h-6 result-empty-state__spinner" aria-hidden="true" />
+          <p className="result-empty-state__body">Loading results…</p>
+        </div>
       </div>
     );
   }
 
   if (visibleError) {
     return (
-      <div className="min-h-screen pt-24 pb-16 px-6 bg-surface-secondary flex items-center justify-center">
-        <div className="text-center">
-          <XCircle className="w-8 h-8 text-error mx-auto mb-3" />
-          <p className="text-text-secondary mb-4">{visibleError}</p>
+      <div className="page-frame">
+        <div className="page-shell result-empty-state">
+          <XCircle className="w-8 h-8 result-empty-state__icon" aria-hidden="true" />
+          <p className="result-empty-state__body">{visibleError}</p>
           <button
-            onClick={() => navigate('/upload')}
-            className="px-6 py-2.5 rounded-xl text-sm font-semibold text-white bg-primary hover:bg-primary-dark transition-colors cursor-pointer"
+            type="button"
+            onClick={() => navigate(buildAppRoute('/upload'))}
+            className="run-cta"
           >
-            Upload New Document
+            Upload new document
           </button>
         </div>
       </div>
     );
   }
 
-  if (!project) return null;
+  if (!project || !projectId) return null;
 
   const isCompleted = project.status === 'completed';
-  const scores = project.confidence_scores || {};
-  const summary = project.execution_summary || {};
-  const formatSize = (size: number) => {
-    if (size < 1024) return `${size} B`;
-    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-  };
+  const isStopped = project.status === 'interrupted' || project.status === 'stopped';
+  const isFailed = project.status === 'failed' || project.status === 'error';
+
+  const statusClass = isCompleted
+    ? 'result-status-pill--success'
+    : isStopped
+      ? 'result-status-pill--warning'
+      : isFailed
+        ? 'result-status-pill--error'
+        : 'result-status-pill--neutral';
+
+  const statusIcon = isCompleted ? (
+    <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
+  ) : isStopped ? (
+    <Square className="w-4 h-4" aria-hidden="true" />
+  ) : isFailed ? (
+    <XCircle className="w-4 h-4" aria-hidden="true" />
+  ) : (
+    <RefreshCw className="w-4 h-4" aria-hidden="true" />
+  );
+
+  const scores = Object.entries(project.confidence_scores || {});
+  const summary = Object.entries(project.execution_summary || {});
+  const recommendedArtifacts = ['metadata_json.json', 'validation_report.txt', 'workflow_report.json'];
 
   return (
-    <div className="min-h-screen pt-20 sm:pt-24 pb-12 sm:pb-16 px-4 sm:px-6 bg-surface-secondary">
-      <div className="w-full max-w-4xl mx-auto">
-        <div className="w-full">
+    <div className="page-frame">
+      <div className="page-shell page-stack">
+        <header className="page-header">
           <button
-            onClick={() => navigate('/upload')}
-            className="flex items-center gap-1.5 text-sm text-text-secondary hover:text-text-primary mb-6 transition-colors cursor-pointer"
+            type="button"
+            onClick={() => navigate(buildAppRoute('/upload'))}
+            className="page-backlink"
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft className="w-4 h-4" aria-hidden="true" />
             Process another document
           </button>
+          <p className="page-eyebrow">Step 4 of 4</p>
+          <h1 className="page-title">{project.project_name || project.filename || 'Workflow results'}</h1>
+          <p className="page-lede">
+            Review the run summary, inspect confidence signals, and download the files produced by this
+            workflow before reusing or submitting the output downstream.
+          </p>
+        </header>
 
-          {/* Header */}
-          <div className="flex items-start gap-4 mb-8">
-            <div className="flex-1">
-              <h1 className="text-3xl font-bold text-text-primary mb-1">
-                {project.project_name || 'Results'}
-              </h1>
-              <p className="text-sm text-text-secondary">
-                Project {projectId}
-              </p>
-            </div>
-            <div
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium ${
-                isCompleted
-                  ? 'bg-success/10 text-success'
-                  : 'bg-error/10 text-error'
-              }`}
-            >
-              {isCompleted ? (
-                <CheckCircle2 className="w-4 h-4" />
-              ) : (
-                <XCircle className="w-4 h-4" />
-              )}
-              {project.status}
-            </div>
-          </div>
-
-          <div className="mb-8 bg-surface rounded-2xl border border-border p-6 shadow-sm">
-            <h2 className="text-lg font-semibold text-text-primary mb-2">What am I looking at?</h2>
-            <p className="text-sm text-text-secondary leading-relaxed">
-              Confidence scores summarize output quality across multiple checks. Artifacts are the concrete files you can download and
-              submit/use downstream (JSON metadata, validation report, processing log, etc.).
-            </p>
-          </div>
-
-          {/* Confidence scores */}
-          {Object.keys(scores).length > 0 && (
-            <div className="mb-8">
-              <h2 className="text-lg font-semibold text-text-primary mb-4">Confidence Scores</h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-                {Object.entries(scores).map(([key, val]) => (
-                  <ScoreCard key={key} label={key} score={val} />
-                ))}
+        <div className="result-layout">
+          <section className="result-main">
+            <article className="page-card">
+              <div className="page-card__header">
+                <div>
+                  <p className="page-card__eyebrow">Inspection guide</p>
+                  <h2 className="page-card__title">What is on this page?</h2>
+                  <p className="page-card__body">
+                    Confidence scores summarize output quality across critique, structure, and validation
+                    checks. The artifact list contains the concrete files written by the run, including the
+                    metadata draft, validation output, and workflow reports.
+                  </p>
+                </div>
+                <div className={`result-status-pill ${statusClass}`}>
+                  {statusIcon}
+                  <span>{project.status}</span>
+                </div>
               </div>
-            </div>
-          )}
+            </article>
 
-          {/* Execution summary */}
-          {Object.keys(summary).length > 0 && (
-            <div className="mb-8">
-              <h2 className="text-lg font-semibold text-text-primary mb-4">Execution Summary</h2>
-              <div className="bg-surface rounded-2xl border border-border p-6 shadow-sm">
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                  {Object.entries(summary).map(([key, val]) => (
-                    <div key={key}>
-                      <p className="text-xs text-text-tertiary capitalize mb-0.5">
-                        {key.replace(/_/g, ' ')}
-                      </p>
-                      <p className="text-sm font-medium text-text-primary">
-                        {typeof val === 'object' ? JSON.stringify(val) : String(val)}
-                      </p>
+            {scores.length > 0 && (
+              <article className="page-card">
+                <div className="page-card__header">
+                  <div>
+                    <p className="page-card__eyebrow">Confidence</p>
+                    <h2 className="page-card__title">Scoring overview</h2>
+                  </div>
+                </div>
+                <div className="result-score-grid">
+                  {scores.map(([key, value]) => {
+                    const pct = Math.round(value * 100);
+                    return (
+                      <div key={key} className={`result-score-card ${scoreToneClass(value)}`}>
+                        <p className="result-score-card__label">{scoreLabel(key)}</p>
+                        <p className="result-score-card__value">{pct}%</p>
+                        <div className="result-score-card__track" aria-hidden="true">
+                          <div
+                            className="result-score-card__fill"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </article>
+            )}
+
+            {summary.length > 0 && (
+              <article className="page-card">
+                <div className="page-card__header">
+                  <div>
+                    <p className="page-card__eyebrow">Run summary</p>
+                    <h2 className="page-card__title">Execution details</h2>
+                  </div>
+                </div>
+                <div className="result-summary-grid">
+                  {summary.map(([key, value]) => (
+                    <div key={key} className="result-summary-card">
+                      <p className="result-summary-card__label">{scoreLabel(key)}</p>
+                      <p className="result-summary-card__value">{formatSummaryValue(value)}</p>
                     </div>
                   ))}
                 </div>
-              </div>
-            </div>
-          )}
+              </article>
+            )}
 
-          {/* Errors */}
-          {project.errors && project.errors.length > 0 && (
-            <div className="mb-8">
-              <h2 className="text-lg font-semibold text-text-primary mb-4">Errors</h2>
-              <div className="bg-error/5 border border-error/20 rounded-2xl p-6 space-y-2">
-                {project.errors.map((err, i) => (
-                  <p key={i} className="text-sm text-error">{err}</p>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Artifacts */}
-          {artifacts.length > 0 && (
-            <div>
-              <h2 className="text-lg font-semibold text-text-primary mb-4">
-                Files ({artifacts.length})
-              </h2>
-              <div className="bg-surface rounded-2xl border border-border shadow-sm divide-y divide-border">
-                {artifacts.map((art) => (
-                  <div key={art.name} className="flex items-center gap-4 px-6 py-4">
-                    <FileDown className="w-5 h-5 text-text-tertiary shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-text-primary break-all">
-                        {art.name.split('/').pop() || art.name}
-                      </p>
-                      <p className="text-xs text-text-tertiary break-all">
-                        {art.name.includes('/') ? `${art.name} · ` : ''}{formatSize(art.size)}
-                      </p>
-                    </div>
-                    {art.available ? (
-                      <a
-                        href={api.getArtifactUrl(projectId!, art.name)}
-                        download
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold
-                          text-primary bg-primary/10 hover:bg-primary/20 transition-colors no-underline"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        Download
-                      </a>
-                    ) : (
-                      <span className="text-xs text-text-tertiary">Unavailable</span>
-                    )}
+            {project.errors && project.errors.length > 0 && (
+              <article className="page-card result-alert">
+                <div className="page-card__header">
+                  <div>
+                    <p className="page-card__eyebrow">Run notes</p>
+                    <h2 className="page-card__title">Issues reported by the workflow</h2>
                   </div>
-                ))}
-              </div>
-              <p className="mt-3 text-xs text-text-tertiary leading-relaxed">
-                Start with <span className="font-semibold text-text-secondary">metadata_json.json</span>,
-                then review <span className="font-semibold text-text-secondary">validation_report.txt</span> and{' '}
-                <span className="font-semibold text-text-secondary">workflow_report.json</span>.
-              </p>
-            </div>
-          )}
+                </div>
+                <div className="result-alert__list">
+                  {project.errors.map((entry, index) => (
+                    <p key={`${entry}-${index}`} className="result-alert__item">
+                      {entry}
+                    </p>
+                  ))}
+                </div>
+              </article>
+            )}
 
-          {/* Process another */}
-          <div className="mt-12 text-center">
+            <article className="page-card">
+              <div className="page-card__header">
+                <div>
+                  <p className="page-card__eyebrow">Artifacts</p>
+                  <h2 className="page-card__title">Files available for download</h2>
+                  <p className="page-card__body">
+                    Start with <strong>metadata_json.json</strong>, then review the validation report and
+                    workflow report before handing the output off to another system.
+                  </p>
+                </div>
+                <div className="result-file-count">{artifacts.length} files</div>
+              </div>
+
+              {artifacts.length > 0 ? (
+                <div className="result-file-list">
+                  {artifacts.map((artifact) => {
+                    const filename = artifact.name.split('/').pop() || artifact.name;
+                    return (
+                      <div key={artifact.name} className="result-file-row">
+                        <div className="result-file-row__icon">
+                          <FileDown className="w-4 h-4" aria-hidden="true" />
+                        </div>
+                        <div className="result-file-row__content">
+                          <p className="result-file-row__name">{filename}</p>
+                          <p className="result-file-row__meta">
+                            {artifact.name.includes('/') ? `${artifact.name} · ` : ''}
+                            {formatSize(artifact.size)}
+                          </p>
+                        </div>
+                        {artifact.available ? (
+                          <a
+                            href={api.getArtifactUrl(projectId, artifact.name)}
+                            download
+                            className="result-download-link"
+                          >
+                            <Download className="w-4 h-4" aria-hidden="true" />
+                            Download
+                          </a>
+                        ) : (
+                          <span className="result-download-link result-download-link--disabled">
+                            Unavailable
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="result-empty-panel">
+                  No artifacts were listed for this project.
+                </div>
+              )}
+            </article>
+          </section>
+
+          <aside className="result-aside result-aside--sticky">
+            <article className="run-sidebar-card">
+              <h2 className="run-sidebar-card__title">Project</h2>
+              <p className="run-sidebar-card__body">{project.filename || 'Processed document'}</p>
+              <div className="run-metric-grid">
+                <div className="run-metric">
+                  <p className="run-metric__label">Project ID</p>
+                  <p className="run-metric__value">{projectId}</p>
+                </div>
+                <div className="run-metric">
+                  <p className="run-metric__label">Status</p>
+                  <p className="run-metric__value">{project.status}</p>
+                </div>
+                <div className="run-metric">
+                  <p className="run-metric__label">Created</p>
+                  <p className="run-metric__value">{project.created_at || 'Not available'}</p>
+                </div>
+                <div className="run-metric">
+                  <p className="run-metric__label">Updated</p>
+                  <p className="run-metric__value">{project.updated_at || 'Not available'}</p>
+                </div>
+              </div>
+            </article>
+
+            <article className="run-sidebar-card">
+              <h2 className="run-sidebar-card__title">Start here</h2>
+              <ul className="page-note-list">
+                {recommendedArtifacts.map((name) => (
+                  <li key={name}>{name}</li>
+                ))}
+              </ul>
+            </article>
+
             <button
-              onClick={() => navigate('/upload')}
-              className="inline-flex items-center gap-2 px-8 py-3 rounded-xl text-sm font-semibold
-                text-white bg-primary hover:bg-primary-dark transition-colors cursor-pointer"
+              type="button"
+              onClick={() => navigate(buildAppRoute('/upload'))}
+              className="run-cta run-cta--gradient"
             >
-              Process Another Document
+              Process another document
             </button>
-          </div>
+          </aside>
         </div>
       </div>
     </div>

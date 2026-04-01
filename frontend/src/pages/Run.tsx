@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Activity, CheckCircle2, XCircle, ArrowRight } from 'lucide-react';
+import { Activity, CheckCircle2, Square, XCircle, ArrowLeft, ArrowRight } from 'lucide-react';
 import { api, type ProjectResponse, type WorkflowEvent } from '../api/client';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { buildAppRoute, getWebSession } from '../utils/session';
+import './InteriorPages.css';
 
 interface LogEntry {
   timestamp: string;
@@ -24,18 +26,32 @@ export default function Run() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const session = getWebSession();
 
+  const [project, setProject] = useState<ProjectResponse | null>(null);
   const [stage, setStage] = useState('Initializing');
   const [progress, setProgress] = useState(0);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [status, setStatus] = useState<'running' | 'completed' | 'error'>('running');
+  const [status, setStatus] = useState<'running' | 'stopping' | 'stopped' | 'completed' | 'error'>('running');
   const [errorMsg, setErrorMsg] = useState('');
+  const [stopSubmitting, setStopSubmitting] = useState(false);
 
   const syncProjectState = (project: ProjectResponse) => {
+    setProject(project);
+    if (project.stop_requested && (project.status === 'pending' || project.status === 'running')) {
+      setStatus('stopping');
+      setStage('Stopping');
+      return false;
+    }
     if (project.status === 'completed') {
       setStatus('completed');
       setProgress(100);
       setStage('Completed');
+      return true;
+    }
+    if (project.status === 'interrupted' || project.status === 'stopped') {
+      setStatus('stopped');
+      setStage('Stopped');
       return true;
     }
     if (project.status === 'failed' || project.status === 'error') {
@@ -106,10 +122,23 @@ export default function Run() {
               case 'progress':
                 if (typeof event.data.progress === 'number') setProgress(event.data.progress);
                 break;
+              case 'stop_requested':
+                setStatus('stopping');
+                setStage('Stopping');
+                setStopSubmitting(false);
+                break;
+              case 'stopped':
+                setStatus('stopped');
+                setStage('Stopped');
+                setStopSubmitting(false);
+                stopPolling();
+                source?.close();
+                break;
               case 'completed':
                 setStatus('completed');
                 setProgress(100);
                 setStage('Completed');
+                setStopSubmitting(false);
                 stopPolling();
                 source?.close();
                 break;
@@ -117,6 +146,7 @@ export default function Run() {
                 setStatus('error');
                 setStage('Failed');
                 setErrorMsg(errorText || message || 'An error occurred');
+                setStopSubmitting(false);
                 startPolling();
                 break;
             }
@@ -133,6 +163,7 @@ export default function Run() {
 
     return () => {
       active = false;
+      setStopSubmitting(false);
       stopPolling();
       source?.close();
     };
@@ -144,126 +175,212 @@ export default function Run() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [logs]);
 
+  const statusToneClass = (() => {
+    if (status === 'completed') return 'run-status-pill--completed';
+    if (status === 'stopped') return 'run-status-pill--stopped';
+    if (status === 'stopping') return 'run-status-pill--stopping';
+    if (status === 'error') return 'run-status-pill--error';
+    return 'run-status-pill--running';
+  })();
+
+  const statusLabel = (() => {
+    if (status === 'completed') return 'Completed';
+    if (status === 'stopped') return 'Stopped';
+    if (status === 'stopping') return 'Stopping';
+    if (status === 'error') return 'Failed';
+    return 'Running';
+  })();
+  const latestLog = logs.length ? logs[logs.length - 1] : null;
+  const canStop = Boolean(projectId && (status === 'running' || status === 'stopping'));
+
+  const handleStop = async () => {
+    if (!projectId || stopSubmitting || status === 'stopping') return;
+    setStopSubmitting(true);
+    setErrorMsg('');
+    try {
+      const updated = await api.stopProject(projectId);
+      syncProjectState(updated);
+      setLogs((prev) => [
+        ...prev,
+        {
+          timestamp: formatTimestamp(Date.now() / 1000),
+          message: 'Stop requested. Waiting for the workflow to exit cleanly.',
+          type: 'stop_requested',
+        },
+      ]);
+      setStatus('stopping');
+      setStage('Stopping');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to stop the run');
+      setStopSubmitting(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen pt-20 sm:pt-24 pb-12 sm:pb-16 px-4 sm:px-6 bg-surface-secondary">
-      <div className="w-full max-w-3xl mx-auto">
-        <div className="w-full">
-          <h1 className="text-3xl font-bold text-text-primary mb-2">Processing</h1>
-          <p className="text-text-secondary mb-8">
-            Project <code className="text-xs bg-surface-tertiary px-2 py-0.5 rounded font-mono">{projectId}</code>
+    <div className="page-frame">
+      <div className="page-shell page-stack">
+        <header className="page-header">
+          <button
+            type="button"
+            onClick={() => navigate(buildAppRoute('/upload'))}
+            className="page-backlink"
+          >
+            <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+            Back to upload
+          </button>
+          <p className="page-eyebrow">Step 3 of 3</p>
+          <h1 className="page-title">Processing in progress.</h1>
+          <p className="page-lede">
+            This page follows the live backend run. Progress, stage changes, and log entries stay attached
+            to the project so you can see what happened before opening the final result files.
           </p>
+        </header>
 
-          <div className="w-full bg-surface rounded-2xl border border-border p-6 sm:p-8 shadow-sm space-y-6">
-            <div className="bg-surface-secondary rounded-xl px-4 py-3 border border-border">
-              <p className="text-xs text-text-secondary leading-relaxed">
-                This page streams live events from the server (SSE). If you reload, you may lose the live log stream, but you can still
-                open Results once the run completes.
+        <div className="run-layout">
+          <section className="run-main">
+            <article className="run-status-card">
+              <div className="run-status-card__top" role="status" aria-live="polite">
+                <div className={`run-status-pill ${statusToneClass}`}>
+                  {status === 'running' && (
+                    <Activity className="w-5 h-5 animate-pulse" aria-hidden />
+                  )}
+                  {status === 'stopping' && (
+                    <Activity className="w-5 h-5 animate-pulse" aria-hidden />
+                  )}
+                  {status === 'stopped' && (
+                    <Square className="w-5 h-5" aria-hidden />
+                  )}
+                  {status === 'completed' && (
+                    <CheckCircle2 className="w-5 h-5" aria-hidden />
+                  )}
+                  {status === 'error' && (
+                    <XCircle className="w-5 h-5" aria-hidden />
+                  )}
+                  <span>{statusLabel}</span>
+                </div>
+                <div className="run-progress-meta">
+                  {Math.round(progress)}% complete
+                </div>
+              </div>
+
+              <div className="run-progress-block">
+                <div className="run-progress-row">
+                  <span>Current stage</span>
+                  <span>{stage}</span>
+                </div>
+                <div className="run-progress-bar" aria-hidden="true">
+                  <div
+                    className="run-progress-bar__fill"
+                    style={{ width: `${progress}%`, transition: 'width 0.5s ease-out' }}
+                  />
+                </div>
+              </div>
+
+              <div className="run-live-note">
+                Live events arrive over SSE. Reloading the page may interrupt the live stream, but the
+                project and its output files remain attached to this session until you remove them.
+              </div>
+
+              {canStop && (
+                <div className="run-action-row">
+                  <button
+                    type="button"
+                    onClick={() => void handleStop()}
+                    disabled={stopSubmitting || status === 'stopping'}
+                    className="run-cta run-cta--secondary"
+                  >
+                    {status === 'stopping' ? 'Stop requested' : 'Stop run'}
+                  </button>
+                </div>
+              )}
+            </article>
+
+            <article className="run-log-card">
+              <h2 className="run-log-card__title">Activity log</h2>
+              <p className="run-log-card__body">
+                Server events are appended here as the workflow moves through parsing, retrieval, metadata
+                drafting, and validation.
               </p>
-            </div>
-            {/* Status header */}
-            <div className="flex items-center gap-3" role="status" aria-live="polite">
-              {status === 'running' && (
-                <Activity className="w-5 h-5 text-primary animate-pulse" aria-hidden />
-              )}
-              {status === 'completed' && (
-                <CheckCircle2 className="w-5 h-5 text-success" aria-hidden />
-              )}
-              {status === 'error' && (
-                <XCircle className="w-5 h-5 text-error" aria-hidden />
-              )}
-              <span className="text-lg font-semibold text-text-primary leading-snug">{stage}</span>
-              {status === 'running' && (
-                <span className="ml-auto text-sm text-text-tertiary">
-                  <span className="inline-flex gap-0.5">
-                    <span className="animate-bounce">.</span>
-                    <span className="animate-bounce [animation-delay:150ms]">.</span>
-                    <span className="animate-bounce [animation-delay:300ms]">.</span>
-                  </span>
-                </span>
-              )}
-            </div>
-
-            {/* Progress bar */}
-            <div>
-              <div className="flex justify-between text-xs text-text-tertiary mb-1.5">
-                <span>Progress</span>
-                <span aria-hidden="true">{Math.round(progress)}%</span>
-              </div>
-              <div className="h-2 bg-surface-tertiary rounded-full overflow-hidden" aria-hidden="true">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-primary to-accent"
-                  style={{ width: `${progress}%`, transition: 'width 0.5s ease-out' }}
-                />
-              </div>
-            </div>
-
-            {/* Log area */}
-            <div>
-              <p className="text-sm font-medium text-text-primary mb-2">Activity Log</p>
               <div
                 ref={logContainerRef}
                 role="log"
                 aria-live="polite"
                 aria-relevant="additions"
-                className="h-72 overflow-y-auto bg-bg-dark rounded-xl p-5 font-mono text-xs leading-relaxed"
+                className="run-log-stream"
               >
                 {logs.length === 0 ? (
-                  <p className="text-white/30">Waiting for events…</p>
+                  <div className="run-log-line">
+                    <span className="run-log-line__time">--:--:--</span>
+                    <span className="run-log-line__message">Waiting for events…</span>
+                  </div>
                 ) : (
                   logs.map((entry, i) => (
-                    <div key={i} className="flex gap-3">
-                      <span className="text-white/25 shrink-0 select-none">{entry.timestamp}</span>
-                      <span
-                        className={
-                          entry.type === 'error'
-                            ? 'text-red-400'
-                            : entry.type === 'completed'
-                              ? 'text-green-400'
-                              : entry.type === 'stage_change'
-                                ? 'text-blue-400'
-                                : 'text-white/70'
-                        }
-                      >
+                    <div key={`${entry.timestamp}-${i}`} className="run-log-line">
+                      <span className="run-log-line__time">{entry.timestamp}</span>
+                      <span className={`run-log-line__message run-log-line__message--${entry.type}`}>
                         {entry.message}
                       </span>
                     </div>
                   ))
                 )}
               </div>
-            </div>
+            </article>
+          </section>
 
-            {/* Error */}
-            {status === 'error' && errorMsg && (
-              <div className="bg-error/10 border border-error/20 rounded-xl px-4 py-3">
-                <p className="text-sm text-error">{errorMsg}</p>
+          <aside className="run-aside run-aside--sticky">
+            <article className="run-sidebar-card">
+              <h2 className="run-sidebar-card__title">Project</h2>
+              <p className="run-sidebar-card__body">
+                {project?.project_name || 'Processing run'}
+              </p>
+              <div className="run-metric-grid">
+                <div className="run-metric">
+                  <p className="run-metric__label">Project ID</p>
+                  <p className="run-metric__value">{projectId}</p>
+                </div>
+                <div className="run-metric">
+                  <p className="run-metric__label">Stage</p>
+                  <p className="run-metric__value">{stage}</p>
+                </div>
+                <div className="run-metric">
+                  <p className="run-metric__label">Session</p>
+                  <p className="run-metric__value">{session.id}</p>
+                </div>
+                <div className="run-metric">
+                  <p className="run-metric__label">Latest event</p>
+                  <p className="run-metric__value">
+                    {latestLog ? latestLog.message : 'Workflow started'}
+                  </p>
+                </div>
               </div>
+            </article>
+
+            {status === 'error' && errorMsg && (
+              <article className="run-sidebar-card">
+                <h2 className="run-sidebar-card__title">Run issue</h2>
+                <p className="run-sidebar-card__body">{errorMsg}</p>
+              </article>
             )}
 
-            {/* Action buttons */}
-            <div className="flex gap-3">
-              {status === 'completed' && (
-                <button
-                  onClick={() => navigate(`/result/${projectId}`)}
-                  className="flex-1 flex items-center justify-center gap-2 px-6 py-3 rounded-xl
-                    text-sm font-semibold text-white bg-gradient-to-r from-primary to-accent
-                    hover:shadow-lg transition-shadow cursor-pointer"
-                >
-                  View Results
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-              )}
-              {status === 'error' && (
-                <button
-                  onClick={() => navigate('/upload')}
-                  className="flex-1 flex items-center justify-center gap-2 px-6 py-3 rounded-xl
-                    text-sm font-semibold text-white bg-primary hover:bg-primary-dark
-                    transition-colors cursor-pointer"
-                >
-                  Try Again
-                </button>
-              )}
-            </div>
-          </div>
+            {(status === 'completed' || status === 'stopped') && (
+              <button
+                onClick={() => navigate(buildAppRoute(`/result/${projectId}`))}
+                className="run-cta run-cta--gradient"
+              >
+                View results
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            )}
+
+            {status === 'error' && (
+              <button
+                onClick={() => navigate(buildAppRoute('/upload'))}
+                className="run-cta"
+              >
+                Try again
+              </button>
+            )}
+          </aside>
         </div>
       </div>
     </div>

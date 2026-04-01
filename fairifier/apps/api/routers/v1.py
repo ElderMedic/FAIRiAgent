@@ -7,6 +7,7 @@ import logging
 import socket
 import tempfile
 import threading
+from uuid import UUID
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncGenerator, Optional
@@ -36,6 +37,7 @@ from ..models import (
 from ..services.event_bus import WorkflowEvent, event_bus
 from ..services.runner import run_workflow_task
 from ..storage.base import ProjectStore
+from fairifier.utils.run_control import set_run_stop_requested
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_OLLAMA_PROVIDER = "ollama"
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+SESSION_ID_HEADER = "X-FAIRifier-Session-Id"
+SESSION_STARTED_AT_HEADER = "X-FAIRifier-Session-Started-At"
 _DEMO_DOCUMENTS = {
     "earthworm_paper": {
         "path": PROJECT_ROOT / "examples" / "inputs" / "earthworm_4n_paper_bioRxiv.pdf",
@@ -69,9 +73,13 @@ def _project_to_response(data: dict) -> ProjectResponse:
         project_id=data.get("project_id", ""),
         project_name=data.get("project_name"),
         filename=data.get("filename"),
+        session_id=data.get("session_id"),
+        session_started_at=data.get("session_started_at"),
         status=data.get("status", "unknown"),
         created_at=data.get("created_at"),
         updated_at=data.get("updated_at"),
+        stop_requested=data.get("stop_requested"),
+        stop_requested_at=data.get("stop_requested_at"),
         confidence_scores=data.get("confidence_scores"),
         needs_review=data.get("needs_review"),
         errors=data.get("errors"),
@@ -102,6 +110,65 @@ def _resolve_default_demo_document_key(
     if documents:
         return documents[0].key
     return ""
+
+
+def _parse_session_id(raw_value: Optional[str]) -> str:
+    if not raw_value:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing session identifier",
+        )
+    try:
+        return str(UUID(raw_value))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid session identifier",
+        ) from exc
+
+
+def _parse_session_started_at(
+    raw_value: Optional[str],
+) -> Optional[str]:
+    if not raw_value:
+        return None
+    try:
+        datetime.fromisoformat(
+            raw_value.replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid session timestamp",
+        ) from exc
+    return raw_value
+
+
+def _get_session_context(request: Request) -> tuple[str, Optional[str]]:
+    session_id = _parse_session_id(
+        request.headers.get(SESSION_ID_HEADER)
+        or request.query_params.get("session_id")
+        or request.query_params.get("session")
+    )
+    session_started_at = _parse_session_started_at(
+        request.headers.get(SESSION_STARTED_AT_HEADER)
+        or request.query_params.get("session_started_at")
+        or request.query_params.get("ts")
+    )
+    return session_id, session_started_at
+
+
+def _get_project_for_session(
+    request: Request, project_id: str
+) -> dict:
+    store = _get_store(request)
+    session_id, _ = _get_session_context(request)
+    data = store.get_project(project_id)
+    if data is None or data.get("session_id") != session_id:
+        raise HTTPException(
+            status_code=404, detail="Project not found"
+        )
+    return data
 
 
 def _probe_tcp(host: str, port: int, timeout: float = 2.0) -> bool:
@@ -575,6 +642,9 @@ async def create_project(
     from fairifier.config import config as fc
 
     store = _get_store(request)
+    session_id, session_started_at = _get_session_context(
+        request
+    )
 
     if file is None and not sample_document:
         raise HTTPException(
@@ -640,12 +710,15 @@ async def create_project(
         "project_id": project_id,
         "project_name": project_name or source_filename,
         "filename": source_filename,
+        "session_id": session_id,
+        "session_started_at": session_started_at or now,
         "status": "pending",
         "created_at": now,
         "updated_at": now,
         "output_dir": output_dir,
         "demo": bool(demo),
         "sample_document": sample_document,
+        "stop_requested": False,
         "message": (
             f"Project {project_id} created "
             "-- workflow starting"
@@ -678,9 +751,14 @@ async def list_projects(
     request: Request,
 ) -> ProjectListResponse:
     store = _get_store(request)
+    session_id, _ = _get_session_context(request)
     rows = store.list_projects()
     return ProjectListResponse(
-        projects=[_project_to_response(r) for r in rows]
+        projects=[
+            _project_to_response(r)
+            for r in rows
+            if r.get("session_id") == session_id
+        ]
     )
 
 
@@ -691,12 +769,7 @@ async def list_projects(
 async def get_project(
     project_id: str, request: Request
 ) -> ProjectResponse:
-    store = _get_store(request)
-    data = store.get_project(project_id)
-    if data is None:
-        raise HTTPException(
-            status_code=404, detail="Project not found"
-        )
+    data = _get_project_for_session(request, project_id)
     return _project_to_response(data)
 
 
@@ -705,12 +778,57 @@ async def delete_project(
     project_id: str, request: Request
 ) -> dict:
     store = _get_store(request)
+    _get_project_for_session(request, project_id)
     deleted = store.delete_project(project_id)
     if not deleted:
         raise HTTPException(
             status_code=404, detail="Project not found"
         )
     return {"message": f"Project {project_id} deleted"}
+
+
+@router.post(
+    "/projects/{project_id}/stop",
+    response_model=ProjectResponse,
+)
+async def stop_project(
+    project_id: str, request: Request
+) -> ProjectResponse:
+    store = _get_store(request)
+    data = _get_project_for_session(request, project_id)
+    status = str(data.get("status") or "unknown")
+    if status not in {"pending", "running"}:
+        return _project_to_response(data)
+
+    now = datetime.now(timezone.utc).isoformat()
+    set_run_stop_requested(True, run_id=project_id)
+    store.update_project(
+        project_id,
+        {
+            "stop_requested": True,
+            "stop_requested_at": now,
+            "message": (
+                "Stop requested. Waiting for the workflow "
+                "to reach a safe checkpoint."
+            ),
+        },
+    )
+    event_bus.publish_sync(
+        WorkflowEvent(
+            event_type="stop_requested",
+            project_id=project_id,
+            data={
+                "message": (
+                    "Stop requested. Waiting for the workflow "
+                    "to reach a safe checkpoint."
+                ),
+                "status": status,
+            },
+        )
+    )
+    return _project_to_response(
+        store.get_project(project_id) or data
+    )
 
 
 # ------------------------------------------------------------------
@@ -722,12 +840,7 @@ async def delete_project(
 async def list_artifacts(
     project_id: str, request: Request
 ) -> dict:
-    store = _get_store(request)
-    data = store.get_project(project_id)
-    if data is None:
-        raise HTTPException(
-            status_code=404, detail="Project not found"
-        )
+    data = _get_project_for_session(request, project_id)
     output_dir = data.get("output_dir")
     if not output_dir:
         return {"project_id": project_id, "artifacts": []}
@@ -750,13 +863,7 @@ async def get_artifact(
     artifact_name: str,
     request: Request,
 ) -> FileResponse:
-    store = _get_store(request)
-    data = store.get_project(project_id)
-    if data is None:
-        raise HTTPException(
-            status_code=404, detail="Project not found"
-        )
-
+    data = _get_project_for_session(request, project_id)
     output_dir = data.get("output_dir")
     if not output_dir:
         raise HTTPException(
@@ -822,12 +929,7 @@ async def project_events(
     project_id: str, request: Request
 ) -> StreamingResponse:
     """SSE stream of workflow events for a project."""
-    store = _get_store(request)
-    data = store.get_project(project_id)
-    if data is None:
-        raise HTTPException(
-            status_code=404, detail="Project not found"
-        )
+    _get_project_for_session(request, project_id)
 
     queue = event_bus.subscribe(project_id)
     return StreamingResponse(

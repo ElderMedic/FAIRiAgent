@@ -90,6 +90,34 @@ class TestBuildMem0Config:
         assert config["embedder"]["config"]["api_key"] == "embed-key"
         assert config["vector_store"]["config"]["embedding_model_dims"] == 1024
 
+    def test_resolve_collection_name_changes_with_embedding_profile(self):
+        """Collection naming should separate incompatible embedding configs."""
+        try:
+            from fairifier.services.mem0_service import (
+                resolve_mem0_collection_name,
+            )
+        except ImportError:
+            pytest.skip("mem0 not installed")
+
+        first = resolve_mem0_collection_name(
+            "fairifier_memories_quicktest",
+            embedding_provider="ollama",
+            embedding_model="nomic-embed-text",
+            embedding_dims=768,
+            embedding_base_url="http://localhost:11434",
+        )
+        second = resolve_mem0_collection_name(
+            "fairifier_memories_quicktest",
+            embedding_provider="openai",
+            embedding_model="text-embedding-v4",
+            embedding_dims=1024,
+            embedding_base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        )
+
+        assert first != second
+        assert first.startswith("fairifier_memories_quicktest__")
+        assert second.startswith("fairifier_memories_quicktest__")
+
 
 class TestMem0Service:
     """Test Mem0Service class."""
@@ -389,6 +417,7 @@ def test_get_mem0_service_uses_dashscope_embeddings_for_qwen(monkeypatch):
         "llm_model": runtime_config.llm_model,
         "llm_base_url": runtime_config.llm_base_url,
         "llm_api_key": runtime_config.llm_api_key,
+        "mem0_collection_name": runtime_config.mem0_collection_name,
         "mem0_embedding_provider": runtime_config.mem0_embedding_provider,
         "mem0_embedding_model": runtime_config.mem0_embedding_model,
         "mem0_embedding_base_url": runtime_config.mem0_embedding_base_url,
@@ -405,6 +434,11 @@ def test_get_mem0_service_uses_dashscope_embeddings_for_qwen(monkeypatch):
         "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     )
     monkeypatch.setattr(runtime_config, "llm_api_key", "dashscope-key")
+    monkeypatch.setattr(
+        runtime_config,
+        "mem0_collection_name",
+        "fairifier_memories_quicktest",
+    )
     monkeypatch.setattr(runtime_config, "mem0_embedding_provider", "ollama")
     monkeypatch.setattr(runtime_config, "mem0_embedding_model", "nomic-embed-text")
     monkeypatch.setattr(runtime_config, "mem0_embedding_base_url", None)
@@ -426,6 +460,10 @@ def test_get_mem0_service_uses_dashscope_embeddings_for_qwen(monkeypatch):
         assert mem0_config["embedder"]["config"]["openai_base_url"].startswith("https://dashscope")
         assert mem0_config["embedder"]["config"]["api_key"] == "dashscope-key"
         assert mem0_config["vector_store"]["config"]["embedding_model_dims"] == 1024
+        assert (
+            mem0_config["vector_store"]["config"]["collection_name"]
+            != "fairifier_memories_quicktest"
+        )
 
     for key, value in original_values.items():
         monkeypatch.setattr(runtime_config, key, value)
@@ -446,6 +484,7 @@ def test_get_mem0_service_fallbacks_embedding_when_ollama_unavailable(monkeypatc
         "llm_model": runtime_config.llm_model,
         "llm_base_url": runtime_config.llm_base_url,
         "llm_api_key": runtime_config.llm_api_key,
+        "mem0_collection_name": runtime_config.mem0_collection_name,
         "mem0_embedding_provider": runtime_config.mem0_embedding_provider,
         "mem0_embedding_model": runtime_config.mem0_embedding_model,
         "mem0_embedding_dims": runtime_config.mem0_embedding_dims,
@@ -461,6 +500,11 @@ def test_get_mem0_service_fallbacks_embedding_when_ollama_unavailable(monkeypatc
     monkeypatch.setattr(runtime_config, "llm_model", "qwen-flash")
     monkeypatch.setattr(runtime_config, "llm_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
     monkeypatch.setattr(runtime_config, "llm_api_key", "dashscope-key")
+    monkeypatch.setattr(
+        runtime_config,
+        "mem0_collection_name",
+        "fairifier_memories_quicktest",
+    )
     monkeypatch.setattr(runtime_config, "mem0_embedding_provider", "ollama")
     monkeypatch.setattr(runtime_config, "mem0_embedding_model", "nomic-embed-text")
     monkeypatch.setattr(runtime_config, "mem0_embedding_dims", 768)
@@ -481,6 +525,10 @@ def test_get_mem0_service_fallbacks_embedding_when_ollama_unavailable(monkeypatc
         assert mem0_config["embedder"]["provider"] == "openai"
         assert mem0_config["embedder"]["config"]["model"] == "text-embedding-v4"
         assert mem0_config["vector_store"]["config"]["embedding_model_dims"] == 1024
+        assert (
+            mem0_config["vector_store"]["config"]["collection_name"]
+            != "fairifier_memories_quicktest"
+        )
 
     for key, value in original_values.items():
         monkeypatch.setattr(runtime_config, key, value)

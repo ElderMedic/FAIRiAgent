@@ -14,6 +14,11 @@ from fairifier.apps.api.storage.sqlite_store import (
 from fairifier.apps.api.models import DemoDocumentResponse
 from fairifier.utils.json_logger import JSONLogger
 
+SESSION_HEADERS = {
+    "X-FAIRifier-Session-Id": "11111111-1111-4111-8111-111111111111",
+    "X-FAIRifier-Session-Started-At": "2026-04-01T10:00:00+00:00",
+}
+
 
 def test_list_artifacts_includes_nested_files_and_downloads(
     tmp_path,
@@ -49,6 +54,12 @@ def test_list_artifacts_includes_nested_files_and_downloads(
         {
             "project_id": "proj-1",
             "project_name": "Test Project",
+            "session_id": SESSION_HEADERS[
+                "X-FAIRifier-Session-Id"
+            ],
+            "session_started_at": SESSION_HEADERS[
+                "X-FAIRifier-Session-Started-At"
+            ],
             "status": "completed",
             "output_dir": str(output_dir),
         },
@@ -57,7 +68,8 @@ def test_list_artifacts_includes_nested_files_and_downloads(
     try:
         with TestClient(app) as client:
             response = client.get(
-                "/api/v1/projects/proj-1/artifacts"
+                "/api/v1/projects/proj-1/artifacts",
+                headers=SESSION_HEADERS,
             )
             assert response.status_code == 200
             payload = response.json()
@@ -77,7 +89,8 @@ def test_list_artifacts_includes_nested_files_and_downloads(
 
             download = client.get(
                 "/api/v1/projects/proj-1/artifacts/"
-                "mineru_doc/report.md"
+                "mineru_doc/report.md",
+                headers=SESSION_HEADERS,
             )
             assert download.status_code == 200
             assert (

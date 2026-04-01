@@ -63,20 +63,19 @@ export default function HomeHero({
         >
           <div className="home-chip">
             <Sparkles className="home-chip__icon" aria-hidden="true" />
-            Scientific metadata, shaped for focused operation
+            Agentic FAIR metadata generation for biological research
           </div>
 
           <div className="home-copy">
-            <p className="home-eyebrow">Research documents in. FAIR metadata out.</p>
+            <p className="home-eyebrow">Full papers in. FAIR metadata drafts out.</p>
             <h1 className="home-title">
-              A cleaner control surface for your FAIR metadata workflow.
+              Context Engineering of Your Project For Autonomous Research
             </h1>
             <p className="home-lede">
-              FAIRiAgent reads the kind of material research groups already produce, such as papers,
-              supplements, and protocol-style documents, then turns that narrative context into
-              package-aware FAIR metadata drafts. Instead of relying on a single prompt, it uses a
-              staged multi-agent workflow with retrieved terms, evidence mapping, critique, and
-              validation before files are exported.
+              FAIRiAgent is a multi-agent workflow for the part of curation that usually takes hours:
+              reading a full paper, recovering methods and sample context, selecting the right MIxS-style
+              checklist, grounding terms against FAIR Data Station resources, and producing structured
+              metadata that can be reviewed before reuse or submission.
             </p>
           </div>
 
@@ -107,8 +106,8 @@ export default function HomeHero({
         >
           <header className="home-console__header">
             <div>
-              <p className="home-console__eyebrow">Workflow surface</p>
-              <h2 className="home-console__title">Local operator console</h2>
+              <p className="home-console__eyebrow">Run overview</p>
+              <h2 className="home-console__title">Paper-to-metadata workflow</h2>
             </div>
             <div className="home-status-pill">
               <BadgeCheck className="home-status-pill__icon" aria-hidden="true" />

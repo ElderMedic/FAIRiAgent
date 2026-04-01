@@ -13,12 +13,12 @@ export default function HomeWorkflowSection({ steps }: HomeWorkflowSectionProps)
           <div className="home-workflow__copy">
             <p className="home-section__eyebrow home-section__eyebrow--dark">Workflow</p>
             <h2 className="home-section__title home-section__title--dark">
-              Explain the system as a sequence, not a collage.
+              Follow the path from full paper to FAIR-ready metadata draft.
             </h2>
           </div>
           <p className="home-workflow__lede">
-            The goal is not to clone another site pixel-for-pixel. The goal is to reach the same standard
-            of restraint: fewer visual decisions, stronger hierarchy, and panels that feel intentional.
+            FAIRiAgent parses the document, selects the right metadata structure, grounds the draft
+            against FAIR Data Station context, then critiques and validates the result before export.
           </p>
         </div>
 
@@ -41,7 +41,7 @@ export default function HomeWorkflowSection({ steps }: HomeWorkflowSectionProps)
           <div className="home-ops-panel__copy">
             <p className="home-section__eyebrow home-section__eyebrow--dark">Operating model</p>
             <h3 className="home-ops-panel__title">
-              Built for local labs and internal teams, not public sign-up funnels.
+              Built for researchers who need a draft they can inspect, correct, and hand forward.
             </h3>
           </div>
 
@@ -49,20 +49,22 @@ export default function HomeWorkflowSection({ steps }: HomeWorkflowSectionProps)
             <article className="home-ops-card">
               <div className="home-ops-card__heading">
                 <FlaskConical className="home-ops-card__icon" aria-hidden="true" />
-                <span>Research-first UX</span>
+                <span>Complete papers, not snippets</span>
               </div>
               <p className="home-ops-card__body">
-                Emphasis stays on process state, evidence, and reviewability rather than decorative churn.
+                The workflow is meant for long biological documents where key metadata are spread across
+                methods, tables, and supporting sections.
               </p>
             </article>
 
             <article className="home-ops-card">
               <div className="home-ops-card__heading">
                 <BadgeCheck className="home-ops-card__icon" aria-hidden="true" />
-                <span>Demo without fakery</span>
+                <span>Same path as a real run</span>
               </div>
               <p className="home-ops-card__body">
-                The bundled earthworm paper still exercises the actual backend flow without using mock data.
+                The bundled earthworm paper goes through the same backend path as an uploaded document, so
+                the interface can be tested without switching into a toy mode.
               </p>
             </article>
           </div>
