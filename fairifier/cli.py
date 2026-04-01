@@ -682,6 +682,50 @@ def ui(port: Optional[int]):
 
 
 @cli.command()
+@click.option(
+    "--port",
+    type=int,
+    default=8000,
+    help="Port for the Web UI server (default: 8000).",
+)
+def webui(port: int):
+    """Launch the new React Web UI (front-end + API on one port)."""
+    import subprocess
+    import socket
+
+    project_root = Path(__file__).resolve().parents[1]
+    frontend_dist = project_root / "frontend" / "dist"
+
+    if not (frontend_dist / "index.html").is_file():
+        frontend_dir = project_root / "frontend"
+        if not (frontend_dir / "node_modules").is_dir():
+            click.echo("📦 Installing frontend dependencies...")
+            subprocess.check_call(["npm", "install"], cwd=str(frontend_dir))
+        click.echo("🔨 Building frontend...")
+        subprocess.check_call(["npm", "run", "build"], cwd=str(frontend_dir))
+
+    click.echo(f"🚀 Starting FAIRiAgent Web UI on port {port}...")
+    click.echo(f"   http://localhost:{port}")
+    try:
+        hostname = socket.gethostname()
+        local_ip = socket.gethostbyname(hostname)
+        click.echo(f"   LAN: http://{local_ip}:{port}")
+    except socket.gaierror:
+        pass
+
+    subprocess.run(
+        [
+            sys.executable, "-m", "uvicorn",
+            "fairifier.apps.api.main:app",
+            "--host", "0.0.0.0",
+            "--port", str(port),
+        ],
+        # Must run from repo root so Python can import `fairifier/`
+        cwd=str(project_root),
+    )
+
+
+@cli.command()
 @click.argument("project_id")
 @click.option(
     "--verbose",

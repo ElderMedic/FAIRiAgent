@@ -1,0 +1,174 @@
+type JsonObject = Record<string, unknown>;
+
+const API_BASE = '/api/v1';
+
+export interface ProjectResponse {
+  project_id: string;
+  project_name?: string;
+  filename?: string;
+  status: string;
+  created_at?: string;
+  updated_at?: string;
+  confidence_scores?: Record<string, number>;
+  needs_review?: boolean;
+  errors?: string[];
+  artifacts?: string[];
+  message?: string;
+  execution_summary?: JsonObject;
+  quality_metrics?: JsonObject;
+}
+
+export interface DemoDocument {
+  key: string;
+  label: string;
+  filename: string;
+  description: string;
+  size_bytes: number;
+}
+
+export interface DemoOptions {
+  default_demo_document_key: string;
+  default_ollama_provider: string;
+  default_ollama_model: string;
+  default_ollama_base_url: string;
+  ollama_available: boolean;
+  documents: DemoDocument[];
+}
+
+export interface ServiceStatus {
+  name: string;
+  label: string;
+  enabled: boolean;
+  reachable: boolean;
+  status: string;
+  message: string;
+  endpoint?: string | null;
+  details?: JsonObject | null;
+}
+
+export interface SystemStatus {
+  timestamp: string;
+  active_config: JsonObject;
+  services: ServiceStatus[];
+}
+
+export interface OllamaModel {
+  name: string;
+  size?: number | null;
+  digest?: string | null;
+  modified_at?: string | null;
+}
+
+export interface OllamaModelsResponse {
+  base_url: string;
+  reachable: boolean;
+  message: string;
+  models: OllamaModel[];
+}
+
+export interface ArtifactInfo {
+  name: string;
+  size: number;
+  available: boolean;
+}
+
+export interface ConfigOverrides {
+  llm_provider?: string;
+  llm_model?: string;
+  llm_base_url?: string;
+  llm_api_key?: string;
+  fair_ds_api_url?: string;
+}
+
+export interface CreateProjectRequest {
+  file?: File;
+  sampleDocument?: string;
+  projectName?: string;
+  configOverrides?: ConfigOverrides;
+  demo?: boolean;
+}
+
+export interface WorkflowEvent {
+  event_type: string;
+  project_id: string;
+  data: JsonObject;
+  timestamp: number;
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { 'Accept': 'application/json' },
+    ...options,
+  });
+  if (!res.ok) {
+    const detail = await res
+      .json()
+      .catch((): { detail: string } => ({ detail: res.statusText })) as { detail?: string };
+    throw new Error(detail.detail || res.statusText);
+  }
+  return res.json();
+}
+
+export const api = {
+  health: () =>
+    request<{ status: string; timestamp: string; version: string }>('/health'),
+
+  demoOptions: () =>
+    request<DemoOptions>('/demo-options'),
+
+  systemStatus: () =>
+    request<SystemStatus>('/system/status'),
+
+  ollamaModels: (baseUrl?: string) =>
+    request<OllamaModelsResponse>(
+      `/system/ollama-models${baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : ''}`,
+    ),
+
+  createProject: ({ file, sampleDocument, projectName, configOverrides, demo }: CreateProjectRequest) => {
+    const form = new FormData();
+    if (file) form.append('file', file);
+    if (sampleDocument) form.append('sample_document', sampleDocument);
+    if (projectName) form.append('project_name', projectName);
+    if (configOverrides) form.append('config_overrides', JSON.stringify(configOverrides));
+    if (demo) form.append('demo', 'true');
+    return request<ProjectResponse>('/projects', { method: 'POST', body: form });
+  },
+
+  listProjects: () =>
+    request<{ projects: ProjectResponse[] }>('/projects'),
+
+  getProject: (id: string) =>
+    request<ProjectResponse>(`/projects/${id}`),
+
+  deleteProject: (id: string) =>
+    request<{ message: string }>(`/projects/${id}`, { method: 'DELETE' }),
+
+  listArtifacts: (id: string) =>
+    request<{ project_id: string; artifacts: ArtifactInfo[] }>(`/projects/${id}/artifacts`),
+
+  getArtifactUrl: (id: string, name: string) =>
+    `${API_BASE}/projects/${id}/artifacts/${name
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')}`,
+
+  subscribeEvents: (
+    id: string,
+    onEvent: (event: WorkflowEvent) => void,
+    onError?: (err: Event) => void,
+  ): EventSource => {
+    const source = new EventSource(`${API_BASE}/projects/${id}/events`);
+    const handleEvent = (e: MessageEvent) => {
+      try {
+        onEvent(JSON.parse(e.data) as WorkflowEvent);
+      } catch {
+        /* skip malformed */
+      }
+    };
+    for (const t of ['log', 'progress', 'stage_change', 'completed', 'error']) {
+      source.addEventListener(t, handleEvent);
+    }
+    if (onError) source.onerror = onError;
+    return source;
+  },
+};
