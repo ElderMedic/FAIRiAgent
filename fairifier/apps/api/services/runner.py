@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from ..storage.base import ProjectStore
 from .event_bus import WorkflowEvent, event_bus
 from fairifier.utils.json_logger import JSONLogger
+from fairifier.utils.run_control import reset_run_stop_requested
 
 logger = logging.getLogger(__name__)
 _CONFIG_OVERRIDE_LOCK = threading.Lock()
@@ -98,6 +99,9 @@ def run_workflow_task(
         component="fairifier.web_api", enable_stdout=False
     )
     try:
+        existing_project = store.get_project(project_id) or {}
+        if not existing_project.get("stop_requested"):
+            reset_run_stop_requested(project_id)
         json_logger.log_processing_start(
             file_path, project_id
         )
@@ -187,22 +191,37 @@ def run_workflow_task(
                 "artifacts": _serialisable_artifacts(
                     result.get("artifacts", {})
                 ),
+                "message": (
+                    "Run stopped by user"
+                    if status == "interrupted"
+                    else f"Workflow {status}"
+                ),
                 "processing_end": result.get(
                     "processing_end"
                 ),
                 "persistence_errors": persistence_errors,
+                "stop_requested": False,
             },
         )
 
         event_bus.publish_sync(
             WorkflowEvent(
-                event_type="completed",
+                event_type=(
+                    "stopped"
+                    if status == "interrupted"
+                    else "completed"
+                ),
                 project_id=project_id,
                 data={
                     "status": status,
                     "progress": 100,
                     "confidence_scores": result.get(
                         "confidence_scores", {}
+                    ),
+                    "message": (
+                        "Run stopped by user"
+                        if status == "interrupted"
+                        else f"Workflow {status}"
                     ),
                 },
             )
@@ -225,7 +244,12 @@ def run_workflow_task(
         )
         store.update_project(
             project_id,
-            {"status": "failed", "errors": [str(exc)]},
+            {
+                "status": "failed",
+                "errors": [str(exc)],
+                "message": str(exc),
+                "stop_requested": False,
+            },
         )
         event_bus.publish_sync(
             WorkflowEvent(
@@ -236,6 +260,7 @@ def run_workflow_task(
         )
 
     finally:
+        reset_run_stop_requested(project_id)
         try:
             os.unlink(file_path)
         except OSError:
@@ -247,11 +272,19 @@ def _apply_config_overrides(
 ) -> None:
     """Apply per-run overrides to the config singleton."""
     from fairifier.config import config
+    from fairifier.services.mem0_service import (
+        reset_mem0_service,
+    )
+    from fairifier.utils.llm_helper import (
+        reset_llm_helper,
+    )
 
     for attr in _CONFIG_OVERRIDE_FIELDS:
         val = overrides.get(attr)
         if val is not None:
             setattr(config, attr, val)
+    reset_llm_helper()
+    reset_mem0_service()
 
 
 def _snapshot_config_state() -> Dict[str, Any]:
@@ -267,9 +300,17 @@ def _snapshot_config_state() -> Dict[str, Any]:
 def _restore_config_state(state: Dict[str, Any]) -> None:
     """Restore mutable config after a request-scoped run."""
     from fairifier.config import config
+    from fairifier.services.mem0_service import (
+        reset_mem0_service,
+    )
+    from fairifier.utils.llm_helper import (
+        reset_llm_helper,
+    )
 
     for field, value in state.items():
         setattr(config, field, value)
+    reset_llm_helper()
+    reset_mem0_service()
 
 
 def _persist_run_outputs(

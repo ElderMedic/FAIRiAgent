@@ -21,9 +21,13 @@ class ProjectResponse(BaseModel):
     project_id: str
     project_name: Optional[str] = None
     filename: Optional[str] = None
+    session_id: Optional[str] = None
+    session_started_at: Optional[str] = None
     status: str
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    stop_requested: Optional[bool] = None
+    stop_requested_at: Optional[str] = None
     confidence_scores: Optional[Dict[str, float]] = None
     needs_review: Optional[bool] = None
     errors: Optional[List[str]] = None

@@ -11,6 +11,7 @@ interface LayoutProps {
 const navLinks = [
   { path: '/', label: 'Home' },
   { path: '/upload', label: 'Upload' },
+  { path: '/recover', label: 'Recover' },
   { path: '/about', label: 'About' },
 ];
 

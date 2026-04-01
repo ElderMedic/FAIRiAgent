@@ -1,3 +1,5 @@
+import { getSessionHeaders, withSessionApiPath, type WebSession } from '../utils/session';
+
 type JsonObject = Record<string, unknown>;
 
 const API_BASE = '/api/v1';
@@ -6,9 +8,13 @@ export interface ProjectResponse {
   project_id: string;
   project_name?: string;
   filename?: string;
+  session_id?: string;
+  session_started_at?: string;
   status: string;
   created_at?: string;
   updated_at?: string;
+  stop_requested?: boolean;
+  stop_requested_at?: string;
   confidence_scores?: Record<string, number>;
   needs_review?: boolean;
   errors?: string[];
@@ -95,10 +101,21 @@ export interface WorkflowEvent {
   timestamp: number;
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+async function request<T>(path: string, options?: RequestInit, session?: WebSession): Promise<T> {
+  const headers = new Headers(options?.headers);
+  headers.set('Accept', 'application/json');
+  const sessionHeaders = session
+    ? {
+        'X-FAIRifier-Session-Id': session.id,
+        'X-FAIRifier-Session-Started-At': session.startedAt,
+      }
+    : getSessionHeaders();
+  for (const [key, value] of Object.entries(sessionHeaders)) {
+    headers.set(key, value);
+  }
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Accept': 'application/json' },
     ...options,
+    headers,
   });
   if (!res.ok) {
     const detail = await res
@@ -140,24 +157,30 @@ export const api = {
   getProject: (id: string) =>
     request<ProjectResponse>(`/projects/${id}`),
 
+  getProjectInSession: (id: string, session: WebSession) =>
+    request<ProjectResponse>(`/projects/${id}`, undefined, session),
+
   deleteProject: (id: string) =>
     request<{ message: string }>(`/projects/${id}`, { method: 'DELETE' }),
+
+  stopProject: (id: string) =>
+    request<ProjectResponse>(`/projects/${id}/stop`, { method: 'POST' }),
 
   listArtifacts: (id: string) =>
     request<{ project_id: string; artifacts: ArtifactInfo[] }>(`/projects/${id}/artifacts`),
 
   getArtifactUrl: (id: string, name: string) =>
-    `${API_BASE}/projects/${id}/artifacts/${name
+    `${API_BASE}${withSessionApiPath(`/projects/${id}/artifacts/${name
       .split('/')
       .map((segment) => encodeURIComponent(segment))
-      .join('/')}`,
+      .join('/')}`)}`,
 
   subscribeEvents: (
     id: string,
     onEvent: (event: WorkflowEvent) => void,
     onError?: (err: Event) => void,
   ): EventSource => {
-    const source = new EventSource(`${API_BASE}/projects/${id}/events`);
+    const source = new EventSource(`${API_BASE}${withSessionApiPath(`/projects/${id}/events`)}`);
     const handleEvent = (e: MessageEvent) => {
       try {
         onEvent(JSON.parse(e.data) as WorkflowEvent);
@@ -165,7 +188,7 @@ export const api = {
         /* skip malformed */
       }
     };
-    for (const t of ['log', 'progress', 'stage_change', 'completed', 'error']) {
+    for (const t of ['log', 'progress', 'stage_change', 'completed', 'stopped', 'stop_requested', 'error']) {
       source.addEventListener(t, handleEvent);
     }
     if (onError) source.onerror = onError;

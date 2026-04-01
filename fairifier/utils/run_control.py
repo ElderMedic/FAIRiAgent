@@ -1,24 +1,38 @@
-"""Thread-safe run control for interrupting long-running workflows (e.g. WebUI)."""
+"""Thread-safe run control for interrupting long-running workflows."""
 
 import threading
+from typing import Optional
 
 _lock = threading.Lock()
-_stop_requested = False
+_global_stop_requested = False
+_run_stop_requests: dict[str, bool] = {}
 
 
-def run_stop_requested() -> bool:
-    """Return True if the current run should stop (e.g. user clicked Stop)."""
+def run_stop_requested(run_id: Optional[str] = None) -> bool:
+    """Return True if the current run should stop."""
     with _lock:
-        return _stop_requested
+        if _global_stop_requested:
+            return True
+        if run_id is None:
+            return False
+        return _run_stop_requests.get(run_id, False)
 
 
-def set_run_stop_requested(value: bool = True) -> None:
-    """Set the stop flag so the workflow can exit at the next step."""
-    global _stop_requested
+def set_run_stop_requested(
+    value: bool = True, run_id: Optional[str] = None
+) -> None:
+    """Set the stop flag so the workflow can exit at the next checkpoint."""
+    global _global_stop_requested
     with _lock:
-        _stop_requested = value
+        if run_id is None:
+            _global_stop_requested = value
+            return
+        if value:
+            _run_stop_requests[run_id] = True
+        else:
+            _run_stop_requests.pop(run_id, None)
 
 
-def reset_run_stop_requested() -> None:
+def reset_run_stop_requested(run_id: Optional[str] = None) -> None:
     """Reset the stop flag before starting a new run."""
-    set_run_stop_requested(False)
+    set_run_stop_requested(False, run_id=run_id)

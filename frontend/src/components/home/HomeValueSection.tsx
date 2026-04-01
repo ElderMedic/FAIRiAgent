@@ -9,12 +9,12 @@ export default function HomeValueSection({ cards }: HomeValueSectionProps) {
     <section className="home-section home-section--light">
       <div className="home-shell home-section__layout">
         <div className="home-section__intro">
-          <p className="home-section__eyebrow">Design principles</p>
-          <h2 className="home-section__title">A research workflow that stays readable under real use.</h2>
+          <p className="home-section__eyebrow">Why this workflow</p>
+          <h2 className="home-section__title">Built around the curation bottleneck in real biology papers.</h2>
           <p className="home-section__body">
-            Researchers should be able to see where a draft came from, what context shaped it, and what
-            still needs checking. The interface is designed to keep that chain visible without making the
-            page feel technical for its own sake.
+            The hard part is not generating a plausible paragraph. It is recovering enough context from a
+            complete paper to produce metadata another researcher, curator, or repository workflow can
+            actually work with.
           </p>
         </div>
 

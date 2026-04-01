@@ -792,6 +792,7 @@ class FAIRifierLangGraphApp:
         Returns:
             Updated state after execution (with or without retries)
         """
+        run_id = state.get("session_id")
         if "execution_history" not in state:
             state["execution_history"] = []
         if "context" not in state:
@@ -821,6 +822,14 @@ class FAIRifierLangGraphApp:
         
         # Retry loop
         for attempt in range(1, self.max_step_retries + 2):  # +2 = initial + max_retries
+            if run_id and run_stop_requested(run_id):
+                logger.warning(
+                    "⏹ Stop requested before %s attempt %s; exiting retry loop.",
+                    agent_name,
+                    attempt,
+                )
+                return self._mark_interrupted_state(state)
+
             # Check global retry limit
             if self.global_retry_count >= self.max_global_retries:
                 logger.warning(f"⚠️ Global retry limit ({self.max_global_retries}) reached")
@@ -858,6 +867,14 @@ class FAIRifierLangGraphApp:
                 state = await agent.execute(state)
                 execution_record["success"] = True
                 execution_record["end_time"] = datetime.now().isoformat()
+                if run_id and run_stop_requested(run_id):
+                    logger.warning(
+                        "⏹ Stop requested after %s attempt %s; skipping downstream evaluation.",
+                        agent_name,
+                        attempt,
+                    )
+                    state["execution_history"].append(execution_record)
+                    return self._mark_interrupted_state(state)
                 
             except Exception as e:
                 logger.error(f"❌ {agent_name} error (attempt {attempt}): {str(e)}")
@@ -874,6 +891,13 @@ class FAIRifierLangGraphApp:
             
             # Add execution record
             state["execution_history"].append(execution_record)
+
+            if run_id and run_stop_requested(run_id):
+                logger.warning(
+                    "⏹ Stop requested before Critic evaluation for %s; stopping workflow.",
+                    agent_name,
+                )
+                return self._mark_interrupted_state(state)
             
             # Call Critic
             logger.info(f"🔍 Critic evaluating {agent_name}...")
@@ -898,6 +922,13 @@ class FAIRifierLangGraphApp:
                 f"   📊 Critic: {decision} (score: {score:.2f}, "
                 f"attempt: {attempt}/{self.max_step_retries + 1})"
             )
+
+            if run_id and run_stop_requested(run_id):
+                logger.warning(
+                    "⏹ Stop requested after Critic evaluation for %s; stopping workflow.",
+                    agent_name,
+                )
+                return self._mark_interrupted_state(state)
             
             # Handle decision
             if decision == "ACCEPT":
@@ -1010,7 +1041,25 @@ class FAIRifierLangGraphApp:
                     f"preparing retry {attempt}/{self.max_step_retries}..."
                 )
                 state = await self.critic.provide_feedback_to_agent(agent_name, critic_eval, state)
+                if run_id and run_stop_requested(run_id):
+                    logger.warning(
+                        "⏹ Stop requested after feedback prep for %s; stopping workflow.",
+                        agent_name,
+                    )
+                    return self._mark_interrupted_state(state)
         
+        return state
+
+    def _mark_interrupted_state(
+        self,
+        state: FAIRifierState,
+    ) -> FAIRifierState:
+        """Mark workflow state as interrupted and avoid duplicating the stop error."""
+        state["status"] = ProcessingStatus.INTERRUPTED.value
+        errors = state.setdefault("errors", [])
+        if "Run stopped by user" not in errors:
+            errors.append("Run stopped by user")
+        state["processing_end"] = datetime.now().isoformat()
         return state
     
     def get_graph_without_checkpointer(self):
@@ -1056,7 +1105,8 @@ class FAIRifierLangGraphApp:
         - Can adapt strategy based on intermediate results
         """
         logger.info("🎯 Orchestrator coordinating all agents")
-        
+        run_id = state.get("session_id")
+
         # Reset global retry counter for this run
         self.global_retry_count = 0
         
@@ -1068,12 +1118,16 @@ class FAIRifierLangGraphApp:
             state, self.document_parser, "DocumentParser",
             lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3
         )
+        if run_id and run_stop_requested(run_id):
+            return self._mark_interrupted_state(state)
         
         # Step 2: Plan workflow based on parsed info
         logger.info("\n" + "="*70)
         logger.info("🧠 Step 2: Planning workflow strategy")
         logger.info("="*70)
         state = await self._plan_workflow_internal(state)
+        if run_id and run_stop_requested(run_id):
+            return self._mark_interrupted_state(state)
         
         # Step 3: Retrieve Knowledge
         logger.info("\n" + "="*70)
@@ -1083,6 +1137,8 @@ class FAIRifierLangGraphApp:
             state, self.knowledge_retriever, "KnowledgeRetriever",
             lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
         )
+        if run_id and run_stop_requested(run_id):
+            return self._mark_interrupted_state(state)
         
         # Step 4: Generate JSON
         logger.info("\n" + "="*70)
@@ -1092,6 +1148,8 @@ class FAIRifierLangGraphApp:
             state, self.json_generator, "JSONGenerator",
             lambda s: s.get("metadata_fields", []) and len(s["metadata_fields"]) > 0
         )
+        if run_id and run_stop_requested(run_id):
+            return self._mark_interrupted_state(state)
         
         logger.info("\n" + "="*70)
         logger.info(f"✅ Orchestration complete (global retries used: {self.global_retry_count}/{self.max_global_retries})")
@@ -2175,6 +2233,8 @@ Return JSON in the following format:
         else:
             logger.info(f"🚀 Starting LangGraph Workflow (project: {project_id})")
         reset_run_stop_requested()
+        if not run_stop_requested(project_id):
+            reset_run_stop_requested(project_id)
 
         # Initial state only for non-resume; resume uses checkpoint state
         initial_state = None
@@ -2226,7 +2286,7 @@ Return JSON in the following format:
                         input_state, config=config_dict, stream_mode="values"
                     ):
                         result = state
-                        if run_stop_requested():
+                        if run_stop_requested(project_id):
                             logger.warning(
                                 f"⏹ Run stopped by user (project: {project_id})"
                             )
@@ -2244,7 +2304,7 @@ Return JSON in the following format:
                     input_state, config=config_dict, stream_mode="values"
                 ):
                     result = state
-                    if run_stop_requested():
+                    if run_stop_requested(project_id):
                         logger.warning(
                             f"⏹ Run stopped by user (project: {project_id})"
                         )
@@ -2258,7 +2318,7 @@ Return JSON in the following format:
                     if snap and getattr(snap, "values", None):
                         result = dict(snap.values)
 
-            if run_stop_requested():
+            if run_stop_requested(project_id):
                 logger.info(
                     f"⏹ LangGraph workflow stopped by user (project: {project_id})"
                 )

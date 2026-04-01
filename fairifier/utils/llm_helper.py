@@ -6,6 +6,7 @@ Provides a unified interface for working with different LLM providers
 """
 
 import json
+import hashlib
 import logging
 import re
 from datetime import datetime
@@ -2780,6 +2781,13 @@ _llm_helper = None
 _last_provider = None
 _last_model = None
 _last_base_url = None
+_last_api_key_fingerprint = None
+
+
+def _fingerprint_api_key(api_key: Optional[str]) -> Optional[str]:
+    if not api_key:
+        return None
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
 
 def check_ollama_model_available(base_url: str, model_name: str, timeout: int = 5) -> tuple[bool, str]:
@@ -2836,19 +2844,21 @@ def get_llm_helper(force_reinit=False) -> LLMHelper:
         force_reinit: If True, force reinitialization even if instance exists.
                      This is useful when configuration has changed.
     """
-    global _llm_helper, _last_provider, _last_model, _last_base_url
+    global _llm_helper, _last_provider, _last_model, _last_base_url, _last_api_key_fingerprint
     
     # Check if we need to reinitialize due to config changes
     current_provider = config.llm_provider
     current_model = config.llm_model
     current_base_url = config.llm_base_url
+    current_api_key_fingerprint = _fingerprint_api_key(config.llm_api_key)
     
     needs_reinit = (
         force_reinit or
         _llm_helper is None or
         _last_provider != current_provider or
         _last_model != current_model or
-        _last_base_url != current_base_url
+        _last_base_url != current_base_url or
+        _last_api_key_fingerprint != current_api_key_fingerprint
     )
     
     if needs_reinit:
@@ -2856,6 +2866,7 @@ def get_llm_helper(force_reinit=False) -> LLMHelper:
         _last_provider = current_provider
         _last_model = current_model
         _last_base_url = current_base_url
+        _last_api_key_fingerprint = current_api_key_fingerprint
         logger.info(f"🔄 Reinitialized LLMHelper: provider={current_provider}, model={current_model}, base_url={current_base_url}")
     
     return _llm_helper
@@ -2863,11 +2874,12 @@ def get_llm_helper(force_reinit=False) -> LLMHelper:
 
 def reset_llm_helper():
     """Reset the global LLM helper instance (force reinitialization on next call)."""
-    global _llm_helper, _last_provider, _last_model, _last_base_url
+    global _llm_helper, _last_provider, _last_model, _last_base_url, _last_api_key_fingerprint
     _llm_helper = None
     _last_provider = None
     _last_model = None
     _last_base_url = None
+    _last_api_key_fingerprint = None
 
 
 def save_llm_responses(output_path: Path, llm_helper: Optional[LLMHelper] = None):

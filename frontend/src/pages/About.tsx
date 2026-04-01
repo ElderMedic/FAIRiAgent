@@ -18,9 +18,9 @@ import {
 import './InteriorPages.css';
 
 const overviewItems = [
-  'CLI-first multi-agent system for turning research narrative into FAIR-DS compatible metadata drafts',
-  'Retrieval of packages, fields, and terms is part of the workflow, so the system is grounded in FAIR structures rather than generic summarization',
-  'Each run keeps logs, artifacts, and review signals together, making the output easier to inspect with the source document beside it',
+  'Built for complete biological papers, including methods sections, tables, and supplements',
+  'Planner, parser, retriever, generator, and critic roles make the workflow inspectable instead of collapsing everything into one prompt',
+  'Each run keeps logs, artifacts, and review signals together so the draft can be checked against the source document',
 ];
 
 const links = [
@@ -63,11 +63,11 @@ export default function About() {
             Project overview
           </div>
           <p className="page-eyebrow">About FAIRiAgent</p>
-          <h1 className="page-title">A research workflow for FAIR metadata generation.</h1>
+          <h1 className="page-title">A multi-agent workflow for FAIR metadata generation.</h1>
           <p className="page-lede">
-            FAIRiAgent is built for a familiar problem in research groups: much of the metadata already
-            exists in papers, supplements, and experimental descriptions, but not yet in a form that is
-            ready for FAIR workflows. The system is meant to reduce that last-mile formalization work.
+            FAIRiAgent is built for a familiar problem in biology labs: the metadata already exists in
+            papers and supporting material, but not yet in a form that is ready for FAIR workflows,
+            repository submission, or downstream reuse.
           </p>
         </header>
 
@@ -85,9 +85,10 @@ export default function About() {
                   </div>
                 </div>
                 <p className="page-card__body">
-                  FAIRiAgent reads PDFs and other research documents, extracts structured information,
-                  retrieves relevant FAIR-DS context, and writes FAIR-DS compatible JSON metadata. It is
-                  a bridge from narrative science to operational FAIR data.
+                  FAIRiAgent is a LangGraph-based multi-agent system that reads PDFs and other research
+                  documents, retrieves FAIR-DS context, and writes structured metadata drafts for
+                  biological studies. It is meant to reduce the manual work between a finished paper and a
+                  repository-ready metadata package.
                 </p>
                 <ul className="about-bullet-list">
                   {overviewItems.map((item) => (
@@ -107,14 +108,15 @@ export default function About() {
                   </div>
                 </div>
                 <p className="page-card__body">
-                  Documents are parsed, package and term context is retrieved, metadata is drafted, and
-                  the result is critiqued and validated before final artifacts are written.
+                  The workflow follows a Plan-Execute-Critique-Refine pattern: parse the document,
+                  identify the right MIxS-style package, retrieve structure and terms, draft the metadata,
+                  then critique and validate the result before final artifacts are written.
                 </p>
                 <p className="page-card__body">
-                  This matters because it answers a practical question for non-technical researchers:
-                  why not just use a chatbot? FAIRiAgent keeps more of the real workflow explicit,
-                  including retrieved context, evidence traces, and run-level reporting. For a deeper
-                  architectural walkthrough, see{' '}
+                  This matters because the bottleneck is not generic summarization. It is standards-heavy
+                  curation over long, messy scientific documents. FAIRiAgent keeps retrieval, evidence,
+                  critique, and validation explicit so a researcher can see how the draft was produced. For
+                  a deeper architectural walkthrough, see{' '}
                   <code className="page-inline-code">docs/en/ARCHITECTURE_AND_FLOW.md</code>.
                 </p>
               </article>
@@ -134,9 +136,8 @@ export default function About() {
                 <p className="page-card__body">
                   The React application works with the FastAPI backend at{' '}
                   <code className="page-inline-code">/api/v1</code> for uploads, configuration,
-                  streaming progress, and artifact downloads. It is the operator surface for the system:
-                  service checks before launch, live run visibility during processing, and file review at
-                  the end.
+                  streaming progress, and artifact downloads. It gives researchers one place to launch a
+                  run, follow what happened, and review the files at the end.
                 </p>
               </article>
 
