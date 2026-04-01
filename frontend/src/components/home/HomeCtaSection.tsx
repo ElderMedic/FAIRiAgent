@@ -1,3 +1,4 @@
+import { motion, useReducedMotion } from 'framer-motion';
 import { ArrowRight } from 'lucide-react';
 
 interface HomeCtaSectionProps {
@@ -6,10 +7,18 @@ interface HomeCtaSectionProps {
 }
 
 export default function HomeCtaSection({ onStart, onAbout }: HomeCtaSectionProps) {
+  const reduceMotion = useReducedMotion();
+
   return (
     <section className="home-section home-section--light home-section--cta">
       <div className="home-shell">
-        <div className="home-cta-card">
+        <motion.div
+          className="home-cta-card"
+          initial={reduceMotion ? undefined : { opacity: 0, y: 22 }}
+          whileInView={reduceMotion ? undefined : { opacity: 1, y: 0 }}
+          viewport={{ once: true, amount: 0.4 }}
+          transition={reduceMotion ? undefined : { duration: 0.65, ease: [0.22, 1, 0.36, 1] }}
+        >
           <div className="home-cta-card__copy">
             <p className="home-section__eyebrow">Next step</p>
             <h2 className="home-section__title">
@@ -30,7 +39,7 @@ export default function HomeCtaSection({ onStart, onAbout }: HomeCtaSectionProps
               Read project overview
             </button>
           </div>
-        </div>
+        </motion.div>
       </div>
     </section>
   );

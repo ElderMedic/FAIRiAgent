@@ -66,7 +66,7 @@ export const valueCards: HomeCard[] = [
     icon: Bot,
     title: 'Specialized agents with explicit roles',
     description:
-      'Planner, parser, retriever, generator, and critic roles stay separate. That makes the workflow easier to inspect and improve than a single-pass extraction prompt.',
+      'Planner, parser, retriever, generator, and critic roles stay separate. That makes the system easier to inspect and improve than a single-pass extraction prompt.',
   },
   {
     icon: ShieldCheck,
@@ -80,7 +80,7 @@ export const workflowSteps: HomeStep[] = [
   {
     icon: FileSearch,
     title: 'Parse the paper',
-    body: 'Convert a PDF or related document into structured text so methods, tables, and supplementary detail can enter the same workflow.',
+    body: 'Convert a PDF or related document into structured text so methods, tables, and supplementary detail can enter the same system.',
   },
   {
     icon: Network,
@@ -108,8 +108,8 @@ export const consoleHighlights = [
 export const consoleSlides: HomeConsoleSlide[] = [
   {
     label: 'Plan',
-    eyebrow: 'Workflow architecture',
-    summary: 'The run starts from the source paper and moves toward a specific metadata package, not a generic summary.',
+    eyebrow: 'System architecture',
+    summary: 'The system starts from the source paper and moves toward a specific metadata package, not a generic summary.',
     wideCard: {
       icon: FileSearch,
       title: 'Paper-scale intake',
@@ -119,7 +119,7 @@ export const consoleSlides: HomeConsoleSlide[] = [
       {
         icon: Workflow,
         title: 'Checklist selection',
-        body: 'The planner works toward the appropriate MIxS-style package before the drafting stage starts.',
+        body: 'The planner steers the system toward the appropriate MIxS-style package before the drafting stage starts.',
       },
       {
         icon: Database,
@@ -146,7 +146,7 @@ export const consoleSlides: HomeConsoleSlide[] = [
       {
         icon: Workflow,
         title: 'Critique-guided retries',
-        body: 'The workflow can retry a weak draft instead of returning the first plausible answer it produced.',
+        body: 'The system can retry a weak draft instead of returning the first plausible answer it produced.',
       },
       {
         icon: Bot,

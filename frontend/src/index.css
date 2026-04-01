@@ -20,10 +20,10 @@
   --color-success: #21a87a;
   --color-bg-dark: #07111f;
   --color-bg-dark-secondary: #0c1726;
-  --font-display: "SF Pro Display", "Segoe UI Variable Display", "Segoe UI",
+  --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua",
+    "URW Palladio L", Georgia, serif;
+  --font-body: "SF Pro Text", "Aptos", "Segoe UI Variable Text", "Segoe UI",
     system-ui, sans-serif;
-  --font-body: "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui,
-    sans-serif;
 }
 
 @theme inline {
@@ -65,7 +65,7 @@ body {
   background:
     radial-gradient(circle at top left, rgba(24, 87, 255, 0.08), transparent 24%),
     linear-gradient(180deg, #f7f4ee 0%, #f2eee5 42%, #ebe6dc 100%);
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 #root {
@@ -87,6 +87,7 @@ h4,
 h5,
 h6 {
   font-family: var(--font-display);
+  font-weight: 600;
 }
 
 button,

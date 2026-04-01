@@ -19,7 +19,7 @@ import './InteriorPages.css';
 
 const overviewItems = [
   'Built for complete biological papers, including methods sections, tables, and supplements',
-  'Planner, parser, retriever, generator, and critic roles make the workflow inspectable instead of collapsing everything into one prompt',
+  'Planner, parser, retriever, generator, and critic roles make the system inspectable instead of collapsing everything into one prompt',
   'Each run keeps logs, artifacts, and review signals together so the draft can be checked against the source document',
 ];
 
@@ -63,10 +63,10 @@ export default function About() {
             Project overview
           </div>
           <p className="page-eyebrow">About FAIRiAgent</p>
-          <h1 className="page-title">A multi-agent workflow for FAIR metadata generation.</h1>
+          <h1 className="page-title">A multi-agent system for FAIR metadata generation.</h1>
           <p className="page-lede">
             FAIRiAgent is built for a familiar problem in biology labs: the metadata already exists in
-            papers and supporting material, but not yet in a form that is ready for FAIR workflows,
+            papers and supporting material, but not yet in a form that is ready for FAIR reuse,
             repository submission, or downstream reuse.
           </p>
         </header>
@@ -101,16 +101,16 @@ export default function About() {
                 <div className="page-card__header">
                   <div>
                     <p className="page-card__eyebrow">How it operates</p>
-                    <h2 className="page-card__title">The processing path</h2>
+                    <h2 className="page-card__title">The system architecture</h2>
                   </div>
                   <div className="page-card__icon-wrap">
                     <Network className="page-card__icon" aria-hidden="true" />
                   </div>
                 </div>
                 <p className="page-card__body">
-                  The workflow follows a Plan-Execute-Critique-Refine pattern: parse the document,
-                  identify the right MIxS-style package, retrieve structure and terms, draft the metadata,
-                  then critique and validate the result before final artifacts are written.
+                  The system combines document parsing, package selection, FAIR-DS retrieval, metadata
+                  drafting, critique, and validation. These parts stay explicit so the run can adapt,
+                  retry, and surface uncertainty instead of pretending the task is linear or trivial.
                 </p>
                 <p className="page-card__body">
                   This matters because the bottleneck is not generic summarization. It is standards-heavy

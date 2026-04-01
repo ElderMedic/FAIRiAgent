@@ -1,4 +1,11 @@
-import { AnimatePresence, motion, useReducedMotion, useScroll, useTransform } from 'framer-motion';
+import {
+  AnimatePresence,
+  motion,
+  useReducedMotion,
+  useScroll,
+  useTransform,
+  type Variants,
+} from 'framer-motion';
 import { ArrowRight, BadgeCheck, Sparkles } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import HomeHeroBackdrop from './HomeHeroBackdrop';
@@ -20,6 +27,27 @@ export default function HomeHero({
   const sectionRef = useRef<HTMLElement | null>(null);
   const reduceMotion = useReducedMotion();
   const [activeConsoleIndex, setActiveConsoleIndex] = useState(0);
+  const heroStagger: Variants | undefined = reduceMotion
+    ? undefined
+    : {
+        hidden: {},
+        show: {
+          transition: {
+            staggerChildren: 0.1,
+            delayChildren: 0.08,
+          },
+        },
+      };
+  const heroItem: Variants | undefined = reduceMotion
+    ? undefined
+    : {
+        hidden: { opacity: 0, y: 20 },
+        show: {
+          opacity: 1,
+          y: 0,
+          transition: { duration: 0.65, ease: [0.22, 1, 0.36, 1] },
+        },
+      };
   const { scrollYProgress } = useScroll({
     target: sectionRef,
     offset: ['start start', 'end start'],
@@ -59,55 +87,63 @@ export default function HomeHero({
       <div className="home-shell home-hero__layout">
         <motion.div
           className="home-hero__content"
+          initial={reduceMotion ? undefined : 'hidden'}
+          animate={reduceMotion ? undefined : 'show'}
+          variants={heroStagger}
           style={reduceMotion ? undefined : { y: contentY, opacity: contentOpacity }}
         >
-          <div className="home-chip">
+          <motion.div className="home-chip" variants={heroItem}>
             <Sparkles className="home-chip__icon" aria-hidden="true" />
             Agentic FAIR metadata generation for biological research
-          </div>
+          </motion.div>
 
-          <div className="home-copy">
+          <motion.div className="home-copy" variants={heroItem}>
             <p className="home-eyebrow">Full papers in. FAIR metadata drafts out.</p>
             <h1 className="home-title">
               Context Engineering of Your Project For Autonomous Research
             </h1>
             <p className="home-lede">
-              FAIRiAgent is a multi-agent workflow for the part of curation that usually takes hours:
+              FAIRiAgent is a multi-agent system for the part of curation that usually takes hours:
               reading a full paper, recovering methods and sample context, selecting the right MIxS-style
               checklist, grounding terms against FAIR Data Station resources, and producing structured
-              metadata that can be reviewed before reuse or submission.
+              metadata drafts that can be reviewed before reuse or submission.
             </p>
-          </div>
+          </motion.div>
 
-          <div className="home-actions">
+          <motion.div className="home-actions" variants={heroItem}>
             <button type="button" onClick={onStart} className="home-button home-button--primary">
-              Launch workflow
+              Start a run
               <ArrowRight className="home-button__icon" aria-hidden="true" />
             </button>
             <button type="button" onClick={onSample} className="home-button home-button--ghost">
               Run bundled sample
             </button>
-          </div>
+          </motion.div>
 
-          <div className="home-signal-grid">
+          <motion.div className="home-signal-grid" variants={heroItem}>
             {signals.map((signal) => (
-              <article key={signal.label} className="home-signal-card">
+              <motion.article
+                key={signal.label}
+                className="home-signal-card"
+                whileHover={reduceMotion ? undefined : { y: -3 }}
+                transition={{ duration: 0.18, ease: 'easeOut' }}
+              >
                 <h2 className="home-signal-card__title">{signal.label}</h2>
                 <p className="home-signal-card__detail">{signal.detail}</p>
-              </article>
+              </motion.article>
             ))}
-          </div>
+          </motion.div>
         </motion.div>
 
         <motion.aside
           className="home-console"
-          aria-label="Workflow overview"
+          aria-label="System overview"
           style={reduceMotion ? undefined : { y: consoleY, opacity: contentOpacity }}
         >
           <header className="home-console__header">
             <div>
               <p className="home-console__eyebrow">Run overview</p>
-              <h2 className="home-console__title">Paper-to-metadata workflow</h2>
+              <h2 className="home-console__title">Paper-to-metadata system</h2>
             </div>
             <div className="home-status-pill">
               <BadgeCheck className="home-status-pill__icon" aria-hidden="true" />
@@ -176,9 +212,15 @@ export default function HomeHero({
 
           <div className="home-console__highlights">
             {activeConsoleSlide.highlights.map((item) => (
-              <div key={item} className="home-highlight">
+              <motion.div
+                key={item}
+                className="home-highlight"
+                initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
+                transition={{ duration: 0.26, ease: 'easeOut' }}
+              >
                 {item}
-              </div>
+              </motion.div>
             ))}
           </div>
         </motion.aside>
