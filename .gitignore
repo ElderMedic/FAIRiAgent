@@ -323,3 +323,11 @@ api_keys.txt
 # Generated docs content list exports
 docs/**/*_content_list_v2.json
 docs/36811fe49edc448233013c77f2a105a7c3076037c6aa3973c8687ccc95a5eb24/
+
+# API runtime data (SQLite DB, uploads, etc.)
+fairifier/apps/api/data/
+
+# Frontend build artifacts and dependencies
+frontend/node_modules/
+frontend/dist/
+test-results/
