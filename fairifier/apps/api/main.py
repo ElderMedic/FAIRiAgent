@@ -24,6 +24,25 @@ FRONTEND_DIST = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 API_VERSION = "1.4.0"
 
 
+def _resolve_frontend_file(
+    base_dir: Path, requested_path: str
+) -> Path | None:
+    """Return a safe file path inside the built frontend directory."""
+    if not requested_path:
+        return None
+
+    resolved_base = base_dir.resolve()
+    candidate = (resolved_base / requested_path).resolve()
+    try:
+        candidate.relative_to(resolved_base)
+    except ValueError:
+        return None
+
+    if not candidate.is_file():
+        return None
+    return candidate
+
+
 def create_app(serve_frontend: bool | None = None) -> FastAPI:
     """Application factory.
 
@@ -75,10 +94,12 @@ def create_app(serve_frontend: bool | None = None) -> FastAPI:
         )
 
         @application.get("/{full_path:path}")
-        async def spa_fallback(request: Request, full_path: str):
+        async def spa_fallback(full_path: str):
             """Serve index.html for any non-API route (SPA client-side routing)."""
-            file_path = FRONTEND_DIST / full_path
-            if full_path and file_path.is_file():
+            file_path = _resolve_frontend_file(
+                FRONTEND_DIST, full_path
+            )
+            if file_path is not None:
                 return FileResponse(str(file_path))
             return FileResponse(str(FRONTEND_DIST / "index.html"))
     else:
