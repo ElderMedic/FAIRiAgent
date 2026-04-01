@@ -62,7 +62,7 @@ export default function HomeWorkflowSection({ steps }: HomeWorkflowSectionProps)
                 <span>Demo without fakery</span>
               </div>
               <p className="home-ops-card__body">
-                The bundled sample still exercises the actual backend flow, just with a smaller document.
+                The bundled earthworm paper still exercises the actual backend flow without using mock data.
               </p>
             </article>
           </div>

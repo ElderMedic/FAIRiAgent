@@ -1,13 +1,17 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from fairifier.apps.api.routers.v1 import router
+from fairifier.apps.api.routers.v1 import (
+    _resolve_default_demo_document_key,
+    router,
+)
 from fairifier.apps.api.services.runner import (
     _persist_run_outputs,
 )
 from fairifier.apps.api.storage.sqlite_store import (
     SQLiteProjectStore,
 )
+from fairifier.apps.api.models import DemoDocumentResponse
 from fairifier.utils.json_logger import JSONLogger
 
 
@@ -122,3 +126,20 @@ def test_persist_run_outputs_writes_core_downloadable_files(
     assert "processing_started" in processing_log
     assert "processing_completed" in processing_log
     assert "artifact_saved" in processing_log
+
+
+def test_default_demo_document_key_falls_back_to_available_sample():
+    documents = [
+      DemoDocumentResponse(
+          key="earthworm_paper",
+          label="Earthworm BioRxiv Paper",
+          filename="earthworm_4n_paper_bioRxiv.pdf",
+          description="Representative PDF example.",
+          size_bytes=123,
+      )
+    ]
+
+    assert (
+        _resolve_default_demo_document_key(documents)
+        == "earthworm_paper"
+    )

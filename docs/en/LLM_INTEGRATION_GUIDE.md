@@ -96,7 +96,7 @@ Gemini support also relies on `langchain-google-genai`, which is already include
 cp env.example .env
 # edit .env
 
-python run_fairifier.py process examples/inputs/test_document.txt
+python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRxiv.pdf
 ```
 
 For interactive use:

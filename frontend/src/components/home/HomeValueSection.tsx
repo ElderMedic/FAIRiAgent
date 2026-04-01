@@ -10,11 +10,11 @@ export default function HomeValueSection({ cards }: HomeValueSectionProps) {
       <div className="home-shell home-section__layout">
         <div className="home-section__intro">
           <p className="home-section__eyebrow">Design principles</p>
-          <h2 className="home-section__title">Clarity at every stage of the workflow.</h2>
+          <h2 className="home-section__title">A research workflow that stays readable under real use.</h2>
           <p className="home-section__body">
-            Stable containers, consistent typography, predictable spacing, and restrained motion help the
-            interface stay calm under real use. The structure follows the operator journey instead of
-            competing with it.
+            Researchers should be able to see where a draft came from, what context shaped it, and what
+            still needs checking. The interface is designed to keep that chain visible without making the
+            page feel technical for its own sake.
           </p>
         </div>
 

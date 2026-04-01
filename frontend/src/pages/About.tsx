@@ -18,9 +18,9 @@ import {
 import './InteriorPages.css';
 
 const overviewItems = [
-  'CLI-first multi-agent framework for extracting metadata from research documents',
-  'FAIR-DS compatible JSON output for downstream review and reuse',
-  'Flexible providers across local and hosted model backends',
+  'CLI-first multi-agent system for turning research narrative into FAIR-DS compatible metadata drafts',
+  'Retrieval of packages, fields, and terms is part of the workflow, so the system is grounded in FAIR structures rather than generic summarization',
+  'Each run keeps logs, artifacts, and review signals together, making the output easier to inspect with the source document beside it',
 ];
 
 const links = [
@@ -65,8 +65,9 @@ export default function About() {
           <p className="page-eyebrow">About FAIRiAgent</p>
           <h1 className="page-title">A research workflow for FAIR metadata generation.</h1>
           <p className="page-lede">
-            FAIRiAgent is built to move from research documents to structured metadata with clearer
-            process control, evidence handling, and reviewability than a one-shot extraction pipeline.
+            FAIRiAgent is built for a familiar problem in research groups: much of the metadata already
+            exists in papers, supplements, and experimental descriptions, but not yet in a form that is
+            ready for FAIR workflows. The system is meant to reduce that last-mile formalization work.
           </p>
         </header>
 
@@ -84,8 +85,9 @@ export default function About() {
                   </div>
                 </div>
                 <p className="page-card__body">
-                  FAIRiAgent is a CLI-first, multi-agent framework that reads PDFs and other research
-                  documents, then builds FAIR-DS compatible JSON metadata from them.
+                  FAIRiAgent reads PDFs and other research documents, extracts structured information,
+                  retrieves relevant FAIR-DS context, and writes FAIR-DS compatible JSON metadata. It is
+                  a bridge from narrative science to operational FAIR data.
                 </p>
                 <ul className="about-bullet-list">
                   {overviewItems.map((item) => (
@@ -105,11 +107,14 @@ export default function About() {
                   </div>
                 </div>
                 <p className="page-card__body">
-                  Documents are parsed, grounded against relevant context, passed through specialized
-                  agents, then refined and validated before final artifacts are produced.
+                  Documents are parsed, package and term context is retrieved, metadata is drafted, and
+                  the result is critiqued and validated before final artifacts are written.
                 </p>
                 <p className="page-card__body">
-                  For a deeper architectural walkthrough, see{' '}
+                  This matters because it answers a practical question for non-technical researchers:
+                  why not just use a chatbot? FAIRiAgent keeps more of the real workflow explicit,
+                  including retrieved context, evidence traces, and run-level reporting. For a deeper
+                  architectural walkthrough, see{' '}
                   <code className="page-inline-code">docs/en/ARCHITECTURE_AND_FLOW.md</code>.
                 </p>
               </article>
@@ -129,7 +134,9 @@ export default function About() {
                 <p className="page-card__body">
                   The React application works with the FastAPI backend at{' '}
                   <code className="page-inline-code">/api/v1</code> for uploads, configuration,
-                  streaming progress, and artifact downloads. It is designed for local or LAN use.
+                  streaming progress, and artifact downloads. It is the operator surface for the system:
+                  service checks before launch, live run visibility during processing, and file review at
+                  the end.
                 </p>
               </article>
 
@@ -177,7 +184,7 @@ export default function About() {
               <ul className="page-note-list">
                 <li>Review all outputs before publication or compliance use.</li>
                 <li>Provider keys, data handling, and institutional policy remain your responsibility.</li>
-                <li>The legacy Streamlit path remains available if needed.</li>
+                <li>FAIRiAgent can reduce metadata friction, but unusual study designs and ambiguous documents still need domain review.</li>
               </ul>
             </div>
 

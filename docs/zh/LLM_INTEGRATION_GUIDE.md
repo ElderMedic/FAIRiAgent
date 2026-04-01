@@ -97,7 +97,7 @@ Gemini 支持依赖 `langchain-google-genai`，该依赖已经加入项目配置
 cp env.example .env
 # 编辑 .env
 
-python run_fairifier.py process examples/inputs/test_document.txt
+python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRxiv.pdf
 ```
 
 如果想交互式使用：

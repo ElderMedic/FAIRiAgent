@@ -42,7 +42,13 @@ export default function Upload() {
       .then((options) => {
         if (!active) return;
         setDemoOptions(options);
-        setSampleDocumentKey(options.default_demo_document_key);
+        const availableKeys = options.documents.map((doc) => doc.key);
+        const fallbackKey = availableKeys[0] || '';
+        setSampleDocumentKey(
+          availableKeys.includes(options.default_demo_document_key)
+            ? options.default_demo_document_key
+            : fallbackKey,
+        );
       })
       .catch(() => {
         /* demo metadata is optional */
@@ -116,8 +122,8 @@ export default function Upload() {
               </div>
 
               <p className="page-card__body">
-                The same backend pipeline runs in both cases. The bundled sample is simply a smaller,
-                ready-to-use document for quick testing.
+                The same backend pipeline runs in both cases. The bundled sample is a real reference
+                document kept in the repository for quick end-to-end checks.
               </p>
 
               <div className="upload-inline-card">
@@ -125,7 +131,7 @@ export default function Upload() {
                   <div className="upload-toggle__copy" id="quick-sample-label">
                     <p className="upload-toggle__title">Quick sample preset</p>
                     <p className="upload-toggle__body">
-                      Use the bundled sample document and move directly into configuration.
+                      Use the bundled earthworm paper and move directly into configuration.
                     </p>
                   </div>
                   <button

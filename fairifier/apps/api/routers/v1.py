@@ -47,15 +47,10 @@ DEFAULT_OLLAMA_PROVIDER = "ollama"
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 _DEMO_DOCUMENTS = {
-    "test_document": {
-        "path": PROJECT_ROOT / "examples" / "inputs" / "test_document.txt",
-        "label": "Quick Demo Text",
-        "description": "Tiny bundled text document for validating the full WebUI flow quickly.",
-    },
     "earthworm_paper": {
         "path": PROJECT_ROOT / "examples" / "inputs" / "earthworm_4n_paper_bioRxiv.pdf",
         "label": "Earthworm BioRxiv Paper",
-        "description": "Representative PDF example for a larger end-to-end run.",
+        "description": "Bundled reference PDF for end-to-end testing.",
     },
 }
 
@@ -99,6 +94,14 @@ def _build_demo_document_response(
         description=meta["description"],
         size_bytes=size_bytes,
     )
+
+
+def _resolve_default_demo_document_key(
+    documents: list[DemoDocumentResponse],
+) -> str:
+    if documents:
+        return documents[0].key
+    return ""
 
 
 def _probe_tcp(host: str, port: int, timeout: float = 2.0) -> bool:
@@ -202,6 +205,25 @@ def _fetch_ollama_models_payload(
         return False, f"Invalid Ollama response: {exc}", []
 
 
+def _build_mineru_status_message(
+    *,
+    cli_detected: bool,
+    server_reachable: bool,
+    server_configured: bool,
+) -> str:
+    if cli_detected and server_reachable:
+        return "CLI and MinerU server reachable"
+    if cli_detected and not server_configured:
+        return "CLI detected, but MinerU server URL is not configured"
+    if cli_detected and not server_reachable:
+        return "CLI detected, but MinerU server is unreachable"
+    if not cli_detected and server_reachable:
+        return "MinerU server reachable, but CLI is not installed"
+    if not server_configured:
+        return "MinerU CLI missing and server URL is not configured"
+    return "MinerU CLI missing and server is unreachable"
+
+
 def _build_system_status() -> SystemStatusResponse:
     from fairifier.config import config as fc
     from fairifier.services.fair_data_station import FAIRDataStationClient
@@ -266,10 +288,10 @@ def _build_system_status() -> SystemStatusResponse:
                 label="MinerU",
                 enabled=True,
                 reachable=bool(mineru_cli_exists and mineru_reachable),
-                message=(
-                    "CLI + server reachable"
-                    if mineru_cli_exists and mineru_reachable
-                    else "CLI missing or server unreachable"
+                message=_build_mineru_status_message(
+                    cli_detected=mineru_cli_exists,
+                    server_reachable=mineru_reachable,
+                    server_configured=bool(fc.mineru_server_url),
                 ),
                 endpoint=fc.mineru_server_url,
                 details={
@@ -485,7 +507,7 @@ async def demo_options() -> DemoOptionsResponse:
     ]
 
     return DemoOptionsResponse(
-        default_demo_document_key="test_document",
+        default_demo_document_key=_resolve_default_demo_document_key(documents),
         default_ollama_provider=DEFAULT_OLLAMA_PROVIDER,
         default_ollama_model=DEFAULT_OLLAMA_MODEL,
         default_ollama_base_url=DEFAULT_OLLAMA_BASE_URL,
