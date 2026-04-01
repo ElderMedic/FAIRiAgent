@@ -10,6 +10,7 @@ langsmith>=0.1.0
 
 # Document processing
 PyMuPDF>=1.23.0
+mineru>=1.0.0
 rdflib>=7.0.0
 pyshacl>=0.25.0
 

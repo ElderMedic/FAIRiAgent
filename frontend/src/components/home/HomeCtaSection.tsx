@@ -13,11 +13,11 @@ export default function HomeCtaSection({ onStart, onAbout }: HomeCtaSectionProps
           <div className="home-cta-card__copy">
             <p className="home-section__eyebrow">Next step</p>
             <h2 className="home-section__title">
-              Start with a real document, then tune the rest of the workflow inside the app.
+              Start from a real paper, then follow the run through to reviewable FAIR metadata files.
             </h2>
             <p className="home-section__body">
-              The same visual language should carry through the working screens next: upload,
-              configuration, run status, and result review.
+              The working screens are meant to support one practical job: turning existing scientific
+              description into a structured draft that a researcher can inspect, correct, and reuse.
             </p>
           </div>
 

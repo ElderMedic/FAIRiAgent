@@ -86,7 +86,7 @@ async def test_document_parser_falls_back_when_deep_result_is_too_sparse(monkeyp
     monkeypatch.setattr(agent, "_invoke_react_agent", fake_invoke)
 
     state = {
-        "document_path": "examples/inputs/test_document.txt",
+        "document_path": "examples/inputs/earthworm_4n_paper_bioRxiv.pdf",
         "document_content": "Short test document",
         "document_conversion": {},
         "context": {},

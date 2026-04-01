@@ -4,7 +4,7 @@ import HomeHero from '../components/home/HomeHero';
 import HomeValueSection from '../components/home/HomeValueSection';
 import HomeWorkflowSection from '../components/home/HomeWorkflowSection';
 import {
-  consoleHighlights,
+  consoleSlides,
   heroSignals,
   valueCards,
   workflowSteps,
@@ -22,7 +22,7 @@ export default function Home() {
         onStart={() => navigate('/upload')}
         onSample={() => navigate('/upload', { state: { demoMode: true } })}
         signals={heroSignals}
-        highlights={consoleHighlights}
+        consoleSlides={consoleSlides}
       />
       <HomeValueSection cards={valueCards} />
       <HomeWorkflowSection steps={workflowSteps} />

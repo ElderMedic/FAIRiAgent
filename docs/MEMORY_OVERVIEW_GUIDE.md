@@ -297,7 +297,7 @@ MEM0_COLLECTION_NAME=fairifier_memories
 
 ```bash
 # 1. Run a workflow to generate memories
-fairifier process examples/inputs/test_document.txt --project-id test_overview
+fairifier process examples/inputs/earthworm_4n_paper_bioRxiv.pdf --project-id test_overview
 
 # 2. Generate overview
 fairifier memory overview test_overview

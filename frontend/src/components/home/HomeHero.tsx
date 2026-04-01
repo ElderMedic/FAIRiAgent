@@ -1,24 +1,25 @@
-import { motion, useReducedMotion, useScroll, useTransform } from 'framer-motion';
-import { ArrowRight, BadgeCheck, Database, FileSearch, Sparkles, Workflow } from 'lucide-react';
-import { useRef } from 'react';
+import { AnimatePresence, motion, useReducedMotion, useScroll, useTransform } from 'framer-motion';
+import { ArrowRight, BadgeCheck, Sparkles } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import HomeHeroBackdrop from './HomeHeroBackdrop';
-import type { HomeSignal } from './content';
+import type { HomeConsoleSlide, HomeSignal } from './content';
 
 interface HomeHeroProps {
   onStart: () => void;
   onSample: () => void;
   signals: HomeSignal[];
-  highlights: string[];
+  consoleSlides: HomeConsoleSlide[];
 }
 
 export default function HomeHero({
   onStart,
   onSample,
   signals,
-  highlights,
+  consoleSlides,
 }: HomeHeroProps) {
   const sectionRef = useRef<HTMLElement | null>(null);
   const reduceMotion = useReducedMotion();
+  const [activeConsoleIndex, setActiveConsoleIndex] = useState(0);
   const { scrollYProgress } = useScroll({
     target: sectionRef,
     offset: ['start start', 'end start'],
@@ -28,6 +29,17 @@ export default function HomeHero({
   const contentOpacity = useTransform(scrollYProgress, [0, 0.74], [1, 0.24]);
   const contentY = useTransform(scrollYProgress, [0, 1], [0, 88]);
   const consoleY = useTransform(scrollYProgress, [0, 1], [0, 116]);
+  const activeConsoleSlide = consoleSlides[activeConsoleIndex];
+
+  useEffect(() => {
+    if (reduceMotion || consoleSlides.length < 2) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      setActiveConsoleIndex((current) => (current + 1) % consoleSlides.length);
+    }, 4200);
+    return () => window.clearInterval(timer);
+  }, [consoleSlides.length, reduceMotion]);
 
   return (
     <motion.section
@@ -60,9 +72,11 @@ export default function HomeHero({
               A cleaner control surface for your FAIR metadata workflow.
             </h1>
             <p className="home-lede">
-              FAIRiAgent turns research documents into structured FAIR metadata through a staged backend
-              pipeline. The front end is built to make that process legible, stable, and easy to operate,
-              with a quieter visual rhythm that supports careful work.
+              FAIRiAgent reads the kind of material research groups already produce, such as papers,
+              supplements, and protocol-style documents, then turns that narrative context into
+              package-aware FAIR metadata drafts. Instead of relying on a single prompt, it uses a
+              staged multi-agent workflow with retrieved terms, evidence mapping, critique, and
+              validation before files are exported.
             </p>
           </div>
 
@@ -105,51 +119,64 @@ export default function HomeHero({
           <div className="home-console__panel">
             <div className="home-console__row">
               <div>
-                <p className="home-console__eyebrow">Run architecture</p>
-                <p className="home-console__summary">Upload, configure, stream, inspect, export.</p>
+                <p className="home-console__eyebrow">{activeConsoleSlide.eyebrow}</p>
+                <p className="home-console__summary">{activeConsoleSlide.summary}</p>
               </div>
-              <div className="home-dots" aria-hidden="true">
-                <span />
-                <span />
-                <span />
+              <div className="home-dots" role="tablist" aria-label="Console views">
+                {consoleSlides.map((slide, index) => (
+                  <button
+                    key={slide.label}
+                    type="button"
+                    role="tab"
+                    aria-selected={index === activeConsoleIndex}
+                    aria-label={`Show ${slide.label.toLowerCase()} view`}
+                    className={`home-dots__button ${index === activeConsoleIndex ? 'is-active' : ''}`}
+                    onClick={() => setActiveConsoleIndex(index)}
+                  >
+                    <span />
+                  </button>
+                ))}
               </div>
             </div>
 
-            <article className="home-console-card home-console-card--wide">
-              <div>
-                <h3 className="home-console-card__title">Document intake</h3>
-                <p className="home-console-card__body">
-                  PDF, TXT, and Markdown drop into the same backend pipeline.
-                </p>
-              </div>
-              <FileSearch className="home-console-card__icon" aria-hidden="true" />
-            </article>
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeConsoleSlide.label}
+                className="home-console__view"
+                initial={reduceMotion ? false : { opacity: 0, y: 10 }}
+                animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
+                exit={reduceMotion ? undefined : { opacity: 0, y: -10 }}
+                transition={{ duration: 0.28, ease: 'easeOut' }}
+              >
+                <article className="home-console-card home-console-card--wide">
+                  <div>
+                    <h3 className="home-console-card__title">{activeConsoleSlide.wideCard.title}</h3>
+                    <p className="home-console-card__body">
+                      {activeConsoleSlide.wideCard.body}
+                    </p>
+                  </div>
+                  <activeConsoleSlide.wideCard.icon className="home-console-card__icon" aria-hidden="true" />
+                </article>
 
-            <div className="home-console__grid">
-              <article className="home-console-card">
-                <div className="home-console-card__heading">
-                  <h3 className="home-console-card__title">Agent loop</h3>
-                  <Workflow className="home-console-card__icon home-console-card__icon--secondary" aria-hidden="true" />
+                <div className="home-console__grid">
+                  {activeConsoleSlide.cards.map((card) => (
+                    <article key={card.title} className="home-console-card">
+                      <div className="home-console-card__heading">
+                        <h3 className="home-console-card__title">{card.title}</h3>
+                        <card.icon className="home-console-card__icon home-console-card__icon--secondary" aria-hidden="true" />
+                      </div>
+                      <p className="home-console-card__body">
+                        {card.body}
+                      </p>
+                    </article>
+                  ))}
                 </div>
-                <p className="home-console-card__body">
-                  Extraction, critique, and validation operate as distinct steps.
-                </p>
-              </article>
-
-              <article className="home-console-card">
-                <div className="home-console-card__heading">
-                  <h3 className="home-console-card__title">Structured output</h3>
-                  <Database className="home-console-card__icon home-console-card__icon--secondary" aria-hidden="true" />
-                </div>
-                <p className="home-console-card__body">
-                  Reviewable metadata artifacts replace disposable chat output.
-                </p>
-              </article>
-            </div>
+              </motion.div>
+            </AnimatePresence>
           </div>
 
           <div className="home-console__highlights">
-            {highlights.map((item) => (
+            {activeConsoleSlide.highlights.map((item) => (
               <div key={item} className="home-highlight">
                 {item}
               </div>
