@@ -298,6 +298,73 @@ def test_knowledge_retriever_runtime_cache_persists_across_state_snapshots():
     assert state_two["retrieval_cache"]["fairds_tools"]
 
 
+def test_knowledge_retriever_trivial_label_heuristic():
+    agent = KnowledgeRetrieverAgent.__new__(KnowledgeRetrieverAgent)
+    assert agent._is_trivial_metadata_label("study identifier") is True
+    assert agent._is_trivial_metadata_label("sample name") is True
+    assert agent._is_trivial_metadata_label("nucleotide sequence accession") is False
+
+
+def test_knowledge_retriever_rebalances_non_sample_optional_fields():
+    agent = KnowledgeRetrieverAgent.__new__(KnowledgeRetrieverAgent)
+    final_selected_fields = [
+        {"label": "study identifier", "requirement": "MANDATORY", "packageName": "default"},
+        {"label": "sample name", "requirement": "MANDATORY", "packageName": "default"},
+    ]
+    fields_by_isa_sheet = {
+        "investigation": {
+            "mandatory": [{"label": "investigation identifier", "requirement": "MANDATORY"}],
+            "optional": [
+                {"label": "investigation objective", "requirement": "OPTIONAL"},
+                {"label": "project design", "requirement": "OPTIONAL"},
+                {"label": "organization", "requirement": "OPTIONAL"},
+            ],
+        },
+        "study": {
+            "mandatory": [{"label": "study identifier", "requirement": "MANDATORY"}],
+            "optional": [
+                {"label": "study factor", "requirement": "OPTIONAL"},
+                {"label": "timepoint design", "requirement": "OPTIONAL"},
+                {"label": "study title", "requirement": "OPTIONAL"},
+            ],
+        },
+        "assay": {
+            "mandatory": [],
+            "optional": [
+                {"label": "library strategy", "requirement": "OPTIONAL"},
+                {"label": "library source", "requirement": "OPTIONAL"},
+                {"label": "target gene", "requirement": "OPTIONAL"},
+                {"label": "sequencing platform", "requirement": "OPTIONAL"},
+            ],
+        },
+        "sample": {"mandatory": [{"label": "sample name", "requirement": "MANDATORY"}], "optional": []},
+        "observationunit": {
+            "mandatory": [],
+            "optional": [
+                {"label": "observation unit treatment", "requirement": "OPTIONAL"},
+                {"label": "observation unit replicate", "requirement": "OPTIONAL"},
+                {"label": "observation unit identifier", "requirement": "OPTIONAL"},
+            ],
+        },
+    }
+
+    enriched, additions = agent._rebalance_non_sample_optional_fields(
+        final_selected_fields=final_selected_fields,
+        fields_by_isa_sheet=fields_by_isa_sheet,
+    )
+
+    labels = {item["label"] for item in enriched}
+    assert "investigation objective" in labels
+    assert "project design" in labels
+    assert "study factor" in labels
+    assert "timepoint design" in labels
+    assert "library strategy" in labels
+    assert "target gene" in labels
+    assert "sequencing platform" in labels
+    assert additions["assay"] > 0
+    assert additions["study"] > 0
+
+
 def test_knowledge_retriever_candidate_packages_exclude_obvious_domain_mismatch():
     agent = KnowledgeRetrieverAgent.__new__(KnowledgeRetrieverAgent)
 
@@ -838,15 +905,66 @@ def test_json_generator_normalizes_isa_sheet_and_extension_labels():
             value="Example",
             isa_sheet="",
             package_source="default",
+            required=True,
         )
     )
     assert field_dict["isa_sheet"] == "study"
     assert field_dict["isa_level"] == "study"
+    assert field_dict["required"] is True
+    assert field_dict["requirement"] == "MANDATORY"
 
     assert agent._normalize_extension_label(
         "No FAIR-DS package for functional gene metadata (nitrifier key genes)"
     ) == "functional gene metadata (nitrifier key genes)"
     assert agent._normalize_extension_label("No field for alpha/gamma diversity metrics") == "alpha/gamma diversity metrics"
+
+
+def test_json_generator_injects_missing_mandatory_fields():
+    agent = JSONGeneratorAgent()
+
+    existing = [
+        MetadataField(
+            field_name="study title",
+            value="Earthworm study",
+            isa_sheet="study",
+            package_source="default",
+            required=True,
+            metadata={"requirement": "MANDATORY", "package": "default", "isa_sheet": "Study"},
+        )
+    ]
+    knowledge_items = [
+        {
+            "term": "study title",
+            "definition": "Study title",
+            "metadata": {
+                "requirement": "MANDATORY",
+                "required": True,
+                "package": "default",
+                "isa_sheet": "Study",
+            },
+        },
+        {
+            "term": "investigation identifier",
+            "definition": "Investigation id",
+            "metadata": {
+                "requirement": "MANDATORY",
+                "required": True,
+                "package": "default",
+                "isa_sheet": "Investigation",
+            },
+        },
+    ]
+
+    fields = agent._ensure_mandatory_fields_present(existing, knowledge_items)
+
+    names = {f.field_name for f in fields}
+    assert "study title" in names
+    assert "investigation identifier" in names
+    injected = next(f for f in fields if f.field_name == "investigation identifier")
+    assert injected.origin == "mandatory_enforcement"
+    assert injected.required is True
+    injected_dict = agent._field_to_dict(injected)
+    assert injected_dict["requirement"] == "MANDATORY"
 
 
 def test_json_generator_extension_output_is_compact_and_deduplicated():
