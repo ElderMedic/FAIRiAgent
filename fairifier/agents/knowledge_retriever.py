@@ -315,7 +315,11 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             ) or None
 
             priority_package_hints = self._infer_priority_packages(
-                doc_info, planner_instruction, available_package_names
+                doc_info,
+                planner_instruction,
+                available_package_names,
+                critic_feedback=critic_feedback,
+                evidence_packets=evidence_packets,
             )
             guided_package_hints = self._extract_guided_package_names(
                 available_package_names,
@@ -514,6 +518,39 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 selected_package_names = priority_package_hints[:]
             if not selected_package_names:
                 selected_package_names = candidate_package_names[:3]
+
+            # Ensure metadata is available for all finally selected packages.
+            # Guided/planner-added packages can fall outside the initial candidate fetch set.
+            fetched_packages = {
+                field.get("packageName")
+                for field in all_packages_metadata
+                if field.get("packageName")
+            }
+            missing_selected_packages = [
+                pkg for pkg in selected_package_names if pkg not in fetched_packages
+            ]
+            if missing_selected_packages:
+                self.log_execution(
+                    state,
+                    f"📦 Fetching metadata for {len(missing_selected_packages)} selected package(s) outside initial candidate set: {missing_selected_packages}"
+                )
+                for pkg_name in missing_selected_packages:
+                    pkg_result = self.tools["get_package"].invoke({"package_name": pkg_name})
+                    if pkg_result["success"] and pkg_result["data"] and "metadata" in pkg_result["data"]:
+                        fields = pkg_result["data"]["metadata"]
+                        all_packages_metadata.extend(fields)
+                        self.log_execution(
+                            state,
+                            f"   ✅ {pkg_name}: loaded {len(fields)} additional fields"
+                        )
+                    else:
+                        self.log_execution(
+                            state,
+                            f"   ⚠️ {pkg_name}: failed to load metadata for selected package",
+                            "warning",
+                        )
+                packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(all_packages_metadata)
+                all_packages = FAIRDSAPIParser.get_all_package_names(packages_by_sheet)
             
             # Phase 2: Get all fields from selected packages, grouped by ISA sheet
             self.log_execution(state, "📦 Phase 2: Collecting fields from selected packages (by ISA sheet)...")
@@ -608,9 +645,23 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             
             # Collect all terms to search (from LLM requests)
             all_terms_to_search = []
-            priority_search_terms = self._infer_priority_search_terms(
-                doc_info, planner_instruction, evidence_packets
+            required_search_terms = self._infer_required_search_terms(
+                doc_info,
+                planner_instruction,
+                critic_feedback=critic_feedback,
+                evidence_packets=evidence_packets,
             )
+            priority_search_terms = self._infer_priority_search_terms(
+                doc_info,
+                planner_instruction,
+                evidence_packets,
+                critic_feedback=critic_feedback,
+            )
+            if required_search_terms:
+                self.log_execution(
+                    state,
+                    f"🎯 Required metadata search terms from planner/critic guidance: {required_search_terms}"
+                )
             if priority_search_terms:
                 self.log_execution(
                     state,
@@ -671,16 +722,42 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                                 state,
                                 f"   🔍 {sheet}: LLM requested term search for: {terms_to_search}"
                             )
+
+            # Safety net: every MANDATORY field for the selected packages must be retained
+            # (sheet name variants or earlier filtering can otherwise drop required fields).
+            present_labels = {
+                f.get("label")
+                for f in final_selected_fields
+                if f.get("label")
+            }
+            for sheet in isa_sheets:
+                for mf in fields_by_isa_sheet[sheet]["mandatory"]:
+                    lab = mf.get("label")
+                    if lab and lab not in present_labels:
+                        final_selected_fields.append(mf)
+                        present_labels.add(lab)
+                        self.log_execution(
+                            state,
+                            f"   ➕ Added missing mandatory field from package set: {lab} ({sheet})",
+                        )
             
             # Add deterministic publication/domain search hints before final FAIR-DS lookup.
             all_terms_to_search = list(
-                dict.fromkeys(priority_search_terms + structured_terms_to_search + all_terms_to_search)
+                dict.fromkeys(
+                    required_search_terms
+                    + priority_search_terms
+                    + structured_terms_to_search
+                    + all_terms_to_search
+                )
             )
 
             # Phase 4: Search for additional terms/fields if LLM requested (using tools)
             if all_terms_to_search and self.fair_ds_client:
                 self.log_execution(state, f"🔍 Phase 4: Searching for {len(all_terms_to_search)} additional terms...")
                 term_search_outcomes: Dict[str, Dict[str, int]] = {}
+                required_search_term_keys = {
+                    str(term).strip().lower() for term in required_search_terms if str(term).strip()
+                }
                 for term in all_terms_to_search:
                     term_key = str(term).strip().lower()
                     if not term_key:
@@ -705,7 +782,12 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     
                     # Also search across packages for fields with matching labels (tool)
                     # Convert list to comma-separated string for tool
-                    search_scope_packages = list(dict.fromkeys(selected_package_names + priority_package_hints))
+                    if term_key in required_search_term_keys:
+                        search_scope_packages = available_package_names
+                    else:
+                        search_scope_packages = list(
+                            dict.fromkeys(selected_package_names + priority_package_hints)
+                        )
                     package_names_str = ",".join(search_scope_packages) if search_scope_packages else None
                     fields_search_result = self.tools["search_fields_in_packages"].invoke({
                         "field_label": term,
@@ -731,6 +813,18 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     }
             else:
                 term_search_outcomes = {}
+
+            uncovered_required_terms = [
+                term
+                for term in required_search_terms
+                if not self._selected_fields_cover_term(term, final_selected_fields)
+            ]
+            if uncovered_required_terms:
+                self.log_execution(
+                    state,
+                    f"⚠️ Planner-critical metadata still uncovered after FAIR-DS retrieval: {uncovered_required_terms}",
+                    "warning",
+                )
             
             # Log final statistics
             total_mandatory = len(all_mandatory_fields)
@@ -804,6 +898,8 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 "candidate_packages_considered": candidate_package_names,
                 "guided_packages_considered": guided_package_hints,
                 "packages_requested_by_planner": self._extract_requested_packages(planner_instruction),
+                "required_metadata_terms": required_search_terms,
+                "uncovered_required_metadata_terms": uncovered_required_terms,
                 "selected_packages": selected_package_names,
                 "unavailable_requested_packages": [
                     hint["label"] for hint in metadata_gap_hints
@@ -1022,9 +1118,25 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         self,
         doc_info: Dict[str, Any],
         planner_instruction: Optional[str],
-        available_package_names: List[str]
+        available_package_names: List[str],
+        critic_feedback: Optional[Dict[str, Any]] = None,
+        evidence_packets: Optional[List[Dict[str, Any]]] = None,
     ) -> List[str]:
         """Infer high-confidence package hints from document domain and publication context."""
+        packet_values = " ".join(
+            str(packet.get("value", ""))
+            for packet in (evidence_packets or [])[:12]
+            if packet.get("value")
+        )
+        critic_text = " ".join(
+            str(part)
+            for part in [
+                critic_feedback.get("critique") if critic_feedback else "",
+                " ".join(critic_feedback.get("suggestions", []) or []) if critic_feedback else "",
+                " ".join(critic_feedback.get("issues", []) or []) if critic_feedback else "",
+            ]
+            if part
+        )
         package_lookup = {name.lower(): name for name in available_package_names}
         text = " ".join(
             str(part)
@@ -1033,7 +1145,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 doc_info.get("document_type", ""),
                 doc_info.get("research_domain", ""),
                 " ".join(doc_info.get("keywords", []) or []),
+                packet_values,
                 planner_instruction or "",
+                critic_text,
             ]
             if part
         ).lower()
@@ -1091,6 +1205,20 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         ):
             add("GSC MIMAGS")
 
+        if any(
+            keyword in text
+            for keyword in [
+                "diversity",
+                "alpha diversity",
+                "beta diversity",
+                "gamma diversity",
+                "shannon",
+                "species richness",
+                "bray-curtis",
+            ]
+        ):
+            add("Diversity")
+
         return hints
 
     def _infer_priority_search_terms(
@@ -1098,12 +1226,22 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         doc_info: Dict[str, Any],
         planner_instruction: Optional[str],
         evidence_packets: Optional[List[Dict[str, Any]]] = None,
+        critic_feedback: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         """Infer metadata labels that matter for publication-ready FAIR outputs."""
         packet_values = " ".join(
             str(packet.get("value", ""))
             for packet in (evidence_packets or [])[:12]
             if packet.get("value")
+        )
+        critic_text = " ".join(
+            str(part)
+            for part in [
+                critic_feedback.get("critique") if critic_feedback else "",
+                " ".join(critic_feedback.get("suggestions", []) or []) if critic_feedback else "",
+                " ".join(critic_feedback.get("issues", []) or []) if critic_feedback else "",
+            ]
+            if part
         )
         text = " ".join(
             str(part)
@@ -1114,6 +1252,7 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 " ".join(doc_info.get("keywords", []) or []),
                 packet_values,
                 planner_instruction or "",
+                critic_text,
             ]
             if part
         ).lower()
@@ -1170,6 +1309,163 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 add(term)
 
         return terms
+
+    def _infer_required_search_terms(
+        self,
+        doc_info: Dict[str, Any],
+        planner_instruction: Optional[str],
+        critic_feedback: Optional[Dict[str, Any]] = None,
+        evidence_packets: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[str]:
+        """Infer planner-critical metadata concepts that must be searched across FAIR-DS."""
+        packet_text = " ".join(
+            " ".join(
+                str(packet.get(key, ""))
+                for key in ["field_candidate", "value", "evidence_text"]
+                if packet.get(key)
+            )
+            for packet in (evidence_packets or [])[:16]
+        )
+        critic_text = " ".join(
+            str(part)
+            for part in [
+                critic_feedback.get("critique") if critic_feedback else "",
+                " ".join(critic_feedback.get("suggestions", []) or []) if critic_feedback else "",
+                " ".join(critic_feedback.get("issues", []) or []) if critic_feedback else "",
+            ]
+            if part
+        )
+        text = " ".join(
+            str(part)
+            for part in [
+                doc_info.get("title", ""),
+                doc_info.get("document_type", ""),
+                doc_info.get("research_domain", ""),
+                doc_info.get("scientific_domain", ""),
+                doc_info.get("methodology", ""),
+                " ".join(doc_info.get("keywords", []) or []),
+                planner_instruction or "",
+                critic_text,
+                packet_text,
+            ]
+            if part
+        ).lower()
+
+        terms: List[str] = []
+
+        def add(term: str):
+            if term not in terms:
+                terms.append(term)
+
+        concept_rules = [
+            {
+                "triggers": [
+                    "diversity",
+                    "alpha diversity",
+                    "beta diversity",
+                    "gamma diversity",
+                    "shannon",
+                    "species richness",
+                    "bray-curtis",
+                ],
+                "terms": [
+                    "diversity",
+                    "alpha diversity",
+                    "beta diversity",
+                    "gamma diversity",
+                    "species richness",
+                    "shannon diversity",
+                    "bray-curtis dissimilarity",
+                ],
+            },
+            {
+                "triggers": [
+                    "license",
+                    "licence",
+                    "access rights",
+                    "usage rights",
+                    "reuse",
+                    "copyright",
+                ],
+                "terms": [
+                    "license",
+                    "data usage license",
+                    "access rights",
+                ],
+            },
+            {
+                "triggers": [
+                    "shotgun metagenome",
+                    "metagenome",
+                    "metagenomic",
+                    "16s",
+                    "18s",
+                    "rrna",
+                    "amplicon",
+                    "library strategy",
+                    "dataset split",
+                    "separate dataset",
+                    "dataset type",
+                ],
+                "terms": [
+                    "dataset type",
+                    "library strategy",
+                    "target gene",
+                    "sequencing method",
+                    "shotgun metagenome",
+                    "16s rrna",
+                    "18s rrna",
+                    "amplicon sequencing",
+                ],
+            },
+        ]
+
+        for rule in concept_rules:
+            if any(trigger in text for trigger in rule["triggers"]):
+                for term in rule["terms"]:
+                    add(term)
+
+        return terms
+
+    def _selected_fields_cover_term(
+        self,
+        term: str,
+        selected_fields: List[Dict[str, Any]],
+    ) -> bool:
+        """Best-effort coverage check between required concepts and selected FAIR-DS labels."""
+        normalized_term = self._normalize_metadata_text(term)
+        if not normalized_term:
+            return False
+
+        synonyms = {
+            "license": ["license", "licence", "access rights", "usage rights"],
+            "data usage license": ["license", "usage rights", "access rights"],
+            "diversity": ["diversity", "richness", "shannon", "bray curtis"],
+            "alpha diversity": ["alpha diversity", "richness", "shannon"],
+            "beta diversity": ["beta diversity", "bray curtis", "distance matrix"],
+            "gamma diversity": ["gamma diversity", "regional diversity"],
+            "dataset type": ["dataset type", "library strategy", "target gene", "sequencing method"],
+            "shotgun metagenome": ["shotgun metagenome", "library strategy", "metagenome"],
+            "16s rrna": ["16s", "rrna", "target gene", "amplicon"],
+            "18s rrna": ["18s", "rrna", "target gene", "amplicon"],
+            "amplicon sequencing": ["amplicon", "target gene", "library strategy"],
+        }
+        expected_tokens = synonyms.get(normalized_term, [normalized_term])
+
+        for field in selected_fields:
+            label = self._normalize_metadata_text(field.get("label", ""))
+            if not label:
+                continue
+            if normalized_term in label or label in normalized_term:
+                return True
+            if any(token in label for token in expected_tokens):
+                return True
+        return False
+
+    def _normalize_metadata_text(self, value: Any) -> str:
+        """Normalize metadata labels and search terms for fuzzy matching."""
+        text = re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+        return " ".join(text.split())
 
     def _infer_excluded_packages(
         self,

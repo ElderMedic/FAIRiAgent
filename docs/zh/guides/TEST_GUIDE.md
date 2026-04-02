@@ -72,8 +72,8 @@ cd /path/to/FAIRiAgent
 # 检查是否有示例文档
 ls examples/inputs/
 
-# 使用 test_document.txt（如果存在）
-cat examples/inputs/test_document.txt
+# 使用 bundled earthworm 样本
+ls -lh examples/inputs/earthworm_4n_paper_bioRxiv.pdf
 ```
 
 ### 方法 2: 创建新的测试文档
@@ -584,7 +584,7 @@ OUTPUT_DIR="output_test_$(date +%Y%m%d_%H%M%S)"
 
 # 运行测试
 echo "🚀 Starting FAIRifier test..."
-python -m fairifier.cli process examples/inputs/test_document.txt \
+python -m fairifier.cli process examples/inputs/earthworm_4n_paper_bioRxiv.pdf \
   --output-dir "$OUTPUT_DIR" \
   --project-id "test_$(date +%H%M%S)" \
   --verbose

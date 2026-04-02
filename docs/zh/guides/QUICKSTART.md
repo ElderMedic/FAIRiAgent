@@ -86,7 +86,7 @@ mamba activate FAIRiAgent
 ./quick_test.sh
 
 # 方式 2: 直接使用 CLI
-python -m fairifier.cli process examples/inputs/test_document.txt --verbose
+python -m fairifier.cli process examples/inputs/earthworm_4n_paper_bioRxiv.pdf --verbose
 ```
 
 ### 4️⃣ 可选：启用记忆层（mem0）

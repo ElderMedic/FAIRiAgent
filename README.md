@@ -4,15 +4,15 @@
 
 ### *FAIR Metadata Generation Framework*
 
-**Transform research documents into FAIR-compliant metadata with AI-powered multi-agent intelligence**
+**Generate FAIR-DS compatible metadata from research documents**
 
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-green.svg)](https://langchain-ai.github.io/langgraph/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![FAIR-DS](https://img.shields.io/badge/FAIR--DS-Compatible-orange.svg)](https://fairds.systemsbiology.nl/)
+[![FAIR-DS](https://img.shields.io/badge/FAIR--DS-Compatible-orange.svg)](https://fairds.fairbydesign.nl/)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ElderMedic/FAIRiAgent)
 
-[🚀 Quick Start](#-quick-start) • [📖 Documentation](#-documentation) • [🎨 Web UI](#-web-ui-features) • [🤝 Contributing](#-contributing)
+[🚀 Quick Start](#-quick-start) • [📖 Documentation](#-documentation) • [🌐 Web UI](#-web-ui) • [🤝 Contributing](#-contributing)
 
 **[🇨🇳 中文版 / Chinese Version](docs/README.md#-中文-chinese)** | **[🇬🇧 English](README.md)**
 
@@ -22,7 +22,7 @@
 
 ![FAIRiAgent Banner](docs/figures/wide_greetings.png)
 
-**From PDF to FAIR metadata in minutes, not hours** 🚀
+PDF in, FAIR metadata out.
 
 </div>
 
@@ -47,7 +47,7 @@ FAIRiAgent is a **CLI-first, multi-agent framework** that automatically extracts
 - 📊 **Standards-compliant**: FAIR-DS compatible output format
 - 🔍 **Evidence-based**: Every field includes evidence, confidence, and provenance
 - 🧠 **Intelligent**: LLM-as-Judge critic with rubric-driven quality assessment
-- 🎨 **User-friendly**: Streamlit Web UI for interactive use
+- 🎨 **Usable**: React Web UI for upload, review, and export
 - 🔧 **Flexible**: Support for local models (Ollama) and cloud providers (OpenAI, Qwen, Gemini, Anthropic)
 
 ### 📈 The Problem We Solve
@@ -83,7 +83,7 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 | 🤖 Multi-Agent Architecture | 🧑‍⚖️ LLM-as-Judge Critic | 🔍 LangSmith Integration |
 | 📄 PDF/Text Processing | 📈 Confidence Aggregator | 📝 JSON Line Logging |
 | 🧠 Knowledge Retrieval | 🔄 Self-Correction Loops | ⚙️ Config Management |
-| 🏷️ Evidence-based Fields | 🎨 Streamlit Web UI | 📋 Runtime Export |
+| 🏷️ Evidence-based Fields | 🌐 React Web UI | 📋 Runtime Export |
 
 </div>
 
@@ -101,7 +101,7 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 - 🧑‍⚖️ **LLM-as-Judge Critic**: Rubric-driven auditing with actionable guidance per agent
 - 📈 **Confidence Aggregator**: Blends critic scores, structural coverage, and validation health
 - 🔄 **Self-Correction**: Automatic retry with feedback from Critic agent
-- 🎨 **Streamlit Web UI**: Interactive interface with real-time streaming and configuration management
+- 🌐 **React Web UI**: Upload, configure, stream logs, and download results from one interface
 - 💬 **Real-time Streaming**: Chat-like interface with live progress updates
 - ⚙️ **Configuration Management**: Save and manage runtime configurations
 - 📋 **Runtime Config Export**: Automatic export of input, .env, and runtime configurations
@@ -262,40 +262,37 @@ flowchart TD
 
 ## 🚀 Quick Start
 
-### ⚡ 30-Second Setup
+### Local setup
 
 ```bash
-# 1. Clone the repository
 git clone <repository-url>
 cd FAIRiAgent
 
-# 2. Activate the recommended local environment
+# Python environment
 mamba activate FAIRiAgent
-# conda activate FAIRiAgent  # fallback
-
-# 3. Install/update dependencies if needed
 pip install -r requirements.txt
 
-# 4. Process your first document
+# Frontend dependencies
+cd frontend && npm install && cd ..
+```
+
+### Run the Web UI
+
+```bash
+python run_fairifier.py webui
+```
+
+Open `http://localhost:8000`.
+
+### Run from the CLI
+
+```bash
 python run_fairifier.py process examples/inputs/your_document.pdf
 ```
 
-### 🐳 Docker Quick Start
+### Docker
 
-```bash
-# Using Docker Compose (API + optional Qdrant)
-cd docker
-cp ../env.example .env
-# Edit .env and set your LLM / FAIR-DS values first
-docker compose up -d
-
-# Access at:
-# - API: http://localhost:8000
-# - Health: http://localhost:8000/health
-# - Qdrant: http://localhost:6333
-```
-
-See [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md) for details.
+See [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md).
 
 ### 📦 Installation
 
@@ -311,8 +308,8 @@ cd FAIRiAgent
 # Install core dependencies
 pip install -r requirements.txt
 
-# Optional: Install Web UI dependencies
-./install_webui_deps.sh
+# Install frontend dependencies
+cd frontend && npm install && cd ..
 ```
 
 **Optional Features:**
@@ -379,8 +376,8 @@ python run_fairifier.py config-info
 **Web UI Mode:**
 
 ```bash
-./start_streamlit.sh
-# Access: http://localhost:8501
+python run_fairifier.py webui
+# Access: http://localhost:8000
 ```
 
 **LangGraph Studio (Development):**
@@ -698,23 +695,17 @@ python run_fairifier.py memory status
 
 **General:** Run `python run_fairifier.py --help` for full usage; run `python run_fairifier.py COMMAND --help` for command-specific options.
 
-## 🎨 Web UI Features
+## 🌐 Web UI
 
-The Streamlit web interface provides:
+The default interface is the React Web UI served by the FastAPI backend.
 
-- 📄 **Document Upload**: Drag-and-drop or use example files
-- 💬 **Real-time Streaming**: Chat-like interface showing LLM responses as they're generated
-- 📊 **Live Logs**: Real-time processing logs and error display
-- ⚙️ **Configuration Management**: Configure LLM, LangSmith, and FAIR-DS settings
-- 🔍 **Result Review**: View and download generated metadata
-- 📋 **LLM API Logs**: View all LLM interactions in formatted display
-
-**Access the UI:**
 ```bash
-python run_fairifier.py ui
+python run_fairifier.py webui
 ```
 
-Then open http://localhost:8501 in your browser.
+Open `http://localhost:8000`.
+
+Legacy Streamlit UI is still available with `python run_fairifier.py ui`.
 
 ## 🧪 Testing & Examples
 
@@ -870,7 +861,7 @@ Detailed documentation is available in the [docs/](docs/README.md) directory.
   - [FAIR-DS API Manual](docs/en/development/FAIRDS_API_MANUAL.md) – API analysis
   - [Critic Rubric](docs/en/development/critic_rubric.yaml) – Evaluation criteria
 - **Web UI**
-  - [Web UI Guide](fairifier/apps/README.md) – Streamlit UI features
+  - [Web UI Guide](fairifier/apps/README.md) – React Web UI and API entry points
 
 For a complete index by language, see [docs/README.md](docs/README.md).
 

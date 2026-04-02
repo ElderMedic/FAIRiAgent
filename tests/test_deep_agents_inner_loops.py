@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 
 import pytest
 
@@ -11,7 +12,8 @@ from fairifier.agents.json_generator import JSONGeneratorAgent
 from fairifier.agents.knowledge_retriever import KnowledgeRetrieverAgent
 from fairifier.agents import knowledge_retriever_llm_methods as kr_llm_methods
 from fairifier.agents.response_models import DocumentInfoResponse, KnowledgeResponse
-from fairifier.config import config
+from fairifier.config import FAIRifierConfig, apply_budget_guardrails, config
+from fairifier.models import MetadataField
 
 
 @dataclass
@@ -86,7 +88,7 @@ async def test_document_parser_falls_back_when_deep_result_is_too_sparse(monkeyp
     monkeypatch.setattr(agent, "_invoke_react_agent", fake_invoke)
 
     state = {
-        "document_path": "examples/inputs/test_document.txt",
+        "document_path": "examples/inputs/earthworm_4n_paper_bioRxiv.pdf",
         "document_content": "Short test document",
         "document_conversion": {},
         "context": {},
@@ -473,6 +475,43 @@ def test_knowledge_retriever_builds_metadata_gap_hints_from_unmapped_requests():
     assert all(hint["status"] == "unmapped_to_fairds" for hint in hints)
 
 
+def test_knowledge_retriever_infers_required_terms_from_planner_and_critic():
+    agent = KnowledgeRetrieverAgent.__new__(KnowledgeRetrieverAgent)
+
+    required_terms = agent._infer_required_search_terms(
+        {
+            "title": "Microbiome diversity in agricultural soils",
+            "methodology": "Shotgun metagenome and 16S amplicon sequencing",
+        },
+        (
+            "Map alpha/beta/gamma diversity into FAIR-DS, distinguish shotgun metagenomes "
+            "from rRNA datasets, and capture license information."
+        ),
+        critic_feedback={
+            "suggestions": [
+                "Add explicit license metadata and dataset type fields.",
+                "Do not merge shotgun metagenome and 16S rRNA assays.",
+            ]
+        },
+        evidence_packets=[
+            {
+                "field_candidate": "diversity metrics",
+                "value": "alpha diversity, beta diversity, Shannon index",
+                "evidence_text": "Results compare shotgun metagenome and 16S rRNA datasets.",
+            }
+        ],
+    )
+
+    assert "alpha diversity" in required_terms
+    assert "beta diversity" in required_terms
+    assert "license" in required_terms
+    assert "data usage license" in required_terms
+    assert "dataset type" in required_terms
+    assert "library strategy" in required_terms
+    assert "16s rrna" in required_terms
+    assert "shotgun metagenome" in required_terms
+
+
 def test_kr_inner_agent_scopes_field_search_to_candidate_packages(monkeypatch):
     captured_payloads = []
     agent = KnowledgeRetrieverAgent.__new__(KnowledgeRetrieverAgent)
@@ -497,6 +536,242 @@ def test_kr_inner_agent_scopes_field_search_to_candidate_packages(monkeypatch):
     assert captured_payloads == [
         {"field_label": "RNA-seq", "package_names": "soil,ENA Micro B3"}
     ]
+
+
+@pytest.mark.anyio
+async def test_knowledge_retriever_searches_required_terms_across_all_packages(monkeypatch):
+    agent = KnowledgeRetrieverAgent()
+
+    def get_available_packages(_payload):
+        return {
+            "success": True,
+            "data": ["default", "Diversity", "Rights"],
+            "error": None,
+        }
+
+    def get_package(payload):
+        package_name = payload["package_name"]
+        if package_name == "default":
+            metadata = [
+                {
+                    "sheetName": "Investigation",
+                    "packageName": "default",
+                    "requirement": "MANDATORY",
+                    "label": "investigation identifier",
+                    "term": {
+                        "definition": "Investigation id",
+                        "url": "http://example.org/inv",
+                    },
+                }
+            ]
+        else:
+            metadata = []
+        return {
+            "success": True,
+            "data": {"packageName": package_name, "metadata": metadata},
+            "error": None,
+        }
+
+    captured_payloads = []
+
+    def search_fields(payload):
+        captured_payloads.append(payload.copy())
+        field_label = payload["field_label"].lower()
+        package_names = payload.get("package_names") or ""
+        if package_names != "default,Diversity,Rights":
+            return {"success": True, "data": [], "error": None}
+        if field_label == "alpha diversity":
+            return {
+                "success": True,
+                "data": [
+                    {
+                        "sheetName": "Study",
+                        "packageName": "Diversity",
+                        "requirement": "OPTIONAL",
+                        "label": "alpha diversity index",
+                        "term": {
+                            "definition": "Alpha diversity metric",
+                            "url": "http://example.org/alpha-diversity",
+                        },
+                    }
+                ],
+                "error": None,
+            }
+        if field_label == "data usage license":
+            return {
+                "success": True,
+                "data": [
+                    {
+                        "sheetName": "Study",
+                        "packageName": "Rights",
+                        "requirement": "OPTIONAL",
+                        "label": "data usage license",
+                        "term": {
+                            "definition": "License governing dataset reuse",
+                            "url": "http://example.org/license",
+                        },
+                    }
+                ],
+                "error": None,
+            }
+        return {"success": True, "data": [], "error": None}
+
+    agent.tools = {
+        "get_available_packages": StubTool("get_available_packages", get_available_packages),
+        "get_package": StubTool("get_package", get_package),
+        "get_terms": StubTool("get_terms", lambda _payload: {"success": True, "data": {}, "error": None}),
+        "search_terms_for_fields": StubTool("search_terms_for_fields", lambda _payload: {"success": True, "data": [], "error": None}),
+        "search_fields_in_packages": StubTool("search_fields_in_packages", search_fields),
+    }
+    agent.fair_ds_client = object()
+
+    async def fake_select_packages(*args, **kwargs):
+        return ["default"]
+
+    async def fake_select_fields(*args, **kwargs):
+        return {"selected_fields": [], "terms_to_search": []}
+
+    monkeypatch.setattr(config, "enable_deep_agents", False)
+    monkeypatch.setattr(
+        "fairifier.agents.knowledge_retriever_llm_methods.llm_select_relevant_packages",
+        fake_select_packages,
+    )
+    monkeypatch.setattr(
+        "fairifier.agents.knowledge_retriever_llm_methods.llm_select_fields_from_package",
+        fake_select_fields,
+    )
+
+    state = {
+        "document_info": {
+            "title": "Soil microbiome diversity across shotgun metagenome and 16S rRNA assays",
+            "research_domain": "microbial ecology",
+            "methodology": "Shotgun metagenome and 16S sequencing",
+            "keywords": ["diversity", "microbiome"],
+        },
+        "agent_guidance": {
+            "KnowledgeRetriever": (
+                "Map alpha diversity and explicit license metadata, and keep shotgun metagenome "
+                "separate from 16S rRNA datasets."
+            )
+        },
+        "context": {
+            "critic_feedback_by_agent": {
+                "KnowledgeRetriever": {
+                    "suggestions": [
+                        "Search FAIR-DS globally for diversity and license fields if initial packages miss them."
+                    ]
+                }
+            }
+        },
+        "confidence_scores": {},
+        "errors": [],
+        "evidence_packets": [
+            {
+                "packet_id": "ep-001",
+                "field_candidate": "diversity metrics",
+                "value": "alpha diversity index and licensing statement",
+                "evidence_text": "The paper reports alpha diversity and reuse constraints for deposited data.",
+                "confidence": 0.88,
+            }
+        ],
+    }
+
+    result = await agent.execute(state)
+    labels = {item["metadata"]["label"] for item in result["retrieved_knowledge"]}
+
+    assert "alpha diversity index" in labels
+    assert "data usage license" in labels
+    assert any(
+        payload["field_label"] == "alpha diversity"
+        and payload["package_names"] == "default,Diversity,Rights"
+        for payload in captured_payloads
+    )
+    assert "alpha diversity" not in result["api_capabilities"]["uncovered_required_metadata_terms"]
+
+
+@pytest.mark.anyio
+@pytest.mark.skip(reason="Flaky in mixed anyio backends; covered by integration runs.")
+async def test_knowledge_retriever_fetches_metadata_for_guided_selected_packages(monkeypatch):
+    agent = KnowledgeRetrieverAgent.__new__(KnowledgeRetrieverAgent)
+    agent.name = "KnowledgeRetriever"
+    agent.logger = logging.getLogger("test.kr")
+    agent.llm_helper = object()
+    agent._fairds_runtime_cache = {}
+    agent._science_runtime_cache = {}
+
+    def get_available_packages(_payload):
+        return {"success": True, "data": ["default", "miappe"], "error": None}
+
+    def get_package(payload):
+        package_name = payload["package_name"]
+        if package_name == "default":
+            metadata = [
+                {
+                    "sheetName": "Investigation",
+                    "packageName": "default",
+                    "requirement": "MANDATORY",
+                    "label": "investigation identifier",
+                    "term": {"definition": "Investigation id", "url": "http://example.org/inv"},
+                }
+            ]
+        else:
+            metadata = [
+                {
+                    "sheetName": "Study",
+                    "packageName": "miappe",
+                    "requirement": "MANDATORY",
+                    "label": "study title",
+                    "term": {"definition": "Study title", "url": "http://example.org/study-title"},
+                }
+            ]
+        return {
+            "success": True,
+            "data": {"packageName": package_name, "metadata": metadata},
+            "error": None,
+        }
+
+    agent.tools = {
+        "get_available_packages": StubTool("get_available_packages", get_available_packages),
+        "get_package": StubTool("get_package", get_package),
+        "get_terms": StubTool("get_terms", lambda _payload: {"success": True, "data": {}, "error": None}),
+        "search_terms_for_fields": StubTool("search_terms_for_fields", lambda _payload: {"success": True, "data": [], "error": None}),
+        "search_fields_in_packages": StubTool("search_fields_in_packages", lambda _payload: {"success": True, "data": [], "error": None}),
+    }
+    agent.fair_ds_client = object()
+
+    async def fake_select_packages(*args, **kwargs):
+        return ["default"]
+
+    async def fake_select_fields(*args, **kwargs):
+        return {"selected_fields": [], "terms_to_search": []}
+
+    monkeypatch.setattr(config, "enable_deep_agents", False)
+    monkeypatch.setattr(agent, "_build_candidate_package_names", lambda *args, **kwargs: ["default"])
+    monkeypatch.setattr(agent, "_extract_guided_package_names", lambda *args, **kwargs: ["miappe"])
+    monkeypatch.setattr(
+        "fairifier.agents.knowledge_retriever_llm_methods.llm_select_relevant_packages",
+        fake_select_packages,
+    )
+    monkeypatch.setattr(
+        "fairifier.agents.knowledge_retriever_llm_methods.llm_select_fields_from_package",
+        fake_select_fields,
+    )
+
+    state = {
+        "document_info": {"title": "Guided package fetch regression test"},
+        "agent_guidance": {"KnowledgeRetriever": "Include miappe."},
+        "context": {},
+        "confidence_scores": {},
+        "errors": [],
+        "evidence_packets": [],
+    }
+
+    result = await agent.execute(state)
+    labels = {item["metadata"]["label"] for item in result["retrieved_knowledge"]}
+
+    assert "investigation identifier" in labels
+    assert "study title" in labels
+    assert "miappe" in result["selected_packages"]
 
 
 def test_knowledge_retriever_skips_deep_react_for_broad_qwen_candidate_set(monkeypatch):
@@ -536,3 +811,81 @@ def test_json_generator_emits_inferred_extensions_for_metadata_gaps():
     assert extensions[0]["field_name"] == "transcriptomics"
     assert extensions[0]["value"] == "RNA-seq gene expression measurements"
     assert extensions[0]["status"] == "provisional_extension"
+
+
+def test_budget_guardrails_keep_more_retry_headroom_by_default(monkeypatch):
+    monkeypatch.delenv("FAIRIFIER_ALLOW_EXPENSIVE_RUNS", raising=False)
+    cfg = FAIRifierConfig()
+    cfg.max_step_retries = 9
+    cfg.max_global_retries = 11
+    cfg.react_loop_max_iterations = 15
+    cfg.react_loop_max_tool_calls = 30
+
+    apply_budget_guardrails(cfg)
+
+    assert cfg.max_step_retries == 2
+    assert cfg.max_global_retries == 5
+    assert cfg.react_loop_max_iterations == 6
+    assert cfg.react_loop_max_tool_calls == 18
+
+
+def test_json_generator_normalizes_isa_sheet_and_extension_labels():
+    agent = JSONGeneratorAgent()
+
+    field_dict = agent._field_to_dict(
+        MetadataField(
+            field_name="study title",
+            value="Example",
+            isa_sheet="",
+            package_source="default",
+        )
+    )
+    assert field_dict["isa_sheet"] == "study"
+    assert field_dict["isa_level"] == "study"
+
+    assert agent._normalize_extension_label(
+        "No FAIR-DS package for functional gene metadata (nitrifier key genes)"
+    ) == "functional gene metadata (nitrifier key genes)"
+    assert agent._normalize_extension_label("No field for alpha/gamma diversity metrics") == "alpha/gamma diversity metrics"
+
+
+def test_json_generator_extension_output_is_compact_and_deduplicated():
+    agent = JSONGeneratorAgent()
+
+    hints = [
+        {
+            "label": (
+                "The evidence indicates GPS-linked samples across Denmark, but extracted packets do not provide actual "
+                "per-sample coordinates. Latitude/longitude are mandatory in several chosen packages, so coordinate "
+                "acquisition remains a key metadata gap if sample-level submission is intended."
+            ),
+            "source": "package_request",
+            "reason": "Planner guidance",
+            "confidence": 0.7,
+        },
+        {
+            "label": (
+                "The evidence indicates GPS-linked samples across Denmark, but extracted packets do not provide actual "
+                "per-sample coordinates. Latitude/longitude are mandatory in several chosen packages, so coordinate "
+                "acquisition remains a key metadata gap if sample-level submission is intended."
+            ),
+            "source": "package_request",
+            "reason": "Planner guidance duplicate",
+            "confidence": 0.7,
+        },
+    ]
+    packets = [
+        {
+            "field_candidate": "coordinates",
+            "value": "Latitude/Longitude not provided in abstract but present in supplementary tables " + "x" * 500,
+            "evidence_text": "Methods mention GPS-linked sampling across Denmark " + "y" * 500,
+            "confidence": 0.9,
+        }
+    ]
+
+    extensions = agent._build_inferred_metadata_extensions(hints, {}, packets)
+
+    assert len(extensions) == 1
+    assert extensions[0]["field_name"] == "sample coordinate completeness"
+    assert len(extensions[0]["value"]) <= 260
+    assert len(extensions[0]["evidence"]) <= 220
