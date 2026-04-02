@@ -87,6 +87,68 @@ export interface MemoryCloud {
   memory_enabled: boolean;
 }
 
+export interface FAIRDSStatisticsTotals {
+  packages: number;
+  fields: number;
+  mandatory_fields: number;
+  recommended_fields: number;
+  optional_fields: number;
+  terms: number;
+  unique_field_labels: number;
+  packages_with_no_fields: number;
+  terms_referenced_in_packages: number;
+  mandatory_ratio: number;
+}
+
+export interface FAIRDSRequirementCount {
+  requirement: string;
+  count: number;
+}
+
+export interface FAIRDSISAStatistics {
+  isa_level: string;
+  fields: number;
+  mandatory_fields: number;
+  recommended_fields: number;
+  optional_fields: number;
+  packages_count: number;
+}
+
+export interface FAIRDSPackageStatistics {
+  package_name: string;
+  fields: number;
+  mandatory_fields: number;
+  recommended_fields: number;
+  optional_fields: number;
+  isa_level_count: number;
+  term_linked_fields: number;
+}
+
+export interface FAIRDSTermStatistics {
+  term: string;
+  field_count: number;
+}
+
+export interface FAIRDSTermQuality {
+  with_definition: number;
+  with_example: number;
+  with_regex: number;
+  with_ontology_url: number;
+}
+
+export interface FAIRDSStatisticsResponse {
+  available: boolean;
+  api_url?: string | null;
+  message: string;
+  generated_at: string;
+  totals: FAIRDSStatisticsTotals;
+  requirement_distribution: FAIRDSRequirementCount[];
+  isa_levels: FAIRDSISAStatistics[];
+  package_leaderboard: FAIRDSPackageStatistics[];
+  top_terms: FAIRDSTermStatistics[];
+  term_quality: FAIRDSTermQuality;
+}
+
 export interface ResourceLoad {
   cpu_pct: number;
   memory_pct: number;
@@ -175,6 +237,15 @@ export const api = {
     request<OllamaModelsResponse>(
       `/system/ollama-models${baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : ''}`,
     ),
+
+  fairdsStatistics: (options?: { refresh?: boolean; top?: number; packages?: number }) => {
+    const query = new URLSearchParams();
+    if (options?.refresh) query.set('refresh', 'true');
+    if (typeof options?.top === 'number') query.set('top', String(options.top));
+    if (typeof options?.packages === 'number') query.set('packages', String(options.packages));
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return request<FAIRDSStatisticsResponse>(`/fairds/statistics${suffix}`);
+  },
 
   createProject: ({ files, sampleDocument, projectName, configOverrides, demo }: CreateProjectRequest) => {
     const form = new FormData();

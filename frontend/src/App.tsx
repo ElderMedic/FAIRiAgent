@@ -9,6 +9,7 @@ import Run from './pages/Run';
 import Result from './pages/Result';
 import About from './pages/About';
 import Recover from './pages/Recover';
+import FairdsStats from './pages/FairdsStats';
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/about" element={<About />} />
           <Route path="/upload" element={<Upload />} />
           <Route path="/recover" element={<Recover />} />
+          <Route path="/fairds-stats" element={<FairdsStats />} />
           <Route path="/config" element={<Config />} />
           <Route path="/run/:projectId" element={<Run />} />
           <Route path="/result/:projectId" element={<Result />} />

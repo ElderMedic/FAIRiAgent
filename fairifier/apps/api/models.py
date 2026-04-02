@@ -120,3 +120,65 @@ class MemoryCloudResponse(BaseModel):
     session_total: int
     scope_total: int
     memory_enabled: bool
+
+
+class FAIRDSStatisticsTotals(BaseModel):
+    packages: int
+    fields: int
+    mandatory_fields: int
+    recommended_fields: int
+    optional_fields: int
+    terms: int
+    unique_field_labels: int
+    packages_with_no_fields: int
+    terms_referenced_in_packages: int
+    mandatory_ratio: float
+
+
+class FAIRDSRequirementCount(BaseModel):
+    requirement: str
+    count: int
+
+
+class FAIRDSISAStatistics(BaseModel):
+    isa_level: str
+    fields: int
+    mandatory_fields: int
+    recommended_fields: int
+    optional_fields: int
+    packages_count: int
+
+
+class FAIRDSPackageStatistics(BaseModel):
+    package_name: str
+    fields: int
+    mandatory_fields: int
+    recommended_fields: int
+    optional_fields: int
+    isa_level_count: int
+    term_linked_fields: int
+
+
+class FAIRDSTermStatistics(BaseModel):
+    term: str
+    field_count: int
+
+
+class FAIRDSTermQuality(BaseModel):
+    with_definition: int
+    with_example: int
+    with_regex: int
+    with_ontology_url: int
+
+
+class FAIRDSStatisticsResponse(BaseModel):
+    available: bool
+    api_url: Optional[str] = None
+    message: str
+    generated_at: str
+    totals: FAIRDSStatisticsTotals
+    requirement_distribution: List[FAIRDSRequirementCount]
+    isa_levels: List[FAIRDSISAStatistics]
+    package_leaderboard: List[FAIRDSPackageStatistics]
+    top_terms: List[FAIRDSTermStatistics]
+    term_quality: FAIRDSTermQuality
