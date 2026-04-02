@@ -1407,6 +1407,14 @@ class FAIRifierLangGraphApp:
                 state["needs_human_review"] = True
                 break
 
+            if retry_anchor not in ("KnowledgeRetriever", "DocumentParser"):
+                logger.warning(
+                    "Unsupported cross-layer retry anchor '%s'. Finalizing current output with review flag.",
+                    retry_anchor,
+                )
+                state["needs_human_review"] = True
+                break
+
             cross_layer_retries_used += 1
             if retry_anchor == "KnowledgeRetriever":
                 logger.info(
@@ -1419,7 +1427,7 @@ class FAIRifierLangGraphApp:
                     state, self.knowledge_retriever, "KnowledgeRetriever",
                     lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
                 )
-            elif retry_anchor == "DocumentParser":
+            else:
                 logger.info(
                     "↩ Cross-layer rollback %s/%s: JSON -> DocumentParser (+plan+retrieval) (%s)",
                     cross_layer_retries_used,
@@ -1443,13 +1451,6 @@ class FAIRifierLangGraphApp:
                     state, self.knowledge_retriever, "KnowledgeRetriever",
                     lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
                 )
-            else:
-                logger.warning(
-                    "Unsupported cross-layer retry anchor '%s'. Finalizing current output with review flag.",
-                    retry_anchor,
-                )
-                state["needs_human_review"] = True
-                break
             if run_id and run_stop_requested(run_id):
                 return self._mark_interrupted_state(state)
         state["cross_layer_retries_used"] = cross_layer_retries_used
@@ -2917,11 +2918,25 @@ Return JSON in the following format:
         }
         total_retries = sum(retries_by_agent.values())
 
+        def _history_attempt(entry: Dict[str, Any]) -> int:
+            raw = entry.get("attempt", 1)
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return 1
+
+        steps_requiring_retry = sum(
+            1
+            for e in execution_history
+            if isinstance(e, dict) and _history_attempt(e) > 1
+        )
+
         summary = {
             "total_steps": len(execution_history),
             "successful_steps": sum(1 for e in execution_history if e.get("success")),
             "failed_steps": sum(1 for e in execution_history if not e.get("success")),
-            "steps_requiring_retry": len(retries_by_agent),
+            "steps_requiring_retry": steps_requiring_retry,
+            "agents_with_retries": len(retries_by_agent),
             "needs_human_review": state.get("needs_human_review", False),
             # Retry stats
             "total_retries": total_retries,
