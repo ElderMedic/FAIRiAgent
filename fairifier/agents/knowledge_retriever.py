@@ -82,6 +82,109 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         )
         return {tool.name: tool for tool in tools_list}
 
+    def _normalize_metadata_label(self, value: Any) -> str:
+        """Normalize label for robust lexical comparisons."""
+        return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip().split())
+
+    def _is_trivial_metadata_label(self, label: Any) -> bool:
+        """Heuristic: labels that are mostly identity/header-like and low informational value."""
+        normalized = self._normalize_metadata_label(label)
+        if not normalized:
+            return True
+        trivial_tokens = {
+            "id",
+            "identifier",
+            "name",
+            "title",
+            "description",
+            "firstname",
+            "lastname",
+            "email",
+            "email address",
+            "department",
+            "organization",
+            "orcid",
+        }
+        if normalized in trivial_tokens:
+            return True
+        # Common low-signal patterns (e.g. "study identifier", "sample name")
+        if normalized.endswith(" identifier") or normalized.endswith(" name"):
+            return True
+        return False
+
+    def _rebalance_non_sample_optional_fields(
+        self,
+        *,
+        final_selected_fields: List[Dict[str, Any]],
+        fields_by_isa_sheet: Dict[str, Dict[str, List[Dict[str, Any]]]],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+        """
+        Ensure non-sample ISA sheets retain enough informative optional fields.
+
+        This is a deterministic safety net after LLM/deepagent selection:
+        - Keep all current selections
+        - Add extra optional fields for non-sample sheets when selection is too sparse
+        - Prefer non-trivial labels over id/name-only labels
+        """
+        enriched = list(final_selected_fields)
+        selected_labels = {
+            str(field.get("label", "")).strip().lower()
+            for field in enriched
+            if isinstance(field, dict) and field.get("label")
+        }
+        # Target informative optional fields per non-sample ISA level.
+        # Conservative values to avoid large token/time overhead.
+        target_optional = {
+            "investigation": 3,
+            "study": 3,
+            "assay": 4,
+            "observationunit": 3,
+        }
+        additions_by_sheet: Dict[str, int] = {sheet: 0 for sheet in target_optional}
+
+        for sheet, target in target_optional.items():
+            sheet_optional = fields_by_isa_sheet.get(sheet, {}).get("optional", []) or []
+            if not sheet_optional or target <= 0:
+                continue
+            optional_labels = {
+                str(field.get("label", "")).strip().lower()
+                for field in sheet_optional
+                if isinstance(field, dict) and field.get("label")
+            }
+            selected_optional_in_sheet = [
+                field for field in enriched
+                if isinstance(field, dict)
+                and str(field.get("label", "")).strip().lower() in optional_labels
+            ]
+            informative_selected = [
+                field for field in selected_optional_in_sheet
+                if not self._is_trivial_metadata_label(field.get("label"))
+            ]
+            deficit = target - len(informative_selected)
+            if deficit <= 0:
+                continue
+
+            # Prefer richer labels first; fallback to any remaining optional if needed.
+            ranked_candidates = sorted(
+                sheet_optional,
+                key=lambda item: (
+                    self._is_trivial_metadata_label(item.get("label")),
+                    str(item.get("label", "")).lower(),
+                ),
+            )
+            for candidate in ranked_candidates:
+                label = str(candidate.get("label", "")).strip().lower()
+                if not label or label in selected_labels:
+                    continue
+                enriched.append(candidate)
+                selected_labels.add(label)
+                additions_by_sheet[sheet] += 1
+                deficit -= 1
+                if deficit <= 0:
+                    break
+
+        return enriched, additions_by_sheet
+
     def _get_science_cache(self, state: FAIRifierState) -> Dict[str, Any]:
         """Return a shared science-tool cache for the current agent run."""
         retrieval_cache = state.setdefault("retrieval_cache", {})
@@ -740,6 +843,18 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                             state,
                             f"   ➕ Added missing mandatory field from package set: {lab} ({sheet})",
                         )
+
+            # ISA balance safety net: avoid non-sample sheets collapsing to only id/name basics.
+            final_selected_fields, additions_by_sheet = self._rebalance_non_sample_optional_fields(
+                final_selected_fields=final_selected_fields,
+                fields_by_isa_sheet=fields_by_isa_sheet,
+            )
+            for sheet, added in additions_by_sheet.items():
+                if added > 0:
+                    self.log_execution(
+                        state,
+                        f"   ⚖️ ISA rebalance added {added} optional field(s) to {sheet}",
+                    )
             
             # Add deterministic publication/domain search hints before final FAIR-DS lookup.
             all_terms_to_search = list(

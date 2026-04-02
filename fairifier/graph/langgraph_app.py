@@ -820,6 +820,8 @@ class FAIRifierLangGraphApp:
         metadata_fields = state.get("metadata_fields", []) or []
         retrieved_knowledge = state.get("retrieved_knowledge", []) or []
         api_capabilities = state.get("api_capabilities", {}) or {}
+        context = state.get("context", {}) or {}
+        bundle_ingestion_incomplete = bool(context.get("bundle_ingestion_incomplete"))
 
         output_field_names = [str(field.get("field_name", "")) for field in metadata_fields if field.get("field_name")]
         missing_required_terms: List[str] = []
@@ -854,9 +856,29 @@ class FAIRifierLangGraphApp:
         }
         isa_mapping_collapsed = len(retrieved_sheets - {"study"}) > 0 and output_sheets <= {"study"}
 
+        missing_required_values: List[str] = []
+        for field in metadata_fields:
+            if not isinstance(field, dict):
+                continue
+            req = str(field.get("requirement", "")).strip().upper()
+            if req != "MANDATORY":
+                continue
+            value = field.get("value")
+            if value in (None, ""):
+                missing_required_values.append(str(field.get("field_name", "unknown")))
+
         issues: List[str] = []
         improvement_ops: List[str] = []
         anchor_agent = "KnowledgeRetriever"
+
+        if bundle_ingestion_incomplete:
+            issues.append(
+                "Input bundle ingestion incomplete before parsing (some uploaded files were discovered but not processed)."
+            )
+            improvement_ops.append(
+                "Re-run DocumentParser after recovering failed source reads so every uploaded source contributes to evidence."
+            )
+            anchor_agent = "DocumentParser"
 
         if uncovered_from_retrieval:
             issues.append(
@@ -883,6 +905,15 @@ class FAIRifierLangGraphApp:
             )
             improvement_ops.append(
                 "Regenerate metadata ensuring every required retrieved_knowledge field appears exactly once."
+            )
+
+        if missing_required_values:
+            issues.append(
+                "JSON output includes mandatory fields with empty values: "
+                + ", ".join(missing_required_values[:8])
+            )
+            improvement_ops.append(
+                "Populate mandatory field values from document evidence; if unavailable, keep explicit placeholder and raise review flag."
             )
 
         if isa_mapping_collapsed:
@@ -1367,14 +1398,6 @@ class FAIRifierLangGraphApp:
             if not retry_anchor:
                 break
 
-            if retry_anchor != "KnowledgeRetriever":
-                logger.warning(
-                    "Unsupported cross-layer retry anchor '%s'. Finalizing current output with review flag.",
-                    retry_anchor,
-                )
-                state["needs_human_review"] = True
-                break
-
             if cross_layer_retries_used >= config.cross_layer_max_restarts:
                 logger.warning(
                     "Cross-layer retry budget exhausted (%s/%s). Finalizing current output with review flag.",
@@ -1385,16 +1408,48 @@ class FAIRifierLangGraphApp:
                 break
 
             cross_layer_retries_used += 1
-            logger.info(
-                "↩ Cross-layer rollback %s/%s: JSON -> KnowledgeRetriever (%s)",
-                cross_layer_retries_used,
-                config.cross_layer_max_restarts,
-                retry_reason or "no reason provided",
-            )
-            state = await self._execute_agent_with_retry(
-                state, self.knowledge_retriever, "KnowledgeRetriever",
-                lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
-            )
+            if retry_anchor == "KnowledgeRetriever":
+                logger.info(
+                    "↩ Cross-layer rollback %s/%s: JSON -> KnowledgeRetriever (%s)",
+                    cross_layer_retries_used,
+                    config.cross_layer_max_restarts,
+                    retry_reason or "no reason provided",
+                )
+                state = await self._execute_agent_with_retry(
+                    state, self.knowledge_retriever, "KnowledgeRetriever",
+                    lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
+                )
+            elif retry_anchor == "DocumentParser":
+                logger.info(
+                    "↩ Cross-layer rollback %s/%s: JSON -> DocumentParser (+plan+retrieval) (%s)",
+                    cross_layer_retries_used,
+                    config.cross_layer_max_restarts,
+                    retry_reason or "no reason provided",
+                )
+                input_documents = state.get("input_documents", []) or []
+                if len(input_documents) > 1:
+                    state = await self._parse_documents_individually(state, input_documents)
+                else:
+                    state = await self._execute_agent_with_retry(
+                        state, self.document_parser, "DocumentParser",
+                        lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3
+                    )
+                if run_id and run_stop_requested(run_id):
+                    return self._mark_interrupted_state(state)
+                state = await self._plan_workflow_internal(state)
+                if run_id and run_stop_requested(run_id):
+                    return self._mark_interrupted_state(state)
+                state = await self._execute_agent_with_retry(
+                    state, self.knowledge_retriever, "KnowledgeRetriever",
+                    lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
+                )
+            else:
+                logger.warning(
+                    "Unsupported cross-layer retry anchor '%s'. Finalizing current output with review flag.",
+                    retry_anchor,
+                )
+                state["needs_human_review"] = True
+                break
             if run_id and run_stop_requested(run_id):
                 return self._mark_interrupted_state(state)
         state["cross_layer_retries_used"] = cross_layer_retries_used
@@ -1490,6 +1545,19 @@ class FAIRifierLangGraphApp:
         merged_packets: List[Dict[str, Any]] = []
         context = state.setdefault("context", {})
         context["multi_file_mode"] = True
+        for failed in context.get("bundle_failed_sources", []) or []:
+            if not isinstance(failed, dict):
+                continue
+            source_outputs.append(
+                {
+                    "source_path": failed.get("path", "unknown"),
+                    "method": "read_failed",
+                    "document_info": {},
+                    "field_count": 0,
+                    "status": "failed_before_parser",
+                    "error": failed.get("error"),
+                }
+            )
 
         for index, input_doc in enumerate(input_documents, start=1):
             source_path = str(input_doc.get("path") or f"input_{index}")
@@ -1623,6 +1691,19 @@ class FAIRifierLangGraphApp:
                 ]
             state["input_documents"] = input_documents
             failed_sources = conversion_info.get("failed_sources") or []
+            context = state.setdefault("context", {})
+            discovered_supported = int(conversion_info.get("files_discovered_supported") or 0)
+            files_processed = int(conversion_info.get("files_processed") or len(input_documents))
+            truncated_by_limit = bool(conversion_info.get("truncated_by_limit"))
+            context["bundle_files_discovered_supported"] = discovered_supported
+            context["bundle_files_processed"] = files_processed
+            context["bundle_truncated_by_limit"] = truncated_by_limit
+            context["bundle_failed_sources"] = failed_sources
+            context["bundle_ingestion_incomplete"] = (
+                discovered_supported > 0
+                and files_processed < discovered_supported
+                and not truncated_by_limit
+            )
             if failed_sources:
                 errors = state.setdefault("errors", [])
                 for failed in failed_sources[:20]:
@@ -1635,6 +1716,13 @@ class FAIRifierLangGraphApp:
                     "⚠️ %s input source(s) failed during bundle read: %s",
                     len(failed_sources),
                     [item.get("path") for item in failed_sources[:10]],
+                )
+            if context.get("bundle_ingestion_incomplete"):
+                logger.warning(
+                    "⚠️ Multi-file ingestion incomplete: processed=%s discovered=%s (limit_truncation=%s).",
+                    files_processed,
+                    discovered_supported,
+                    truncated_by_limit,
                 )
             
         except Exception as e:
@@ -1873,15 +1961,40 @@ class FAIRifierLangGraphApp:
                     result["error"],
                 )
 
-            # Fallback to PyMuPDF
-            import fitz  # PyMuPDF
-            doc = fitz.open(fs_str)
-            text = ""
-            for page in doc:
-                text += page.get_text()
-            doc.close()
-            conversion_info["method"] = "pymupdf"
-            return text, conversion_info
+            # Fallback to local PDF extractors (PyMuPDF -> pypdf) for robustness.
+            try:
+                import fitz  # PyMuPDF
+
+                doc = fitz.open(fs_str)
+                text = ""
+                for page in doc:
+                    text += page.get_text()
+                doc.close()
+                conversion_info["method"] = "pymupdf"
+                if text.strip():
+                    return text, conversion_info
+                logger.warning(
+                    "PyMuPDF extracted empty text from %s; trying pypdf fallback.",
+                    fs_str,
+                )
+            except Exception as exc:
+                logger.warning("PyMuPDF fallback failed for %s: %s", fs_str, exc)
+
+            try:
+                from pypdf import PdfReader
+
+                reader = PdfReader(fs_str)
+                text_chunks: List[str] = []
+                for page in reader.pages:
+                    text_chunks.append(page.extract_text() or "")
+                text = "\n".join(text_chunks)
+                conversion_info["method"] = "pypdf"
+                if text.strip():
+                    return text, conversion_info
+            except Exception as exc:
+                logger.warning("pypdf fallback failed for %s: %s", fs_str, exc)
+
+            raise ValueError(f"Unable to extract PDF text from {fs_str} with available extractors")
 
         # Non-PDF text-like files: read directly
         with open(fs_str, "r", encoding="utf-8") as file:
@@ -1910,6 +2023,7 @@ class FAIRifierLangGraphApp:
         )
         supported_files = [p for p in all_files if self._is_supported_bundle_file(p)]
         selected_files = supported_files[:max_files]
+        truncated_by_limit = len(supported_files) > max_files
 
         if not selected_files:
             raise ValueError(
@@ -1955,7 +2069,7 @@ class FAIRifierLangGraphApp:
         if not sections:
             raise ValueError(f"Bundle contained supported files but none could be parsed: {root_dir}")
 
-        if len(supported_files) > max_files:
+        if truncated_by_limit:
             sections.append(
                 f"\n\n[Bundle Notice] Processed first {max_files} files out of {len(supported_files)} supported files "
                 f"(configured by multi_file_max_inputs={max_files})."
@@ -1966,6 +2080,7 @@ class FAIRifierLangGraphApp:
             "bundle_root": str(root_dir),
             "files_processed": len(sources),
             "files_discovered_supported": len(supported_files),
+            "truncated_by_limit": truncated_by_limit,
             "sources": sources,
             "input_documents": input_documents,
             "failed_sources": failed_sources,
@@ -2778,18 +2893,33 @@ Return JSON in the following format:
         # Generate execution summary
         execution_history = state.get("execution_history", [])
         
-        # Count retry attempts
+        # Count retries from execution history (max attempt per agent minus initial attempt).
         retry_trajectory = state.get("retry_trajectory", {})
-        total_retries = sum(len(traj) for traj in retry_trajectory.values())
+        attempts_by_agent: Dict[str, int] = {}
+        for entry in execution_history:
+            if not isinstance(entry, dict):
+                continue
+            agent_name = str(entry.get("agent_name") or "")
+            raw_attempt = entry.get("attempt", 1)
+            try:
+                attempt = int(raw_attempt)
+            except (TypeError, ValueError):
+                attempt = 1
+            if not agent_name:
+                continue
+            attempts_by_agent[agent_name] = max(attempts_by_agent.get(agent_name, 1), attempt)
         retries_by_agent = {
-            agent: len(traj) for agent, traj in retry_trajectory.items()
+            agent: max(0, max_attempt - 1)
+            for agent, max_attempt in attempts_by_agent.items()
+            if max_attempt > 1
         }
-        
+        total_retries = sum(retries_by_agent.values())
+
         summary = {
             "total_steps": len(execution_history),
             "successful_steps": sum(1 for e in execution_history if e.get("success")),
             "failed_steps": sum(1 for e in execution_history if not e.get("success")),
-            "steps_requiring_retry": sum(1 for e in execution_history if e.get("attempt", 1) > 1),
+            "steps_requiring_retry": len(retries_by_agent),
             "needs_human_review": state.get("needs_human_review", False),
             # Retry stats
             "total_retries": total_retries,

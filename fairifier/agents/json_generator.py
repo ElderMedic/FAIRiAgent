@@ -75,6 +75,10 @@ class JSONGeneratorAgent(BaseAgent):
                 prior_memory_context=prior_memory_context or None,
                 selected_packages=state.get("selected_packages"),
             )
+            metadata_fields = self._ensure_mandatory_fields_present(
+                metadata_fields=metadata_fields,
+                knowledge_items=knowledge_items,
+            )
             self.log_execution(
                 state, 
                 f"✅ LLM generated {len(metadata_fields)} fields with values"
@@ -286,6 +290,10 @@ class JSONGeneratorAgent(BaseAgent):
     def _field_to_dict(self, field: MetadataField) -> Dict[str, Any]:
         """Convert MetadataField to dictionary for FAIR-DS format."""
         normalized_sheet = FAIRDSAPIParser.normalize_isa_sheet(field.isa_sheet)
+        metadata = field.metadata if isinstance(field.metadata, dict) else {}
+        requirement = str(metadata.get("requirement", "")).strip().upper()
+        if requirement not in {"MANDATORY", "RECOMMENDED", "OPTIONAL"}:
+            requirement = "MANDATORY" if field.required else "OPTIONAL"
         return {
             "field_name": field.field_name,
             "value": field.value,
@@ -296,7 +304,78 @@ class JSONGeneratorAgent(BaseAgent):
             "status": field.status,
             "isa_sheet": normalized_sheet,
             "isa_level": normalized_sheet,
+            "required": requirement == "MANDATORY",
+            "requirement": requirement,
         }
+
+    def _is_mandatory_metadata_item(self, metadata: Dict[str, Any]) -> bool:
+        """Return True if FAIR-DS metadata marks the field as mandatory."""
+        if not isinstance(metadata, dict):
+            return False
+        requirement = str(metadata.get("requirement", "")).strip().upper()
+        if requirement == "MANDATORY":
+            return True
+        return bool(metadata.get("required"))
+
+    def _normalize_field_key(self, value: Any) -> str:
+        """Normalize labels for coverage checks."""
+        return " ".join(
+            re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip().split()
+        )
+
+    def _ensure_mandatory_fields_present(
+        self,
+        metadata_fields: List[MetadataField],
+        knowledge_items: List[Dict[str, Any]],
+    ) -> List[MetadataField]:
+        """Guarantee mandatory FAIR-DS fields from retrieval are present in output."""
+        if not metadata_fields:
+            metadata_fields = []
+        existing_names = {
+            self._normalize_field_key(field.field_name)
+            for field in metadata_fields
+            if getattr(field, "field_name", None)
+        }
+        injected_count = 0
+        for item in knowledge_items:
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata", {}) or {}
+            if not self._is_mandatory_metadata_item(metadata):
+                continue
+            label = str(item.get("term") or metadata.get("label") or "").strip()
+            normalized_label = self._normalize_field_key(label)
+            if not normalized_label:
+                continue
+            if normalized_label in existing_names:
+                continue
+            isa_sheet = FAIRDSAPIParser.normalize_isa_sheet(
+                metadata.get("isa_sheet") or metadata.get("sheet")
+            )
+            metadata_fields.append(
+                MetadataField(
+                    field_name=label,
+                    value=None,
+                    evidence="Mandatory field injected from FAIR-DS package selection.",
+                    confidence=0.0,
+                    origin="mandatory_enforcement",
+                    package_source=metadata.get("package"),
+                    isa_sheet=isa_sheet,
+                    status="provisional",
+                    data_type=metadata.get("type", "string"),
+                    required=True,
+                    description=metadata.get("definition") or item.get("definition"),
+                    metadata=metadata,
+                )
+            )
+            existing_names.add(normalized_label)
+            injected_count += 1
+        if injected_count:
+            self.logger.info(
+                "Injected %s mandatory field(s) that were missing from LLM output.",
+                injected_count,
+            )
+        return metadata_fields
     
     def _generate_json_output(
         self, 
@@ -477,8 +556,19 @@ class JSONGeneratorAgent(BaseAgent):
             if compact:
                 label = compact
 
-        if len(label) > 96:
-            label = label[:96].rstrip(" ,;.")
+        label = re.sub(
+            r"\b(not represented|not captured|not covered|outside fair-?ds.*)$",
+            "",
+            label,
+            flags=re.IGNORECASE,
+        ).strip(" ,;:.")
+        if len(label) > 64:
+            label = label[:64]
+            if " " in label:
+                label = label.rsplit(" ", 1)[0]
+            label = label.strip(" ,;:.")
+        while label.lower().endswith((" not", " and", " or", " but")):
+            label = label.rsplit(" ", 1)[0].strip(" ,;:.")
         return label
 
     def _compress_extension_sentence(self, label: str) -> str:
