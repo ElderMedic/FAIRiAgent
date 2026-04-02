@@ -45,10 +45,10 @@ function readSessionFromSearch(search?: string): WebSession | null {
   if (typeof URLSearchParams === 'undefined') return null;
   const params = new URLSearchParams(search ?? (typeof window !== 'undefined' ? window.location.search : ''));
   const id = params.get('session');
-  const startedAt = params.get('ts');
-  if (!isValidUuid(id) || !isValidIsoTimestamp(startedAt)) {
-    return null;
-  }
+  if (!isValidUuid(id)) return null;
+  const ts = params.get('ts');
+  // Timestamp is optional — fall back to current time so UUID alone is sufficient
+  const startedAt = isValidIsoTimestamp(ts) ? ts : new Date().toISOString();
   return { id, startedAt };
 }
 

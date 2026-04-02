@@ -98,9 +98,11 @@ class FAIRifierState(TypedDict):
     document_content: str
     document_conversion: Dict[str, Any]
     output_dir: Optional[str]  # Output directory for artifacts (including MinerU)
+    input_documents: List[Dict[str, Any]]  # Normalized input units for per-file parsing
     
     # Processing stages
     document_info: Dict[str, Any]
+    document_info_by_source: List[Dict[str, Any]]
     evidence_packets: List[Dict[str, Any]]
     retrieved_knowledge: List[Dict[str, Any]]
     metadata_fields: List[Dict[str, Any]]  # FAIR-DS format fields

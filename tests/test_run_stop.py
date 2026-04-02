@@ -68,3 +68,30 @@ async def test_execute_agent_with_retry_stops_before_critic_when_requested():
         assert app.critic.called is False
     finally:
         reset_run_stop_requested(run_id)
+
+
+def test_json_hard_gate_detects_missing_required_terms_and_routes_to_retrieval():
+    app = FAIRifierLangGraphApp.__new__(FAIRifierLangGraphApp)
+
+    state = {
+        "metadata_fields": [
+            {"field_name": "study title", "isa_sheet": "study"},
+            {"field_name": "study description", "isa_sheet": "study"},
+        ],
+        "retrieved_knowledge": [
+            {
+                "term": "data usage license",
+                "metadata": {"required": True, "isa_sheet": "investigation"},
+            }
+        ],
+        "api_capabilities": {
+            "required_metadata_terms": ["alpha diversity", "data usage license"],
+            "uncovered_required_metadata_terms": ["alpha diversity"],
+        },
+    }
+
+    gate = app._evaluate_json_hard_gate(state)
+
+    assert gate["passed"] is False
+    assert gate["anchor_agent"] == "KnowledgeRetriever"
+    assert any("alpha diversity" in issue for issue in gate["issues"])

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import threading
 import traceback
 from pathlib import Path
@@ -90,6 +91,7 @@ def run_workflow_task(
     output_dir: Optional[str] = None,
     config_overrides: Optional[Dict[str, Any]] = None,
     demo_mode: bool = False,
+    user_session_id: Optional[str] = None,
 ) -> None:
     """Run the FAIRifier workflow synchronously.
 
@@ -148,7 +150,12 @@ def run_workflow_task(
                         )
                     )
                     result = asyncio.run(
-                        app.run(file_path, project_id, output_dir)
+                        app.run(
+                            file_path,
+                            project_id,
+                            output_dir,
+                            user_session_id=user_session_id,
+                        )
                     )
                 finally:
                     _restore_config_state(original_config)
@@ -261,10 +268,17 @@ def run_workflow_task(
 
     finally:
         reset_run_stop_requested(project_id)
-        try:
-            os.unlink(file_path)
-        except OSError:
-            pass
+        temp_path = Path(file_path)
+        if temp_path.is_dir():
+            try:
+                shutil.rmtree(temp_path)
+            except OSError:
+                pass
+        else:
+            try:
+                os.unlink(file_path)
+            except OSError:
+                pass
 
 
 def _apply_config_overrides(

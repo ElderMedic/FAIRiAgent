@@ -13,7 +13,6 @@ import {
   buildRouteWithSession,
   getWebSession,
   isValidSessionId,
-  isValidSessionTimestamp,
   setWebSession,
   type WebSession,
 } from '../utils/session';
@@ -53,7 +52,6 @@ export default function Recover() {
   const activeSession = useMemo(() => getWebSession(location.search), [location.search]);
 
   const [sessionIdInput, setSessionIdInput] = useState(activeSession.id);
-  const [sessionStartedAtInput, setSessionStartedAtInput] = useState(activeSession.startedAt);
   const [projectIdInput, setProjectIdInput] = useState('');
   const [projects, setProjects] = useState<ProjectResponse[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
@@ -63,8 +61,7 @@ export default function Recover() {
 
   useEffect(() => {
     setSessionIdInput(activeSession.id);
-    setSessionStartedAtInput(activeSession.startedAt);
-  }, [activeSession.id, activeSession.startedAt]);
+  }, [activeSession.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -90,7 +87,7 @@ export default function Recover() {
     return () => {
       cancelled = true;
     };
-  }, [activeSession.id, activeSession.startedAt]);
+  }, [activeSession.id]);
 
   const adoptSession = (session: WebSession) => {
     setWebSession(session);
@@ -100,15 +97,11 @@ export default function Recover() {
   const handleSessionApply = async () => {
     const session: WebSession = {
       id: sessionIdInput.trim(),
-      startedAt: sessionStartedAtInput.trim(),
+      startedAt: activeSession.startedAt,
     };
 
     if (!isValidSessionId(session.id)) {
-      setSubmitError('Enter a valid session UUID.');
-      return;
-    }
-    if (!isValidSessionTimestamp(session.startedAt)) {
-      setSubmitError('Enter a valid session timestamp.');
+      setSubmitError('Enter a valid session UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).');
       return;
     }
 
@@ -145,8 +138,8 @@ export default function Recover() {
           <p className="page-eyebrow">Recover session</p>
           <h1 className="page-title">Find a previous run or reopen its result files.</h1>
           <p className="page-lede">
-            If you refreshed the browser, closed a tab, or moved to another device, use the session UUID
-            and timestamp from an earlier FAIRiAgent link to restore that session and reopen its runs.
+            If you refreshed the browser, closed a tab, or moved to another device, paste the session UUID
+            shown on the run page to restore that session and reopen its runs.
           </p>
         </header>
 
@@ -158,7 +151,7 @@ export default function Recover() {
                   <p className="page-card__eyebrow">Session lookup</p>
                   <h2 className="page-card__title">Restore a session</h2>
                   <p className="page-card__body">
-                    Paste the session UUID and start timestamp from a previous link. Add a project ID if
+                    Paste the session UUID shown on the run page. Add a project ID if
                     you want to jump directly into one run.
                   </p>
                 </div>
@@ -175,16 +168,7 @@ export default function Recover() {
                     value={sessionIdInput}
                     onChange={(event) => setSessionIdInput(event.target.value)}
                     placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                  />
-                </label>
-
-                <label className="config-field">
-                  <span className="config-field__label">Session started at</span>
-                  <input
-                    className="config-input"
-                    value={sessionStartedAtInput}
-                    onChange={(event) => setSessionStartedAtInput(event.target.value)}
-                    placeholder="2026-04-01T12:34:56.789Z"
+                    spellCheck={false}
                   />
                 </label>
 
@@ -245,7 +229,7 @@ export default function Recover() {
                       <button
                         type="button"
                         className="recover-open-link"
-                        onClick={() => navigate(buildAppRoute(projectDestination(project)))}
+                        onClick={() => navigate(buildRouteWithSession(projectDestination(project), activeSession))}
                       >
                         Open
                         <ArrowRight className="w-4 h-4" aria-hidden="true" />
@@ -279,8 +263,8 @@ export default function Recover() {
             <article className="run-sidebar-card">
               <h2 className="run-sidebar-card__title">How recovery works</h2>
               <ul className="page-note-list">
-                <li>Each browser session gets a temporary UUID and timestamp.</li>
-                <li>Those values are kept in FAIRiAgent links and used to isolate runs and artifacts.</li>
+                <li>Each browser session gets a unique UUID stored in your browser.</li>
+                <li>The UUID appears in the sidebar on the run page — copy it from there.</li>
                 <li>Restoring the session lets you reopen run pages and download previous outputs.</li>
               </ul>
             </article>

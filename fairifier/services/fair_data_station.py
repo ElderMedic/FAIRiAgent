@@ -10,6 +10,8 @@ try:
 except ImportError:  # pragma: no cover - handled gracefully at runtime
     requests = None  # type: ignore
 
+from .fairds_api_parser import FAIRDSAPIParser
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,11 +49,14 @@ class FAIRDataStationClient:
     """Thin HTTP client for FAIR Data Station metadata endpoints.
     
     API Version: Latest (January 2026)
-    Endpoints:
-        - GET /api - API overview
-        - GET /api/terms - Get all terms or filter by label/definition
-        - GET /api/package - Get all packages, specific package by name, or search fields
-        - POST /api/upload - Upload and validate Excel file
+    Endpoints (see live ``GET {base}/api`` for the authoritative list):
+        - GET /api — discovery / available subpaths
+        - GET /api/terms — all terms or ``?label=`` / ``?definition=`` filters
+        - GET /api/package — package name list (no query) or ``?name=`` for metadata
+        - POST /api/upload — Excel upload/validation
+
+    Package ``metadata`` rows may use ``level`` (current) or ``sheetName`` (legacy)
+    for the ISA layer; both are handled via :class:`FAIRDSAPIParser`.
     """
 
     def __init__(self, base_url: str, timeout: int = 15) -> None:
@@ -224,7 +229,7 @@ class FAIRDataStationClient:
                 "itemCount": 63,
                 "metadata": [
                     {
-                        "sheetName": "Study",
+                        "level": "Study",
                         "packageName": "miappe",
                         "requirement": "MANDATORY",
                         "label": "start date of study",
@@ -369,8 +374,15 @@ class FAIRDataStationClient:
             
         # Filter by sheet name
         if sheet_name:
-            sheet_lower = sheet_name.lower()
-            fields = [f for f in fields if f.get("sheetName", "").lower() == sheet_lower]
+            want = FAIRDSAPIParser.normalize_isa_sheet(sheet_name)
+            fields = [
+                f
+                for f in fields
+                if FAIRDSAPIParser.normalize_isa_sheet(
+                    FAIRDSAPIParser.raw_isa_level_from_field(f)
+                )
+                == want
+            ]
             
         return fields
 
@@ -428,10 +440,10 @@ class FAIRDataStationClient:
         fields_by_sheet: Dict[str, List[Dict[str, Any]]] = {}
         
         for field in package.get("metadata", []):
-            sheet = field.get("sheetName", "Unknown")
-            if sheet not in fields_by_sheet:
-                fields_by_sheet[sheet] = []
-            fields_by_sheet[sheet].append(field)
+            canon = FAIRDSAPIParser.normalize_isa_sheet(
+                FAIRDSAPIParser.raw_isa_level_from_field(field)
+            )
+            fields_by_sheet.setdefault(canon, []).append(field)
             
         return fields_by_sheet
 
@@ -467,7 +479,9 @@ class FAIRDataStationClient:
         }
         
         for field in package.get("metadata", []):
-            sheet = field.get("sheetName", "Unknown")
+            sheet = FAIRDSAPIParser.normalize_isa_sheet(
+                FAIRDSAPIParser.raw_isa_level_from_field(field)
+            )
             requirement = field.get("requirement", "OPTIONAL")
             
             if sheet not in summary["bySheet"]:

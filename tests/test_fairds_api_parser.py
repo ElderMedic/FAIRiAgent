@@ -120,6 +120,23 @@ class TestFAIRDSAPIParser:
         assert result["definition"] == "Title of the study"
         assert result["isa_sheet"] == "study"
 
+    def test_extract_field_info_uses_level_when_sheetname_absent(self):
+        """Live FAIRDS uses ``level`` for ISA layer on package metadata rows."""
+        field = {
+            "label": "assay identifier",
+            "level": "Assay",
+            "packageName": "default",
+            "requirement": "MANDATORY",
+            "term": {
+                "label": "assay identifier",
+                "syntax": "{text}",
+                "definition": "Identifier for this assay",
+            },
+        }
+        result = FAIRDSAPIParser.extract_field_info(field)
+        assert result["isa_sheet"] == "assay"
+        assert result["sheet"] == "Assay"
+
     def test_extract_field_info_minimal(self):
         """Test extracting field information with minimal data."""
         field = {

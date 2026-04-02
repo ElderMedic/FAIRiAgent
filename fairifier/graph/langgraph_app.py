@@ -11,6 +11,10 @@ This implements a proper LangGraph application where:
 import logging
 import json
 import os
+import re
+import csv
+import zipfile
+import tempfile
 from typing import Dict, Any, Literal, Optional, Tuple, List, Callable
 from datetime import datetime
 from langsmith import traceable
@@ -29,7 +33,9 @@ from ..utils.llm_helper import get_llm_helper, normalize_llm_response_content
 from ..utils.report_generator import WorkflowReportGenerator
 from ..utils.run_control import run_stop_requested, reset_run_stop_requested
 from ..services.mineru_client import MinerUClient, MinerUConversionError
+from ..services import mineru_cache as mineru_cache_service
 from ..services.confidence_aggregator import aggregate_confidence
+from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..tools.mineru_tools import create_mineru_convert_tool
 
 # Mem0 service (optional)
@@ -40,6 +46,14 @@ except ImportError:
     get_mem0_service = None
 
 logger = logging.getLogger(__name__)
+
+
+def _filesystem_document_path(document_path: str):
+    """On-disk path when ``document_path`` uses ``base::source`` multi-file markers."""
+    from pathlib import Path
+
+    head = document_path.split("::", 1)[0] if "::" in document_path else document_path
+    return Path(head)
 
 
 class FAIRifierLangGraphApp:
@@ -256,7 +270,8 @@ class FAIRifierLangGraphApp:
         agent_name: str,
         state: FAIRifierState,
         session_id: str,
-        top_k: int = 5
+        top_k: int = 5,
+        prior_issues: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Retrieve relevant memories before agent execution (R in R+W).
         
@@ -309,7 +324,12 @@ class FAIRifierLangGraphApp:
                 )
             else:
                 query = f"workflow for {domain or doc_type}"
-            
+
+            # On retry: append rejection issues to make the query more targeted
+            if prior_issues:
+                issue_summary = "; ".join(prior_issues[:3])
+                query = f"{query} — previous failures: {issue_summary}"
+
             # Search with cross-agent support
             memory_scope_id = state.get("memory_scope_id") or session_id
             memories = self.mem0_service.search(
@@ -363,11 +383,13 @@ class FAIRifierLangGraphApp:
             )
             return True
         
-        # Rule 3: Failure patterns (for avoidance)
-        if decision == "REJECT" and attempt == 1:
+        # Rule 3: Failure patterns (for avoidance) — any attempt with issues
+        if decision == "REJECT":
             issues = critic_eval.get("issues", [])
-            if issues and len(issues) > 0:
-                logger.info("✅ Write gate passed: novel failure pattern")
+            if issues:
+                logger.info(
+                    f"✅ Write gate passed: failure pattern (attempt={attempt}, issues={len(issues)})"
+                )
                 return True
         
         # Rule 4: Workflow decisions (always valuable)
@@ -764,6 +786,124 @@ class FAIRifierLangGraphApp:
         except Exception as e:
             logger.warning(f"Failed to extract insights for {agent_name}: {e}")
             return []
+
+    def _normalize_metadata_text(self, value: Any) -> str:
+        """Normalize metadata labels/concepts for fuzzy matching."""
+        return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip().split())
+
+    def _field_covers_concept(self, field_name: str, concept: str) -> bool:
+        """Best-effort concept coverage check between generated field names and required concepts."""
+        normalized_field = self._normalize_metadata_text(field_name)
+        normalized_concept = self._normalize_metadata_text(concept)
+        if not normalized_field or not normalized_concept:
+            return False
+        if normalized_concept in normalized_field or normalized_field in normalized_concept:
+            return True
+        concept_aliases = {
+            "license": ["license", "licence", "access rights", "usage rights"],
+            "data usage license": ["license", "usage rights", "access rights"],
+            "diversity": ["diversity", "richness", "shannon", "bray curtis"],
+            "alpha diversity": ["alpha diversity", "richness", "shannon"],
+            "beta diversity": ["beta diversity", "bray curtis", "distance matrix"],
+            "gamma diversity": ["gamma diversity", "regional diversity"],
+            "dataset type": ["dataset type", "library strategy", "target gene", "sequencing method"],
+            "shotgun metagenome": ["shotgun metagenome", "metagenome", "library strategy"],
+            "16s rrna": ["16s", "rrna", "target gene", "amplicon"],
+            "18s rrna": ["18s", "rrna", "target gene", "amplicon"],
+            "amplicon sequencing": ["amplicon", "target gene", "library strategy"],
+        }
+        aliases = concept_aliases.get(normalized_concept, [normalized_concept])
+        return any(alias in normalized_field for alias in aliases)
+
+    def _evaluate_json_hard_gate(self, state: FAIRifierState) -> Dict[str, Any]:
+        """Cross-layer hard gate: ensure JSON output covers required concepts/mandatory fields."""
+        metadata_fields = state.get("metadata_fields", []) or []
+        retrieved_knowledge = state.get("retrieved_knowledge", []) or []
+        api_capabilities = state.get("api_capabilities", {}) or {}
+
+        output_field_names = [str(field.get("field_name", "")) for field in metadata_fields if field.get("field_name")]
+        missing_required_terms: List[str] = []
+        for concept in api_capabilities.get("required_metadata_terms", []) or []:
+            if not any(self._field_covers_concept(field_name, concept) for field_name in output_field_names):
+                missing_required_terms.append(concept)
+
+        mandatory_terms = []
+        for item in retrieved_knowledge:
+            metadata = item.get("metadata", {}) if isinstance(item, dict) else {}
+            if metadata.get("required"):
+                mandatory_terms.append(str(item.get("term", "")))
+        missing_mandatory_terms = [
+            term for term in mandatory_terms
+            if term and not any(self._field_covers_concept(field_name, term) for field_name in output_field_names)
+        ]
+
+        uncovered_from_retrieval = api_capabilities.get("uncovered_required_metadata_terms", []) or []
+
+        retrieved_sheets = {
+            FAIRDSAPIParser.normalize_isa_sheet(
+                (item.get("metadata", {}) or {}).get("isa_sheet")
+                or (item.get("metadata", {}) or {}).get("sheet")
+            )
+            for item in retrieved_knowledge
+            if isinstance(item, dict)
+        }
+        output_sheets = {
+            FAIRDSAPIParser.normalize_isa_sheet(field.get("isa_sheet"))
+            for field in metadata_fields
+            if isinstance(field, dict)
+        }
+        isa_mapping_collapsed = len(retrieved_sheets - {"study"}) > 0 and output_sheets <= {"study"}
+
+        issues: List[str] = []
+        improvement_ops: List[str] = []
+        anchor_agent = "KnowledgeRetriever"
+
+        if uncovered_from_retrieval:
+            issues.append(
+                "KnowledgeRetriever still reports uncovered planner-critical concepts: "
+                + ", ".join(uncovered_from_retrieval[:8])
+            )
+            improvement_ops.append(
+                "Expand FAIR-DS search scope for planner-critical terms and include matched fields before JSON generation."
+            )
+
+        if missing_required_terms:
+            issues.append(
+                "JSON output is missing planner-critical concepts: "
+                + ", ".join(missing_required_terms[:8])
+            )
+            improvement_ops.append(
+                "Re-run KnowledgeRetriever with planner/critic guidance and ensure required concepts are selected."
+            )
+
+        if missing_mandatory_terms:
+            issues.append(
+                "JSON output is missing mandatory FAIR-DS fields selected by KnowledgeRetriever: "
+                + ", ".join(missing_mandatory_terms[:8])
+            )
+            improvement_ops.append(
+                "Regenerate metadata ensuring every required retrieved_knowledge field appears exactly once."
+            )
+
+        if isa_mapping_collapsed:
+            issues.append(
+                "ISA mapping collapsed to study-level output despite multi-level retrieved knowledge."
+            )
+            improvement_ops.append(
+                "Normalize isa_sheet from FAIR-DS metadata and preserve ISA level on all generated fields."
+            )
+            if not uncovered_from_retrieval and not missing_required_terms:
+                anchor_agent = "JSONGenerator"
+
+        passed = not issues
+        summary = "JSON hard gate passed." if passed else f"JSON hard gate failed ({len(issues)} issue(s))."
+        return {
+            "passed": passed,
+            "anchor_agent": anchor_agent,
+            "issues": issues,
+            "improvement_ops": improvement_ops,
+            "summary": summary,
+        }
     
     async def _execute_agent_with_retry(
         self,
@@ -814,12 +954,15 @@ class FAIRifierLangGraphApp:
                 agent_name=agent_name,
                 state=state,
                 session_id=session_id,
-                top_k=10
+                top_k=10,
             )
             state["context"]["retrieved_memories"] = relevant_memories
         else:
             state["context"]["retrieved_memories"] = []
-        
+
+        # Track critic issues across attempts so retries can query memory more specifically
+        prior_issues: list = []
+
         # Retry loop
         for attempt in range(1, self.max_step_retries + 2):  # +2 = initial + max_retries
             if run_id and run_stop_requested(run_id):
@@ -930,6 +1073,52 @@ class FAIRifierLangGraphApp:
                 )
                 return self._mark_interrupted_state(state)
             
+            feedback_prepared = False
+
+            # Hard gate after JSON generation: force cross-layer recovery when schema coverage is still broken.
+            if agent_name == "JSONGenerator" and decision == "ACCEPT":
+                hard_gate = self._evaluate_json_hard_gate(state)
+                if not hard_gate.get("passed", True):
+                    logger.warning("🚫 JSON hard gate failed: %s", hard_gate.get("summary"))
+                    critic_eval.setdefault("issues", [])
+                    critic_eval.setdefault("improvement_ops", [])
+                    critic_eval["issues"].extend(hard_gate.get("issues", []))
+                    for op in hard_gate.get("improvement_ops", []):
+                        if op not in critic_eval["improvement_ops"]:
+                            critic_eval["improvement_ops"].append(op)
+                    critic_eval["hard_gate"] = hard_gate
+                    critic_eval["decision"] = "RETRY"
+                    critic_eval["score"] = min(
+                        float(critic_eval.get("score", 0.0) or 0.0),
+                        config.critic_retry_max_threshold,
+                    )
+                    decision = "RETRY"
+                    score = critic_eval["score"]
+
+                    target_agent = hard_gate.get("anchor_agent", "KnowledgeRetriever")
+                    state = await self.critic.provide_feedback_to_agent(target_agent, critic_eval, state)
+                    feedback_prepared = True
+
+                    if self.mem0_service and session_id and hard_gate.get("issues"):
+                        enriched_memories = self._retrieve_relevant_memories(
+                            agent_name=target_agent,
+                            state=state,
+                            session_id=session_id,
+                            top_k=10,
+                            prior_issues=hard_gate["issues"],
+                        )
+                        state["context"]["retrieved_memories"] = enriched_memories
+
+                    if target_agent != agent_name:
+                        state["context"]["force_retry_from"] = target_agent
+                        state["context"]["cross_layer_retry_reason"] = hard_gate.get("summary")
+                        logger.info(
+                            "↩ Requesting cross-layer retry anchor: %s (reason: %s)",
+                            target_agent,
+                            hard_gate.get("summary"),
+                        )
+                        return state
+
             # Handle decision
             if decision == "ACCEPT":
                 logger.info(
@@ -1040,7 +1229,22 @@ class FAIRifierLangGraphApp:
                     f"   🔄 {agent_name} needs improvement (score: {score:.2f}), "
                     f"preparing retry {attempt}/{self.max_step_retries}..."
                 )
-                state = await self.critic.provide_feedback_to_agent(agent_name, critic_eval, state)
+                # Accumulate issues for targeted memory retrieval on next attempt
+                new_issues = critic_eval.get("issues", [])
+                if new_issues:
+                    prior_issues.extend(new_issues)
+                # Re-retrieve memories with rejection context so the agent gets targeted help
+                if self.mem0_service and session_id and prior_issues:
+                    enriched_memories = self._retrieve_relevant_memories(
+                        agent_name=agent_name,
+                        state=state,
+                        session_id=session_id,
+                        top_k=10,
+                        prior_issues=prior_issues,
+                    )
+                    state["context"]["retrieved_memories"] = enriched_memories
+                if not feedback_prepared:
+                    state = await self.critic.provide_feedback_to_agent(agent_name, critic_eval, state)
                 if run_id and run_stop_requested(run_id):
                     logger.warning(
                         "⏹ Stop requested after feedback prep for %s; stopping workflow.",
@@ -1114,10 +1318,14 @@ class FAIRifierLangGraphApp:
         logger.info("\n" + "="*70)
         logger.info("📋 Step 1: DocumentParser")
         logger.info("="*70)
-        state = await self._execute_agent_with_retry(
-            state, self.document_parser, "DocumentParser",
-            lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3
-        )
+        input_documents = state.get("input_documents", []) or []
+        if len(input_documents) > 1:
+            state = await self._parse_documents_individually(state, input_documents)
+        else:
+            state = await self._execute_agent_with_retry(
+                state, self.document_parser, "DocumentParser",
+                lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3
+            )
         if run_id and run_stop_requested(run_id):
             return self._mark_interrupted_state(state)
         
@@ -1139,17 +1347,57 @@ class FAIRifierLangGraphApp:
         )
         if run_id and run_stop_requested(run_id):
             return self._mark_interrupted_state(state)
-        
-        # Step 4: Generate JSON
-        logger.info("\n" + "="*70)
-        logger.info("📝 Step 4: JSONGenerator")
-        logger.info("="*70)
-        state = await self._execute_agent_with_retry(
-            state, self.json_generator, "JSONGenerator",
-            lambda s: s.get("metadata_fields", []) and len(s["metadata_fields"]) > 0
-        )
-        if run_id and run_stop_requested(run_id):
-            return self._mark_interrupted_state(state)
+
+        # Step 4: Generate JSON (with optional cross-layer rollback to retrieval)
+        cross_layer_retries_used = 0
+        while True:
+            logger.info("\n" + "="*70)
+            logger.info("📝 Step 4: JSONGenerator")
+            logger.info("="*70)
+            state = await self._execute_agent_with_retry(
+                state, self.json_generator, "JSONGenerator",
+                lambda s: s.get("metadata_fields", []) and len(s["metadata_fields"]) > 0
+            )
+            if run_id and run_stop_requested(run_id):
+                return self._mark_interrupted_state(state)
+
+            context = state.get("context", {})
+            retry_anchor = context.pop("force_retry_from", None)
+            retry_reason = context.pop("cross_layer_retry_reason", None)
+            if not retry_anchor:
+                break
+
+            if retry_anchor != "KnowledgeRetriever":
+                logger.warning(
+                    "Unsupported cross-layer retry anchor '%s'. Finalizing current output with review flag.",
+                    retry_anchor,
+                )
+                state["needs_human_review"] = True
+                break
+
+            if cross_layer_retries_used >= config.cross_layer_max_restarts:
+                logger.warning(
+                    "Cross-layer retry budget exhausted (%s/%s). Finalizing current output with review flag.",
+                    cross_layer_retries_used,
+                    config.cross_layer_max_restarts,
+                )
+                state["needs_human_review"] = True
+                break
+
+            cross_layer_retries_used += 1
+            logger.info(
+                "↩ Cross-layer rollback %s/%s: JSON -> KnowledgeRetriever (%s)",
+                cross_layer_retries_used,
+                config.cross_layer_max_restarts,
+                retry_reason or "no reason provided",
+            )
+            state = await self._execute_agent_with_retry(
+                state, self.knowledge_retriever, "KnowledgeRetriever",
+                lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
+            )
+            if run_id and run_stop_requested(run_id):
+                return self._mark_interrupted_state(state)
+        state["cross_layer_retries_used"] = cross_layer_retries_used
         
         logger.info("\n" + "="*70)
         logger.info(f"✅ Orchestration complete (global retries used: {self.global_retry_count}/{self.max_global_retries})")
@@ -1161,6 +1409,159 @@ class FAIRifierLangGraphApp:
         """Internal planning (part of orchestration)."""
         # This is the same as the old _plan_workflow_node logic
         return await self._plan_workflow_node(state)
+
+    def _is_empty_value(self, value: Any) -> bool:
+        """Return True for values that should not overwrite merged context."""
+        if value is None:
+            return True
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            return lowered in {"", "unknown", "n/a", "na", "none", "not specified"}
+        if isinstance(value, (list, dict)):
+            return len(value) == 0
+        return False
+
+    def _merge_document_info_entries(
+        self,
+        per_source_entries: List[Dict[str, Any]],
+    ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
+        """Merge parsed document-info dicts while preserving conflicts and unions."""
+        merged: Dict[str, Any] = {}
+        conflicts: Dict[str, List[str]] = {}
+
+        for entry in per_source_entries:
+            source_path = str(entry.get("source_path", "unknown"))
+            info = entry.get("document_info", {}) or {}
+            if not isinstance(info, dict):
+                continue
+            for key, value in info.items():
+                if self._is_empty_value(value):
+                    continue
+                if key not in merged or self._is_empty_value(merged.get(key)):
+                    merged[key] = value
+                    continue
+
+                existing = merged[key]
+                if isinstance(existing, list) and isinstance(value, list):
+                    dedup = []
+                    seen = set()
+                    for item in existing + value:
+                        marker = json.dumps(item, ensure_ascii=False, sort_keys=True) if isinstance(item, (dict, list)) else str(item)
+                        if marker in seen:
+                            continue
+                        seen.add(marker)
+                        dedup.append(item)
+                    merged[key] = dedup
+                    continue
+
+                if isinstance(existing, dict) and isinstance(value, dict):
+                    merged[key] = {**existing, **value}
+                    continue
+
+                existing_str = str(existing).strip()
+                value_str = str(value).strip()
+                if value_str == existing_str:
+                    continue
+                conflicts.setdefault(key, [])
+                if existing_str and existing_str not in conflicts[key]:
+                    conflicts[key].append(existing_str)
+                if value_str and value_str not in conflicts[key]:
+                    conflicts[key].append(value_str)
+                logger.info(
+                    "Multi-file conflict on '%s' from source '%s'; keeping primary value and recording variants.",
+                    key,
+                    source_path,
+                )
+
+        return merged, conflicts
+
+    async def _parse_documents_individually(
+        self,
+        state: FAIRifierState,
+        input_documents: List[Dict[str, Any]],
+    ) -> FAIRifierState:
+        """Parse each input document separately, then synthesize one merged context."""
+        logger.info(
+            "📚 Multi-file mode enabled: parsing %s input files individually before downstream agents.",
+            len(input_documents),
+        )
+        base_document_path = state.get("document_path", "")
+        source_outputs: List[Dict[str, Any]] = []
+        merged_packets: List[Dict[str, Any]] = []
+        context = state.setdefault("context", {})
+        context["multi_file_mode"] = True
+
+        for index, input_doc in enumerate(input_documents, start=1):
+            source_path = str(input_doc.get("path") or f"input_{index}")
+            source_content = str(input_doc.get("content") or "")
+            if not source_content.strip():
+                logger.warning("Skipping empty input source in multi-file mode: %s", source_path)
+                continue
+
+            logger.info(
+                "📄 Multi-file parse %s/%s: %s (%s chars)",
+                index,
+                len(input_documents),
+                source_path,
+                len(source_content),
+            )
+            state["document_content"] = source_content
+            state["document_path"] = f"{base_document_path}::{source_path}" if base_document_path else source_path
+            state["document_info"] = {}
+            state["evidence_packets"] = []
+            context["current_source_path"] = source_path
+            context["current_source_index"] = index
+            context["current_source_total"] = len(input_documents)
+
+            state = await self._execute_agent_with_retry(
+                state,
+                self.document_parser,
+                "DocumentParser",
+                lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3,
+            )
+
+            per_source_info = state.get("document_info", {}) or {}
+            per_source_packets = state.get("evidence_packets", []) or []
+            source_outputs.append(
+                {
+                    "source_path": source_path,
+                    "method": input_doc.get("method", "unknown"),
+                    "document_info": per_source_info,
+                    "field_count": len(per_source_info) if isinstance(per_source_info, dict) else 0,
+                }
+            )
+            for packet in per_source_packets:
+                if not isinstance(packet, dict):
+                    continue
+                enriched = dict(packet)
+                enriched.setdefault("source_document", source_path)
+                merged_packets.append(enriched)
+
+        if not source_outputs:
+            state["errors"] = state.get("errors", []) + ["Multi-file parsing failed: no source could be parsed"]
+            return state
+
+        merged_info, conflicts = self._merge_document_info_entries(source_outputs)
+        merged_info["multi_file_sources"] = [entry["source_path"] for entry in source_outputs]
+        merged_info["historical_records_included"] = len(source_outputs) > 1
+
+        state["document_info"] = merged_info
+        state["document_info_by_source"] = source_outputs
+        state["evidence_packets"] = merged_packets
+        state["document_path"] = base_document_path
+        context.pop("current_source_path", None)
+        context.pop("current_source_index", None)
+        context.pop("current_source_total", None)
+        context["multi_file_conflicts"] = conflicts
+
+        logger.info(
+            "✅ Multi-file synthesis complete: %s source docs, %s merged fields, %s evidence packets, %s conflicting keys",
+            len(source_outputs),
+            len(merged_info),
+            len(merged_packets),
+            len(conflicts),
+        )
+        return state
     
     @traceable(name="ReadFile", tags=["workflow", "io"])
     async def _read_file_node(self, state: FAIRifierState) -> FAIRifierState:
@@ -1177,6 +1578,16 @@ class FAIRifierLangGraphApp:
             
             state["document_content"] = text
             state["document_conversion"] = conversion_info
+            input_documents = conversion_info.get("input_documents")
+            if not isinstance(input_documents, list) or not input_documents:
+                input_documents = [
+                    {
+                        "path": os.path.basename(document_path) or document_path or "input",
+                        "content": text,
+                        "method": conversion_info.get("method", "direct_read"),
+                    }
+                ]
+            state["input_documents"] = input_documents
             
         except Exception as e:
             logger.error(f"❌ Failed to read file: {e}")
@@ -1184,61 +1595,64 @@ class FAIRifierLangGraphApp:
                 state["errors"] = []
             state["errors"].append(f"File reading error: {str(e)}")
             state["document_content"] = ""
+            state["input_documents"] = []
         
         return state
     
-    def _find_existing_mineru_result(self, document_path: str) -> Optional[Tuple[str, str]]:
+    def _find_existing_mineru_result(
+        self,
+        document_path: str,
+        output_dir: Optional[str] = None,
+    ) -> Optional[Tuple[str, str]]:
         """
         Check if pre-converted MinerU results exist for this document.
-        
-        Searches in the same directory as the document for:
-        1. mineru_{doc_name}/{doc_name}/vlm/{doc_name}.md (standard MinerU output structure)
-        2. mineru_{doc_name}/**/*.md (any markdown in the mineru directory)
-        
-        Args:
-            document_path: Path to the original PDF document
-            
-        Returns:
-            Tuple of (markdown_path, images_dir) if found, None otherwise
+
+        Searches, in order:
+        1. ``{output_dir}/mineru_{doc_name}/`` (normal web run / cache materialization)
+        2. ``{document_parent}/mineru_{doc_name}/`` (legacy CLI layout beside the file)
+
+        Inside that tree:
+        - ``mineru_{doc_name}/{doc_name}/vlm/{doc_name}.md`` (standard layout), or
+        - any ``*.md`` under the mineru directory (reused cache may use a different inner stem).
         """
         from pathlib import Path
-        
-        doc_path = Path(document_path)
+
+        doc_path = _filesystem_document_path(document_path)
         doc_name = doc_path.stem
         doc_dir = doc_path.parent
-        
-        # Check for mineru_{doc_name} directory in same location as document
-        mineru_dir = doc_dir / f"mineru_{doc_name}"
-        
-        if not mineru_dir.exists():
-            return None
-        
-        logger.info(f"🔍 Found pre-converted MinerU directory: {mineru_dir}")
-        
-        # Try standard MinerU output structure: mineru_{doc_name}/{doc_name}/vlm/{doc_name}.md
-        standard_md_path = mineru_dir / doc_name / "vlm" / f"{doc_name}.md"
-        if standard_md_path.exists():
-            images_dir = mineru_dir / doc_name / "vlm" / "images"
-            logger.info(f"✅ Found pre-converted markdown: {standard_md_path}")
-            return str(standard_md_path), str(images_dir) if images_dir.exists() else None
-        
-        # Fallback: search for any .md file in the mineru directory
-        md_files = list(mineru_dir.rglob("*.md"))
-        if md_files:
-            # Prefer files named like the document
-            for md_file in md_files:
-                if doc_name in md_file.stem:
-                    images_dir = md_file.parent / "images"
-                    logger.info(f"✅ Found pre-converted markdown: {md_file}")
-                    return str(md_file), str(images_dir) if images_dir.exists() else None
-            
-            # Use first found markdown file
-            md_file = md_files[0]
-            images_dir = md_file.parent / "images"
-            logger.info(f"✅ Found pre-converted markdown: {md_file}")
-            return str(md_file), str(images_dir) if images_dir.exists() else None
-        
-        logger.warning(f"⚠️ MinerU directory exists but no markdown found: {mineru_dir}")
+
+        search_roots: list[Path] = []
+        if output_dir:
+            search_roots.append(Path(output_dir) / f"mineru_{doc_name}")
+        search_roots.append(doc_dir / f"mineru_{doc_name}")
+
+        for mineru_dir in search_roots:
+            if not mineru_dir.exists():
+                continue
+
+            logger.info("🔍 Found pre-converted MinerU directory: %s", mineru_dir)
+
+            standard_md_path = mineru_dir / doc_name / "vlm" / f"{doc_name}.md"
+            if standard_md_path.exists():
+                images_dir = mineru_dir / doc_name / "vlm" / "images"
+                logger.info("✅ Found pre-converted markdown: %s", standard_md_path)
+                return str(standard_md_path), str(images_dir) if images_dir.exists() else None
+
+            md_files = list(mineru_dir.rglob("*.md"))
+            if md_files:
+                for md_file in md_files:
+                    if doc_name in md_file.stem:
+                        images_dir = md_file.parent / "images"
+                        logger.info("✅ Found pre-converted markdown: %s", md_file)
+                        return str(md_file), str(images_dir) if images_dir.exists() else None
+
+                md_file = md_files[0]
+                images_dir = md_file.parent / "images"
+                logger.info("✅ Found pre-converted markdown: %s", md_file)
+                return str(md_file), str(images_dir) if images_dir.exists() else None
+
+            logger.warning("⚠️ MinerU directory exists but no markdown found: %s", mineru_dir)
+
         return None
     
     def _read_document_content(
@@ -1246,82 +1660,320 @@ class FAIRifierLangGraphApp:
         document_path: str,
         output_dir: Optional[str] = None
     ) -> Tuple[str, Dict[str, Any]]:
-        """Read content using MinerU when available, or use pre-converted results."""
+        """Read document content from single file, directory, or zip bundle."""
         from pathlib import Path
-        
+
+        path = _filesystem_document_path(document_path)
+        if path.is_dir():
+            return self._read_multi_file_bundle(
+                root_dir=path,
+                output_dir=output_dir,
+                source_method="directory_bundle",
+            )
+
+        if path.suffix.lower() == ".zip":
+            with tempfile.TemporaryDirectory(prefix="fairifier_bundle_") as tmp_dir:
+                extract_dir = Path(tmp_dir)
+                with zipfile.ZipFile(path, "r") as zf:
+                    zf.extractall(extract_dir)
+                return self._read_multi_file_bundle(
+                    root_dir=extract_dir,
+                    output_dir=output_dir,
+                    source_method="zip_bundle",
+                )
+
+        return self._read_single_document_content(document_path, output_dir)
+
+    def _read_single_document_content(
+        self,
+        document_path: str,
+        output_dir: Optional[str] = None,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Read a single document file with format-aware extraction."""
+        fs_path = _filesystem_document_path(document_path)
+        fs_str = str(fs_path)
+
         conversion_info: Dict[str, Any] = {}
-        
-        if document_path.endswith(".pdf"):
-            # First, check if pre-converted MinerU results exist
-            existing_result = self._find_existing_mineru_result(document_path)
+        suffix = fs_path.suffix.lower()
+
+        if suffix in {".csv", ".tsv", ".xlsx", ".xls"}:
+            table_text = self._read_tabular_content(fs_str)
+            conversion_info["method"] = f"tabular_{suffix.lstrip('.')}"
+            return table_text, conversion_info
+
+        if suffix == ".json":
+            with open(fs_str, "r", encoding="utf-8") as file:
+                parsed = json.load(file)
+            pretty = json.dumps(parsed, indent=2, ensure_ascii=False)
+            conversion_info["method"] = "json_pretty"
+            return pretty, conversion_info
+
+        if suffix == ".pdf":
+            doc_path = fs_path
+            doc_name = doc_path.stem
+
+            existing_result = self._find_existing_mineru_result(
+                fs_str, output_dir
+            )
+            cache_hit = False
+            file_digest: Optional[str] = None
+
+            if (
+                not existing_result
+                and config.mineru_cache_enabled
+                and config.mineru_enabled
+                and output_dir
+                and self.mineru_tool
+            ):
+                try:
+                    cache_root = Path(config.mineru_cache_dir).resolve()
+                    file_digest = mineru_cache_service.sha256_file(doc_path)
+                    if (
+                        mineru_cache_service.try_get_cached_mineru_tree(
+                            cache_root,
+                            file_digest,
+                            Path(output_dir),
+                            doc_name,
+                        )
+                        is not None
+                    ):
+                        existing_result = self._find_existing_mineru_result(
+                            fs_str, output_dir
+                        )
+                        if existing_result:
+                            cache_hit = True
+                except OSError as exc:
+                    logger.warning("MinerU shared-cache materialize failed: %s", exc)
+
             if existing_result:
                 markdown_path, images_dir = existing_result
-                logger.info(f"📄 Using pre-converted MinerU result (skipping conversion)")
+                src_label = (
+                    "shared checksum cache" if cache_hit else "pre-converted on disk"
+                )
+                logger.info("📄 Using MinerU result (%s, skipping GPU run)", src_label)
                 try:
                     with open(markdown_path, "r", encoding="utf-8") as f:
                         markdown_text = f.read()
-                    
-                    # Build conversion_info similar to MinerU client output
+
                     conversion_info = {
-                        "source": "pre-converted",
+                        "source": "mineru_cache" if cache_hit else "pre-converted",
                         "markdown_path": markdown_path,
                         "images_dir": images_dir,
                         "output_dir": str(Path(markdown_path).parent.parent),
-                        "method": "mineru_preconverted"
+                        "method": "mineru_cache"
+                        if cache_hit
+                        else "mineru_preconverted",
                     }
-                    logger.info(f"✅ Loaded pre-converted MinerU markdown ({len(markdown_text)} chars)")
+                    if file_digest:
+                        conversion_info["source_sha256"] = file_digest
+                    logger.info(
+                        "✅ Loaded MinerU markdown (%s chars, %s)",
+                        len(markdown_text),
+                        src_label,
+                    )
                     return markdown_text, conversion_info
                 except Exception as e:
-                    logger.warning(f"⚠️ Failed to read pre-converted result: {e}")
-                    # Fall through to normal conversion
-            
-            # No pre-converted results, use MinerU tool if available
+                    logger.warning("⚠️ Failed to read MinerU reuse result: %s", e)
+
+            # No pre-converted / cache results: run MinerU tool if available
             if self.mineru_tool:
-                # Use output_dir for MinerU artifacts if provided
                 mineru_output = None
                 if output_dir:
-                    doc_name = Path(document_path).stem
                     mineru_output = str(Path(output_dir) / f"mineru_{doc_name}")
-                    logger.info(f"MinerU will save artifacts to: {mineru_output}")
-                
-                # Invoke MinerU tool
+                    logger.info("MinerU will save artifacts to: %s", mineru_output)
+
+                if file_digest is None and config.mineru_cache_enabled and output_dir:
+                    try:
+                        file_digest = mineru_cache_service.sha256_file(doc_path)
+                    except OSError as exc:
+                        logger.debug("SHA-256 for MinerU cache skipped: %s", exc)
+
                 result = self.mineru_tool.invoke({
-                    "input_path": document_path,
+                    "input_path": fs_str,
                     "output_dir": mineru_output
                 })
-                
+
                 if result["success"]:
-                    # Conversion successful
                     conversion_info = {
                         "markdown_path": result["markdown_path"],
                         "output_dir": result["output_dir"],
                         "images_dir": result["images_dir"],
-                        "method": result["method"]
+                        "method": result["method"],
                     }
+                    if file_digest:
+                        conversion_info["source_sha256"] = file_digest
                     logger.info("MinerU conversion successful: %s", result["markdown_path"])
-                    logger.info(f"MinerU artifacts: {result['output_dir']}")
+                    logger.info("MinerU artifacts: %s", result["output_dir"])
                     if result["images_dir"]:
-                        logger.info(f"MinerU images: {result['images_dir']}")
+                        logger.info("MinerU images: %s", result["images_dir"])
+                    if (
+                        file_digest
+                        and config.mineru_cache_enabled
+                        and result.get("output_dir")
+                    ):
+                        try:
+                            mineru_cache_service.store_mineru_output_after_success(
+                                Path(config.mineru_cache_dir).resolve(),
+                                file_digest,
+                                Path(result["output_dir"]),
+                            )
+                        except OSError as exc:
+                            logger.warning("MinerU cache store failed: %s", exc)
                     return result["markdown_text"], conversion_info
-                else:
-                    # Conversion failed
-                    logger.warning("MinerU conversion failed (%s). Falling back to PyMuPDF.", result["error"])
-            
+                logger.warning(
+                    "MinerU conversion failed (%s). Falling back to PyMuPDF.",
+                    result["error"],
+                )
+
             # Fallback to PyMuPDF
             import fitz  # PyMuPDF
-            doc = fitz.open(document_path)
+            doc = fitz.open(fs_str)
             text = ""
             for page in doc:
                 text += page.get_text()
             doc.close()
             conversion_info["method"] = "pymupdf"
             return text, conversion_info
-        
-        # Non-PDF files: read directly
-        with open(document_path, "r", encoding="utf-8") as file:
+
+        # Non-PDF text-like files: read directly
+        with open(fs_str, "r", encoding="utf-8") as file:
             text = file.read()
         conversion_info["method"] = "direct_read"
         return text, conversion_info
+
+    def _is_supported_bundle_file(self, path: "Path") -> bool:
+        """Return True when a file extension is supported for bundle ingestion."""
+        return path.suffix.lower() in {
+            ".pdf", ".txt", ".md", ".markdown", ".rst",
+            ".csv", ".tsv", ".xlsx", ".xls", ".json",
+        }
+
+    def _read_multi_file_bundle(
+        self,
+        root_dir: "Path",
+        output_dir: Optional[str],
+        source_method: str,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Read and aggregate multiple supported files from a directory-like bundle."""
+        max_files = max(1, int(config.multi_file_max_inputs))
+        all_files = sorted(
+            p for p in root_dir.rglob("*")
+            if p.is_file() and not any(part.startswith(".") for part in p.parts)
+        )
+        supported_files = [p for p in all_files if self._is_supported_bundle_file(p)]
+        selected_files = supported_files[:max_files]
+
+        if not selected_files:
+            raise ValueError(
+                f"No supported input files found under bundle: {root_dir}"
+            )
+
+        sections: List[str] = []
+        sources: List[Dict[str, Any]] = []
+        input_documents: List[Dict[str, Any]] = []
+        for idx, file_path in enumerate(selected_files, start=1):
+            try:
+                text, info = self._read_single_document_content(str(file_path), output_dir)
+            except Exception as exc:
+                logger.warning("Skipping bundle file %s due to read error: %s", file_path, exc)
+                continue
+            rel_name = str(file_path.relative_to(root_dir))
+            sections.append(
+                f"\n\n=== Source {idx}: {rel_name} ===\n{text}"
+            )
+            sources.append(
+                {
+                    "path": rel_name,
+                    "method": info.get("method", "unknown"),
+                    "chars": len(text),
+                }
+            )
+            input_documents.append(
+                {
+                    "path": rel_name,
+                    "content": text,
+                    "method": info.get("method", "unknown"),
+                }
+            )
+
+        if not sections:
+            raise ValueError(f"Bundle contained supported files but none could be parsed: {root_dir}")
+
+        if len(supported_files) > max_files:
+            sections.append(
+                f"\n\n[Bundle Notice] Processed first {max_files} files out of {len(supported_files)} supported files "
+                f"(configured by multi_file_max_inputs={max_files})."
+            )
+
+        conversion_info: Dict[str, Any] = {
+            "method": source_method,
+            "bundle_root": str(root_dir),
+            "files_processed": len(sources),
+            "files_discovered_supported": len(supported_files),
+            "sources": sources,
+            "input_documents": input_documents,
+        }
+        return "".join(sections).strip(), conversion_info
+
+    def _read_tabular_content(self, document_path: str) -> str:
+        """Render tabular files into a concise text view for LLM parsing."""
+        from pathlib import Path
+
+        path = Path(document_path)
+        suffix = path.suffix.lower()
+        max_rows = max(1, int(config.table_preview_max_rows))
+        max_cols = max(1, int(config.table_preview_max_cols))
+
+        def render_rows(headers: List[str], rows: List[List[Any]], total_rows: int) -> str:
+            clipped_headers = headers[:max_cols]
+            clipped_rows = [row[:max_cols] for row in rows[:max_rows]]
+            lines = [
+                f"Table file: {path.name}",
+                f"Columns ({len(headers)}): {', '.join(clipped_headers)}",
+                f"Preview rows: {min(len(rows), max_rows)} / {total_rows}",
+                "Rows (tab-separated):",
+                "\t".join(clipped_headers),
+            ]
+            for row in clipped_rows:
+                lines.append("\t".join(str(cell) for cell in row))
+            if len(rows) > max_rows:
+                lines.append(f"... ({len(rows) - max_rows} more rows omitted)")
+            if len(headers) > max_cols:
+                lines.append(f"... ({len(headers) - max_cols} more columns omitted)")
+            return "\n".join(lines)
+
+        if suffix in {".csv", ".tsv"}:
+            delimiter = "," if suffix == ".csv" else "\t"
+            with open(path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.reader(f, delimiter=delimiter)
+                all_rows = list(reader)
+            if not all_rows:
+                return f"Table file: {path.name}\n(empty)"
+            headers = [str(h) for h in all_rows[0]]
+            rows = all_rows[1:]
+            return render_rows(headers, rows, total_rows=len(rows))
+
+        # Excel parsing (xlsx/xls) uses pandas/openpyxl from requirements.
+        import pandas as pd
+        try:
+            workbook = pd.ExcelFile(path)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to parse Excel file '{path.name}'. "
+                "Ensure openpyxl (for .xlsx) / xlrd (for .xls) is installed."
+            ) from exc
+        sheet_text_blocks: List[str] = []
+        for sheet_name in workbook.sheet_names[:6]:
+            df = pd.read_excel(path, sheet_name=sheet_name)
+            headers = [str(col) for col in df.columns]
+            rows = df.fillna("").values.tolist()
+            block = render_rows(headers, rows, total_rows=len(rows))
+            sheet_text_blocks.append(f"[Sheet: {sheet_name}]\n{block}")
+        if len(workbook.sheet_names) > 6:
+            sheet_text_blocks.append(
+                f"... ({len(workbook.sheet_names) - 6} more sheets omitted)"
+            )
+        return "\n\n".join(sheet_text_blocks)
     
     @traceable(name="PlanWorkflow", tags=["workflow", "planning"])
     async def _plan_workflow_node(self, state: FAIRifierState) -> FAIRifierState:
@@ -2174,6 +2826,7 @@ Return JSON in the following format:
         project_id: str = None,
         output_dir: str = None,
         resume: bool = False,
+        user_session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run the LangGraph workflow. If resume=True, continue from last checkpoint."""
         if not project_id:
@@ -2243,8 +2896,10 @@ Return JSON in the following format:
                 "document_path": document_path,
                 "document_content": "",
                 "document_conversion": {},
+                "input_documents": [],
                 "output_dir": output_dir,
                 "document_info": {},
+                "document_info_by_source": [],
                 "evidence_packets": [],
                 "retrieved_knowledge": [],
                 "metadata_fields": [],
@@ -2269,7 +2924,15 @@ Return JSON in the following format:
                     "generate_retry_count": 0,
                 },
                 "session_id": project_id,
-                "memory_scope_id": config.memory_scope_id or project_id,
+                # memory_scope_id drives cross-run learning:
+                # - WebUI: user_session_id is the browser's persistent UUID → isolates by user
+                # - CLI with explicit override: config.memory_scope_id
+                # - CLI without override: "fairifier-global" so all CLI runs share a pool
+                "memory_scope_id": (
+                    user_session_id
+                    or config.memory_scope_id
+                    or "fairifier-global"
+                ),
             }
 
         try:

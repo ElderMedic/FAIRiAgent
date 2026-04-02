@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import json
 import logging
+import os
 import socket
 import tempfile
 import threading
@@ -27,16 +28,20 @@ from ..models import (
     DemoDocumentResponse,
     DemoOptionsResponse,
     HealthResponse,
+    MemoryCloudResponse,
+    MemoryWordEntry,
     OllamaModelResponse,
     OllamaModelsResponse,
     ProjectListResponse,
     ProjectResponse,
+    ResourceLoadResponse,
     ServiceStatusResponse,
     SystemStatusResponse,
 )
 from ..services.event_bus import WorkflowEvent, event_bus
 from ..services.runner import run_workflow_task
 from ..storage.base import ProjectStore
+from ..system_metrics import collect_resource_metrics_with_gpu
 from fairifier.utils.run_control import set_run_stop_requested
 
 logger = logging.getLogger(__name__)
@@ -73,6 +78,7 @@ def _project_to_response(data: dict) -> ProjectResponse:
         project_id=data.get("project_id", ""),
         project_name=data.get("project_name"),
         filename=data.get("filename"),
+        input_files=data.get("input_files"),
         session_id=data.get("session_id"),
         session_started_at=data.get("session_started_at"),
         status=data.get("status", "unknown"),
@@ -588,6 +594,56 @@ async def system_status() -> SystemStatusResponse:
     return _build_system_status()
 
 
+@router.get("/system/resource-load", response_model=ResourceLoadResponse)
+async def resource_load(request: Request) -> ResourceLoadResponse:
+    """Return coarse server resource usage for display purposes.
+
+    ``active_runs`` counts workflow projects that are *pending* or *running*
+    **for the same browser session** as the request headers (not server-wide).
+
+    GPU stats use ``nvidia-smi`` when available (NVIDIA driver). No paths,
+    hostnames, usernames, or per-process details are included.
+
+    Metrics use stdlib + /proc on Linux (no psutil required). Work is run in a
+    thread pool so the event loop is not blocked during the CPU sample window.
+    """
+    session_id, _ = _get_session_context(request)
+    store = _get_store(request)
+    try:
+        projects = store.list_projects()
+        active_runs = sum(
+            1
+            for p in projects
+            if p.get("session_id") == session_id
+            and p.get("status") in ("pending", "running")
+        )
+    except Exception:
+        active_runs = 0
+
+    (
+        cpu_pct,
+        memory_pct,
+        memory_used_gb,
+        memory_total_gb,
+        disk_pct,
+        gpu_util_pct,
+        gpu_memory_used_gb,
+        gpu_memory_total_gb,
+    ) = await asyncio.to_thread(collect_resource_metrics_with_gpu)
+
+    return ResourceLoadResponse(
+        cpu_pct=cpu_pct,
+        memory_pct=memory_pct,
+        memory_used_gb=memory_used_gb,
+        memory_total_gb=memory_total_gb,
+        disk_pct=disk_pct,
+        active_runs=active_runs,
+        gpu_util_pct=gpu_util_pct,
+        gpu_memory_used_gb=gpu_memory_used_gb,
+        gpu_memory_total_gb=gpu_memory_total_gb,
+    )
+
+
 @router.get("/system/ollama-models", response_model=OllamaModelsResponse)
 async def ollama_models(
     base_url: Optional[str] = Query(default=None),
@@ -632,6 +688,7 @@ async def ollama_models(
 )
 async def create_project(
     request: Request,
+    files: Optional[list[UploadFile]] = File(default=None),
     file: Optional[UploadFile] = File(default=None),
     project_name: Optional[str] = Form(default=None),
     config_overrides: Optional[str] = Form(default=None),
@@ -646,13 +703,25 @@ async def create_project(
         request
     )
 
-    if file is None and not sample_document:
+    uploaded_files: list[UploadFile] = []
+    if files:
+        uploaded_files.extend(files)
+    if file is not None:
+        uploaded_files.append(file)
+
+    if not uploaded_files and not sample_document:
         raise HTTPException(
             status_code=400,
             detail="Provide either a file or sample_document",
         )
+    if uploaded_files and sample_document:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide uploaded files or sample_document, not both",
+        )
 
     source_filename: str
+    input_filenames: list[str]
     if sample_document:
         doc_meta = _DEMO_DOCUMENTS.get(sample_document)
         if doc_meta is None or not doc_meta["path"].is_file():
@@ -663,32 +732,64 @@ async def create_project(
         source_path = doc_meta["path"]
         content = source_path.read_bytes()
         source_filename = source_path.name
+        input_filenames = [source_filename]
         suffix = source_path.suffix
-    else:
-        assert file is not None
-        if not file.filename:
+        max_bytes = fc.max_document_size_mb * 1024 * 1024
+        if len(content) > max_bytes:
             raise HTTPException(
-                status_code=400, detail="No file provided"
+                status_code=413,
+                detail=(
+                    "File too large. "
+                    f"Max size: {fc.max_document_size_mb} MB"
+                ),
             )
-        content = await file.read()
-        source_filename = file.filename
-        suffix = Path(file.filename).suffix
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=suffix
+        ) as tmp:
+            tmp.write(content)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp_path = tmp.name
+    else:
+        max_bytes = fc.max_document_size_mb * 1024 * 1024
+        file_payloads: list[tuple[str, bytes]] = []
+        for idx, uploaded in enumerate(uploaded_files, start=1):
+            raw_name = (uploaded.filename or "").strip()
+            if not raw_name:
+                raw_name = f"input_{idx}"
+            safe_name = Path(raw_name).name
+            if not safe_name:
+                safe_name = f"input_{idx}"
+            blob = await uploaded.read()
+            if len(blob) > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"File '{safe_name}' is too large. "
+                        f"Max size: {fc.max_document_size_mb} MB"
+                    ),
+                )
+            file_payloads.append((safe_name, blob))
 
-    max_bytes = fc.max_document_size_mb * 1024 * 1024
-    if len(content) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=(
-                "File too large. "
-                f"Max size: {fc.max_document_size_mb} MB"
-            ),
-        )
+        input_filenames = [name for name, _ in file_payloads]
+        source_filename = input_filenames[0] if len(input_filenames) == 1 else f"{len(input_filenames)} input files"
 
-    with tempfile.NamedTemporaryFile(
-        delete=False, suffix=suffix
-    ) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
+        if len(file_payloads) == 1:
+            single_name, single_content = file_payloads[0]
+            with tempfile.NamedTemporaryFile(
+                delete=False, suffix=Path(single_name).suffix
+            ) as tmp:
+                tmp.write(single_content)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                tmp_path = tmp.name
+        else:
+            tmp_dir = tempfile.mkdtemp(prefix="fairifier_upload_bundle_")
+            for idx, (safe_name, blob) in enumerate(file_payloads, start=1):
+                target_name = f"{idx:02d}_{safe_name}"
+                target_path = Path(tmp_dir) / target_name
+                target_path.write_bytes(blob)
+            tmp_path = tmp_dir
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     project_id = f"fairifier_{ts}"
@@ -710,6 +811,7 @@ async def create_project(
         "project_id": project_id,
         "project_name": project_name or source_filename,
         "filename": source_filename,
+        "input_files": input_filenames,
         "session_id": session_id,
         "session_started_at": session_started_at or now,
         "status": "pending",
@@ -733,6 +835,7 @@ async def create_project(
             "output_dir": output_dir,
             "config_overrides": overrides_dict,
             "demo_mode": bool(demo),
+            "user_session_id": session_id,
         },
         daemon=True,
     )
@@ -922,6 +1025,109 @@ async def _sse_generator(
                 break
     finally:
         event_bus.unsubscribe(project_id, queue)
+
+
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+    "has", "have", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "that", "this", "these", "those", "it", "its",
+    "as", "if", "not", "no", "so", "up", "out", "more", "than", "then",
+    "also", "about", "into", "using", "used", "via", "based", "per",
+    "between", "identified", "selected", "requires", "required", "within",
+    "across", "during", "after", "before", "through", "all", "each",
+    "which", "when", "where", "how", "what", "well", "can", "use",
+})
+
+
+def _tokenize_memories(
+    memories: list,
+) -> list:
+    """Extract (word, category) pairs from a list of mem0 memory dicts."""
+    import re
+    pairs: list[tuple[str, str]] = []
+    for m in memories:
+        text = m.get("memory", "")
+        category = (
+            m.get("metadata", {}).get("agent_id")
+            or m.get("metadata", {}).get("workflow_step")
+            or "unknown"
+        )
+        for word in re.findall(r"[a-zA-Z]{3,}", text):
+            w = word.lower()
+            if w not in _STOP_WORDS:
+                pairs.append((w, category))
+    return pairs
+
+
+def _build_word_entries(pairs: list) -> list[MemoryWordEntry]:
+    """Aggregate (word, category) pairs into MemoryWordEntry list."""
+    from collections import Counter, defaultdict
+    freq: Counter = Counter(w for w, _ in pairs)
+    cat_map: dict = defaultdict(Counter)
+    for w, cat in pairs:
+        cat_map[w][cat] += 1
+    return [
+        MemoryWordEntry(
+            text=word,
+            value=count,
+            category=cat_map[word].most_common(1)[0][0],
+        )
+        for word, count in freq.most_common(80)
+        if count >= 2
+    ]
+
+
+@router.get("/projects/{project_id}/memory-cloud", response_model=MemoryCloudResponse)
+async def memory_cloud(project_id: str, request: Request) -> MemoryCloudResponse:
+    """Return word-frequency data extracted from this project's memories.
+
+    Two views are returned:
+    - session_words: memories scoped to this specific run (session_id = project_id)
+    - scope_words:   memories scoped to the shared memory_scope_id (cross-run learning)
+
+    Only word frequencies and agent categories are exposed — no raw memory text,
+    no file paths, no user identifiers.
+    """
+    from fairifier.services.mem0_service import mem0_service
+
+    if not mem0_service.is_available():
+        return MemoryCloudResponse(
+            session_words=[],
+            scope_words=[],
+            session_total=0,
+            scope_total=0,
+            memory_enabled=False,
+        )
+
+    store = _get_store(request)
+    try:
+        project_data = store.get_project(project_id)
+    except Exception:
+        project_data = {}
+
+    # session scope = this run only
+    session_id = project_data.get("session_id") or project_id
+    session_mems = mem0_service.list_memories(session_id=session_id)
+
+    # shared scope = cross-run learning pool (may equal session_id if not configured)
+    from fairifier.config import config as fc
+    scope_id = fc.memory_scope_id or session_id
+    if scope_id != session_id:
+        scope_mems = mem0_service.list_memories(session_id=scope_id)
+    else:
+        scope_mems = session_mems
+
+    session_pairs = _tokenize_memories(session_mems)
+    scope_pairs = _tokenize_memories(scope_mems)
+
+    return MemoryCloudResponse(
+        session_words=_build_word_entries(session_pairs),
+        scope_words=_build_word_entries(scope_pairs),
+        session_total=len(session_mems),
+        scope_total=len(scope_mems),
+        memory_enabled=True,
+    )
 
 
 @router.get("/projects/{project_id}/events")

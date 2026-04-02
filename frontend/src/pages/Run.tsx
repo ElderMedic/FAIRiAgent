@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Activity, CheckCircle2, Square, XCircle, ArrowLeft, ArrowRight } from 'lucide-react';
-import { api, type ProjectResponse, type WorkflowEvent } from '../api/client';
+import { api, type ProjectResponse, type ResourceLoad, type WorkflowEvent } from '../api/client';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { buildAppRoute, getWebSession } from '../utils/session';
 import './InteriorPages.css';
@@ -35,6 +35,7 @@ export default function Run() {
   const [status, setStatus] = useState<'running' | 'stopping' | 'stopped' | 'completed' | 'error'>('running');
   const [errorMsg, setErrorMsg] = useState('');
   const [stopSubmitting, setStopSubmitting] = useState(false);
+  const [resourceLoad, setResourceLoad] = useState<ResourceLoad | null>(null);
 
   const syncProjectState = (project: ProjectResponse) => {
     setProject(project);
@@ -147,6 +148,7 @@ export default function Run() {
                 setStage('Failed');
                 setErrorMsg(errorText || message || 'An error occurred');
                 setStopSubmitting(false);
+                source?.close();
                 startPolling();
                 break;
             }
@@ -168,6 +170,22 @@ export default function Run() {
       source?.close();
     };
   }, [projectId]);
+
+  // Resource load polling
+  useEffect(() => {
+    let active = true;
+    const fetch = () => {
+      api.resourceLoad()
+        .then((data) => { if (active) setResourceLoad(data); })
+        .catch(() => { /* non-critical */ });
+    };
+    fetch();
+    const timer = window.setInterval(fetch, 8000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   // Auto-scroll logs
   useEffect(() => {
@@ -335,6 +353,14 @@ export default function Run() {
               </p>
               <div className="run-metric-grid">
                 <div className="run-metric">
+                  <p className="run-metric__label">Input file</p>
+                  <p className="run-metric__value run-metric__value--file">
+                    {project?.filename
+                      ? project.filename.split('/').pop()
+                      : '—'}
+                  </p>
+                </div>
+                <div className="run-metric">
                   <p className="run-metric__label">Project ID</p>
                   <p className="run-metric__value">{projectId}</p>
                 </div>
@@ -343,8 +369,12 @@ export default function Run() {
                   <p className="run-metric__value">{stage}</p>
                 </div>
                 <div className="run-metric">
-                  <p className="run-metric__label">Session</p>
-                  <p className="run-metric__value">{session.id}</p>
+                  <p className="run-metric__label">Session UUID <span className="run-metric__hint">(copy to recover)</span></p>
+                  <p
+                    className="run-metric__value run-metric__value--copyable"
+                    title="Click to copy"
+                    onClick={() => navigator.clipboard?.writeText(session.id).catch(() => {})}
+                  >{session.id}</p>
                 </div>
                 <div className="run-metric">
                   <p className="run-metric__label">Latest event</p>
@@ -354,6 +384,82 @@ export default function Run() {
                 </div>
               </div>
             </article>
+
+            {resourceLoad && (
+              <article className="run-sidebar-card">
+                <h2 className="run-sidebar-card__title">Server load</h2>
+                <div className="run-resource-grid">
+                  <div className="run-resource">
+                    <div className="run-resource__header">
+                      <span className="run-resource__label">CPU</span>
+                      <span className="run-resource__value">{resourceLoad.cpu_pct}%</span>
+                    </div>
+                    <div className="run-resource__bar">
+                      <div
+                        className={`run-resource__fill ${resourceLoad.cpu_pct >= 90 ? 'run-resource__fill--high' : resourceLoad.cpu_pct >= 60 ? 'run-resource__fill--mid' : ''}`}
+                        style={{ width: `${resourceLoad.cpu_pct}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="run-resource">
+                    <div className="run-resource__header">
+                      <span className="run-resource__label">Memory</span>
+                      <span className="run-resource__value">
+                        {resourceLoad.memory_pct}% · {resourceLoad.memory_used_gb}/{resourceLoad.memory_total_gb} GB
+                      </span>
+                    </div>
+                    <div className="run-resource__bar">
+                      <div
+                        className={`run-resource__fill ${resourceLoad.memory_pct >= 90 ? 'run-resource__fill--high' : resourceLoad.memory_pct >= 70 ? 'run-resource__fill--mid' : ''}`}
+                        style={{ width: `${resourceLoad.memory_pct}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="run-resource">
+                    <div className="run-resource__header">
+                      <span className="run-resource__label">Disk</span>
+                      <span className="run-resource__value">{resourceLoad.disk_pct}%</span>
+                    </div>
+                    <div className="run-resource__bar">
+                      <div
+                        className={`run-resource__fill ${resourceLoad.disk_pct >= 90 ? 'run-resource__fill--high' : resourceLoad.disk_pct >= 70 ? 'run-resource__fill--mid' : ''}`}
+                        style={{ width: `${resourceLoad.disk_pct}%` }}
+                      />
+                    </div>
+                  </div>
+                  {typeof resourceLoad.gpu_util_pct === 'number' && (
+                    <div className="run-resource">
+                      <div className="run-resource__header">
+                        <span className="run-resource__label">GPU</span>
+                        <span className="run-resource__value">
+                          {resourceLoad.gpu_util_pct}%
+                          {resourceLoad.gpu_memory_used_gb != null &&
+                          resourceLoad.gpu_memory_total_gb != null &&
+                          resourceLoad.gpu_memory_total_gb > 0
+                            ? ` · VRAM ${resourceLoad.gpu_memory_used_gb}/${resourceLoad.gpu_memory_total_gb} GB`
+                            : ''}
+                        </span>
+                      </div>
+                      <div className="run-resource__bar">
+                        <div
+                          className={`run-resource__fill ${resourceLoad.gpu_util_pct >= 90 ? 'run-resource__fill--high' : resourceLoad.gpu_util_pct >= 60 ? 'run-resource__fill--mid' : ''}`}
+                          style={{ width: `${resourceLoad.gpu_util_pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <div className="run-resource run-resource--inline">
+                    <span
+                      className="run-resource__label"
+                      title="Workflow jobs pending or running under this page’s session (same Session UUID), not all users on the server."
+                    >
+                      Session runs (active)
+                    </span>
+                    <span className="run-resource__badge">{resourceLoad.active_runs}</span>
+                  </div>
+                </div>
+              </article>
+            )}
 
             {status === 'error' && errorMsg && (
               <article className="run-sidebar-card">

@@ -98,6 +98,12 @@ function formatDetailValue(value: unknown) {
   return String(value);
 }
 
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function serviceDetailEntries(service: ServiceStatus) {
   const details = service.details || {};
   const preferredKeys: Record<string, string[]> = {
@@ -160,13 +166,15 @@ export default function Config() {
   usePageTitle('Configuration');
   const navigate = useNavigate();
   const location = useLocation();
-  const { file, projectName, demoMode, sampleDocumentKey, demoOptions } = (location.state as {
+  const { files, file, projectName, demoMode, sampleDocumentKey, demoOptions } = (location.state as {
+    files?: File[];
     file?: File;
     projectName?: string;
     demoMode?: boolean;
     sampleDocumentKey?: string;
     demoOptions?: DemoOptions;
   }) || {};
+  const selectedFiles = files?.length ? files : file ? [file] : [];
 
   const [config, setConfig] = useState<ConfigOverrides>(() => ({
     llm_provider: demoOptions?.default_ollama_provider,
@@ -293,13 +301,13 @@ export default function Config() {
     resolvedOllamaBaseUrl,
   ]);
 
-  if (!file && !sampleDocumentKey && !demoMode) {
+  if (!selectedFiles.length && !sampleDocumentKey && !demoMode) {
     return (
       <div className="min-h-screen pt-24 pb-16 px-6 bg-surface-secondary flex items-center justify-center">
         <div className="text-center">
-          <p className="text-text-secondary mb-4">No file selected. Please upload a document first (or enable Demo mode).</p>
+          <p className="text-text-secondary mb-4">No input files selected. Please upload document files first (or enable Demo mode).</p>
           <button
-            onClick={() => navigate('/upload')}
+            onClick={() => navigate(buildAppRoute('/upload'))}
             className="px-6 py-2.5 rounded-xl text-sm font-semibold text-white bg-primary hover:bg-primary-dark transition-colors cursor-pointer"
           >
             Go to Upload
@@ -322,7 +330,7 @@ export default function Config() {
         : prev.llm_base_url,
       llm_model: value === 'ollama'
         ? prev.llm_model || demoOptions?.default_ollama_model
-        : prev.llm_model,
+        : prev.llm_provider === 'ollama' ? undefined : prev.llm_model,
     }));
     if (value === 'ollama' && !config.llm_model) {
       setOllamaTagMode('preset');
@@ -339,8 +347,8 @@ export default function Config() {
     try {
       const hasOverrides = Object.values(config).some(Boolean);
       const result = await api.createProject({
-        file,
-        sampleDocument: sampleDocumentKey,
+        files: selectedFiles,
+        sampleDocument: selectedFiles.length ? undefined : sampleDocumentKey,
         projectName,
         configOverrides: hasOverrides ? config : undefined,
         demo: !!demoMode,
@@ -354,12 +362,18 @@ export default function Config() {
 
   const ollamaSelectValue = ollamaTagMode === 'custom' ? OLLAMA_CUSTOM_VALUE : config.llm_model || '';
   const startDisabled = submitting || Boolean(ollamaStartBlockedReason);
-  const selectedInputTitle = file
-    ? file.name
+  const selectedInputTitle = selectedFiles.length
+    ? selectedFiles.length === 1
+      ? selectedFiles[0].name
+      : `${selectedFiles.length} uploaded files`
     : sampleDocumentKey
       ? `Bundled sample: ${sampleDocumentKey}`
       : 'Demo mode';
-  const selectedInputMeta = projectName || 'Unnamed project';
+  const selectedInputMeta = selectedFiles.length
+    ? `${selectedFiles.reduce((total, next) => total + next.size, 0)} bytes · ${formatBytes(
+        selectedFiles.reduce((total, next) => total + next.size, 0),
+      )}`
+    : projectName || 'Unnamed project';
 
   return (
     <div className="page-frame">
@@ -367,7 +381,7 @@ export default function Config() {
         <header className="page-header">
           <button
             type="button"
-            onClick={() => navigate('/upload')}
+            onClick={() => navigate(buildAppRoute('/upload'))}
             className="page-backlink"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -503,9 +517,7 @@ export default function Config() {
                             onChange={(e) => {
                               if (e.target.value === OLLAMA_CUSTOM_VALUE) {
                                 setOllamaTagMode('custom');
-                                if (ollamaModels?.models.some((model) => model.name === config.llm_model)) {
-                                  update('llm_model', '');
-                                }
+                                update('llm_model', '');
                                 return;
                               }
                               setOllamaTagMode('preset');

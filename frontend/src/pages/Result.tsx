@@ -3,13 +3,16 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Download,
   FileDown,
   RefreshCw,
   Square,
   XCircle,
 } from 'lucide-react';
-import { api, type ArtifactInfo, type ProjectResponse } from '../api/client';
+import { api, type ArtifactInfo, type MemoryCloud, type ProjectResponse } from '../api/client';
+import WordCloud from '../components/WordCloud';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { buildAppRoute } from '../utils/session';
 import './InteriorPages.css';
@@ -47,23 +50,39 @@ export default function Result() {
   const [artifacts, setArtifacts] = useState<ArtifactInfo[]>([]);
   const [error, setError] = useState('');
   const [resolvedProjectId, setResolvedProjectId] = useState<string | null>(null);
+  const [showMinerU, setShowMinerU] = useState(false);
+  const [memCloud, setMemCloud] = useState<MemoryCloud | null>(null);
+  const [memCloudTab, setMemCloudTab] = useState<'session' | 'scope'>('session');
 
   useEffect(() => {
     if (!projectId) return;
+    let active = true;
     Promise.all([
       api.getProject(projectId),
       api.listArtifacts(projectId).catch(() => ({ project_id: projectId, artifacts: [] })),
     ])
       .then(([proj, arts]) => {
+        if (!active) return;
         setProject(proj);
         setArtifacts(arts.artifacts);
         setError('');
         setResolvedProjectId(projectId);
       })
       .catch((err) => {
+        if (!active) return;
         setError(err instanceof Error ? err.message : 'Failed to load project');
         setResolvedProjectId(projectId);
       });
+    return () => { active = false; };
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let active = true;
+    api.memoryCloud(projectId)
+      .then((data) => { if (active) setMemCloud(data); })
+      .catch(() => { /* memory unavailable, skip silently */ });
+    return () => { active = false; };
   }, [projectId]);
 
   const loading = Boolean(projectId) && resolvedProjectId !== projectId;
@@ -125,6 +144,10 @@ export default function Result() {
   const scores = Object.entries(project.confidence_scores || {});
   const summary = Object.entries(project.execution_summary || {});
   const recommendedArtifacts = ['metadata_json.json', 'validation_report.txt', 'workflow_report.json'];
+
+  const mainArtifacts = artifacts.filter((a) => !a.name.startsWith('mineru_'));
+  const mineruArtifacts = artifacts.filter((a) => a.name.startsWith('mineru_'));
+  const visibleArtifacts = showMinerU ? artifacts : mainArtifacts;
 
   return (
     <div className="page-frame">
@@ -241,12 +264,12 @@ export default function Result() {
                     workflow report before handing the output off to another system.
                   </p>
                 </div>
-                <div className="result-file-count">{artifacts.length} files</div>
+                <div className="result-file-count">{visibleArtifacts.length} files</div>
               </div>
 
-              {artifacts.length > 0 ? (
+              {visibleArtifacts.length > 0 ? (
                 <div className="result-file-list">
-                  {artifacts.map((artifact) => {
+                  {visibleArtifacts.map((artifact) => {
                     const filename = artifact.name.split('/').pop() || artifact.name;
                     return (
                       <div key={artifact.name} className="result-file-row">
@@ -283,6 +306,23 @@ export default function Result() {
                   No artifacts were listed for this project.
                 </div>
               )}
+
+              {mineruArtifacts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowMinerU((v) => !v)}
+                  className="result-mineru-toggle"
+                >
+                  {showMinerU ? (
+                    <ChevronDown className="w-4 h-4" aria-hidden="true" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4" aria-hidden="true" />
+                  )}
+                  {showMinerU
+                    ? `Hide MinerU intermediate files (${mineruArtifacts.length})`
+                    : `Show MinerU intermediate files (${mineruArtifacts.length})`}
+                </button>
+              )}
             </article>
           </section>
 
@@ -318,6 +358,55 @@ export default function Result() {
                 ))}
               </ul>
             </article>
+
+            {memCloud && memCloud.memory_enabled && (
+              <article className="result-memory-card">
+                <div className="result-memory-card__header">
+                  <h2 className="result-memory-card__title">Memory extractions</h2>
+                  <div className="result-memory-tabs">
+                    <button
+                      type="button"
+                      className={`result-memory-tab ${memCloudTab === 'session' ? 'is-active' : ''}`}
+                      onClick={() => setMemCloudTab('session')}
+                    >
+                      This run
+                      <span className="result-memory-tab__count">{memCloud.session_total}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`result-memory-tab ${memCloudTab === 'scope' ? 'is-active' : ''}`}
+                      onClick={() => setMemCloudTab('scope')}
+                    >
+                      All runs
+                      <span className="result-memory-tab__count">{memCloud.scope_total}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="result-memory-cloud">
+                  <WordCloud
+                    words={memCloudTab === 'session' ? memCloud.session_words : memCloud.scope_words}
+                    width={300}
+                    height={220}
+                  />
+                </div>
+
+                <div className="result-memory-legend">
+                  {[
+                    ['DocumentParser',        '#3b82f6'],
+                    ['KnowledgeRetriever',    '#10b981'],
+                    ['Planner',               '#8b5cf6'],
+                    ['MetadataJSONGenerator', '#f59e0b'],
+                    ['ValidationAgent',       '#ef4444'],
+                  ].map(([label, color]) => (
+                    <span key={label} className="result-memory-legend__item">
+                      <span className="result-memory-legend__dot" style={{ background: color }} />
+                      {label}
+                    </span>
+                  ))}
+                </div>
+              </article>
+            )}
 
             <button
               type="button"
