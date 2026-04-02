@@ -673,6 +673,57 @@ def build_mem0_config(
 _LOCAL_HOST_ALIASES = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 
 
+def _sanitize_collection_token(
+    value: Optional[str],
+    fallback: str,
+    max_length: int = 18,
+) -> str:
+    raw = (value or "").strip().lower()
+    token = "".join(
+        ch if ch.isalnum() else "-"
+        for ch in raw
+    ).strip("-")
+    while "--" in token:
+        token = token.replace("--", "-")
+    token = token[:max_length].strip("-")
+    return token or fallback
+
+
+def resolve_mem0_collection_name(
+    base_name: str,
+    *,
+    embedding_provider: str,
+    embedding_model: str,
+    embedding_dims: int,
+    embedding_base_url: Optional[str] = None,
+) -> str:
+    """Derive a stable Qdrant collection name for the effective embedding profile.
+
+    This prevents accidental reuse of the same collection across incompatible
+    embedding dimensions or providers.
+    """
+    base = (base_name or "fairifier_memories").strip()
+    fingerprint_source = json.dumps(
+        {
+            "provider": embedding_provider,
+            "model": embedding_model,
+            "dims": int(embedding_dims),
+            "base_url": embedding_base_url or "",
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    fingerprint = hashlib.sha1(
+        fingerprint_source.encode("utf-8")
+    ).hexdigest()[:10]
+    provider_token = _sanitize_collection_token(
+        embedding_provider, "embed"
+    )
+    return (
+        f"{base}__{provider_token}_{int(embedding_dims)}d_{fingerprint}"
+    )
+
+
 def _is_local_host(host: str) -> bool:
     return (host or "").strip().lower() in _LOCAL_HOST_ALIASES
 
@@ -1056,6 +1107,13 @@ def get_mem0_service() -> Optional[Mem0Service]:
                         return None
 
         mem0_config = build_mem0_config(
+            collection_name=resolve_mem0_collection_name(
+                config.mem0_collection_name,
+                embedding_provider=embedding_provider,
+                embedding_model=embedding_model,
+                embedding_dims=int(embedding_dims),
+                embedding_base_url=embedding_base_url,
+            ),
             llm_provider=mem0_llm_provider,
             llm_model=mem0_llm_model,
             llm_base_url=mem0_llm_base,
@@ -1067,7 +1125,6 @@ def get_mem0_service() -> Optional[Mem0Service]:
             embedding_model_dims=embedding_dims,
             qdrant_host=config.mem0_qdrant_host,
             qdrant_port=config.mem0_qdrant_port,
-            collection_name=config.mem0_collection_name,
         )
 
         _mem0_service = Mem0Service(mem0_config)

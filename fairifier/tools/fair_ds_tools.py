@@ -115,7 +115,7 @@ def create_fair_ds_tools(client=None, cache_store: Optional[Dict[str, Any]] = No
                 "itemCount": int,
                 "metadata": [
                     {
-                        "sheetName": str,
+                        "level": str,
                         "packageName": str,
                         "requirement": str,
                         "label": str,
@@ -124,6 +124,7 @@ def create_fair_ds_tools(client=None, cache_store: Optional[Dict[str, Any]] = No
                     ...
                 ]
             }
+            (``sheetName`` may appear instead of ``level`` on older servers.)
         """
         if _client is None:
             return {

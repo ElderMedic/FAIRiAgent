@@ -1,101 +1,54 @@
 # FAIRiAgent Apps
 
-This directory contains the Streamlit web UI and optional API components for FAIRiAgent.
+This directory contains the current web interfaces and API components.
 
-## 🎨 Streamlit Web UI
+## React Web UI
 
-The Streamlit web interface provides an interactive way to use FAIRiAgent without command-line access.
-
-### Features
-
-- 📄 **Document Upload**: Upload PDF, text, or markdown files
-- 💬 **Real-time Streaming**: Chat-like interface showing LLM responses as they're generated
-- 📊 **Live Logs**: Real-time processing logs and error display
-- ⚙️ **Configuration Management**: Configure LLM, LangSmith, and FAIR-DS settings
-- 🔍 **Result Review**: View and download generated metadata
-- 📋 **LLM API Logs**: View all LLM interactions in formatted display
-- 💾 **Runtime Config Export**: Automatic export of runtime configurations
-
-### Usage
+Default entry point:
 
 ```bash
-# Start the web UI
-python run_fairifier.py ui
-
-# Access at http://localhost:8501
+python run_fairifier.py webui
 ```
 
-### Configuration
+Open `http://localhost:8000`.
 
-The web UI includes a configuration page where you can:
-- Set LLM provider (Ollama, OpenAI, Qwen, Gemini, Anthropic)
-- Configure LLM parameters (model, temperature, max tokens, etc.)
-- Set up LangSmith tracing
-- Configure FAIR-DS API
-- Export configuration to .env file
+For local development:
 
-### Streaming Output
+```bash
+python run_fairifier.py dev
+```
 
-The UI features a chat-like streaming interface that displays:
-- Agent name and operation
-- Real-time LLM response streaming
-- Timestamp for each message
-- Formatted chat bubbles
+This runs:
+- backend on `8000`
+- Vite dev server on `5173`
 
-Enable/disable streaming in the "Upload & Process" tab.
+## API
 
-### Output Files
+```text
+frontend/           React + TypeScript + Vite
+fairifier/apps/api/ FastAPI backend under /api/v1
+```
 
-All outputs are saved to `output/<project_id>/`:
-- `metadata_json.json` - Generated metadata
-- `processing_log.jsonl` - Processing logs
-- `llm_responses.json` - All LLM interactions
-- `runtime_config.json` - Complete runtime configuration including:
-  - Input document path
-  - Environment variables (.env)
-  - LLM configuration
-  - Runtime settings
-  - Project metadata
+Project state is stored in SQLite. Progress updates are streamed with SSE. Result files are served from each run's output directory.
 
-### Example Usage
+Common routes:
 
-1. **Start the UI:**
-   ```bash
-   python run_fairifier.py ui
-   ```
+| Method | Path |
+| --- | --- |
+| `GET` | `/api/v1/health` |
+| `POST` | `/api/v1/projects` |
+| `GET` | `/api/v1/projects/{id}` |
+| `GET` | `/api/v1/projects/{id}/artifacts` |
+| `GET` | `/api/v1/projects/{id}/events` |
 
-2. **Upload a document:**
-   - Use the "📄 Upload & Process" tab
-   - Upload a PDF, text, or markdown file
-   - Or use the example file option (Earthworm paper)
+OpenAPI docs are available at `/docs`.
 
-3. **Configure settings:**
-   - Go to "⚙️ Configuration" tab
-   - Set LLM provider, model, and other parameters
-   - Save to session or export to .env file
+## Streamlit UI
 
-4. **Process the document:**
-   - Click "🚀 Process Document" button
-   - Watch real-time streaming output in the chat interface
-   - View processing logs and LLM API responses
+The legacy Streamlit UI is still available:
 
-5. **Review results:**
-   - Go to "🔍 Review Results" tab
-   - View generated metadata
-   - Download artifacts
+```bash
+python run_fairifier.py ui
+```
 
-## 🚀 API Server (Optional)
-
-The `api/` directory contains an optional FastAPI server for programmatic access.
-
-**Status**: Optional, not maintained  
-**Purpose**: REST API for web integration  
-**Usage**: Not recommended for production use  
-**Note**: May be removed in future versions
-
-## 📝 Notes
-
-- The Streamlit UI is the recommended way to interact with FAIRiAgent interactively
-- All configurations can be managed through the web UI
-- Runtime configurations are automatically saved for each run
-- The UI supports both streaming and non-streaming modes
+Open `http://localhost:8501`.

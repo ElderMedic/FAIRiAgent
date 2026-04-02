@@ -67,47 +67,10 @@ fi
 
 echo ""
 
-# Create test document if it doesn't exist
-TEST_DOC="examples/inputs/test_document.txt"
+TEST_DOC="examples/inputs/earthworm_4n_paper_bioRxiv.pdf"
 if [ ! -f "$TEST_DOC" ]; then
-    echo "📝 Creating test document..."
-    mkdir -p examples/inputs
-    cat > "$TEST_DOC" << 'EOF'
-Title: Microbial Diversity in Alpine Grassland Soils
-
-Authors: Dr. John Smith, Dr. Jane Doe, Prof. Alice Johnson
-
-Abstract: This study investigates microbial community composition and diversity 
-in alpine grassland soils across elevation gradients in the Swiss Alps. We employed 
-shotgun metagenomics sequencing to characterize bacterial and archaeal populations 
-at three altitude zones (2000m, 2500m, 3000m).
-
-Keywords: metagenomics, alpine ecology, soil microbiome, microbial diversity, 
-elevation gradient, bacterial communities
-
-Study Location: Grindelwald region, Swiss Alps
-Coordinates: 46.62°N, 8.04°E
-Elevation: 2000-3000 meters above sea level
-
-Sampling Design:
-- Three elevation zones with three replicates each
-- Total samples: 9 soil cores
-- Depth: 0-10 cm
-- Period: Summer 2024
-
-Environmental Parameters:
-- Temperature: 5-15°C (summer)
-- pH: 5.5-6.5
-- Soil type: Alpine brown soil
-
-Methods:
-- DNA Extraction: DNeasy PowerSoil Kit
-- Sequencing: Illumina NovaSeq 6000
-- Read length: 2x150bp paired-end
-- Assembly: metaSPAdes
-- Analysis: Kraken2, KEGG annotation
-EOF
-    echo "  ✅ Created $TEST_DOC"
+    echo "❌ Bundled sample not found: $TEST_DOC"
+    exit 1
 fi
 
 # Create output directory
@@ -155,4 +118,3 @@ else
 fi
 
 echo ""
-

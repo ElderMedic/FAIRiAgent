@@ -1,5 +1,6 @@
 """Configuration management for FAIRifier."""
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
@@ -81,14 +82,17 @@ class FAIRifierConfig:
     # Modern LLMs support 200K+ tokens (~800K chars), these limits are conservative
     max_doc_context_markdown: int = 200000  # Conservative default to cap input-token cost in test/dev
     max_doc_context_text: int = 120000      # Conservative default to cap input-token cost in test/dev
+    multi_file_max_inputs: int = 8  # Cap number of files aggregated from directory/zip input
+    table_preview_max_rows: int = 120  # Cap tabular rows rendered into text context
+    table_preview_max_cols: int = 24  # Cap tabular columns rendered into text context
     
     # Processing limits
     max_document_size_mb: int = 50
     max_processing_time_minutes: int = 10
     
     # Retry configuration
-    max_step_retries: int = 1  # Conservative default for test/dev token control
-    max_global_retries: int = 2  # Conservative default for test/dev token control
+    max_step_retries: int = 2  # Default budget favors robustness over minimum token spend
+    max_global_retries: int = 5  # Allow planner/critic loops to recover from upstream misses
     
     # Confidence thresholds
     min_confidence_threshold: float = 0.75
@@ -127,10 +131,15 @@ class FAIRifierConfig:
     mineru_backend: str = "vlm-http-client"
     mineru_server_url: Optional[str] = "http://localhost:30000"
     mineru_timeout_seconds: int = 300
+    # Reuse MinerU GPU output for identical uploads (SHA-256 of file bytes)
+    mineru_cache_enabled: bool = True
+    # Shared across runs; keep next to default ``output`` so permissions match project outputs
+    mineru_cache_dir: Path = project_root / "output" / ".mineru_cache"
 
     # Deep agent inner-loop contracts
-    react_loop_max_iterations: int = 4
-    react_loop_max_tool_calls: int = 12
+    react_loop_max_iterations: int = 6
+    react_loop_max_tool_calls: int = 18
+    cross_layer_max_restarts: int = 1  # Max rollback cycles from JSON -> retrieval
     react_loop_document_parser_target_fields: int = 6
     react_loop_document_parser_target_packets: int = 8
     react_loop_knowledge_retriever_target_packages: int = 4
@@ -195,6 +204,15 @@ class FAIRifierConfig:
         # Ensure checkpoint DB parent directory exists if using sqlite
         if self.checkpointer_backend == "sqlite":
             self.checkpoint_db_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.mineru_cache_enabled:
+            try:
+                self.mineru_cache_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                logging.getLogger(__name__).warning(
+                    "MinerU cache directory not usable (%s): %s — caching disabled at startup",
+                    self.mineru_cache_dir,
+                    exc,
+                )
 
 
 def apply_env_overrides(config_instance: FAIRifierConfig):
@@ -232,6 +250,16 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.react_loop_max_iterations = int(os.getenv("REACT_LOOP_MAX_ITERATIONS"))
     if os.getenv("REACT_LOOP_MAX_TOOL_CALLS"):
         config_instance.react_loop_max_tool_calls = int(os.getenv("REACT_LOOP_MAX_TOOL_CALLS"))
+    if os.getenv("FAIRIFIER_MULTI_FILE_MAX_INPUTS"):
+        config_instance.multi_file_max_inputs = int(os.getenv("FAIRIFIER_MULTI_FILE_MAX_INPUTS"))
+    if os.getenv("FAIRIFIER_TABLE_PREVIEW_MAX_ROWS"):
+        config_instance.table_preview_max_rows = int(os.getenv("FAIRIFIER_TABLE_PREVIEW_MAX_ROWS"))
+    if os.getenv("FAIRIFIER_TABLE_PREVIEW_MAX_COLS"):
+        config_instance.table_preview_max_cols = int(os.getenv("FAIRIFIER_TABLE_PREVIEW_MAX_COLS"))
+    if os.getenv("FAIRIFIER_CROSS_LAYER_MAX_RESTARTS"):
+        config_instance.cross_layer_max_restarts = int(
+            os.getenv("FAIRIFIER_CROSS_LAYER_MAX_RESTARTS")
+        )
 
     if os.getenv("QDRANT_URL"):
         config_instance.qdrant_url = os.getenv("QDRANT_URL")
@@ -434,6 +462,11 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("MINERU_TIMEOUT_SECONDS"):
         timeout_value = os.getenv("MINERU_TIMEOUT_SECONDS")
         config_instance.mineru_timeout_seconds = int(timeout_value)
+    if os.getenv("MINERU_CACHE_ENABLED"):
+        v = os.getenv("MINERU_CACHE_ENABLED", "").strip().lower()
+        config_instance.mineru_cache_enabled = v not in ("0", "false", "no", "off")
+    if os.getenv("MINERU_CACHE_DIR"):
+        config_instance.mineru_cache_dir = Path(os.getenv("MINERU_CACHE_DIR"))
     
     # Checkpointer configuration
     if os.getenv("CHECKPOINTER_BACKEND"):
@@ -558,13 +591,16 @@ def apply_budget_guardrails(config_instance: FAIRifierConfig):
     config_instance.max_doc_context_text = min(
         config_instance.max_doc_context_text, 120000
     )
-    config_instance.max_step_retries = min(config_instance.max_step_retries, 1)
-    config_instance.max_global_retries = min(config_instance.max_global_retries, 2)
+    config_instance.max_step_retries = min(config_instance.max_step_retries, 2)
+    config_instance.max_global_retries = min(config_instance.max_global_retries, 5)
     config_instance.react_loop_max_iterations = min(
-        config_instance.react_loop_max_iterations, 4
+        config_instance.react_loop_max_iterations, 6
     )
     config_instance.react_loop_max_tool_calls = min(
-        config_instance.react_loop_max_tool_calls, 12
+        config_instance.react_loop_max_tool_calls, 18
+    )
+    config_instance.cross_layer_max_restarts = min(
+        config_instance.cross_layer_max_restarts, 2
     )
 
 

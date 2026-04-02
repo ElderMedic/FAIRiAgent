@@ -4,7 +4,9 @@ FAIR-DS API Parser - 解析真实的 FAIR-DS API 返回数据
 API Version: Latest (January 2026)
 Endpoints:
     - GET /api/terms - Get all terms or filter by label/definition
-    - GET /api/package - Get all packages or specific package by name
+    - GET /api/package - Package list (no query) or one package?s fields (``?name=``)
+
+Package field rows may use ``sheetName`` (legacy) or ``level`` (current FAIRDS) for the ISA layer.
 """
 
 import logging
@@ -27,6 +29,61 @@ class FAIRDSAPIParser:
     
     # ISA Sheets in hierarchy order
     ISA_SHEETS = ["investigation", "study", "observationunit", "sample", "assay"]
+
+    @staticmethod
+    def normalize_isa_sheet(raw: Optional[Any]) -> str:
+        """Map FAIR-DS / API sheet labels to a canonical ISA sheet name.
+
+        API responses may use ``sheetName``, ``sheet``, different casing, or
+        spellings such as "Observation Unit" vs ``observationunit``. Empty or
+        unknown values default to ``study`` so downstream code never sees "".
+        """
+        if raw is None:
+            return "study"
+        s = str(raw).strip()
+        if not s or s.lower() == "unknown":
+            return "study"
+        key = s.lower().replace("_", " ").replace("-", " ")
+        key = " ".join(key.split())
+        compact = key.replace(" ", "")
+
+        if compact in (
+            "investigation",
+            "study",
+            "assay",
+            "sample",
+            "observationunit",
+        ):
+            return compact
+        if "investigation" in key:
+            return "investigation"
+        if "observation" in key and "unit" in key:
+            return "observationunit"
+        if key in ("observation", "obs unit", "obsunit"):
+            return "observationunit"
+        if "assay" in key and len(key) <= 12:
+            return "assay"
+        if "sample" in key and "assay" not in key:
+            return "sample"
+        if "study" in key:
+            return "study"
+        return "study"
+
+    @staticmethod
+    def raw_isa_level_from_field(field: Dict[str, Any]) -> Any:
+        """Return the ISA sheet / level string from a package ``metadata`` row.
+
+        FAIRDS may expose either ``sheetName`` or ``level`` (same semantics).
+        """
+        if not isinstance(field, dict):
+            return None
+        return (
+            field.get("sheetName")
+            or field.get("level")
+            or field.get("sheet")
+            or field.get("isaSheet")
+            or field.get("isa_sheet")
+        )
     
     @staticmethod
     def parse_terms_response(api_response: Any) -> Dict[str, Dict[str, Any]]:
@@ -141,10 +198,9 @@ class FAIRDSAPIParser:
         grouped: Dict[str, List[Dict[str, Any]]] = {}
         
         for field in fields:
-            sheet = field.get("sheetName", "Unknown")
-            if sheet not in grouped:
-                grouped[sheet] = []
-            grouped[sheet].append(field)
+            sheet_raw = FAIRDSAPIParser.raw_isa_level_from_field(field)
+            canon = FAIRDSAPIParser.normalize_isa_sheet(sheet_raw)
+            grouped.setdefault(canon, []).append(field)
         
         return grouped
     
@@ -206,7 +262,8 @@ class FAIRDSAPIParser:
         result: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
         
         for field in fields:
-            sheet = field.get("sheetName", "Unknown")
+            sheet_raw = FAIRDSAPIParser.raw_isa_level_from_field(field)
+            sheet = FAIRDSAPIParser.normalize_isa_sheet(sheet_raw)
             req = field.get("requirement", "OPTIONAL").upper()
             
             if sheet not in result:
@@ -246,6 +303,9 @@ class FAIRDSAPIParser:
         返回标准化的字段信息
         """
         term = field.get("term", {})
+        sheet_raw = FAIRDSAPIParser.raw_isa_level_from_field(field)
+        isa_sheet = FAIRDSAPIParser.normalize_isa_sheet(sheet_raw)
+        sheet_display = sheet_raw if sheet_raw is not None else ""
         
         return {
             "name": field.get("label", ""),
@@ -254,8 +314,8 @@ class FAIRDSAPIParser:
             "required": field.get("requirement") == "MANDATORY",
             "requirement": field.get("requirement", "OPTIONAL"),
             "package": field.get("packageName", ""),
-            "isa_sheet": field.get("sheetName", "").lower(),
-            "sheet": field.get("sheetName", ""),
+            "isa_sheet": isa_sheet,
+            "sheet": str(sheet_display).strip(),
             "syntax": term.get("syntax", ""),
             "example": term.get("example", ""),
             "regex": term.get("regex", ""),
@@ -450,7 +510,7 @@ class FAIRDSAPIParser:
         seen_labels_by_sheet = {sheet: set() for sheet in FAIRDSAPIParser.ISA_SHEETS}
         
         for sheet_name, fields in packages_by_sheet.items():
-            normalized_sheet = sheet_name.lower()
+            normalized_sheet = FAIRDSAPIParser.normalize_isa_sheet(sheet_name)
             if normalized_sheet not in FAIRDSAPIParser.ISA_SHEETS:
                 continue
             
