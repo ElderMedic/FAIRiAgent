@@ -67,8 +67,13 @@ class JSONGeneratorAgent(BaseAgent):
                 f"from KnowledgeRetriever (already filtered for relevance)"
             )
             metadata_fields = await self._generate_with_llm(
-                doc_info, knowledge_items, document_context, critic_feedback, planner_instruction,
-                prior_memory_context=prior_memory_context or None
+                doc_info,
+                knowledge_items,
+                document_context,
+                critic_feedback,
+                planner_instruction,
+                prior_memory_context=prior_memory_context or None,
+                selected_packages=state.get("selected_packages"),
             )
             self.log_execution(
                 state, 
@@ -140,7 +145,8 @@ class JSONGeneratorAgent(BaseAgent):
         document_text: str,
         critic_feedback: Optional[Dict[str, Any]] = None,
         planner_instruction: Optional[str] = None,
-        prior_memory_context: Optional[str] = None
+        prior_memory_context: Optional[str] = None,
+        selected_packages: Optional[List[str]] = None,
     ) -> List[MetadataField]:
         """
         Generate metadata fields with LLM-based value extraction.
@@ -180,16 +186,30 @@ class JSONGeneratorAgent(BaseAgent):
             prior_memory_context=prior_memory_context
         )
         
+        # Order items so KnowledgeRetriever's selected_packages wins duplicate MIxS labels
+        pref_index = {
+            str(p).strip().lower(): i
+            for i, p in enumerate(selected_packages or [])
+            if str(p).strip()
+        }
+
+        def _pkg_order(item: Dict[str, Any]) -> tuple[int, str]:
+            pkg = str(item.get("metadata", {}).get("package", "")).strip().lower()
+            return (pref_index.get(pkg, 10_000), pkg)
+
+        knowledge_items_ordered = sorted(knowledge_items, key=_pkg_order)
+
         # Build lookup for knowledge items (to get FAIR-DS metadata)
         # Use multiple keys for matching: term, name, label (normalized)
-        knowledge_lookup = {}
-        for item in knowledge_items:
+        knowledge_lookup: Dict[str, Dict[str, Any]] = {}
+        for item in knowledge_items_ordered:
             term = item.get('term', '').lower().strip()
-            # Add multiple lookup keys for flexible matching
-            knowledge_lookup[term] = item
-            # Also add normalized versions (remove spaces, underscores, etc.)
+            if not term:
+                continue
+            if term not in knowledge_lookup:
+                knowledge_lookup[term] = item
             normalized = term.replace(' ', '').replace('_', '').replace('-', '')
-            if normalized and normalized != term:
+            if normalized and normalized != term and normalized not in knowledge_lookup:
                 knowledge_lookup[normalized] = item
         
         # Build lookup from selected_fields to preserve original field names
@@ -220,10 +240,9 @@ class JSONGeneratorAgent(BaseAgent):
                         normalized_original = original_name.replace(' ', '').replace('_', '').replace('-', '')
                         knowledge_item = knowledge_lookup.get(normalized_original, None)
             
-            # 4. Fuzzy match: find best match in knowledge_items
+            # 4. Fuzzy match: find best match (prefer packages earlier in selected_packages)
             if not knowledge_item:
-                # Try to find similar field names
-                for item in knowledge_items:
+                for item in knowledge_items_ordered:
                     term = item.get('term', '').lower().strip()
                     # Simple similarity check: if field_name contains term or vice versa
                     if (field_name_lower in term or term in field_name_lower) and len(term) > 3:
@@ -339,6 +358,18 @@ class JSONGeneratorAgent(BaseAgent):
             
             # Document information summary (compact view; derived from flexible LLM extraction)
             "document_info": self._build_document_info_compact(doc_info),
+            "multi_file_parse_summary": {
+                "source_count": len(state.get("document_info_by_source", []) or []),
+                "sources": [
+                    {
+                        "source_path": item.get("source_path"),
+                        "field_count": item.get("field_count"),
+                        "status": item.get("status"),
+                    }
+                    for item in (state.get("document_info_by_source", []) or [])[:20]
+                    if isinstance(item, dict)
+                ],
+            },
             "evidence_packets_summary": {
                 "count": len(state.get("evidence_packets", []) or []),
                 "fields": sorted(

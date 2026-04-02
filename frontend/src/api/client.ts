@@ -141,6 +141,10 @@ async function request<T>(path: string, options?: RequestInit, session?: WebSess
   for (const [key, value] of Object.entries(sessionHeaders)) {
     headers.set(key, value);
   }
+  // FormData must not carry an explicit Content-Type (browser sets boundary).
+  if (typeof FormData !== 'undefined' && options?.body instanceof FormData) {
+    headers.delete('Content-Type');
+  }
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers,

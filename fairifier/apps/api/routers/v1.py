@@ -48,6 +48,34 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["v1"])
 
+
+async def _gather_project_uploads(
+    request: Request,
+    files: Optional[list[UploadFile]],
+    file: Optional[UploadFile],
+) -> list[UploadFile]:
+    """Collect uploaded parts for ``/projects`` (multipart field ``files`` / ``file``).
+
+    FastAPI/Starlette can fail to bind repeated ``files`` parts into ``list[UploadFile]``
+    in some client/version combinations; fall back to parsing :meth:`Request.form`.
+    """
+    uploaded: list[UploadFile] = []
+    if files is not None:
+        if isinstance(files, list):
+            uploaded.extend(files)
+        else:
+            uploaded.append(files)
+    if file is not None:
+        uploaded.append(file)
+    if uploaded:
+        return uploaded
+    form = await request.form()
+    for key in ("files", "file"):
+        for part in form.getlist(key):
+            if isinstance(part, UploadFile):
+                uploaded.append(part)
+    return uploaded
+
 API_VERSION = "1.4.0"
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_OLLAMA_PROVIDER = "ollama"
@@ -703,11 +731,7 @@ async def create_project(
         request
     )
 
-    uploaded_files: list[UploadFile] = []
-    if files:
-        uploaded_files.extend(files)
-    if file is not None:
-        uploaded_files.append(file)
+    uploaded_files = await _gather_project_uploads(request, files, file)
 
     if not uploaded_files and not sample_document:
         raise HTTPException(

@@ -342,6 +342,10 @@ export default function Config() {
       setError(`Start blocked: ${ollamaStartBlockedReason}`);
       return;
     }
+    if (!selectedFiles.length && !(sampleDocumentKey && sampleDocumentKey.trim())) {
+      setError('Upload at least one file or choose a bundled sample document.');
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {

@@ -755,8 +755,14 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             if all_terms_to_search and self.fair_ds_client:
                 self.log_execution(state, f"🔍 Phase 4: Searching for {len(all_terms_to_search)} additional terms...")
                 term_search_outcomes: Dict[str, Dict[str, int]] = {}
-                required_search_term_keys = {
-                    str(term).strip().lower() for term in required_search_terms if str(term).strip()
+                # Only attribute fields to packages the workflow actually selected (Phase 1).
+                # Searching all available packages and deduping by label alone used to pull
+                # MIxS duplicates (e.g. "target gene" from "human oral") even when that package
+                # was never selected — disagreeing with LangSmith package-selection traces.
+                selected_pkg_norm = {
+                    str(p).strip().lower()
+                    for p in selected_package_names
+                    if str(p).strip()
                 }
                 for term in all_terms_to_search:
                     term_key = str(term).strip().lower()
@@ -780,14 +786,12 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                             state["additional_terms"] = []
                         state["additional_terms"].extend(found_terms)
                     
-                    # Also search across packages for fields with matching labels (tool)
-                    # Convert list to comma-separated string for tool
-                    if term_key in required_search_term_keys:
-                        search_scope_packages = available_package_names
-                    else:
-                        search_scope_packages = list(
-                            dict.fromkeys(selected_package_names + priority_package_hints)
-                        )
+                    # Also search across packages for fields with matching labels (tool).
+                    # Scope is selected + publication/domain hints — never the full registry
+                    # (required terms used to search everything and pick arbitrary MIxS duplicates).
+                    search_scope_packages = list(
+                        dict.fromkeys(selected_package_names + priority_package_hints)
+                    )
                     package_names_str = ",".join(search_scope_packages) if search_scope_packages else None
                     fields_search_result = self.tools["search_fields_in_packages"].invoke({
                         "field_label": term,
@@ -801,12 +805,17 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                             state,
                             f"   📦 Found {len(found_fields)} fields matching '{term}' across packages"
                         )
-                        # Add unique fields to final selection
+                        # Add unique fields to final selection (label-level), only from
+                        # selected packages so package_source matches agent-chosen packages.
                         existing_labels = {f.get("label") for f in final_selected_fields}
                         for field in found_fields:
-                            if field.get("label") not in existing_labels:
+                            label = field.get("label")
+                            pkg_norm = str(field.get("packageName") or "").strip().lower()
+                            if not label or pkg_norm not in selected_pkg_norm:
+                                continue
+                            if label not in existing_labels:
                                 final_selected_fields.append(field)
-                                existing_labels.add(field.get("label"))
+                                existing_labels.add(label)
                     term_search_outcomes[term_key] = {
                         "terms_found": term_hits,
                         "fields_found": field_hits,
