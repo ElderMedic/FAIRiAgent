@@ -1,6 +1,7 @@
 """V1 API router -- versioned under ``/api/v1``."""
 
 import asyncio
+from collections import Counter
 import importlib.util
 import json
 import logging
@@ -25,6 +26,13 @@ from fastapi import (
 from fastapi.responses import FileResponse, StreamingResponse
 
 from ..models import (
+    FAIRDSISAStatistics,
+    FAIRDSPackageStatistics,
+    FAIRDSRequirementCount,
+    FAIRDSStatisticsResponse,
+    FAIRDSStatisticsTotals,
+    FAIRDSTermQuality,
+    FAIRDSTermStatistics,
     DemoDocumentResponse,
     DemoOptionsResponse,
     HealthResponse,
@@ -575,6 +583,354 @@ def _build_system_status() -> SystemStatusResponse:
     )
 
 
+def _normalize_requirement(raw: object) -> str:
+    value = str(raw or "OPTIONAL").strip().upper()
+    if value == "MANDATORY":
+        return "mandatory"
+    if value == "RECOMMENDED":
+        return "recommended"
+    return "optional"
+
+
+def _empty_fairds_statistics(
+    *,
+    api_url: Optional[str],
+    message: str,
+) -> FAIRDSStatisticsResponse:
+    generated_at = datetime.now(timezone.utc).isoformat()
+    empty_totals = FAIRDSStatisticsTotals(
+        packages=0,
+        fields=0,
+        mandatory_fields=0,
+        recommended_fields=0,
+        optional_fields=0,
+        terms=0,
+        unique_field_labels=0,
+        packages_with_no_fields=0,
+        terms_referenced_in_packages=0,
+        mandatory_ratio=0.0,
+    )
+    return FAIRDSStatisticsResponse(
+        available=False,
+        api_url=api_url,
+        message=message,
+        generated_at=generated_at,
+        totals=empty_totals,
+        requirement_distribution=[
+            FAIRDSRequirementCount(requirement="mandatory", count=0),
+            FAIRDSRequirementCount(requirement="recommended", count=0),
+            FAIRDSRequirementCount(requirement="optional", count=0),
+        ],
+        isa_levels=[],
+        package_leaderboard=[],
+        top_terms=[],
+        term_quality=FAIRDSTermQuality(
+            with_definition=0,
+            with_example=0,
+            with_regex=0,
+            with_ontology_url=0,
+        ),
+    )
+
+
+def _build_fairds_statistics(
+    *,
+    force_refresh: bool = False,
+    top_terms_limit: int = 12,
+    package_limit: int = 15,
+) -> FAIRDSStatisticsResponse:
+    from fairifier.config import config as fc
+    from fairifier.services.fair_data_station import (
+        FAIRDataStationClient,
+    )
+    from fairifier.services.fairds_api_parser import (
+        FAIRDSAPIParser,
+    )
+
+    api_url = fc.fair_ds_api_url
+    if not api_url:
+        return _empty_fairds_statistics(
+            api_url=None,
+            message="FAIR-DS API URL is not configured.",
+        )
+
+    try:
+        client = FAIRDataStationClient(api_url, timeout=12)
+    except Exception as exc:
+        return _empty_fairds_statistics(
+            api_url=api_url,
+            message=f"Failed to initialize FAIR-DS client: {exc}",
+        )
+
+    if not client.is_available():
+        return _empty_fairds_statistics(
+            api_url=api_url,
+            message="FAIR-DS API is unreachable.",
+        )
+
+    try:
+        raw_packages = client.get_available_packages(
+            force_refresh=force_refresh
+        )
+        package_names = sorted(
+            {
+                str(name).strip()
+                for name in raw_packages
+                if str(name).strip()
+            }
+        )
+
+        raw_terms = client.get_terms(force_refresh=force_refresh)
+        terms = (
+            raw_terms if isinstance(raw_terms, dict) else {}
+        )
+
+        isa_levels = list(FAIRDSAPIParser.ISA_SHEETS)
+        isa_stats: dict[str, dict] = {
+            level: {
+                "fields": 0,
+                "mandatory_fields": 0,
+                "recommended_fields": 0,
+                "optional_fields": 0,
+                "packages": set(),
+            }
+            for level in isa_levels
+        }
+
+        requirement_counter: Counter = Counter(
+            {
+                "mandatory": 0,
+                "recommended": 0,
+                "optional": 0,
+            }
+        )
+        term_reference_counter: Counter = Counter()
+        package_rows: list[FAIRDSPackageStatistics] = []
+        unique_field_labels: set[str] = set()
+        packages_with_no_fields = 0
+        total_fields = 0
+
+        term_count = 0
+        term_quality = {
+            "with_definition": 0,
+            "with_example": 0,
+            "with_regex": 0,
+            "with_ontology_url": 0,
+        }
+        known_term_keys: set[str] = set()
+
+        for term_name, term_info in terms.items():
+            if not isinstance(term_info, dict):
+                continue
+            term_count += 1
+            key = str(term_name).strip().lower()
+            if key:
+                known_term_keys.add(key)
+            label = str(term_info.get("label") or "").strip().lower()
+            if label:
+                known_term_keys.add(label)
+            if str(term_info.get("definition") or "").strip():
+                term_quality["with_definition"] += 1
+            if str(term_info.get("example") or "").strip():
+                term_quality["with_example"] += 1
+            if str(term_info.get("regex") or "").strip():
+                term_quality["with_regex"] += 1
+            if str(term_info.get("url") or "").strip():
+                term_quality["with_ontology_url"] += 1
+
+        for package_name in package_names:
+            package_data = client.get_package(
+                package_name, force_refresh=force_refresh
+            )
+            metadata = []
+            if isinstance(package_data, dict):
+                raw_metadata = package_data.get("metadata")
+                if isinstance(raw_metadata, list):
+                    metadata = raw_metadata
+
+            if not metadata:
+                packages_with_no_fields += 1
+
+            pkg_counter: Counter = Counter(
+                {
+                    "mandatory": 0,
+                    "recommended": 0,
+                    "optional": 0,
+                }
+            )
+            pkg_term_linked_fields = 0
+            pkg_isa_levels: set[str] = set()
+
+            for field in metadata:
+                if not isinstance(field, dict):
+                    continue
+
+                total_fields += 1
+                requirement = _normalize_requirement(
+                    field.get("requirement")
+                )
+                requirement_counter[requirement] += 1
+                pkg_counter[requirement] += 1
+
+                raw_isa_level = FAIRDSAPIParser.raw_isa_level_from_field(
+                    field
+                )
+                isa_level = FAIRDSAPIParser.normalize_isa_sheet(
+                    raw_isa_level
+                )
+                if isa_level not in isa_stats:
+                    isa_stats[isa_level] = {
+                        "fields": 0,
+                        "mandatory_fields": 0,
+                        "recommended_fields": 0,
+                        "optional_fields": 0,
+                        "packages": set(),
+                    }
+                isa_stats[isa_level]["fields"] += 1
+                isa_stats[isa_level][
+                    f"{requirement}_fields"
+                ] += 1
+                isa_stats[isa_level]["packages"].add(package_name)
+                pkg_isa_levels.add(isa_level)
+
+                label = str(field.get("label") or "").strip()
+                if label:
+                    unique_field_labels.add(label.lower())
+
+                term_payload = field.get("term")
+                term_label = ""
+                if isinstance(term_payload, dict):
+                    term_label = str(
+                        term_payload.get("label") or ""
+                    ).strip()
+                if not term_label and label:
+                    term_label = label
+                if term_label:
+                    term_reference_counter[
+                        term_label.lower()
+                    ] += 1
+                    pkg_term_linked_fields += 1
+
+            package_rows.append(
+                FAIRDSPackageStatistics(
+                    package_name=package_name,
+                    fields=sum(pkg_counter.values()),
+                    mandatory_fields=pkg_counter["mandatory"],
+                    recommended_fields=pkg_counter["recommended"],
+                    optional_fields=pkg_counter["optional"],
+                    isa_level_count=len(pkg_isa_levels),
+                    term_linked_fields=pkg_term_linked_fields,
+                )
+            )
+
+        ordered_isa_levels = isa_levels + sorted(
+            level
+            for level in isa_stats.keys()
+            if level not in isa_levels
+        )
+        isa_rows = [
+            FAIRDSISAStatistics(
+                isa_level=isa_level,
+                fields=isa_stats[isa_level]["fields"],
+                mandatory_fields=isa_stats[isa_level][
+                    "mandatory_fields"
+                ],
+                recommended_fields=isa_stats[isa_level][
+                    "recommended_fields"
+                ],
+                optional_fields=isa_stats[isa_level][
+                    "optional_fields"
+                ],
+                packages_count=len(
+                    isa_stats[isa_level]["packages"]
+                ),
+            )
+            for isa_level in ordered_isa_levels
+            if isa_stats[isa_level]["fields"] > 0
+        ]
+
+        package_leaderboard = sorted(
+            package_rows,
+            key=lambda row: (
+                -row.fields,
+                -row.mandatory_fields,
+                row.package_name,
+            ),
+        )[:package_limit]
+
+        top_terms = [
+            FAIRDSTermStatistics(term=term, field_count=count)
+            for term, count in term_reference_counter.most_common(
+                top_terms_limit
+            )
+        ]
+
+        matched_terms = {
+            term
+            for term in term_reference_counter.keys()
+            if term in known_term_keys
+        }
+
+        mandatory_ratio = (
+            round(
+                requirement_counter["mandatory"] / total_fields,
+                4,
+            )
+            if total_fields
+            else 0.0
+        )
+
+        totals = FAIRDSStatisticsTotals(
+            packages=len(package_names),
+            fields=total_fields,
+            mandatory_fields=requirement_counter["mandatory"],
+            recommended_fields=requirement_counter["recommended"],
+            optional_fields=requirement_counter["optional"],
+            terms=term_count,
+            unique_field_labels=len(unique_field_labels),
+            packages_with_no_fields=packages_with_no_fields,
+            terms_referenced_in_packages=len(matched_terms),
+            mandatory_ratio=mandatory_ratio,
+        )
+
+        return FAIRDSStatisticsResponse(
+            available=True,
+            api_url=api_url,
+            message=(
+                f"Loaded {len(package_names)} packages and "
+                f"{term_count} terms from FAIR-DS."
+            ),
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            totals=totals,
+            requirement_distribution=[
+                FAIRDSRequirementCount(
+                    requirement="mandatory",
+                    count=requirement_counter["mandatory"],
+                ),
+                FAIRDSRequirementCount(
+                    requirement="recommended",
+                    count=requirement_counter["recommended"],
+                ),
+                FAIRDSRequirementCount(
+                    requirement="optional",
+                    count=requirement_counter["optional"],
+                ),
+            ],
+            isa_levels=isa_rows,
+            package_leaderboard=package_leaderboard,
+            top_terms=top_terms,
+            term_quality=FAIRDSTermQuality(**term_quality),
+        )
+    except Exception as exc:
+        logger.exception(
+            "Failed to build FAIR-DS statistics"
+        )
+        return _empty_fairds_statistics(
+            api_url=api_url,
+            message=f"Failed to build FAIR-DS statistics: {exc}",
+        )
+
+
 # ------------------------------------------------------------------
 # Health
 # ------------------------------------------------------------------
@@ -701,6 +1057,23 @@ async def ollama_models(
         reachable=reachable,
         message=message,
         models=normalized_models,
+    )
+
+
+@router.get(
+    "/fairds/statistics",
+    response_model=FAIRDSStatisticsResponse,
+)
+async def fairds_statistics(
+    refresh: bool = Query(default=False),
+    top: int = Query(default=12, ge=3, le=30),
+    packages: int = Query(default=15, ge=5, le=40),
+) -> FAIRDSStatisticsResponse:
+    return await asyncio.to_thread(
+        _build_fairds_statistics,
+        force_refresh=refresh,
+        top_terms_limit=top,
+        package_limit=packages,
     )
 
 
@@ -1113,9 +1486,10 @@ async def memory_cloud(project_id: str, request: Request) -> MemoryCloudResponse
     Only word frequencies and agent categories are exposed — no raw memory text,
     no file paths, no user identifiers.
     """
-    from fairifier.services.mem0_service import mem0_service
+    from fairifier.services.mem0_service import get_mem0_service
 
-    if not mem0_service.is_available():
+    mem0 = get_mem0_service()
+    if mem0 is None or not mem0.is_available():
         return MemoryCloudResponse(
             session_words=[],
             scope_words=[],
@@ -1132,13 +1506,13 @@ async def memory_cloud(project_id: str, request: Request) -> MemoryCloudResponse
 
     # session scope = this run only
     session_id = project_data.get("session_id") or project_id
-    session_mems = mem0_service.list_memories(session_id=session_id)
+    session_mems = mem0.list_memories(session_id=session_id)
 
     # shared scope = cross-run learning pool (may equal session_id if not configured)
     from fairifier.config import config as fc
     scope_id = fc.memory_scope_id or session_id
     if scope_id != session_id:
-        scope_mems = mem0_service.list_memories(session_id=scope_id)
+        scope_mems = mem0.list_memories(session_id=scope_id)
     else:
         scope_mems = session_mems
 

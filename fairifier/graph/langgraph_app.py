@@ -1826,6 +1826,8 @@ class FAIRifierLangGraphApp:
         output_dir: Optional[str] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """Read a single document file with format-aware extraction."""
+        from pathlib import Path
+
         fs_path = _filesystem_document_path(document_path)
         fs_str = str(fs_path)
 
