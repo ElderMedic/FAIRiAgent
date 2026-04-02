@@ -4,7 +4,6 @@ __pycache__/
 *$py.class
 
 .DS_Store
-.gitignore
 
 # Temporary files and local memory
 .memory/
@@ -326,6 +325,15 @@ docs/36811fe49edc448233013c77f2a105a7c3076037c6aa3973c8687ccc95a5eb24/
 
 # API runtime data (SQLite DB, uploads, etc.)
 fairifier/apps/api/data/
+
+# Local runtime data (e.g. Qdrant Docker volume bind-mount under repo root)
+data/
+
+# Accidental pip/shell redirects (e.g. `pip install ... >=1.30.0` creating `=1.30.0`)
+=*
+
+# OpenAI Codex / local agent state
+.codex
 
 # Frontend build artifacts and dependencies
 frontend/node_modules/

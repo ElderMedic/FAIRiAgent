@@ -2,6 +2,7 @@
 
 import json
 from typing import Dict, Any, List, Optional
+import re
 from datetime import datetime
 from langsmith import traceable
 
@@ -10,6 +11,7 @@ from ..models import FAIRifierState, MetadataField
 from ..config import config
 from ..services.evidence_packets import build_evidence_context
 from ..utils.llm_helper import get_llm_helper
+from ..services.fairds_api_parser import FAIRDSAPIParser
 
 
 class JSONGeneratorAgent(BaseAgent):
@@ -154,12 +156,15 @@ class JSONGeneratorAgent(BaseAgent):
         for item in knowledge_items:
             term = item.get('term', '')
             metadata = item.get('metadata', {})
+            isa_sheet = FAIRDSAPIParser.normalize_isa_sheet(
+                metadata.get("isa_sheet") or metadata.get("sheet")
+            )
             selected_fields.append({
                 "name": term,  # Use term as name
                 "description": item.get('definition', ''),
                 "required": metadata.get('required', False),
                 "package": metadata.get('package', ''),
-                "isa_sheet": metadata.get('isa_sheet', 'study'),
+                "isa_sheet": isa_sheet,
                 "metadata": metadata  # Preserve full metadata
             })
         
@@ -229,13 +234,17 @@ class JSONGeneratorAgent(BaseAgent):
             if knowledge_item:
                 fairds_metadata = knowledge_item.get('metadata', {})
                 package_source = fairds_metadata.get('package', 'unknown')
-                isa_sheet = fairds_metadata.get('isa_sheet', 'study')
+                isa_sheet = FAIRDSAPIParser.normalize_isa_sheet(
+                    fairds_metadata.get("isa_sheet") or fairds_metadata.get("sheet")
+                )
             else:
                 # Fallback: try to infer from selected_fields
                 original_field = selected_fields_lookup.get(field_name_lower, {})
                 fairds_metadata = original_field.get('metadata', {})
                 package_source = fairds_metadata.get('package', 'unknown')
-                isa_sheet = fairds_metadata.get('isa_sheet', 'study')
+                isa_sheet = FAIRDSAPIParser.normalize_isa_sheet(
+                    fairds_metadata.get("isa_sheet") or fairds_metadata.get("sheet")
+                )
             
             field = MetadataField(
                 field_name=field_name,
@@ -257,6 +266,7 @@ class JSONGeneratorAgent(BaseAgent):
     
     def _field_to_dict(self, field: MetadataField) -> Dict[str, Any]:
         """Convert MetadataField to dictionary for FAIR-DS format."""
+        normalized_sheet = FAIRDSAPIParser.normalize_isa_sheet(field.isa_sheet)
         return {
             "field_name": field.field_name,
             "value": field.value,
@@ -265,8 +275,8 @@ class JSONGeneratorAgent(BaseAgent):
             "origin": field.origin,
             "package_source": field.package_source,
             "status": field.status,
-            "isa_sheet": field.isa_sheet,
-            "isa_level": field.isa_sheet,
+            "isa_sheet": normalized_sheet,
+            "isa_level": normalized_sheet,
         }
     
     def _generate_json_output(
@@ -384,10 +394,18 @@ class JSONGeneratorAgent(BaseAgent):
     ) -> List[Dict[str, Any]]:
         """Build a lightweight extension block for metadata concepts not covered by FAIR-DS."""
         extensions: List[Dict[str, Any]] = []
+        seen_labels: set[str] = set()
         for hint in metadata_gap_hints[:20]:
-            label = str(hint.get("label") or "").strip()
+            label = self._normalize_extension_label(
+                hint.get("label"),
+                source=hint.get("source"),
+            )
             if not label:
                 continue
+            lowered = label.lower()
+            if lowered in seen_labels:
+                continue
+            seen_labels.add(lowered)
             packet = self._select_supporting_packet(label, evidence_packets, hint)
             value, evidence, confidence = self._infer_extension_value(label, doc_info, packet, hint)
             extensions.append(
@@ -403,6 +421,63 @@ class JSONGeneratorAgent(BaseAgent):
                 }
             )
         return extensions
+
+    def _normalize_extension_label(self, raw_label: Any, source: Optional[str] = None) -> str:
+        """Keep extension labels concise and semantic (avoid sentence-like noise)."""
+        label = str(raw_label or "").strip()
+        if not label:
+            return ""
+        replacements = [
+            "No FAIR-DS package for ",
+            "No standardized field for ",
+            "No field for ",
+        ]
+        for prefix in replacements:
+            if label.startswith(prefix):
+                label = label[len(prefix):].strip()
+                break
+        if label.startswith("No "):
+            label = label[3:].strip()
+
+        # Planner/package hints sometimes arrive as full explanatory sentences.
+        # Convert these to compact concept-like labels for output readability.
+        if source == "package_request":
+            compact = self._compress_extension_sentence(label)
+            if compact:
+                label = compact
+
+        if len(label) > 96:
+            label = label[:96].rstrip(" ,;.")
+        return label
+
+    def _compress_extension_sentence(self, label: str) -> str:
+        """Compress long planner-style sentences into short semantic labels."""
+        text = " ".join(str(label or "").split()).strip(" .")
+        if not text:
+            return ""
+
+        lower = text.lower()
+        concept_map = [
+            (["mfdo", "habitat classification"], "MFDO habitat classification mapping"),
+            (["pacbio", "nanopore", "platform"], "PacBio/Nanopore assay metadata"),
+            (["repository", "bioproject", "zenodo", "ena"], "repository accession linkage"),
+            (["orcid", "crossref", "doi", "publication"], "publication contributor linkage"),
+            (["gtdb", "silva", "pr2", "greengenes", "taxonomy"], "reference taxonomy database provenance"),
+            (["latitude", "longitude", "gps", "coordinate"], "sample coordinate completeness"),
+            (["water", "chemistry"], "water chemistry measurement coverage"),
+            (["mag", "mimags", "assembly quality", "completeness", "contamination", "binning"], "MAG quality metrics completeness"),
+        ]
+        for tokens, normalized in concept_map:
+            if any(token in lower for token in tokens):
+                return normalized
+
+        # Fallback: keep only the first clause and trim to concise phrase length.
+        clause = re.split(r"[.;:]", text, maxsplit=1)[0]
+        clause = re.split(r", but |, and | but | and ", clause, maxsplit=1, flags=re.IGNORECASE)[0]
+        words = clause.split()
+        if len(words) > 8:
+            clause = " ".join(words[:8])
+        return clause.strip(" ,;.")
 
     def _select_supporting_packet(
         self,
@@ -445,27 +520,51 @@ class JSONGeneratorAgent(BaseAgent):
         normalized_label = label.lower().strip()
         for key, value in doc_info.items():
             if str(key).lower().strip() == normalized_label and value:
-                return str(value), f"DocumentParser field: {key}", 0.78
+                return (
+                    self._clip_text(str(value), max_chars=260),
+                    self._clip_text(f"DocumentParser field: {key}", max_chars=180),
+                    0.78,
+                )
 
         if packet:
             packet_value = packet.get("value") or packet.get("supporting_value")
             packet_evidence = packet.get("evidence_text") or packet.get("supporting_evidence") or packet.get("section")
             if packet_value:
                 return (
-                    str(packet_value),
-                    str(packet_evidence or "Evidence packet"),
+                    self._clip_text(str(packet_value), max_chars=260),
+                    self._clip_text(str(packet_evidence or "Evidence packet"), max_chars=220),
                     round(min(float(packet.get("confidence") or 0.6), 0.82), 2),
                 )
 
         support = hint.get("supporting_value") or hint.get("supporting_evidence")
         if support:
-            return str(support), str(hint.get("supporting_evidence") or "KnowledgeRetriever metadata gap hint"), round(min(float(hint.get("confidence") or 0.55), 0.75), 2)
+            return (
+                self._clip_text(str(support), max_chars=260),
+                self._clip_text(
+                    str(
+                        hint.get("supporting_evidence")
+                        or "KnowledgeRetriever metadata gap hint"
+                    ),
+                    max_chars=220,
+                ),
+                round(min(float(hint.get("confidence") or 0.55), 0.75), 2),
+            )
 
         return (
             "not explicitly captured in FAIR-DS package set",
-            "Planner/KnowledgeRetriever identified this metadata concept but FAIR-DS had no direct package/field match",
+            self._clip_text(
+                "Planner/KnowledgeRetriever identified this metadata concept but FAIR-DS had no direct package/field match",
+                max_chars=220,
+            ),
             round(min(float(hint.get("confidence") or 0.45), 0.65), 2),
         )
+
+    def _clip_text(self, value: str, max_chars: int) -> str:
+        """Clip noisy long strings in extension output while keeping readability."""
+        text = " ".join(str(value or "").split()).strip()
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 3].rstrip(" ,;:.") + "..."
 
     def _build_document_info_compact(self, doc_info: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -643,13 +742,15 @@ class JSONGeneratorAgent(BaseAgent):
         for field in fields:
             # Use the actual 'isa_sheet' attribute from FAIR-DS metadata
             # This is set by KnowledgeRetriever when it retrieves fields from the API
-            isa_sheet = getattr(field, 'isa_sheet', None)
+            isa_sheet = FAIRDSAPIParser.normalize_isa_sheet(getattr(field, 'isa_sheet', None))
             
-            if not isa_sheet:
+            if not isa_sheet or isa_sheet == "study":
                 # Fallback: try to infer from field metadata if not set
                 # Check if field object has metadata dict
                 if hasattr(field, 'metadata') and isinstance(field.metadata, dict):
-                    isa_sheet = field.metadata.get('isa_sheet')
+                    isa_sheet = FAIRDSAPIParser.normalize_isa_sheet(
+                        field.metadata.get('isa_sheet') or field.metadata.get("sheet")
+                    )
             
             # If still no isa_sheet, assign to 'study' as default (most common)
             if not isa_sheet or isa_sheet not in grouped:

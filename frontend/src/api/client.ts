@@ -8,6 +8,7 @@ export interface ProjectResponse {
   project_id: string;
   project_name?: string;
   filename?: string;
+  input_files?: string[];
   session_id?: string;
   session_started_at?: string;
   status: string;
@@ -72,6 +73,33 @@ export interface OllamaModelsResponse {
   models: OllamaModel[];
 }
 
+export interface MemoryWord {
+  text: string;
+  value: number;
+  category: string;
+}
+
+export interface MemoryCloud {
+  session_words: MemoryWord[];
+  scope_words: MemoryWord[];
+  session_total: number;
+  scope_total: number;
+  memory_enabled: boolean;
+}
+
+export interface ResourceLoad {
+  cpu_pct: number;
+  memory_pct: number;
+  memory_used_gb: number;
+  memory_total_gb: number;
+  disk_pct: number;
+  /** Pending or running workflow projects for this browser session only. */
+  active_runs: number;
+  gpu_util_pct?: number | null;
+  gpu_memory_used_gb?: number | null;
+  gpu_memory_total_gb?: number | null;
+}
+
 export interface ArtifactInfo {
   name: string;
   size: number;
@@ -87,7 +115,7 @@ export interface ConfigOverrides {
 }
 
 export interface CreateProjectRequest {
-  file?: File;
+  files?: File[];
   sampleDocument?: string;
   projectName?: string;
   configOverrides?: ConfigOverrides;
@@ -136,14 +164,19 @@ export const api = {
   systemStatus: () =>
     request<SystemStatus>('/system/status'),
 
+  resourceLoad: () =>
+    request<ResourceLoad>('/system/resource-load'),
+
   ollamaModels: (baseUrl?: string) =>
     request<OllamaModelsResponse>(
       `/system/ollama-models${baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : ''}`,
     ),
 
-  createProject: ({ file, sampleDocument, projectName, configOverrides, demo }: CreateProjectRequest) => {
+  createProject: ({ files, sampleDocument, projectName, configOverrides, demo }: CreateProjectRequest) => {
     const form = new FormData();
-    if (file) form.append('file', file);
+    for (const file of files || []) {
+      form.append('files', file);
+    }
     if (sampleDocument) form.append('sample_document', sampleDocument);
     if (projectName) form.append('project_name', projectName);
     if (configOverrides) form.append('config_overrides', JSON.stringify(configOverrides));
@@ -165,6 +198,9 @@ export const api = {
 
   stopProject: (id: string) =>
     request<ProjectResponse>(`/projects/${id}/stop`, { method: 'POST' }),
+
+  memoryCloud: (id: string) =>
+    request<MemoryCloud>(`/projects/${id}/memory-cloud`),
 
   listArtifacts: (id: string) =>
     request<{ project_id: string; artifacts: ArtifactInfo[] }>(`/projects/${id}/artifacts`),

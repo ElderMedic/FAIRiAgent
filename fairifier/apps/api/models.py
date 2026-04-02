@@ -21,6 +21,7 @@ class ProjectResponse(BaseModel):
     project_id: str
     project_name: Optional[str] = None
     filename: Optional[str] = None
+    input_files: Optional[List[str]] = None
     session_id: Optional[str] = None
     session_started_at: Optional[str] = None
     status: str
@@ -93,3 +94,29 @@ class SystemStatusResponse(BaseModel):
     timestamp: str
     active_config: Dict[str, Any]
     services: List[ServiceStatusResponse]
+
+
+class ResourceLoadResponse(BaseModel):
+    cpu_pct: float
+    memory_pct: float
+    memory_used_gb: float
+    memory_total_gb: float
+    disk_pct: float
+    active_runs: int
+    gpu_util_pct: Optional[float] = None
+    gpu_memory_used_gb: Optional[float] = None
+    gpu_memory_total_gb: Optional[float] = None
+
+
+class MemoryWordEntry(BaseModel):
+    text: str
+    value: int
+    category: str
+
+
+class MemoryCloudResponse(BaseModel):
+    session_words: List[MemoryWordEntry]
+    scope_words: List[MemoryWordEntry]
+    session_total: int
+    scope_total: int
+    memory_enabled: bool

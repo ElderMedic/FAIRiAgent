@@ -11,10 +11,23 @@ import {
 } from 'lucide-react';
 import { api, type DemoDocument, type DemoOptions } from '../api/client';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { buildAppRoute } from '../utils/session';
 import './InteriorPages.css';
 
-const ACCEPTED_TYPES = ['.pdf', '.txt', '.md'];
-const ACCEPTED_MIME = ['application/pdf', 'text/plain', 'text/markdown'];
+const ACCEPTED_TYPES = ['.pdf', '.txt', '.md', '.csv', '.tsv', '.xlsx', '.xls', '.json', '.zip'];
+const ACCEPTED_MIME = [
+  'application/pdf',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'text/tab-separated-values',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'application/json',
+  'application/zip',
+  'application/x-zip-compressed',
+];
+const MAX_FILES = 8;
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -28,7 +41,7 @@ export default function Upload() {
   const location = useLocation();
   const locationState = (location.state as { demoMode?: boolean } | null) ?? null;
   const inputRef = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [projectName, setProjectName] = useState('');
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState('');
@@ -58,6 +71,8 @@ export default function Upload() {
     };
   }, []);
 
+  const hasSampleDocs = demoOptions !== null && demoOptions.documents.length > 0;
+
   const sampleDocument: DemoDocument | undefined = demoOptions?.documents.find(
     (doc) => doc.key === sampleDocumentKey,
   );
@@ -68,26 +83,39 @@ export default function Upload() {
       setError(`Unsupported file type. Please upload ${ACCEPTED_TYPES.join(', ')} files.`);
       return false;
     }
-    setError('');
     return true;
   };
 
-  const handleFile = (nextFile: File) => {
-    if (validateFile(nextFile)) setFile(nextFile);
+  const mergeFiles = (incoming: File[]) => {
+    const validIncoming = incoming.filter((nextFile) => validateFile(nextFile));
+    if (!validIncoming.length) return;
+    setFiles((prev) => {
+      const dedup = new Map<string, File>();
+      for (const file of [...prev, ...validIncoming]) {
+        dedup.set(`${file.name}:${file.size}:${file.lastModified}`, file);
+      }
+      const merged = Array.from(dedup.values());
+      if (merged.length > MAX_FILES) {
+        setError(`You can upload up to ${MAX_FILES} files per run.`);
+        return merged.slice(0, MAX_FILES);
+      }
+      setError('');
+      return merged;
+    });
   };
 
   const handleDrop = (event: DragEvent) => {
     event.preventDefault();
     setDragging(false);
-    const nextFile = event.dataTransfer.files[0];
-    if (nextFile) handleFile(nextFile);
+    const droppedFiles = Array.from(event.dataTransfer.files || []);
+    if (droppedFiles.length) mergeFiles(droppedFiles);
   };
 
   const handleContinue = () => {
-    if (!file && !sampleDocumentKey && !demoMode) return;
-    navigate('/config', {
+    if (!files.length && !(hasSampleDocs && sampleDocumentKey) && !(hasSampleDocs && demoMode)) return;
+    navigate(buildAppRoute('/config'), {
       state: {
-        file: file || undefined,
+        files: files.length ? files : undefined,
         projectName: projectName || undefined,
         demoMode,
         sampleDocumentKey: sampleDocumentKey || undefined,
@@ -126,25 +154,27 @@ export default function Upload() {
                 document kept in the repository for quick end-to-end checks.
               </p>
 
-              <div className="upload-inline-card">
-                <div className="upload-toggle">
-                  <div className="upload-toggle__copy" id="quick-sample-label">
-                    <p className="upload-toggle__title">Quick sample preset</p>
-                    <p className="upload-toggle__body">
-                      Use the bundled earthworm paper and move directly into configuration.
-                    </p>
+              {hasSampleDocs && (
+                <div className="upload-inline-card">
+                  <div className="upload-toggle">
+                    <div className="upload-toggle__copy" id="quick-sample-label">
+                      <p className="upload-toggle__title">Quick sample preset</p>
+                      <p className="upload-toggle__body">
+                        Use the bundled earthworm paper and move directly into configuration.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      aria-pressed={demoMode}
+                      aria-labelledby="quick-sample-label"
+                      onClick={() => setDemoMode((value) => !value)}
+                      className={`upload-toggle__button ${demoMode ? 'is-on' : ''}`}
+                    >
+                      {demoMode ? 'Enabled' : 'Disabled'}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    aria-pressed={demoMode}
-                    aria-labelledby="quick-sample-label"
-                    onClick={() => setDemoMode((value) => !value)}
-                    className={`upload-toggle__button ${demoMode ? 'is-on' : ''}`}
-                  >
-                    {demoMode ? 'Enabled' : 'Disabled'}
-                  </button>
                 </div>
-              </div>
+              )}
 
               <div
                 onDragOver={(event) => {
@@ -160,17 +190,21 @@ export default function Upload() {
                   ref={inputRef}
                   aria-label="Upload a research document"
                   type="file"
+                  multiple
                   accept={ACCEPTED_TYPES.join(',')}
                   className="hidden"
                   onChange={(event) => {
-                    const nextFile = event.target.files?.[0];
-                    if (nextFile) handleFile(nextFile);
+                    const selectedFiles = Array.from(event.target.files || []);
+                    if (selectedFiles.length) {
+                      mergeFiles(selectedFiles);
+                    }
+                    event.currentTarget.value = '';
                   }}
                 />
                 <FolderUp className="upload-dropzone__icon" aria-hidden="true" />
-                <p className="upload-dropzone__title">Drop your file here or click to browse</p>
+                <p className="upload-dropzone__title">Drop files here or click to browse</p>
                 <p className="upload-dropzone__body">
-                  Supported formats: PDF, TXT, and Markdown. The interface accepts one document at a time.
+                  Supported formats: PDF, TXT, Markdown, CSV/TSV, Excel, JSON, ZIP. Up to {MAX_FILES} files.
                 </p>
                 {demoMode && (
                   <p className="upload-dropzone__body">
@@ -185,7 +219,7 @@ export default function Upload() {
                 </p>
               )}
 
-              {demoOptions && (
+              {hasSampleDocs && (
                 <div className="upload-section">
                   <label htmlFor="sample_document" className="upload-section__label">
                     Bundled sample document
@@ -196,7 +230,7 @@ export default function Upload() {
                     onChange={(event) => setSampleDocumentKey(event.target.value)}
                     className="upload-select"
                   >
-                    {demoOptions.documents.map((doc) => (
+                    {demoOptions!.documents.map((doc) => (
                       <option key={doc.key} value={doc.key}>
                         {doc.label} · {doc.filename}
                       </option>
@@ -208,26 +242,34 @@ export default function Upload() {
                 </div>
               )}
 
-              {file && (
-                <div className="upload-file-pill">
+              {files.map((file, idx) => (
+                <div className="upload-file-pill" key={`${file.name}:${file.size}:${file.lastModified}`}>
                   <FileText className="upload-file-pill__icon" aria-hidden="true" />
                   <div className="flex-1 min-w-0">
                     <p className="upload-file-pill__name">{file.name}</p>
-                    <p className="upload-file-pill__meta">{formatSize(file.size)}</p>
+                    <p className="upload-file-pill__meta">
+                      {formatSize(file.size)} · file {idx + 1}
+                    </p>
                   </div>
                   <button
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation();
-                      setFile(null);
+                      setFiles((prev) =>
+                        prev.filter(
+                          (candidate) =>
+                            `${candidate.name}:${candidate.size}:${candidate.lastModified}` !==
+                            `${file.name}:${file.size}:${file.lastModified}`,
+                        ),
+                      );
                     }}
-                    aria-label="Remove selected file"
+                    aria-label={`Remove ${file.name}`}
                     className="upload-file-pill__remove"
                   >
                     <X className="w-4 h-4" aria-hidden="true" />
                   </button>
                 </div>
-              )}
+              ))}
 
               <div className="upload-section">
                 <label htmlFor="project_name" className="upload-section__label">
@@ -250,7 +292,7 @@ export default function Upload() {
                 <button
                   type="button"
                   onClick={handleContinue}
-                  disabled={!file && !sampleDocumentKey && !demoMode}
+                  disabled={!files.length && !(hasSampleDocs && sampleDocumentKey) && !(hasSampleDocs && demoMode)}
                   className="upload-button upload-button--primary"
                 >
                   Continue to configuration
@@ -275,7 +317,7 @@ export default function Upload() {
               <div className="upload-meta-grid">
                 <div className="upload-meta">
                   <p className="upload-meta__label">Formats</p>
-                  <p className="upload-meta__value">PDF, TXT, Markdown</p>
+                  <p className="upload-meta__value">PDF, TXT, Markdown, CSV/TSV, Excel, JSON, ZIP</p>
                 </div>
                 <div className="upload-meta">
                   <p className="upload-meta__label">Execution mode</p>
