@@ -1496,28 +1496,24 @@ class FAIRifierLangGraphApp:
             source_content = str(input_doc.get("content") or "")
             if not source_content.strip():
                 logger.warning("Skipping empty input source in multi-file mode: %s", source_path)
+                source_outputs.append(
+                    {
+                        "source_path": source_path,
+                        "method": input_doc.get("method", "unknown"),
+                        "document_info": {},
+                        "field_count": 0,
+                        "status": "skipped_empty_content",
+                    }
+                )
                 continue
 
-            logger.info(
-                "📄 Multi-file parse %s/%s: %s (%s chars)",
-                index,
-                len(input_documents),
-                source_path,
-                len(source_content),
-            )
-            state["document_content"] = source_content
-            state["document_path"] = f"{base_document_path}::{source_path}" if base_document_path else source_path
-            state["document_info"] = {}
-            state["evidence_packets"] = []
-            context["current_source_path"] = source_path
-            context["current_source_index"] = index
-            context["current_source_total"] = len(input_documents)
-
-            state = await self._execute_agent_with_retry(
-                state,
-                self.document_parser,
-                "DocumentParser",
-                lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3,
+            state = await self._parse_single_input_source(
+                state=state,
+                source_path=source_path,
+                source_content=source_content,
+                source_index=index,
+                source_total=len(input_documents),
+                base_document_path=base_document_path,
             )
 
             per_source_info = state.get("document_info", {}) or {}
@@ -1528,6 +1524,7 @@ class FAIRifierLangGraphApp:
                     "method": input_doc.get("method", "unknown"),
                     "document_info": per_source_info,
                     "field_count": len(per_source_info) if isinstance(per_source_info, dict) else 0,
+                    "status": "parsed",
                 }
             )
             for packet in per_source_packets:
@@ -1562,6 +1559,43 @@ class FAIRifierLangGraphApp:
             len(conflicts),
         )
         return state
+
+    @traceable(name="ParseDocumentSource", tags=["workflow", "multi-file", "parsing"])
+    async def _parse_single_input_source(
+        self,
+        *,
+        state: FAIRifierState,
+        source_path: str,
+        source_content: str,
+        source_index: int,
+        source_total: int,
+        base_document_path: str,
+    ) -> FAIRifierState:
+        """Parse one source document in multi-file mode with explicit trace visibility."""
+        logger.info(
+            "📄 Multi-file parse %s/%s: %s (%s chars)",
+            source_index,
+            source_total,
+            source_path,
+            len(source_content),
+        )
+        context = state.setdefault("context", {})
+        state["document_content"] = source_content
+        state["document_path"] = (
+            f"{base_document_path}::{source_path}" if base_document_path else source_path
+        )
+        state["document_info"] = {}
+        state["evidence_packets"] = []
+        context["current_source_path"] = source_path
+        context["current_source_index"] = source_index
+        context["current_source_total"] = source_total
+
+        return await self._execute_agent_with_retry(
+            state,
+            self.document_parser,
+            "DocumentParser",
+            lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3,
+        )
     
     @traceable(name="ReadFile", tags=["workflow", "io"])
     async def _read_file_node(self, state: FAIRifierState) -> FAIRifierState:
@@ -1588,6 +1622,20 @@ class FAIRifierLangGraphApp:
                     }
                 ]
             state["input_documents"] = input_documents
+            failed_sources = conversion_info.get("failed_sources") or []
+            if failed_sources:
+                errors = state.setdefault("errors", [])
+                for failed in failed_sources[:20]:
+                    msg = (
+                        f"Input source read failed: {failed.get('path', 'unknown')} "
+                        f"({failed.get('error', 'unknown error')})"
+                    )
+                    errors.append(msg)
+                logger.warning(
+                    "⚠️ %s input source(s) failed during bundle read: %s",
+                    len(failed_sources),
+                    [item.get("path") for item in failed_sources[:10]],
+                )
             
         except Exception as e:
             logger.error(f"❌ Failed to read file: {e}")
@@ -1871,11 +1919,19 @@ class FAIRifierLangGraphApp:
         sections: List[str] = []
         sources: List[Dict[str, Any]] = []
         input_documents: List[Dict[str, Any]] = []
+        failed_sources: List[Dict[str, str]] = []
         for idx, file_path in enumerate(selected_files, start=1):
             try:
                 text, info = self._read_single_document_content(str(file_path), output_dir)
             except Exception as exc:
                 logger.warning("Skipping bundle file %s due to read error: %s", file_path, exc)
+                rel_name = str(file_path.relative_to(root_dir))
+                failed_sources.append(
+                    {
+                        "path": rel_name,
+                        "error": str(exc),
+                    }
+                )
                 continue
             rel_name = str(file_path.relative_to(root_dir))
             sections.append(
@@ -1912,6 +1968,7 @@ class FAIRifierLangGraphApp:
             "files_discovered_supported": len(supported_files),
             "sources": sources,
             "input_documents": input_documents,
+            "failed_sources": failed_sources,
         }
         return "".join(sections).strip(), conversion_info
 

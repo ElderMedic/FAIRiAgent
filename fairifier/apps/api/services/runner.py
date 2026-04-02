@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 from ..storage.base import ProjectStore
 from .event_bus import WorkflowEvent, event_bus
 from fairifier.utils.json_logger import JSONLogger
+from fairifier.utils.config_saver import save_runtime_config
 from fairifier.utils.run_control import reset_run_stop_requested
 
 logger = logging.getLogger(__name__)
@@ -41,9 +42,10 @@ _STAGE_PROGRESS_HINTS = (
 class _WorkflowLogHandler(logging.Handler):
     """Bridge workflow logs into SSE so the WebUI reflects real progress."""
 
-    def __init__(self, project_id: str) -> None:
+    def __init__(self, project_id: str, json_logger: Optional[JSONLogger] = None) -> None:
         super().__init__(level=logging.INFO)
         self.project_id = project_id
+        self.json_logger = json_logger
 
     def emit(self, record: logging.LogRecord) -> None:
         if not record.name.startswith(_SSE_LOG_PREFIXES):
@@ -56,6 +58,18 @@ class _WorkflowLogHandler(logging.Handler):
 
         if not message:
             return
+
+        if self.json_logger is not None:
+            try:
+                self.json_logger.info(
+                    "workflow_log",
+                    project_id=self.project_id,
+                    logger=record.name,
+                    level=record.levelname,
+                    message=message,
+                )
+            except Exception:
+                pass
 
         event_bus.publish_sync(
             WorkflowEvent(
@@ -121,7 +135,7 @@ def run_workflow_task(
             )
         )
 
-        workflow_log_handler = _WorkflowLogHandler(project_id)
+        workflow_log_handler = _WorkflowLogHandler(project_id, json_logger=json_logger)
         logging.getLogger().addHandler(workflow_log_handler)
         try:
             with _CONFIG_OVERRIDE_LOCK:
@@ -181,6 +195,24 @@ def run_workflow_task(
             output_dir=persisted_output_dir,
             json_logger=json_logger,
         )
+        if persisted_output_dir:
+            try:
+                output_path = Path(persisted_output_dir)
+                project_snapshot = store.get_project(project_id) or {}
+                input_files = project_snapshot.get("input_files") or []
+                if isinstance(input_files, list) and input_files:
+                    source_label = ", ".join(str(name) for name in input_files[:10])
+                else:
+                    source_label = project_snapshot.get("filename") or file_path
+                save_runtime_config(
+                    document_path=str(source_label),
+                    project_id=project_id,
+                    output_path=output_path,
+                )
+            except Exception as exc:
+                msg = f"Failed to save runtime_config.json: {exc}"
+                logger.warning(msg)
+                persistence_errors.append(msg)
         store.update_project(
             project_id,
             {
