@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.1] - 2026-04-10
+
+### Changed
+- **Workflow output filename**: Primary metadata artifact on disk is now `metadata.json` (legacy `metadata_json.json` still read by evaluation tooling where applicable).
+- **Merge**: Integrated `feature/lan-webui` into `main` (Streamlit UI removed on `main`; React frontend remains the web UI).
+
+---
+
 ## [1.3.0] - 2026-03-26 – Observability and output validation release
 
 ### Added

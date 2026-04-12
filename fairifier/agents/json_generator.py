@@ -402,7 +402,7 @@ class JSONGeneratorAgent(BaseAgent):
         
         # Build ISA-structured output - NO HARDCODED PACKAGE NAMES
         output = {
-            "fairifier_version": "V1.3.0",
+            "fairifier_version": "V1.3.1",
             "generated_at": datetime.now().isoformat(),
             "document_source": state.get("document_path", ""),
             "overall_confidence": round(overall_confidence, 3),
