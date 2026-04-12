@@ -143,7 +143,7 @@ export default function Result() {
 
   const scores = Object.entries(project.confidence_scores || {});
   const summary = Object.entries(project.execution_summary || {});
-  const recommendedArtifacts = ['metadata_json.json', 'validation_report.txt', 'workflow_report.json'];
+  const recommendedArtifacts = ['metadata.json', 'validation_report.txt', 'workflow_report.json'];
 
   const mainArtifacts = artifacts.filter((a) => !a.name.startsWith('mineru_'));
   const mineruArtifacts = artifacts.filter((a) => a.name.startsWith('mineru_'));
@@ -260,7 +260,7 @@ export default function Result() {
                   <p className="page-card__eyebrow">Artifacts</p>
                   <h2 className="page-card__title">Files available for download</h2>
                   <p className="page-card__body">
-                    Start with <strong>metadata_json.json</strong>, then review the validation report and
+                    Start with <strong>metadata.json</strong>, then review the validation report and
                     workflow report before handing the output off to another system.
                   </p>
                 </div>

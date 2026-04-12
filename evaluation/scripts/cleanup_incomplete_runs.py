@@ -3,22 +3,26 @@
 Clean up incomplete and timeout runs from evaluation results.
 
 This script:
-1. Identifies runs without metadata_json.json (incomplete/timeout)
+1. Identifies runs without metadata.json (incomplete/timeout)
 2. Deletes these incomplete runs
 3. Ensures each model-document pair has exactly 10 successful runs
 """
 
 import json
 import shutil
+import sys
 from pathlib import Path
 from collections import defaultdict
 from typing import Dict, List, Tuple
 import argparse
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from fairifier.output_paths import run_has_metadata_output
+
 
 def is_complete_run(run_dir: Path) -> bool:
     """
-    Check if a run is complete (has metadata_json.json).
+    Check if a run is complete (has metadata.json or legacy metadata_json.json).
     
     Args:
         run_dir: Path to run directory (e.g., run_1, run_2)
@@ -26,8 +30,7 @@ def is_complete_run(run_dir: Path) -> bool:
     Returns:
         True if run is complete, False otherwise
     """
-    metadata_file = run_dir / "metadata_json.json"
-    return metadata_file.exists()
+    return run_has_metadata_output(run_dir)
 
 
 def is_timeout_run(run_dir: Path) -> bool:

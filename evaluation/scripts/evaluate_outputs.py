@@ -17,6 +17,8 @@ from dotenv import load_dotenv
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
+from fairifier.output_paths import resolve_metadata_output_read_path
+
 from evaluation.evaluators import (
     CompletenessEvaluator,
     CorrectnessEvaluator,
@@ -48,11 +50,11 @@ class EvaluationOrchestrator:
             'error_message': None
         }
         
-        metadata_file = run_dir / 'metadata_json.json'
+        metadata_file = resolve_metadata_output_read_path(run_dir)
         eval_result_file = run_dir / 'eval_result.json'
         
         # Check if metadata exists
-        if metadata_file.exists():
+        if metadata_file is not None:
             status['has_metadata'] = True
             status['category'] = 'success'
             return status
@@ -224,9 +226,9 @@ class EvaluationOrchestrator:
         """Evaluate all outputs for a single model configuration."""
         # Load all FAIRiAgent outputs for this model
         # Support multiple directory structures:
-        # 1. model_dir/outputs/{config_name}/{doc_id}/run_{N}/metadata_json.json
-        # 2. model_dir/{config_name}/{doc_id}/run_{N}/metadata_json.json
-        # 3. model_dir/{doc_id}/metadata_json.json (legacy)
+        # 1. model_dir/outputs/{config_name}/{doc_id}/run_{N}/metadata.json
+        # 2. model_dir/{config_name}/{doc_id}/run_{N}/metadata.json
+        # 3. model_dir/{doc_id}/metadata.json (legacy; old runs may use metadata_json.json)
         fairifier_outputs = {}
         
         # Try different directory structures
@@ -270,7 +272,7 @@ class EvaluationOrchestrator:
                 status = self.classify_run_status(run_dir)
                 
                 if status['category'] == 'success':
-                    metadata_file = run_dir / 'metadata_json.json'
+                    metadata_file = resolve_metadata_output_read_path(run_dir)
                     workflow_report_file = run_dir / 'workflow_report.json'
                     
                     run_info = {

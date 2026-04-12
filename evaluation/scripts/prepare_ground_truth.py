@@ -350,7 +350,7 @@ def main():
     gen_parser = subparsers.add_parser('generate-template', 
                                        help='Generate template from FAIRiAgent output')
     gen_parser.add_argument('--fairifier-output', type=Path, required=True,
-                           help='Path to metadata_json.json from FAIRiAgent')
+                           help='Path to metadata.json from FAIRiAgent (legacy: metadata_json.json)')
     gen_parser.add_argument('--output', type=Path, required=True,
                            help='Output path for template')
     

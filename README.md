@@ -454,7 +454,7 @@ result = await workflow.run(document_path, project_id)
 ### Output Files
 
 FAIRiAgent generates (in `output/<project_id>/`):
-1. **`metadata_json.json`** - FAIR-DS compatible metadata
+1. **`metadata.json`** - FAIR-DS compatible metadata
 2. **`processing_log.jsonl`** - JSON line logs
 3. **`llm_responses.json`** - All LLM API interactions (automatically logged, including Critic evaluations)
 4. **`runtime_config.json`** - Complete runtime configuration including:
@@ -604,7 +604,7 @@ kb/                      # Knowledge base
 
 output/                  # Generated outputs
 └── <project_id>/
-    ├── metadata_json.json
+    ├── metadata.json
     ├── processing_log.jsonl
     ├── llm_responses.json
     └── runtime_config.json

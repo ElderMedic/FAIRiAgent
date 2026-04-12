@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 from dotenv import load_dotenv
 
 # Import LLM helpers
+from fairifier.output_paths import metadata_output_write_path
 from fairifier.utils.llm_helper import LLMHelper
 from langchain_core.messages import HumanMessage
 
@@ -266,7 +267,7 @@ def run_baseline_extraction(
     end_time = datetime.now()
     
     # Save metadata JSON
-    metadata_json_path = output_dir / "metadata_json.json"
+    metadata_json_path = metadata_output_write_path(output_dir)
     with open(metadata_json_path, 'w', encoding='utf-8') as f:
         json.dump(result["metadata"], f, indent=2, ensure_ascii=False)
     

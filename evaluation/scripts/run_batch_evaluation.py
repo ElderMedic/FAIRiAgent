@@ -35,6 +35,13 @@ def safe_load_dotenv(*args, **kwargs):
 
 dotenv.load_dotenv = safe_load_dotenv
 
+from fairifier.output_paths import (
+    LEGACY_METADATA_OUTPUT_FILENAME,
+    METADATA_OUTPUT_FILENAME,
+    resolve_metadata_output_read_path,
+)
+
+
 class BatchEvaluationRunner:
     """Run FAIRiAgent on multiple documents with different configurations."""
     
@@ -491,17 +498,21 @@ class BatchEvaluationRunner:
             else:
                 success = result.returncode == 0
                 
-                # Check if metadata_json.json was created
-                metadata_json_path = doc_output_dir / 'metadata_json.json'
-                if not metadata_json_path.exists():
-                    # Try to find it in subdirectories (FAIRiAgent might create nested dirs)
-                    found_metadata = list(doc_output_dir.rglob('metadata_json.json'))
+                # Check if metadata.json was created (or legacy metadata_json.json)
+                metadata_json_path = resolve_metadata_output_read_path(doc_output_dir)
+                if metadata_json_path is None:
+                    found_metadata = []
+                    for _name in (METADATA_OUTPUT_FILENAME, LEGACY_METADATA_OUTPUT_FILENAME):
+                        found_metadata.extend(doc_output_dir.rglob(_name))
                     if found_metadata:
                         metadata_json_path = found_metadata[0]
                 
-                if not metadata_json_path.exists():
+                if metadata_json_path is None or not metadata_json_path.exists():
                     success = False
-                    error_msg = "metadata_json.json not found after workflow completion"
+                    error_msg = (
+                        f"{METADATA_OUTPUT_FILENAME} (or legacy "
+                        f"{LEGACY_METADATA_OUTPUT_FILENAME}) not found after workflow completion"
+                    )
                 else:
                     error_msg = None
                 

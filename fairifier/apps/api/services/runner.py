@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 
 from ..storage.base import ProjectStore
 from .event_bus import WorkflowEvent, event_bus
+from fairifier.output_paths import artifact_output_filename
 from fairifier.utils.json_logger import JSONLogger
 from fairifier.utils.config_saver import save_runtime_config
 from fairifier.utils.run_control import reset_run_stop_requested
@@ -376,16 +377,10 @@ def _persist_run_outputs(
 
     artifacts = result.get("artifacts", {})
     if isinstance(artifacts, dict):
-        extensions = {
-            "metadata_json": ".json",
-            "validation_report": ".txt",
-            "processing_log": ".jsonl",
-        }
         for artifact_name, content in artifacts.items():
             if not content:
                 continue
-            ext = extensions.get(artifact_name, ".json")
-            artifact_path = output_path / f"{artifact_name}{ext}"
+            artifact_path = output_path / artifact_output_filename(artifact_name)
             try:
                 text = (
                     content
