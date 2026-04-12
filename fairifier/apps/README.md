@@ -42,13 +42,3 @@ Common routes:
 | `GET` | `/api/v1/projects/{id}/events` |
 
 OpenAPI docs are available at `/docs`.
-
-## Streamlit UI
-
-The legacy Streamlit UI is still available:
-
-```bash
-python run_fairifier.py ui
-```
-
-Open `http://localhost:8501`.

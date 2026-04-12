@@ -100,13 +100,13 @@ cp env.example .env
 python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRxiv.pdf
 ```
 
-如果想交互式使用：
+如需 Web 界面（与运行流程同机）：
 
 ```bash
-python run_fairifier.py ui
+python run_fairifier.py webui
 ```
 
-当前 Streamlit UI 配置页支持：
+支持的 LLM 提供商（通过 `.env` 或 Web 界面中已暴露的配置项设置）：
 
 - Qwen
 - Gemini

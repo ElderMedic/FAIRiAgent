@@ -127,7 +127,7 @@ def _detect_environment() -> str:
     Auto-detect execution environment.
     
     Returns:
-        Environment identifier: cli, api, ui, eval, test, dev, or unknown
+        Environment identifier: cli, api, eval, test, dev, or unknown
     """
     # Check for known environment markers
     if os.getenv("FAIRIFIER_ENV"):
@@ -136,11 +136,6 @@ def _detect_environment() -> str:
     # Check for evaluation mode
     if os.getenv("EVALUATION_MODE") or "evaluation" in os.getcwd().lower():
         return "eval"
-    
-    # Check for Streamlit (avoid importing heavy libs)
-    import importlib.util
-    if importlib.util.find_spec("streamlit") is not None:
-        return "ui-streamlit"
     
     # Check for FastAPI/API mode
     if os.getenv("API_MODE") or "uvicorn" in os.getenv("_", ""):

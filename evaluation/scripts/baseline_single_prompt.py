@@ -137,8 +137,7 @@ class BaselineLLMExtractor:
             response = asyncio.run(
                 self.llm_helper._call_llm(
                     messages,
-                    stream_to_streamlit=False,
-                    operation_name="Baseline Extraction"
+                    operation_name="Baseline Extraction",
                 )
             )
             

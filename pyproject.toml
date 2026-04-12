@@ -28,7 +28,6 @@ pyshacl = ">=0.25.0"
 # Web framework
 fastapi = ">=0.104.0,<0.118"
 uvicorn = ">=0.24.0"
-streamlit = ">=1.28.0"
 # Utilities
 pydantic = ">=2.5.0"
 pyyaml = ">=6.0.1"

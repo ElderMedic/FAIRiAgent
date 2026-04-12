@@ -721,9 +721,9 @@ class LLMHelper:
             # Don't fail the entire operation if logging fails
             logger.warning(f"Failed to log LLM response for {operation_name}: {e}")
     
-    async def _call_llm(self, messages, stream_to_streamlit=None, operation_name="LLM Call"):
+    async def _call_llm(self, messages, operation_name="LLM Call"):
         """Helper method to call LLM with proper parameters.
-        
+
         Thinking mode is controlled by config.llm_enable_thinking (LLM_ENABLE_THINKING env).
         Provider-specific mapping:
         - qwen: extra_body={"enable_thinking": bool} (DashScope/百炼)
@@ -731,503 +731,177 @@ class LLMHelper:
         - gemini: no provider-specific thinking payload (basic integration path)
         - ollama: think=bool (Ollama /api/chat think parameter)
         - anthropic: extra_body={"reasoning": {"enabled": bool}} (Claude Extended Thinking; may vary by API)
-        
+
         Args:
             messages: List of messages to send to LLM
-            stream_to_streamlit: If True, stream output to Streamlit container (if available).
-                                If None, auto-detect if Streamlit container is available.
             operation_name: Name of the operation for display purposes.
         """
         run_config = self._build_run_config()
         enable_thinking = config.llm_enable_thinking
-        
-        # Extract prompt preview for display
-        prompt_preview = ""
-        if messages:
-            last_message = messages[-1]
-            if hasattr(last_message, 'content'):
-                prompt_preview = last_message.content[:500] if last_message.content else ""
-        
-        # Extract agent name from operation_name
-        agent_name = "System"
-        if "DocumentParser" in operation_name or "parse" in operation_name.lower():
-            agent_name = "📄 Document Parser"
-        elif "KnowledgeRetriever" in operation_name or "retrieve" in operation_name.lower() or "package" in operation_name.lower():
-            agent_name = "🔍 Knowledge Retriever"
-        elif "JSONGenerator" in operation_name or "generate" in operation_name.lower() or "json" in operation_name.lower():
-            agent_name = "📝 JSON Generator"
-        elif "Critic" in operation_name or "evaluate" in operation_name.lower() or "critic" in operation_name.lower():
-            agent_name = "🎯 Critic"
-        elif "orchestrator" in operation_name.lower() or "plan" in operation_name.lower() or "workflow" in operation_name.lower():
-            agent_name = "🎼 Planner"
-        
-        # Auto-detect Streamlit chat container if stream_to_streamlit is None
-        chat_container = None
-        message_id = None
-        if stream_to_streamlit is None:
-            # Try to detect if we're in Streamlit mode
-            try:
-                from fairifier.apps.ui.streamlit_app import get_streamlit_chat_container
-                chat_container = get_streamlit_chat_container()
-                stream_to_streamlit = chat_container is not None
-                if stream_to_streamlit:
-                    # Create a new chat message
-                    from fairifier.apps.ui.streamlit_app import create_chat_message
-                    _, message_id = create_chat_message(agent_name, operation_name)
-            except (ImportError, AttributeError):
-                stream_to_streamlit = False
-        elif stream_to_streamlit:
-            # Explicitly requested streaming
-            try:
-                from fairifier.apps.ui.streamlit_app import get_streamlit_chat_container, create_chat_message
-                chat_container = get_streamlit_chat_container()
-                if chat_container:
-                    # Create a new chat message
-                    _, message_id = create_chat_message(agent_name, operation_name)
-            except (ImportError, AttributeError):
-                chat_container = None
-                stream_to_streamlit = False
-        
+
         # For Qwen provider, use extra_body as per official documentation
         if self.provider == "qwen":
-            if enable_thinking or stream_to_streamlit:
-                # Thinking mode or streaming mode: use streaming
+            if enable_thinking:
                 try:
-                    # Use bind with extra_body for Qwen (as per official docs)
                     llm_with_params = self.llm.bind(
-                        extra_body={"enable_thinking": True if enable_thinking else False},
-                        stream=True
+                        extra_body={"enable_thinking": True},
+                        stream=True,
                     )
-                    # Collect streaming response
-                    content_parts = []
                     full_text = ""
-                    
                     async for chunk in llm_with_params.astream(messages, config=run_config):
-                        if hasattr(chunk, 'content') and chunk.content:
-                            content = chunk.content
-                            content_parts.append(content)
-                            full_text += content
-                            
-                            # Stream to Streamlit chat if available
-                            if message_id:
-                                try:
-                                    from fairifier.apps.ui.streamlit_app import update_chat_message
-                                    update_chat_message(message_id, full_text, is_streaming=True)
-                                except Exception:
-                                    pass  # Ignore errors in Streamlit update
-                    
-                    # Finalize chat message (remove cursor)
-                    if message_id:
-                        try:
-                            from fairifier.apps.ui.streamlit_app import finalize_chat_message
-                            finalize_chat_message(message_id)
-                        except Exception:
-                            pass
-                    
-                    # Create a response-like object
+                        if hasattr(chunk, "content") and chunk.content:
+                            full_text += chunk.content
                     result = AIMessage(content=full_text)
-                    
-                    # Log LLM response
                     self._log_llm_response(result, messages, operation_name)
-                    
-                    # Add to Streamlit display if available
-                    try:
-                        from fairifier.apps.ui.streamlit_app import add_llm_response
-                        add_llm_response(operation_name, prompt_preview, full_text)
-                    except (ImportError, AttributeError):
-                        pass
-                    
                     return result
                 except Exception as e:
                     logger.warning(f"Streaming failed: {e}, trying non-streaming")
-                    # If streaming doesn't work, try non-streaming
                     try:
                         llm_with_params = self.llm.bind(
-                            extra_body={"enable_thinking": True if enable_thinking else False}
+                            extra_body={"enable_thinking": True},
                         )
                         result = await llm_with_params.ainvoke(messages, config=run_config)
-                        
-                        # Log LLM response
                         self._log_llm_response(result, messages, operation_name)
-                        
-                        # Add to Streamlit display
-                        try:
-                            from fairifier.apps.ui.streamlit_app import add_llm_response
-                            content = result.content if hasattr(result, 'content') else str(result)
-                            add_llm_response(operation_name, prompt_preview, content)
-                        except (ImportError, AttributeError):
-                            pass
                         return result
                     except Exception as e2:
                         logger.warning(f"Non-streaming failed: {e2}, falling back to regular call")
                         result = await self.llm.ainvoke(messages, config=run_config)
-                        
-                        # Log LLM response
                         self._log_llm_response(result, messages, operation_name)
-                        
-                        # Add to Streamlit display
-                        try:
-                            from fairifier.apps.ui.streamlit_app import add_llm_response
-                            content = result.content if hasattr(result, 'content') else str(result)
-                            add_llm_response(operation_name, prompt_preview, content)
-                        except (ImportError, AttributeError):
-                            pass
                         return result
             else:
-                # Non-thinking mode: ensure enable_thinking=False
-                # Qwen3 open-source models require this for non-streaming calls
                 try:
-                    llm_with_params = self.llm.bind(
-                        extra_body={"enable_thinking": False}
-                    )
+                    llm_with_params = self.llm.bind(extra_body={"enable_thinking": False})
                     result = await llm_with_params.ainvoke(messages, config=run_config)
-                    
-                    # Log LLM response
                     self._log_llm_response(result, messages, operation_name)
-                    
-                    # Add to Streamlit display
-                    try:
-                        from fairifier.apps.ui.streamlit_app import add_llm_response
-                        content = result.content if hasattr(result, 'content') else str(result)
-                        add_llm_response(operation_name, prompt_preview, content)
-                    except (ImportError, AttributeError):
-                        pass
                     return result
                 except Exception as e:
                     logger.warning(f"Failed to set enable_thinking=False via extra_body: {e}, using regular call")
                     result = await self.llm.ainvoke(messages, config=run_config)
-                    
-                    # Log LLM response
                     self._log_llm_response(result, messages, operation_name)
-                    
-                    # Add to Streamlit display
-                    try:
-                        from fairifier.apps.ui.streamlit_app import add_llm_response
-                        content = result.content if hasattr(result, 'content') else str(result)
-                        add_llm_response(operation_name, prompt_preview, content)
-                    except (ImportError, AttributeError):
-                        pass
                     return result
         elif self.provider in {"openai", "gemini", "google"}:
-            # Official OpenAI does not accept DashScope-style enable_thinking in extra_body.
-            # Gemini also uses its official SDK path here without provider-specific
-            # thinking payloads. Keep both provider-clean.
-            if stream_to_streamlit:
-                try:
-                    llm_with_params = self.llm.bind(stream=True)
-                    content_parts = []
-                    full_text = ""
-                    
-                    async for chunk in llm_with_params.astream(messages, config=run_config):
-                        if hasattr(chunk, 'content') and chunk.content:
-                            content = chunk.content
-                            content_parts.append(content)
-                            full_text += content
-                            
-                            # Stream to Streamlit chat if available
-                            if message_id:
-                                try:
-                                    from fairifier.apps.ui.streamlit_app import update_chat_message
-                                    update_chat_message(message_id, full_text, is_streaming=True)
-                                except Exception:
-                                    pass
-                    
-                    # Finalize chat message (remove cursor)
-                    if message_id:
-                        try:
-                            from fairifier.apps.ui.streamlit_app import finalize_chat_message
-                            finalize_chat_message(message_id)
-                        except Exception:
-                            pass
-                    
-                    result = AIMessage(content=full_text)
-                    
-                    # Log LLM response
-                    self._log_llm_response(result, messages, operation_name)
-                    
-                    # Add to Streamlit display
-                    try:
-                        from fairifier.apps.ui.streamlit_app import add_llm_response
-                        add_llm_response(operation_name, prompt_preview, full_text)
-                    except (ImportError, AttributeError):
-                        pass
-                    return result
-                except Exception as e:
-                    logger.warning(
-                        "%s streaming failed: %s, falling back to regular call",
-                        self.provider,
-                        e,
-                    )
-                    result = await self.llm.ainvoke(messages, config=run_config)
-                    
-                    # Log LLM response
-                    self._log_llm_response(result, messages, operation_name)
-                    
-                    # Add to Streamlit display
-                    try:
-                        from fairifier.apps.ui.streamlit_app import add_llm_response
-                        content = result.content if hasattr(result, 'content') else str(result)
-                        add_llm_response(operation_name, prompt_preview, content)
-                    except (ImportError, AttributeError):
-                        pass
-                    return result
-            else:
-                result = await self.llm.ainvoke(messages, config=run_config)
-                
-                # Log LLM response
-                self._log_llm_response(result, messages, operation_name)
-                
-                # Add to Streamlit display
-                try:
-                    from fairifier.apps.ui.streamlit_app import add_llm_response
-                    content = result.content if hasattr(result, 'content') else str(result)
-                    add_llm_response(operation_name, prompt_preview, content)
-                except (ImportError, AttributeError):
-                    pass
-                return result
+            result = await self.llm.ainvoke(messages, config=run_config)
+            self._log_llm_response(result, messages, operation_name)
+            return result
         elif self.provider == "ollama":
-            # Ollama: think=True enables model thinking (separate thinking/output); think=False direct output (official API)
-            # Same switch as config.llm_enable_thinking (LLM_ENABLE_THINKING env)
-            if stream_to_streamlit:
-                try:
-                    llm_with_params = self.llm.bind(stream=True, think=enable_thinking)
-                    content_parts = []
-                    full_text = ""
-                    
-                    async for chunk in llm_with_params.astream(messages, config=run_config):
-                        if hasattr(chunk, 'content') and chunk.content:
-                            content = chunk.content
-                            content_parts.append(content)
-                            full_text += content
-                            
-                            # Stream to Streamlit chat if available
-                            if message_id:
-                                try:
-                                    from fairifier.apps.ui.streamlit_app import update_chat_message
-                                    update_chat_message(message_id, full_text, is_streaming=True)
-                                except Exception:
-                                    pass
-                    
-                    # Finalize chat message (remove cursor)
-                    if message_id:
-                        try:
-                            from fairifier.apps.ui.streamlit_app import finalize_chat_message
-                            finalize_chat_message(message_id)
-                        except Exception:
-                            pass
-                    
-                    result = AIMessage(content=full_text)
-                    
-                    # Log LLM response
-                    self._log_llm_response(result, messages, operation_name)
-                    
-                    # Add to Streamlit display
-                    try:
-                        from fairifier.apps.ui.streamlit_app import add_llm_response
-                        add_llm_response(operation_name, prompt_preview, full_text)
-                    except (ImportError, AttributeError):
-                        pass
-                    return result
-                except Exception as e:
-                    logger.warning(f"Ollama streaming failed: {e}, falling back to regular call")
-                    llm_with_params = self.llm.bind(think=enable_thinking)
-                    result = await llm_with_params.ainvoke(messages, config=run_config)
-                    
-                    # Check if result is valid
-                    if not result:
-                        logger.error(f"❌ Ollama returned None result for {operation_name}")
-                        raise ValueError(f"Ollama returned None result")
-                    
-                    # Try multiple ways to get content (same as non-streaming path)
-                    content = None
-                    if hasattr(result, 'content'):
-                        content = result.content
-                    
-                    if not content or len(str(content).strip()) == 0:
-                        # Try response_metadata
-                        if hasattr(result, 'response_metadata'):
-                            metadata = result.response_metadata
-                            if isinstance(metadata, dict):
-                                for key in ['content', 'text', 'message', 'response']:
-                                    if key in metadata and metadata[key]:
-                                        content = metadata[key]
-                                        logger.info(f"Found content in response_metadata['{key}']: {len(str(content))} chars")
-                                        break
-                        
-                        # Try direct attribute access
-                        if not content:
-                            for attr in ['text', 'message', 'response', 'output']:
-                                if hasattr(result, attr):
-                                    attr_value = getattr(result, attr)
-                                    if attr_value and len(str(attr_value).strip()) > 0:
-                                        content = attr_value
-                                        logger.info(f"Found content in result.{attr}: {len(str(content))} chars")
-                                        break
-                    
-                    if not content or len(str(content).strip()) == 0:
-                        logger.error(f"❌ Ollama returned empty content for {operation_name}")
-                        logger.error(f"Result object: {result}, Type: {type(result)}")
-                        if hasattr(result, 'response_metadata'):
-                            logger.error(f"Response metadata: {result.response_metadata}")
-                        raise ValueError(f"Ollama returned empty content")
-                    
-                    # If we found content from alternative source, update result.content
-                    if content and (not hasattr(result, 'content') or not result.content):
-                        logger.info(f"Updating result.content with content from alternative source")
-                        result.content = content
-                    
-                    # Log LLM response
-                    self._log_llm_response(result, messages, operation_name)
-                    
-                    # Add to Streamlit display
-                    try:
-                        from fairifier.apps.ui.streamlit_app import add_llm_response
-                        add_llm_response(operation_name, prompt_preview, content)
-                    except (ImportError, AttributeError):
-                        pass
-                    return result
-            else:
-                try:
-                    llm_with_params = self.llm.bind(think=enable_thinking)
-                    result = await llm_with_params.ainvoke(messages, config=run_config)
-                    
-                    # Check if result is valid
-                    if not result:
-                        logger.error(f"❌ Ollama returned None result for {operation_name}")
-                        logger.error(f"Provider: {self.provider}, Model: {self.model}, Base URL: {config.llm_base_url}")
-                        raise ValueError(f"Ollama returned None result")
-                    
-                    # Debug: Log full result structure for ollama
-                    logger.debug(f"Ollama result type: {type(result)}")
-                    logger.debug(f"Ollama result attributes: {dir(result) if result else 'None'}")
-                    if hasattr(result, 'response_metadata'):
-                        logger.debug(f"Ollama response_metadata: {result.response_metadata}")
-                    
-                    # Try multiple ways to get content
-                    content = None
-                    if hasattr(result, 'content'):
-                        content = result.content
-                        logger.debug(f"Got content from result.content: {len(str(content)) if content else 0} chars")
-                    
-                    # If content is empty, try other attributes
-                    if not content or len(str(content).strip()) == 0:
-                        # Try response_metadata - ollama might store content here when truncated
-                        if hasattr(result, 'response_metadata'):
-                            metadata = result.response_metadata
-                            logger.debug(f"Checking response_metadata: {metadata}")
-                            # Some ollama responses might have content in metadata
-                            if isinstance(metadata, dict):
-                                # Check for common ollama metadata keys
-                                for key in ['content', 'text', 'message', 'response', 'model_response', 'generated_text']:
-                                    if key in metadata and metadata[key]:
-                                        content = metadata[key]
-                                        logger.info(f"Found content in response_metadata['{key}']: {len(str(content))} chars")
-                                        break
-                                
-                                # Check nested structures (ollama sometimes nests content)
-                                if not content:
-                                    for key in ['message', 'response', 'data']:
-                                        if key in metadata and isinstance(metadata[key], dict):
-                                            nested = metadata[key]
-                                            for nested_key in ['content', 'text', 'message', 'response']:
-                                                if nested_key in nested and nested[nested_key]:
-                                                    content = nested[nested_key]
-                                                    logger.info(f"Found content in response_metadata['{key}']['{nested_key}']: {len(str(content))} chars")
-                                                    break
-                                            if content:
-                                                break
-                        
-                        # Try direct attribute access
-                        if not content:
-                            for attr in ['text', 'message', 'response', 'output', 'generated_text']:
-                                if hasattr(result, attr):
-                                    attr_value = getattr(result, attr)
-                                    if attr_value and len(str(attr_value).strip()) > 0:
-                                        content = attr_value
-                                        logger.info(f"Found content in result.{attr}: {len(str(content))} chars")
-                                        break
-                        
-                        # Last resort: check if result has a __dict__ with content
-                        if not content and hasattr(result, '__dict__'):
-                            result_dict = result.__dict__
-                            for key in ['content', 'text', 'message', 'response', 'output', 'generated_text']:
-                                if key in result_dict and result_dict[key]:
-                                    content = result_dict[key]
-                                    logger.info(f"Found content in result.__dict__['{key}']: {len(str(content))} chars")
-                                    break
-                    
-                    # Final check
-                    if not content or len(str(content).strip()) == 0:
-                        logger.error(f"❌ Ollama returned empty content for {operation_name}")
-                        logger.error(f"Result object: {result}")
-                        logger.error(f"Result type: {type(result)}")
-                        logger.error(f"Result attributes: {dir(result) if result else 'None'}")
-                        if hasattr(result, 'response_metadata'):
-                            logger.error(f"Response metadata: {result.response_metadata}")
-                        logger.error(f"Provider: {self.provider}, Model: {self.model}, Base URL: {config.llm_base_url}")
-                        raise ValueError(f"Ollama returned empty content")
-                    
-                    # If we found content from alternative source, update result.content
-                    if content and (not hasattr(result, 'content') or not result.content):
-                        logger.info(f"Updating result.content with content from alternative source")
-                        result.content = content
-                    
-                    # Log LLM response
-                    self._log_llm_response(result, messages, operation_name)
-                    
-                    # Add to Streamlit display
-                    try:
-                        from fairifier.apps.ui.streamlit_app import add_llm_response
-                        add_llm_response(operation_name, prompt_preview, content)
-                    except (ImportError, AttributeError):
-                        pass
-                    return result
-                except Exception as e:
-                    logger.error(f"❌ Ollama call failed for {operation_name}: {e}")
+            try:
+                llm_with_params = self.llm.bind(think=enable_thinking)
+                result = await llm_with_params.ainvoke(messages, config=run_config)
+
+                if not result:
+                    logger.error(f"❌ Ollama returned None result for {operation_name}")
                     logger.error(f"Provider: {self.provider}, Model: {self.model}, Base URL: {config.llm_base_url}")
-                    raise
+                    raise ValueError("Ollama returned None result")
+
+                logger.debug(f"Ollama result type: {type(result)}")
+                logger.debug(f"Ollama result attributes: {dir(result) if result else 'None'}")
+                if hasattr(result, "response_metadata"):
+                    logger.debug(f"Ollama response_metadata: {result.response_metadata}")
+
+                content = None
+                if hasattr(result, "content"):
+                    content = result.content
+                    logger.debug(f"Got content from result.content: {len(str(content)) if content else 0} chars")
+
+                if not content or len(str(content).strip()) == 0:
+                    if hasattr(result, "response_metadata"):
+                        metadata = result.response_metadata
+                        logger.debug(f"Checking response_metadata: {metadata}")
+                        if isinstance(metadata, dict):
+                            for key in [
+                                "content",
+                                "text",
+                                "message",
+                                "response",
+                                "model_response",
+                                "generated_text",
+                            ]:
+                                if key in metadata and metadata[key]:
+                                    content = metadata[key]
+                                    logger.info(
+                                        f"Found content in response_metadata['{key}']: {len(str(content))} chars"
+                                    )
+                                    break
+
+                            if not content:
+                                for key in ["message", "response", "data"]:
+                                    if key in metadata and isinstance(metadata[key], dict):
+                                        nested = metadata[key]
+                                        for nested_key in ["content", "text", "message", "response"]:
+                                            if nested_key in nested and nested[nested_key]:
+                                                content = nested[nested_key]
+                                                logger.info(
+                                                    f"Found content in response_metadata['{key}']['{nested_key}']: {len(str(content))} chars"
+                                                )
+                                                break
+                                        if content:
+                                            break
+
+                    if not content:
+                        for attr in ["text", "message", "response", "output", "generated_text"]:
+                            if hasattr(result, attr):
+                                attr_value = getattr(result, attr)
+                                if attr_value and len(str(attr_value).strip()) > 0:
+                                    content = attr_value
+                                    logger.info(f"Found content in result.{attr}: {len(str(content))} chars")
+                                    break
+
+                    if not content and hasattr(result, "__dict__"):
+                        result_dict = result.__dict__
+                        for key in [
+                            "content",
+                            "text",
+                            "message",
+                            "response",
+                            "output",
+                            "generated_text",
+                        ]:
+                            if key in result_dict and result_dict[key]:
+                                content = result_dict[key]
+                                logger.info(
+                                    f"Found content in result.__dict__['{key}']: {len(str(content))} chars"
+                                )
+                                break
+
+                if not content or len(str(content).strip()) == 0:
+                    logger.error(f"❌ Ollama returned empty content for {operation_name}")
+                    logger.error(f"Result object: {result}")
+                    logger.error(f"Result type: {type(result)}")
+                    logger.error(f"Result attributes: {dir(result) if result else 'None'}")
+                    if hasattr(result, "response_metadata"):
+                        logger.error(f"Response metadata: {result.response_metadata}")
+                    logger.error(
+                        f"Provider: {self.provider}, Model: {self.model}, Base URL: {config.llm_base_url}"
+                    )
+                    raise ValueError("Ollama returned empty content")
+
+                if content and (not hasattr(result, "content") or not result.content):
+                    logger.info("Updating result.content with content from alternative source")
+                    result.content = content
+
+                self._log_llm_response(result, messages, operation_name)
+                return result
+            except Exception as e:
+                logger.error(f"❌ Ollama call failed for {operation_name}: {e}")
+                logger.error(f"Provider: {self.provider}, Model: {self.model}, Base URL: {config.llm_base_url}")
+                raise
         elif self.provider == "anthropic" or self.provider == "claude":
-            # Anthropic Claude Extended Thinking: reasoning.enabled / effort (API-specific)
-            # Pass extra_body so backends that support it can enable extended thinking
             try:
                 llm_with_params = self.llm.bind(
                     extra_body={"reasoning": {"enabled": enable_thinking}} if enable_thinking else {}
                 )
                 result = await llm_with_params.ainvoke(messages, config=run_config)
             except Exception as e:
-                # Some Anthropic SDK/API versions may not support extra_body or different shape
                 logger.debug(f"Anthropic extra_body for thinking failed: {e}, using plain invoke")
                 result = await self.llm.ainvoke(messages, config=run_config)
-            
-            # Log LLM response
+
             self._log_llm_response(result, messages, operation_name)
-            
-            # Add to Streamlit display if available
-            try:
-                from fairifier.apps.ui.streamlit_app import add_llm_response
-                content = result.content if hasattr(result, 'content') else str(result)
-                add_llm_response(operation_name, prompt_preview, content)
-            except (ImportError, AttributeError):
-                pass
-            
             return result
         else:
-            # Unsupported or future provider: no thinking param
             result = await self.llm.ainvoke(messages, config=run_config)
-            
-            # Log LLM response
             self._log_llm_response(result, messages, operation_name)
-            
-            # Add to Streamlit display if available
-            try:
-                from fairifier.apps.ui.streamlit_app import add_llm_response
-                content = result.content if hasattr(result, 'content') else str(result)
-                add_llm_response(operation_name, prompt_preview, content)
-            except (ImportError, AttributeError):
-                pass
-            
             return result
-        
+
     def _initialize_llm(self):
         """Initialize LLM based on provider configuration.
         

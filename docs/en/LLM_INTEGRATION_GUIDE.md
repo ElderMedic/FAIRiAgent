@@ -99,13 +99,13 @@ cp env.example .env
 python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRxiv.pdf
 ```
 
-For interactive use:
+For the web UI (settings alongside runs):
 
 ```bash
-python run_fairifier.py ui
+python run_fairifier.py webui
 ```
 
-The Streamlit UI configuration page supports:
+Supported LLM providers (configure via `.env` or the web UI where exposed):
 
 - Qwen
 - Gemini
