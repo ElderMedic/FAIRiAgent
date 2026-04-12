@@ -447,11 +447,9 @@ result = await workflow.run(document_path, project_id)
 # Will cleanup when garbage collected (not recommended for production)
 ```
 
-**Web UI Configuration:**
-- Access the "⚙️ Configuration" tab in the Streamlit UI
-- Configure LLM, LangSmith, and FAIR-DS settings
-- Save to session or export to .env file
-- Changes apply to next processing run
+**Web UI configuration:**
+- Run `python run_fairifier.py webui` and use the in-app settings where available, or edit `.env` for LLM, LangSmith, and FAIR-DS options
+- Export or copy values to `.env` when you want the CLI or next run to pick them up without the browser
 
 ### Output Files
 
@@ -589,9 +587,7 @@ fairifier/
 │   ├── langgraph_app.py # Main LangGraph application
 │   └── __dev__.py       # LangGraph Studio entry point
 ├── apps/                # Web UI and API
-│   ├── ui/
-│   │   └── streamlit_app.py  # Streamlit web interface
-│   └── api/             # FastAPI (optional)
+│   └── api/             # FastAPI backend + React static assets
 ├── services/            # FAIR-DS and local knowledge
 ├── utils/               # Utilities
 │   ├── llm_helper.py    # LLM interaction utilities
@@ -705,8 +701,6 @@ python run_fairifier.py webui
 
 Open `http://localhost:8000`.
 
-Legacy Streamlit UI is still available with `python run_fairifier.py ui`.
-
 ## 🧪 Testing & Examples
 
 ### 🎯 Quick Test
@@ -719,7 +713,7 @@ python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf
 python run_fairifier.py validate-document --env-only
 
 # Test web UI
-python run_fairifier.py ui
+python run_fairifier.py webui
 # Then use the example file option in the UI
 ```
 
@@ -819,7 +813,7 @@ FAIRiAgent includes comprehensive LangSmith integration for debugging and monito
 export LANGSMITH_API_KEY="your_api_key_here"
 export LANGSMITH_PROJECT="fairifier-testing"
 
-# Or configure in Streamlit UI under "⚙️ Configuration" tab
+# Or set the same variables in `.env` or your shell before starting the web UI
 ```
 
 LangSmith provides:
@@ -827,7 +821,7 @@ LangSmith provides:
 - 📊 **Performance Metrics**: Token usage, costs, and timing
 - 🐛 **Debug Tools**: Step-by-step debugging and error analysis
 - 📈 **Monitoring**: Track performance over time
-- 🔗 **Trace Links**: Direct links to traces from Streamlit UI
+- 🔗 **Trace Links**: Links to traces in the LangSmith UI when tracing is enabled
 
 **LangGraph Studio Integration:**
 ```bash

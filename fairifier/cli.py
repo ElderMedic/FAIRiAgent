@@ -653,38 +653,6 @@ async def _run_workflow(
 @click.option(
     "--port",
     type=int,
-    default=None,
-    help="Port for Streamlit (default: 8501).",
-)
-def ui(port: Optional[int]):
-    """Launch the Web UI (Streamlit)."""
-    import subprocess
-
-    port = port or 8501
-    click.echo("🚀 Starting Streamlit Web UI...")
-    click.echo(f"   Interface: http://localhost:{port}")
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "streamlit",
-            "run",
-            "fairifier/apps/ui/streamlit_app.py",
-            "--server.port",
-            str(port),
-            "--server.address",
-            "0.0.0.0",
-            "--browser.gatherUsageStats",
-            "false",
-        ],
-        cwd=Path(__file__).resolve().parents[2],
-    )
-
-
-@cli.command()
-@click.option(
-    "--port",
-    type=int,
     default=8000,
     help="Port for the Web UI server (default: 8000).",
 )
