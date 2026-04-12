@@ -15,6 +15,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 from fairifier.graph.langgraph_app import FAIRifierLangGraphApp
 from fairifier.config import config, apply_env_overrides
+from fairifier.output_paths import (
+    artifact_output_filename,
+    resolve_metadata_output_read_path,
+    METADATA_OUTPUT_FILENAME,
+    LEGACY_METADATA_OUTPUT_FILENAME,
+)
 from fairifier.utils.run_control import set_run_stop_requested
 
 # Check if we're running in Streamlit environment
@@ -71,8 +77,12 @@ def _load_result_from_output_folder(folder_path):
         # Required files
         workflow_report_path = path / "workflow_report.json"
         runtime_config_path = path / "runtime_config.json"
-        metadata_json_path = path / "metadata_json.json"
-        if not workflow_report_path.exists() or not runtime_config_path.exists() or not metadata_json_path.exists():
+        metadata_json_path = resolve_metadata_output_read_path(path)
+        if (
+            not workflow_report_path.exists()
+            or not runtime_config_path.exists()
+            or not metadata_json_path
+        ):
             return None, None, None, None
         report = json.loads(workflow_report_path.read_text(encoding="utf-8"))
         runtime = json.loads(runtime_config_path.read_text(encoding="utf-8"))
@@ -158,16 +168,10 @@ def _write_artifacts_to_output_path(result, output_path):
     path = Path(output_path) if not isinstance(output_path, Path) else output_path
     path.mkdir(parents=True, exist_ok=True)
     artifacts = result.get("artifacts", {})
-    extensions = {
-        "metadata_json": ".json",
-        "validation_report": ".txt",
-        "processing_log": ".jsonl",
-    }
     for artifact_name, content in artifacts.items():
         if not content:
             continue
-        ext = extensions.get(artifact_name, ".json")
-        filename = f"{artifact_name}{ext}"
+        filename = artifact_output_filename(artifact_name)
         filepath = path / filename
         text = content if isinstance(content, str) else json.dumps(content, indent=2, ensure_ascii=False)
         filepath.write_text(text, encoding="utf-8")
@@ -830,7 +834,10 @@ def review_results_page():
         "Output folder path",
         value=default_path,
         placeholder="e.g. output/20260129_174859 or absolute path",
-        help="Path to a run output directory containing workflow_report.json, runtime_config.json, metadata_json.json.",
+        help=(
+            "Path to a run output directory containing workflow_report.json, runtime_config.json, "
+            f"and {METADATA_OUTPUT_FILENAME} (or legacy {LEGACY_METADATA_OUTPUT_FILENAME})."
+        ),
     )
     if st.button("Load run"):
         if folder_path and folder_path.strip():
@@ -843,7 +850,11 @@ def review_results_page():
                 st.success(f"Loaded run: {proj_name} ({proj_id}). Showing below.")
                 st.rerun()
             else:
-                st.error("Failed to load run. Check that the folder contains workflow_report.json, runtime_config.json, and metadata_json.json.")
+                st.error(
+                    f"Failed to load run. Check that the folder contains workflow_report.json, "
+                    f"runtime_config.json, and {METADATA_OUTPUT_FILENAME} "
+                    f"(or legacy {LEGACY_METADATA_OUTPUT_FILENAME})."
+                )
         else:
             st.warning("Enter an output folder path.")
     

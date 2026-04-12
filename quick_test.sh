@@ -101,7 +101,7 @@ if [ $EXIT_CODE -eq 0 ]; then
     ls -lh "$OUTPUT_DIR"
     echo ""
     echo "📊 View results:"
-    echo "  • Metadata JSON: cat $OUTPUT_DIR/metadata_json.json | jq '.'"
+    echo "  • Metadata JSON: cat $OUTPUT_DIR/metadata.json | jq '.'"
     echo "  • Processing Log: cat $OUTPUT_DIR/processing_log.jsonl | jq '.'"
     echo "  • LLM Responses: cat $OUTPUT_DIR/llm_responses.json | jq '.'"
     echo ""

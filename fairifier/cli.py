@@ -13,6 +13,13 @@ import click
 
 from .graph.langgraph_app import FAIRifierLangGraphApp
 from .config import config
+from .output_paths import (
+    artifact_output_filename,
+    metadata_output_write_path,
+    resolve_metadata_output_read_path,
+    METADATA_OUTPUT_FILENAME,
+    LEGACY_METADATA_OUTPUT_FILENAME,
+)
 from .utils.json_logger import get_logger
 from .utils.llm_helper import get_llm_helper, save_llm_responses, check_ollama_model_available
 from .validation import check_metadata_json_output
@@ -141,8 +148,8 @@ def _post_write_metadata_json_checks(
     do_syntax: bool,
     do_fair: bool,
 ) -> None:
-    """After metadata_json.json is written: optional syntax + FAIR/ISA checks (warn + log only)."""
-    metadata_json_path = output_path / "metadata_json.json"
+    """After metadata.json is written: optional syntax + FAIR/ISA checks (warn + log only)."""
+    metadata_json_path = metadata_output_write_path(output_path)
     if not (do_syntax or do_fair):
         return
     if not metadata_json_path.exists():
@@ -155,12 +162,12 @@ def _post_write_metadata_json_checks(
     except json.JSONDecodeError as e:
         if do_syntax:
             click.echo(
-                f"\n⚠️  JSON syntax check failed for metadata_json.json: {e}",
+                f"\n⚠️  JSON syntax check failed for {METADATA_OUTPUT_FILENAME}: {e}",
                 err=True,
             )
             json_logger.warning(
                 "json_syntax_check",
-                file="metadata_json.json",
+                file=METADATA_OUTPUT_FILENAME,
                 valid=False,
                 error=str(e),
             )
@@ -178,8 +185,8 @@ def _post_write_metadata_json_checks(
         return
 
     if do_syntax:
-        click.echo("  ✓ JSON syntax check: metadata_json.json is valid JSON")
-        json_logger.info("json_syntax_check", file="metadata_json.json", valid=True)
+        click.echo(f"  ✓ JSON syntax check: {METADATA_OUTPUT_FILENAME} is valid JSON")
+        json_logger.info("json_syntax_check", file=METADATA_OUTPUT_FILENAME, valid=True)
 
     if not do_fair:
         return
@@ -306,7 +313,7 @@ def cli(ctx: click.Context):
     "--no-validate-json",
     is_flag=True,
     default=False,
-    help="Skip JSON syntax and FAIR/ISA format checks after saving metadata_json.json.",
+    help="Skip JSON syntax and FAIR/ISA format checks after saving metadata.json.",
 )
 @click.option(
     "--no-validate-json-fair-format",
@@ -529,7 +536,9 @@ async def _run_workflow(
         # Check for critical output
         has_metadata_json = "metadata_json" in artifacts and artifacts["metadata_json"]
         if not has_metadata_json:
-            click.echo("\n❌ CRITICAL: metadata_json.json was not generated!", err=True)
+            click.echo(
+                f"\n❌ CRITICAL: {METADATA_OUTPUT_FILENAME} was not generated!", err=True
+            )
             click.echo("   The workflow did not complete successfully.", err=True)
         
         if needs_review:
@@ -552,15 +561,7 @@ async def _run_workflow(
             
             for artifact_name, content in artifacts.items():
                 if content:
-                    # Determine file extension
-                    extensions = {
-                        "metadata_json": ".json",
-                        "validation_report": ".txt",
-                        "processing_log": ".jsonl"
-                    }
-                    
-                    ext = extensions.get(artifact_name, ".json")
-                    filename = f"{artifact_name}{ext}"
+                    filename = artifact_output_filename(artifact_name)
                     filepath = output_path / filename
                     
                     with open(filepath, 'w', encoding='utf-8') as f:
@@ -830,11 +831,16 @@ def status(project_id: str, verbose: bool):
     
     # Infer status from files if not in log
     if not is_running and status_from_log is None:
-        metadata_json_file = run_dir / "metadata_json.json"
-        if metadata_json_file.exists():
-            click.echo(f"\n✅ Status:     COMPLETED (inferred from metadata_json.json)")
+        metadata_json_file = resolve_metadata_output_read_path(run_dir)
+        if metadata_json_file and metadata_json_file.exists():
+            click.echo(
+                f"\n✅ Status:     COMPLETED (inferred from {metadata_json_file.name})"
+            )
         else:
-            click.echo(f"\n❓ Status:     UNKNOWN (no processing_log.jsonl or metadata_json.json)")
+            click.echo(
+                f"\n❓ Status:     UNKNOWN (no processing_log.jsonl or "
+                f"{METADATA_OUTPUT_FILENAME}/{LEGACY_METADATA_OUTPUT_FILENAME})"
+            )
     
     # Check for errors in logs (optional, simple implementation)
     error_count = 0
@@ -1045,13 +1051,7 @@ async def _resume_workflow(
         if artifacts:
             for artifact_name, content in artifacts.items():
                 if content:
-                    extensions = {
-                        "metadata_json": ".json",
-                        "validation_report": ".txt",
-                        "processing_log": ".jsonl"
-                    }
-                    ext = extensions.get(artifact_name, ".json")
-                    filename = f"{artifact_name}{ext}"
+                    filename = artifact_output_filename(artifact_name)
                     filepath = output_path / filename
                     
                     with open(filepath, 'w', encoding='utf-8') as f:

@@ -28,7 +28,7 @@ class WorkflowReportGenerator:
         
         Args:
             state: FAIRifierState dictionary
-            metadata_json_path: Path to metadata_json.json file (optional)
+            metadata_json_path: Path to metadata.json on disk (optional)
             
         Returns:
             Dictionary containing report data

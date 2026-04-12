@@ -128,7 +128,7 @@ def test_persist_run_outputs_writes_core_downloadable_files(
 
     assert errors == []
     assert (
-        tmp_path / "metadata_json.json"
+        tmp_path / "metadata.json"
     ).read_text(encoding="utf-8") == '{"ok": true}'
     assert (
         tmp_path / "validation_report.txt"

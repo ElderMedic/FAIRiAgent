@@ -23,6 +23,12 @@ import pandas as pd
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
+from fairifier.output_paths import (
+    LEGACY_METADATA_OUTPUT_FILENAME,
+    METADATA_OUTPUT_FILENAME,
+    resolve_metadata_output_read_path,
+)
+
 from evaluation.evaluators.mandatory_coverage_evaluator import MandatoryCoverageEvaluator
 from evaluation.evaluators.completeness_evaluator import CompletenessEvaluator
 from evaluation.analysis.analyzers.field_presence import FieldPresenceAnalyzer
@@ -98,45 +104,48 @@ class ImprovedAnalysisRunner:
         else:
             # Fallback: scan for individual run directories
             print(f"Scanning for individual runs in: {self.runs_dir}")
-            for metadata_file in self.runs_dir.rglob('metadata_json.json'):
-                run_dir = metadata_file.parent
-                
-                # Extract model and document from path
-                parts = run_dir.parts
-                
-                model_name = None
-                doc_id = None
-                
-                # Strategy 1: outputs/model/document/run_X structure
-                if 'outputs' in parts:
-                    idx = parts.index('outputs')
-                    if idx + 2 < len(parts):
-                        model_name = parts[idx + 1]
-                        doc_id = parts[idx + 2]
-                
-                # Strategy 2: document/run_X structure (e.g., qwen_max/earthworm/run_1)
-                elif len(parts) >= 2:
-                    # Check if parent is a document name
-                    parent_name = parts[-2]
-                    if parent_name in ['earthworm', 'biosensor', 'pomato']:
-                        doc_id = parent_name
-                        # Model name is the runs directory name
-                        model_name = self.runs_dir.name
-                
-                if model_name and doc_id:
-                    run_data = self._load_single_run(run_dir, model_name, doc_id)
-                    if run_data:
-                        runs.append(run_data)
+            seen_run_dirs = set()
+            for name in (METADATA_OUTPUT_FILENAME, LEGACY_METADATA_OUTPUT_FILENAME):
+                for metadata_file in self.runs_dir.rglob(name):
+                    run_dir = metadata_file.parent
+                    if run_dir in seen_run_dirs:
+                        continue
+                    seen_run_dirs.add(run_dir)
+
+                    # Extract model and document from path
+                    parts = run_dir.parts
+
+                    model_name = None
+                    doc_id = None
+
+                    # Strategy 1: outputs/model/document/run_X structure
+                    if "outputs" in parts:
+                        idx = parts.index("outputs")
+                        if idx + 2 < len(parts):
+                            model_name = parts[idx + 1]
+                            doc_id = parts[idx + 2]
+
+                    # Strategy 2: document/run_X structure (e.g., qwen_max/earthworm/run_1)
+                    elif len(parts) >= 2:
+                        parent_name = parts[-2]
+                        if parent_name in ["earthworm", "biosensor", "pomato"]:
+                            doc_id = parent_name
+                            model_name = self.runs_dir.name
+
+                    if model_name and doc_id:
+                        run_data = self._load_single_run(run_dir, model_name, doc_id)
+                        if run_data:
+                            runs.append(run_data)
         
         print(f"✓ Loaded {len(runs)} runs")
         return runs
     
     def _load_single_run(self, run_dir: Path, model_name: str, doc_id: str) -> Dict[str, Any]:
         """Load data from a single run directory."""
-        metadata_file = run_dir / 'metadata_json.json'
+        metadata_file = resolve_metadata_output_read_path(run_dir)
         eval_file = run_dir / 'eval_result.json'
         
-        if not metadata_file.exists():
+        if not metadata_file:
             return None
         
         try:

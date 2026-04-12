@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+from fairifier.output_paths import LEGACY_METADATA_OUTPUT_FILENAME, METADATA_OUTPUT_FILENAME
 RUNS_ROOT = REPO_ROOT / "evaluation/harness/runs"
 OUT_ROOT = REPO_ROOT / "evaluation/harness/organized"
 
@@ -85,11 +88,14 @@ def discover_campaigns() -> List[HarnessCampaign]:
             if not config_dir.is_dir():
                 continue
 
-            metadata_files = sorted(config_dir.rglob("metadata_json.json"))
-            if not metadata_files:
+            run_output_dirs = set()
+            for pat in (METADATA_OUTPUT_FILENAME, LEGACY_METADATA_OUTPUT_FILENAME):
+                for p in config_dir.rglob(pat):
+                    run_output_dirs.add(p.parent)
+            if not run_output_dirs:
                 continue
 
-            docs = sorted({path.parent.parent.name for path in metadata_files})
+            docs = sorted({run_dir.parent.name for run_dir in run_output_dirs})
             dataset = "_".join(docs)
             model = MODEL_ALIASES.get(config_dir.name, config_dir.name)
             workflow = "baseline" if "baseline" in config_dir.name.lower() else "fairiagent"
@@ -116,7 +122,7 @@ def discover_campaigns() -> List[HarnessCampaign]:
                     documents=docs,
                     source_path=str(config_dir.relative_to(REPO_ROOT)),
                     source_batch=batch_dir.name,
-                    n_completed_runs=len(metadata_files),
+                    n_completed_runs=len(run_output_dirs),
                     has_batch_evaluation_results=has_eval,
                     notes="; ".join(notes),
                 )

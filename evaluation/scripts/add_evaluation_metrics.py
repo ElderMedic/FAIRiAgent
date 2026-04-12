@@ -18,6 +18,8 @@ import os
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from fairifier.output_paths import resolve_metadata_output_read_path
+
 from evaluation.evaluators import (
     CompletenessEvaluator,
     CorrectnessEvaluator,
@@ -71,9 +73,9 @@ def evaluate_single_run(
     
     ground_truth_doc = ground_truth_docs[doc_id]
     
-    # Load metadata_json.json
-    metadata_file = run_dir / 'metadata_json.json'
-    if not metadata_file.exists():
+    # Load metadata.json (or legacy metadata_json.json)
+    metadata_file = resolve_metadata_output_read_path(run_dir)
+    if not metadata_file:
         return None
     
     with open(metadata_file, 'r', encoding='utf-8') as f:

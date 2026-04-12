@@ -39,7 +39,7 @@ class InternalMetricsEvaluator:
         Evaluate a single document's internal metrics.
         
         Args:
-            metadata_json: FAIRiAgent metadata_json.json content
+            metadata_json: FAIRiAgent metadata.json content
             workflow_report: FAIRiAgent workflow_report.json content (optional)
             
         Returns:
@@ -54,7 +54,7 @@ class InternalMetricsEvaluator:
             'human_review_flags': {}
         }
         
-        # Extract from metadata_json.json
+        # Extract from metadata.json
         result['metadata_confidence'] = {
             'overall_confidence': metadata_json.get('overall_confidence', 0.0),
             'needs_review': metadata_json.get('needs_review', False)
@@ -189,7 +189,7 @@ class InternalMetricsEvaluator:
         Evaluate internal metrics for a batch of documents.
         
         Args:
-            fairifier_outputs: Dict mapping doc_id to metadata_json.json content
+            fairifier_outputs: Dict mapping doc_id to metadata.json content
             output_dirs: Optional dict mapping doc_id to output directory path (to load workflow_report.json)
             
         Returns:

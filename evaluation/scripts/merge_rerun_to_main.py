@@ -10,10 +10,14 @@ This script:
 
 import json
 import shutil
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple, Set
 import argparse
 from collections import defaultdict
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from fairifier.output_paths import run_has_metadata_output
 
 
 def get_existing_run_indices(model_dir: Path, document: str) -> Set[int]:
@@ -37,7 +41,7 @@ def get_existing_run_indices(model_dir: Path, document: str) -> Set[int]:
             try:
                 run_idx = int(run_dir.name.split('_')[1])
                 # Check if it's a complete run
-                if (run_dir / "metadata_json.json").exists():
+                if run_has_metadata_output(run_dir):
                     existing.add(run_idx)
             except:
                 pass
@@ -98,7 +102,7 @@ def get_rerun_results(rerun_dir: Path) -> Dict[Tuple[str, str], List[Path]]:
                 for run_dir in doc_dir.iterdir():
                     if run_dir.is_dir() and run_dir.name.startswith('run_'):
                         # Check if complete
-                        if (run_dir / "metadata_json.json").exists():
+                        if run_has_metadata_output(run_dir):
                             key = (model_name, document)
                             results[key].append(run_dir)
     
