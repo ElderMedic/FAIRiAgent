@@ -4,7 +4,12 @@ Generate Key Figure - 单一综合图表
 """
 
 import json
+import sys
 from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO_ROOT))
+from fairifier.output_paths import LEGACY_METADATA_OUTPUT_FILENAME, METADATA_OUTPUT_FILENAME
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -100,7 +105,13 @@ def analyze_runs(ws):
 
 def process_model(model_dir, model_name, run_type, gt):
     results = []
-    for mf in model_dir.rglob('metadata_json.json'):
+    by_run_dir = {}
+    for pat in (METADATA_OUTPUT_FILENAME, LEGACY_METADATA_OUTPUT_FILENAME):
+        for mf in model_dir.rglob(pat):
+            run_dir = mf.parent
+            if run_dir not in by_run_dir or mf.name == METADATA_OUTPUT_FILENAME:
+                by_run_dir[run_dir] = mf
+    for mf in by_run_dir.values():
         try:
             with open(mf) as f:
                 meta = json.load(f)

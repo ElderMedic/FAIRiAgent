@@ -24,6 +24,9 @@ SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parents[1]
 EVAL_DIR = PROJECT_ROOT / "evaluation"
 
+sys.path.insert(0, str(PROJECT_ROOT))
+from fairifier.output_paths import resolve_metadata_output_read_path
+
 # Confidence threshold for high-confidence excess fields
 HIGH_CONFIDENCE_THRESHOLD = 0.8
 
@@ -55,9 +58,9 @@ def extract_run_results(runs_dir: Path) -> List[Dict]:
             with open(path, 'r') as f:
                 result = json.load(f)
             
-            # Try to load metadata_json.json from same directory
-            metadata_path = path.parent / "metadata_json.json"
-            if metadata_path.exists():
+            # Try to load metadata.json (or legacy metadata_json.json) from same directory
+            metadata_path = resolve_metadata_output_read_path(path.parent)
+            if metadata_path:
                 with open(metadata_path, 'r') as f:
                     result["extracted_metadata"] = json.load(f)
             

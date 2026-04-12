@@ -25,7 +25,7 @@ cp /path/to/papers/*.pdf datasets/raw/
 
 # Generate annotation templates from existing FAIRiAgent outputs
 python scripts/prepare_ground_truth.py generate-template \
-  --fairifier-output ../output/20251116_185736/metadata_json.json \
+  --fairifier-output ../output/20251116_185736/metadata.json \
   --output datasets/annotated/paper_001_template.json
 
 # Annotate papers (interactive guided process)
@@ -261,7 +261,7 @@ See `evaluation/EVALUATION_IMPROVEMENT_PLAN.md` for complete specification.
 
 - All runs are organized by model and document: `runs/{model_name}/{document_id}/run_X/`
 - Each run directory contains:
-  - `metadata_json.json`: Extracted metadata
+  - `metadata.json`: Extracted metadata (older runs may use `metadata_json.json`)
   - `eval_result.json`: Evaluation results
   - `cli_output.txt`: CLI execution log
 - Analysis automatically discovers and aggregates all runs

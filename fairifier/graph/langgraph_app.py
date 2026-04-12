@@ -29,6 +29,7 @@ from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
 from ..agents.json_generator import JSONGeneratorAgent
 from ..agents.critic import CriticAgent
 from ..config import config
+from ..output_paths import resolve_metadata_output_read_path, METADATA_OUTPUT_FILENAME
 from ..utils.llm_helper import get_llm_helper, normalize_llm_response_content
 from ..utils.report_generator import WorkflowReportGenerator
 from ..utils.run_control import run_stop_requested, reset_run_stop_requested
@@ -2763,8 +2764,13 @@ Return JSON in the following format:
         if not metadata_json or not metadata_fields:
             # Critical output missing - this is a failure
             state["status"] = ProcessingStatus.FAILED.value
-            logger.error("❌ Workflow FAILED: No metadata_json.json generated")
-            state["errors"] = state.get("errors", []) + ["Critical output missing: metadata_json.json not generated"]
+            logger.error(
+                "❌ Workflow FAILED: No metadata output generated (%s)",
+                METADATA_OUTPUT_FILENAME,
+            )
+            state["errors"] = state.get("errors", []) + [
+                f"Critical output missing: {METADATA_OUTPUT_FILENAME} not generated"
+            ]
         elif summary["failed_steps"] > 0:
             state["status"] = ProcessingStatus.REVIEWING.value
             logger.warning("⚠️ Workflow completed with failures - needs review")
@@ -2786,13 +2792,13 @@ Return JSON in the following format:
             output_dir = state.get("output_dir")
             report_generator = WorkflowReportGenerator(output_dir=output_dir)
             
-            # Find metadata_json.json path if available
+            # Find metadata.json path on disk if available (CLI may write after this node)
             metadata_json_path = None
             if output_dir:
                 from pathlib import Path
                 output_path = Path(output_dir)
-                metadata_json_file = output_path / "metadata_json.json"
-                if metadata_json_file.exists():
+                metadata_json_file = resolve_metadata_output_read_path(output_path)
+                if metadata_json_file:
                     metadata_json_path = str(metadata_json_file)
             
             # Generate report

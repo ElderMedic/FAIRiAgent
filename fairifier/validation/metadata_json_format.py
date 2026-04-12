@@ -1,4 +1,4 @@
-"""Single source of truth for FAIR / ISA metadata_json.json format checks.
+"""Single source of truth for FAIR / ISA metadata JSON format checks (``metadata.json``).
 
 Used by the CLI after workflow output and by evaluation.SchemaValidator.
 """

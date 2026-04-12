@@ -89,7 +89,7 @@ class CorrectnessEvaluator:
         Only checks if fields were extracted, not their values.
         
         Args:
-            fairifier_output: Parsed metadata_json.json from FAIRiAgent
+            fairifier_output: Parsed metadata.json from FAIRiAgent
             ground_truth_doc: Ground truth annotation for this document
             use_llm_judge: Not used (kept for compatibility)
             

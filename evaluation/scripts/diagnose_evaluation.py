@@ -9,6 +9,8 @@ from collections import defaultdict
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from fairifier.output_paths import run_has_metadata_output
+
 from evaluation.analysis.config import (
     EXCLUDED_MODELS,
     EXCLUDED_DOCUMENTS,
@@ -151,7 +153,7 @@ def check_runs_data():
                 if not run_dir.is_dir():
                     continue
                 
-                has_metadata = (run_dir / "metadata_json.json").exists()
+                has_metadata = run_has_metadata_output(run_dir)
                 has_eval = (run_dir / "eval_result.json").exists()
                 
                 if has_metadata and has_eval:

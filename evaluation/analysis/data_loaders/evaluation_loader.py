@@ -387,7 +387,7 @@ class EvaluationDataLoader:
                     
                     rows.append(row)
         
-        # Also scan for failed runs (those with eval_result.json but no metadata_json.json or failed status)
+        # Also scan for failed runs (those with eval_result.json but no metadata.json or failed status)
         for run_dir in self.runs_dir.rglob('*'):
             if not run_dir.is_dir():
                 continue

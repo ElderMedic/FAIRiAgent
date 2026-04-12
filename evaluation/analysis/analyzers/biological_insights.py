@@ -26,6 +26,8 @@ from collections import defaultdict
 import statistics
 import math
 
+from fairifier.output_paths import resolve_metadata_output_read_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -193,8 +195,8 @@ class BiologicalInsightsAnalyzer:
                     if not run_dir.is_dir() or not run_dir.name.startswith('run_'):
                         continue
                     
-                    metadata_file = run_dir / 'metadata_json.json'
-                    if metadata_file.exists():
+                    metadata_file = resolve_metadata_output_read_path(run_dir)
+                    if metadata_file:
                         try:
                             with open(metadata_file) as f:
                                 metadata = json.load(f)

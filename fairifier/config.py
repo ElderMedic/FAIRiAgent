@@ -165,7 +165,7 @@ class FAIRifierConfig:
     checkpointer_backend: str = "sqlite"
     checkpoint_db_path: Path = project_root / "output" / ".checkpoints.db"
 
-    # Post-output static checks (CLI, after metadata_json.json is written)
+    # Post-output static checks (CLI, after metadata.json is written)
     validate_output_json: bool = True  # JSON syntax (json.load)
     validate_output_json_fair_format: bool = True  # FAIR/ISA rules (same as SchemaValidator)
     

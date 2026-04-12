@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 import numpy as np
 
+from fairifier.output_paths import resolve_metadata_output_read_path
+
 from .config import (
     EXCLUDED_MODELS, EXCLUDED_DOCUMENTS, EXCLUDED_DIRECTORIES,
     normalize_model_name, normalize_document_id, get_model_display_name,
@@ -24,7 +26,7 @@ def count_actual_fields(metadata: dict) -> int:
     For baseline output: counts leaf values in the flat structure
     
     Args:
-        metadata: Metadata dictionary from metadata_json.json
+        metadata: Metadata dictionary from metadata.json (on disk)
         
     Returns:
         Number of populated fields
@@ -179,9 +181,9 @@ def load_run_data(run_dir: Path) -> Dict[str, Any]:
                 data['runtimes'].append(runtime)
                 data['by_document'][doc_id]['runtimes'].append(runtime)
                 
-                # Count actual fields from metadata_json.json
-                metadata_file = eval_file.parent / "metadata_json.json"
-                if metadata_file.exists():
+                # Count actual fields from metadata.json (or legacy name)
+                metadata_file = resolve_metadata_output_read_path(eval_file.parent)
+                if metadata_file:
                     with open(metadata_file, 'r') as f:
                         metadata = json.load(f)
                         actual_fields = count_actual_fields(metadata)

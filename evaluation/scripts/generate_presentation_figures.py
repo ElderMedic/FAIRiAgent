@@ -403,7 +403,7 @@ def make_traceability_stack(manifest: Dict) -> None:
     ax.axis("off")
 
     items = [
-        ("metadata_json.json", "Structured FAIR/ISA-linked output", COLORS["teal"]),
+        ("metadata.json", "Structured FAIR/ISA-linked output", COLORS["teal"]),
         ("workflow_report.json", "Execution summary, quality metrics, retries, timeline", COLORS["moss"]),
         ("processing_log.jsonl", "Stepwise machine-readable events", COLORS["amber"]),
         ("llm_responses.json", "Model outputs captured for inspection", COLORS["clay"]),

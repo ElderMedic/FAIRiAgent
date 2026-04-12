@@ -20,10 +20,14 @@ Target structure:
 
 import json
 import shutil
+import sys
 from pathlib import Path
 from collections import defaultdict
 from typing import Dict, List, Tuple
 import argparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from fairifier.output_paths import run_has_metadata_output
 
 
 def get_model_document_from_path(run_dir: Path) -> Tuple[str, str, int]:
@@ -66,8 +70,8 @@ def get_model_document_from_path(run_dir: Path) -> Tuple[str, str, int]:
 
 
 def is_complete_run(run_dir: Path) -> bool:
-    """Check if run is complete (has metadata_json.json)."""
-    return (run_dir / "metadata_json.json").exists()
+    """Check if run is complete (has metadata.json or legacy metadata_json.json)."""
+    return run_has_metadata_output(run_dir)
 
 
 def is_timeout_run(run_dir: Path) -> bool:
