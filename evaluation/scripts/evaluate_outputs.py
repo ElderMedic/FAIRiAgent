@@ -46,6 +46,7 @@ class EvaluationOrchestrator:
         status = {
             'category': 'incomplete',
             'has_metadata': False,
+            'metadata_path': None,
             'error_type': None,
             'error_message': None
         }
@@ -57,6 +58,7 @@ class EvaluationOrchestrator:
         if metadata_file is not None:
             status['has_metadata'] = True
             status['category'] = 'success'
+            status['metadata_path'] = metadata_file
             return status
         
         # Check eval_result.json for error information
@@ -272,7 +274,21 @@ class EvaluationOrchestrator:
                 status = self.classify_run_status(run_dir)
                 
                 if status['category'] == 'success':
-                    metadata_file = resolve_metadata_output_read_path(run_dir)
+                    # Use path from same classify_run_status snapshot (avoid second resolve / race skew)
+                    metadata_file = status.get('metadata_path')
+                    if metadata_file is None:
+                        incomplete_runs.append({
+                            'run_dir': run_dir,
+                            'status': {
+                                **status,
+                                'category': 'incomplete',
+                                'error_type': 'metadata_path_missing',
+                                'error_message': (
+                                    'classify_run_status reported success but metadata_path is missing'
+                                ),
+                            },
+                        })
+                        continue
                     workflow_report_file = run_dir / 'workflow_report.json'
                     
                     run_info = {
@@ -334,6 +350,11 @@ class EvaluationOrchestrator:
             
             selected_run = successful_runs[0]
             metadata_file = selected_run['metadata_file']
+            if metadata_file is None:
+                print(
+                    f"  ⚠️  No metadata path for {doc_id} (selected run); skipping load"
+                )
+                continue
             
             try:
                 with open(metadata_file, 'r', encoding='utf-8') as f:
