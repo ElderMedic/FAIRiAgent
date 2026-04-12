@@ -24,6 +24,9 @@ SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parents[1]
 EVAL_DIR = PROJECT_ROOT / "evaluation"
 
+sys.path.insert(0, str(PROJECT_ROOT))
+from fairifier.output_paths import resolve_metadata_output_read_path
+
 
 def load_evaluation_results(runs_dir: Path) -> dict:
     """Load evaluation results from a runs directory."""
@@ -66,9 +69,9 @@ def load_evaluation_results(runs_dir: Path) -> dict:
                             with open(eval_result, 'r') as f:
                                 results[model_name]["runs"].append(json.load(f))
                         
-                        # Load metadata_json.json for metrics
-                        metadata_file = run_dir / "metadata_json.json"
-                        if metadata_file.exists():
+                        # Load metadata.json (or legacy metadata_json.json) for metrics
+                        metadata_file = resolve_metadata_output_read_path(run_dir)
+                        if metadata_file:
                             try:
                                 with open(metadata_file, 'r') as f:
                                     metadata = json.load(f)

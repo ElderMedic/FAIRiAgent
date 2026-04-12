@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,8 @@ import seaborn as sns
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+from fairifier.output_paths import resolve_metadata_output_read_path
 
 GT_PATH = REPO_ROOT / "evaluation/datasets/annotated/ground_truth_filtered.json"
 MATRIX_CSV = (
@@ -279,7 +282,10 @@ def load_matrix() -> pd.DataFrame:
         if not run_path.exists():
             continue
 
-        metadata = load_json(run_path / "metadata_json.json")
+        meta_path = resolve_metadata_output_read_path(run_path)
+        if not meta_path:
+            continue
+        metadata = load_json(meta_path)
         workflow = load_json(run_path / "workflow_report.json")
         comp_metrics = compute_completeness(metadata, gt_docs[document])
         quality = workflow["quality_metrics"]
@@ -351,7 +357,7 @@ def check_missing(df_phase1: pd.DataFrame, df_matrix: pd.DataFrame) -> Dict[str,
         "LLM judge metrics are intentionally omitted from slide figures because current evaluator output is unreliable in multiple recent batches."
     )
     issues["notes"].append(
-        "Matrix completeness metrics in the slide figures are recomputed directly from metadata_json.json against ground truth so that all current matrix cells are evaluated on the same per-document basis."
+        "Matrix completeness metrics in the slide figures are recomputed directly from metadata.json against ground truth so that all current matrix cells are evaluated on the same per-document basis."
     )
     issues["notes"].append(
         "Anthropic pomato cells are retained for coverage but marked provider-affected based on QC."

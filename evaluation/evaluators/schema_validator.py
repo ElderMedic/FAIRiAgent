@@ -32,7 +32,7 @@ class SchemaValidator:
         Validate FAIRiAgent output.
 
         Args:
-            fairifier_output: Parsed metadata_json.json from FAIRiAgent
+            fairifier_output: Parsed metadata.json from FAIRiAgent
 
         Returns:
             Dict with validation results

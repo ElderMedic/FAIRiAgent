@@ -27,7 +27,7 @@ class MandatoryCoverageEvaluator:
         Success = 100% mandatory fields covered for selected package
         
         Args:
-            fairifier_output: Parsed metadata_json.json from FAIRiAgent
+            fairifier_output: Parsed metadata.json from FAIRiAgent
             ground_truth_doc: Ground truth annotation for this document
             
         Returns:

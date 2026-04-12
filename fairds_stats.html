@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FAIR-DS · Data Statistics</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #07111f;
+      --bg2: #0c1826;
+      --bg3: #101f30;
+      --border: rgba(255,255,255,0.08);
+      --border-hover: rgba(255,255,255,0.16);
+      --text: #e8edf4;
+      --text-dim: rgba(232,237,244,0.55);
+      --text-faint: rgba(232,237,244,0.32);
+      --accent: #5ed7b6;
+      --accent2: #1857ff;
+      --accent3: #f5a623;
+      --mandatory: #ff6b6b;
+      --recommended: #5ed7b6;
+      --preferred: #a5bcff;
+      --optional: rgba(232,237,244,0.35);
+      --ignore: rgba(232,237,244,0.18);
+      --radius: 1rem;
+      --radius-sm: 0.6rem;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Header ─────────────────────────────────────────────── */
+    .top-bar {
+      position: sticky; top: 0; z-index: 50;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 1rem; padding: 0 2rem; height: 3.5rem;
+      background: rgba(7,17,31,0.86);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(20px);
+    }
+    .top-bar__brand { display: flex; align-items: center; gap: 0.55rem; }
+    .top-bar__dot { width: 0.55rem; height: 0.55rem; border-radius: 999px; background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+    .top-bar__title { font-size: 0.85rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text); }
+    .top-bar__sub { font-size: 0.72rem; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+
+    #status-badge {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      padding: 0.3rem 0.75rem; border-radius: 999px; font-size: 0.72rem; font-weight: 600;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.05); color: var(--text-dim);
+      transition: all 0.3s;
+    }
+    #status-badge.ok { border-color: rgba(94,215,182,0.35); background: rgba(94,215,182,0.08); color: var(--accent); }
+    #status-badge.err { border-color: rgba(255,107,107,0.35); background: rgba(255,107,107,0.08); color: #ff6b6b; }
+    #status-badge__dot { width: 0.45rem; height: 0.45rem; border-radius: 999px; background: currentColor; }
+
+    /* ── Layout ─────────────────────────────────────────────── */
+    .shell { max-width: 82rem; margin: 0 auto; padding: 2.5rem 2rem 5rem; }
+
+    .page-header { margin-bottom: 2.5rem; }
+    .page-header h1 { font-size: clamp(1.8rem, 3.2vw, 2.8rem); font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; }
+    .page-header p { margin-top: 0.5rem; color: var(--text-dim); font-size: 0.95rem; }
+
+    /* ── KPI row ─────────────────────────────────────────────── */
+    .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+    .kpi-card {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 1.25rem 1.4rem;
+      background: linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .kpi-card:hover { border-color: var(--border-hover); transform: translateY(-2px); }
+    .kpi-card__label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 0.6rem; }
+    .kpi-card__value { font-size: 2rem; font-weight: 700; letter-spacing: -0.04em; line-height: 1; }
+    .kpi-card__sub { margin-top: 0.35rem; font-size: 0.8rem; color: var(--text-dim); }
+
+    /* ── Two-column grid ─────────────────────────────────────── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem; }
+    @media (max-width: 860px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    /* ── Panel ───────────────────────────────────────────────── */
+    .panel {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--bg2); overflow: hidden;
+    }
+    .panel__header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1rem 1.4rem; border-bottom: 1px solid var(--border);
+    }
+    .panel__title { font-size: 0.85rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+    .panel__badge {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      font-size: 0.72rem; font-weight: 600; font-family: 'JetBrains Mono', monospace;
+      padding: 0.2rem 0.55rem; border-radius: 999px;
+      background: rgba(255,255,255,0.06); color: var(--text-dim);
+    }
+    .panel__body { padding: 1.25rem 1.4rem; }
+
+    /* ── Terms breakdown ─────────────────────────────────────── */
+    .terms-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 0.75rem; }
+    .term-stat { text-align: center; padding: 0.85rem 0.5rem; border-radius: var(--radius-sm); background: rgba(255,255,255,0.03); border: 1px solid var(--border); }
+    .term-stat__val { font-size: 1.5rem; font-weight: 700; color: var(--accent); letter-spacing: -0.03em; }
+    .term-stat__label { font-size: 0.72rem; color: var(--text-dim); margin-top: 0.2rem; }
+
+    /* ── Requirement legend ──────────────────────────────────── */
+    .req-legend { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; }
+    .req-pill {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      font-size: 0.72rem; font-weight: 600; padding: 0.25rem 0.65rem;
+      border-radius: 999px; border: 1px solid transparent;
+    }
+    .req-pill__dot { width: 0.5rem; height: 0.5rem; border-radius: 999px; flex: none; }
+    .req-pill--mandatory { background: rgba(255,107,107,0.1); border-color: rgba(255,107,107,0.3); color: #ff6b6b; }
+    .req-pill--mandatory .req-pill__dot { background: #ff6b6b; }
+    .req-pill--recommended { background: rgba(94,215,182,0.1); border-color: rgba(94,215,182,0.3); color: var(--accent); }
+    .req-pill--recommended .req-pill__dot { background: var(--accent); }
+    .req-pill--preferred { background: rgba(165,188,255,0.1); border-color: rgba(165,188,255,0.3); color: var(--preferred); }
+    .req-pill--preferred .req-pill__dot { background: var(--preferred); }
+    .req-pill--optional { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.12); color: var(--text-dim); }
+    .req-pill--optional .req-pill__dot { background: rgba(255,255,255,0.35); }
+    .req-pill--ignore { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.08); color: var(--text-faint); }
+    .req-pill--ignore .req-pill__dot { background: rgba(255,255,255,0.2); }
+
+    /* ── Package list ────────────────────────────────────────── */
+    .pkg-search {
+      width: 100%; padding: 0.6rem 1rem; border-radius: var(--radius-sm);
+      background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+      color: var(--text); font-family: inherit; font-size: 0.88rem; outline: none;
+      margin-bottom: 1rem; transition: border-color 0.2s;
+    }
+    .pkg-search:focus { border-color: rgba(94,215,182,0.4); }
+    .pkg-search::placeholder { color: var(--text-faint); }
+
+    .pkg-list { display: grid; gap: 0.5rem; max-height: 28rem; overflow-y: auto; padding-right: 0.25rem; }
+    .pkg-list::-webkit-scrollbar { width: 4px; }
+    .pkg-list::-webkit-scrollbar-track { background: transparent; }
+    .pkg-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+
+    .pkg-item {
+      display: grid; grid-template-columns: 1fr auto;
+      align-items: center; gap: 0.75rem;
+      padding: 0.65rem 0.9rem; border-radius: var(--radius-sm);
+      border: 1px solid var(--border); background: rgba(255,255,255,0.02);
+      cursor: pointer; transition: all 0.18s; user-select: none;
+    }
+    .pkg-item:hover { border-color: var(--border-hover); background: rgba(255,255,255,0.05); }
+    .pkg-item.active { border-color: rgba(94,215,182,0.4); background: rgba(94,215,182,0.06); }
+    .pkg-item__name { font-size: 0.85rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pkg-item__count {
+      font-size: 0.72rem; font-family: 'JetBrains Mono', monospace;
+      padding: 0.15rem 0.45rem; border-radius: 999px;
+      background: rgba(255,255,255,0.07); color: var(--text-dim); flex: none;
+    }
+
+    /* ── Package detail ──────────────────────────────────────── */
+    .pkg-detail { grid-column: 1 / -1; }
+    .detail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.75rem; }
+    .detail-title { font-size: 1.3rem; font-weight: 700; letter-spacing: -0.02em; }
+    .detail-total { font-size: 0.82rem; color: var(--text-dim); }
+
+    .req-bars { display: grid; gap: 0.55rem; margin-bottom: 1.5rem; }
+    .req-bar { display: grid; grid-template-columns: 6.5rem 1fr 3rem; align-items: center; gap: 0.75rem; }
+    .req-bar__label { font-size: 0.78rem; font-weight: 600; text-align: right; }
+    .req-bar__track { height: 6px; border-radius: 999px; background: rgba(255,255,255,0.07); overflow: hidden; }
+    .req-bar__fill { height: 100%; border-radius: 999px; transition: width 0.6s cubic-bezier(0.22,1,0.36,1); }
+    .req-bar__val { font-size: 0.78rem; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); }
+
+    .level-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; }
+    .level-chip {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      padding: 0.35rem 0.75rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600;
+      border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04); color: var(--text-dim);
+    }
+    .level-chip__count { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--accent); }
+
+    .field-table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+    .field-table th {
+      text-align: left; padding: 0.5rem 0.75rem; font-size: 0.7rem; font-weight: 700;
+      letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint);
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    .field-table td { padding: 0.55rem 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: top; }
+    .field-table tr:last-child td { border-bottom: none; }
+    .field-table tr:hover td { background: rgba(255,255,255,0.025); }
+    .field-label { font-weight: 500; }
+    .field-def { color: var(--text-dim); font-size: 0.78rem; max-width: 22rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .field-unit { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--preferred); }
+
+    .req-tag { display: inline-block; padding: 0.15rem 0.45rem; border-radius: 4px; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; }
+    .req-tag--MANDATORY { background: rgba(255,107,107,0.15); color: #ff8585; }
+    .req-tag--RECOMMENDED { background: rgba(94,215,182,0.12); color: var(--accent); }
+    .req-tag--PREFERRED { background: rgba(165,188,255,0.12); color: var(--preferred); }
+    .req-tag--OPTIONAL { background: rgba(255,255,255,0.06); color: var(--text-dim); }
+    .req-tag--IGNORE { background: rgba(255,255,255,0.03); color: var(--text-faint); }
+
+    /* ── Table scroll wrapper ────────────────────────────────── */
+    .table-wrap { max-height: 22rem; overflow-y: auto; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+    .table-wrap::-webkit-scrollbar { width: 4px; }
+    .table-wrap::-webkit-scrollbar-track { background: transparent; }
+    .table-wrap::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+
+    /* ── Loading / error ─────────────────────────────────────── */
+    .loading { display: flex; align-items: center; justify-content: center; gap: 0.75rem; padding: 3rem; color: var(--text-dim); font-size: 0.9rem; }
+    .spinner { width: 1.25rem; height: 1.25rem; border: 2px solid rgba(94,215,182,0.2); border-top-color: var(--accent); border-radius: 999px; animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-msg { padding: 1.5rem; color: #ff8585; font-size: 0.88rem; text-align: center; }
+
+    /* ── Chart: donut ────────────────────────────────────────── */
+    .donut-wrap { display: flex; align-items: center; gap: 2rem; flex-wrap: wrap; }
+    svg.donut { overflow: visible; flex: none; }
+    .donut-legend { display: grid; gap: 0.5rem; }
+    .donut-legend-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; }
+    .donut-legend-dot { width: 0.65rem; height: 0.65rem; border-radius: 999px; flex: none; }
+    .donut-legend-label { color: var(--text-dim); }
+    .donut-legend-val { margin-left: auto; font-weight: 600; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; padding-left: 0.75rem; }
+
+    /* ── Top packages bar chart ──────────────────────────────── */
+    .bar-chart { display: grid; gap: 0.55rem; }
+    .bar-row { display: grid; grid-template-columns: 10rem 1fr 3rem; align-items: center; gap: 0.65rem; }
+    .bar-row__name { font-size: 0.78rem; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); }
+    .bar-row__track { height: 8px; border-radius: 999px; background: rgba(255,255,255,0.07); overflow: hidden; }
+    .bar-row__fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent2), var(--accent)); opacity: 0.8; transition: width 0.6s cubic-bezier(0.22,1,0.36,1); }
+    .bar-row__val { font-size: 0.75rem; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); }
+
+    /* ── Full-width section ──────────────────────────────────── */
+    .full-panel { margin-bottom: 1.5rem; }
+
+    /* ── Refresh btn ─────────────────────────────────────────── */
+    .refresh-btn {
+      display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer;
+      background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+      color: var(--text-dim); font-family: inherit; font-size: 0.78rem; font-weight: 600;
+      padding: 0.35rem 0.85rem; border-radius: 999px; transition: all 0.18s;
+    }
+    .refresh-btn:hover { border-color: rgba(94,215,182,0.4); color: var(--accent); }
+    .refresh-btn svg { transition: transform 0.4s; }
+    .refresh-btn.spinning svg { animation: spin 0.7s linear infinite; }
+
+    /* ── Placeholder ─────────────────────────────────────────── */
+    .placeholder { padding: 2.5rem; text-align: center; color: var(--text-faint); font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+
+<header class="top-bar">
+  <div class="top-bar__brand">
+    <div class="top-bar__dot"></div>
+    <span class="top-bar__title">FAIR-DS</span>
+    <span class="top-bar__sub">localhost:8083</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:0.75rem">
+    <button class="refresh-btn" id="refresh-btn" onclick="loadAll()">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+      </svg>
+      Refresh
+    </button>
+    <div id="status-badge">
+      <div id="status-badge__dot" class="status-badge__dot"></div>
+      <span id="status-text">Connecting…</span>
+    </div>
+  </div>
+</header>
+
+<main class="shell">
+  <div class="page-header">
+    <h1>FAIR Data Station · Statistics</h1>
+    <p>Live package &amp; metadata distribution from the running FAIRDS API</p>
+  </div>
+
+  <!-- KPI row -->
+  <div class="kpi-row" id="kpi-row">
+    <div class="kpi-card"><div class="kpi-card__label">Packages</div><div class="kpi-card__value" id="kpi-pkg">—</div><div class="kpi-card__sub">metadata bundles</div></div>
+    <div class="kpi-card"><div class="kpi-card__label">Terms</div><div class="kpi-card__value" id="kpi-terms">—</div><div class="kpi-card__sub">vocabularyentries</div></div>
+    <div class="kpi-card"><div class="kpi-card__label">Linked Terms</div><div class="kpi-card__value" id="kpi-url">—</div><div class="kpi-card__sub">with ontology URL</div></div>
+    <div class="kpi-card"><div class="kpi-card__label">Date Fields</div><div class="kpi-card__value" id="kpi-date">—</div><div class="kpi-card__sub">date / datetime</div></div>
+    <div class="kpi-card"><div class="kpi-card__label">Typed Units</div><div class="kpi-card__value" id="kpi-unit">—</div><div class="kpi-card__sub">preferred unit set</div></div>
+    <div class="kpi-card"><div class="kpi-card__label">Strict Patterns</div><div class="kpi-card__value" id="kpi-regex">—</div><div class="kpi-card__sub">non-wildcard regex</div></div>
+  </div>
+
+  <!-- Row 1: donut + top packages -->
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel__header">
+        <span class="panel__title">Terms · Type Breakdown</span>
+      </div>
+      <div class="panel__body" id="terms-donut-body">
+        <div class="loading"><div class="spinner"></div>Loading…</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel__header">
+        <span class="panel__title">Top Packages by Field Count</span>
+        <span class="panel__badge" id="top-pkg-count">—</span>
+      </div>
+      <div class="panel__body" id="top-pkg-body">
+        <div class="loading"><div class="spinner"></div>Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 2: package explorer (full width) -->
+  <div class="panel full-panel">
+    <div class="panel__header">
+      <span class="panel__title">Package Explorer</span>
+      <span class="panel__badge" id="pkg-explorer-count">59 pkgs</span>
+    </div>
+    <div class="panel__body">
+      <div class="grid-2" style="gap:1.5rem">
+        <!-- left: list -->
+        <div>
+          <input class="pkg-search" id="pkg-search" placeholder="Filter packages…" oninput="filterPkgs(this.value)" />
+          <div class="pkg-list" id="pkg-list">
+            <div class="loading"><div class="spinner"></div>Loading…</div>
+          </div>
+        </div>
+        <!-- right: detail -->
+        <div id="pkg-detail-pane">
+          <div class="placeholder">← Select a package to explore its fields</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const BASE = 'http://localhost:8083';
+let allPackages = [];
+let allTerms = {};
+let pkgCache = {};
+let activePackage = null;
+
+/* ── Utilities ─────────────────────────────────────────────── */
+function setStatus(ok, text) {
+  const badge = document.getElementById('status-badge');
+  const span = document.getElementById('status-text');
+  badge.className = ok ? 'ok' : 'err';
+  span.textContent = text;
+}
+
+function fmtNum(n) {
+  return n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n);
+}
+
+/* ── DonutChart ─────────────────────────────────────────────── */
+function buildDonut(segments, size=140, stroke=22) {
+  const r = (size - stroke) / 2;
+  const cx = size / 2, cy = size / 2;
+  const circ = 2 * Math.PI * r;
+  const total = segments.reduce((s,x)=>s+x.value,0);
+  let offset = 0;
+  let paths = '';
+  for (const seg of segments) {
+    const pct = seg.value / total;
+    const dash = pct * circ;
+    const gap = circ - dash;
+    paths += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${seg.color}"
+      stroke-width="${stroke}" stroke-dasharray="${dash} ${gap}"
+      stroke-dashoffset="${-offset * circ / total * circ / total}"
+      style="stroke-dashoffset:-${offset / total * circ}; transition: stroke-dashoffset 0.6s" />`;
+    offset += seg.value;
+  }
+  return `<svg class="donut" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"
+    style="transform:rotate(-90deg)">${paths}</svg>`;
+}
+
+/* ── Main loader ─────────────────────────────────────────────── */
+async function loadAll() {
+  const btn = document.getElementById('refresh-btn');
+  btn.classList.add('spinning');
+  try {
+    await Promise.all([loadPackageList(), loadTerms()]);
+    setStatus(true, 'API reachable');
+  } catch(e) {
+    setStatus(false, 'Unreachable');
+    document.getElementById('top-pkg-body').innerHTML = `<div class="error-msg">Cannot reach FAIR-DS at ${BASE}<br>${e.message}</div>`;
+    document.getElementById('terms-donut-body').innerHTML = `<div class="error-msg">Cannot reach FAIR-DS at ${BASE}</div>`;
+  } finally {
+    btn.classList.remove('spinning');
+  }
+}
+
+async function loadPackageList() {
+  const res = await fetch(`${BASE}/api/package`);
+  const data = await res.json();
+  allPackages = data.packages || [];
+
+  document.getElementById('kpi-pkg').textContent = allPackages.length;
+  document.getElementById('pkg-explorer-count').textContent = `${allPackages.length} pkgs`;
+
+  renderPkgList(allPackages);
+  await loadTopPackages(allPackages);
+}
+
+async function loadTerms() {
+  const res = await fetch(`${BASE}/api/terms`);
+  const data = await res.json();
+  allTerms = data.terms || {};
+  const total = Object.keys(allTerms).length;
+
+  let hasURL = 0, isDate = 0, isDatetime = 0, isFile = 0, hasUnit = 0, hasRegex = 0;
+  for (const t of Object.values(allTerms)) {
+    if (t.url) hasURL++;
+    if (t.date) isDate++;
+    if (t.dateTime) isDatetime++;
+    if (t.file) isFile++;
+    if (t.preferredUnit) hasUnit++;
+    if (t.regex && t.regex !== '.*' && t.regex !== '') hasRegex++;
+  }
+
+  document.getElementById('kpi-terms').textContent = fmtNum(total);
+  document.getElementById('kpi-url').textContent = hasURL;
+  document.getElementById('kpi-date').textContent = isDate + isDatetime;
+  document.getElementById('kpi-unit').textContent = hasUnit;
+  document.getElementById('kpi-regex').textContent = hasRegex;
+
+  // Donut: type breakdown
+  const textTerms = total - isDate - isDatetime - isFile;
+  const segments = [
+    { label: 'Text', value: textTerms, color: '#5ed7b6' },
+    { label: 'Date / DateTime', value: isDate + isDatetime, color: '#a5bcff' },
+    { label: 'File', value: isFile, color: '#f5a623' },
+  ];
+  const donutHtml = buildDonut(segments);
+  const legendHtml = segments.map(s => `
+    <div class="donut-legend-item">
+      <div class="donut-legend-dot" style="background:${s.color}"></div>
+      <span class="donut-legend-label">${s.label}</span>
+      <span class="donut-legend-val">${s.value}</span>
+    </div>`).join('');
+
+  const extraRows = `
+    <div class="donut-legend-item" style="padding-top:0.5rem;border-top:1px solid rgba(255,255,255,0.07)">
+      <div class="donut-legend-dot" style="background:var(--accent2)"></div>
+      <span class="donut-legend-label">With ontology URL</span>
+      <span class="donut-legend-val">${hasURL}</span>
+    </div>
+    <div class="donut-legend-item">
+      <div class="donut-legend-dot" style="background:var(--accent3)"></div>
+      <span class="donut-legend-label">Preferred unit set</span>
+      <span class="donut-legend-val">${hasUnit}</span>
+    </div>
+    <div class="donut-legend-item">
+      <div class="donut-legend-dot" style="background:#ff6b6b"></div>
+      <span class="donut-legend-label">Strict regex pattern</span>
+      <span class="donut-legend-val">${hasRegex}</span>
+    </div>`;
+
+  document.getElementById('terms-donut-body').innerHTML = `
+    <div class="donut-wrap">
+      ${donutHtml}
+      <div class="donut-legend">${legendHtml}${extraRows}</div>
+    </div>`;
+}
+
+async function loadTopPackages(packages) {
+  // Fetch all packages in parallel (with throttle)
+  const BATCH = 12;
+  let results = [];
+  for (let i = 0; i < packages.length; i += BATCH) {
+    const batch = packages.slice(i, i + BATCH);
+    const fetched = await Promise.all(batch.map(async name => {
+      try {
+        const r = await fetch(`${BASE}/api/package?name=${encodeURIComponent(name)}`);
+        const d = await r.json();
+        pkgCache[name] = d;
+        return { name, count: d.itemCount || (d.metadata||[]).length };
+      } catch { return { name, count: 0 }; }
+    }));
+    results = results.concat(fetched);
+  }
+
+  results.sort((a,b) => b.count - a.count);
+  const top = results.slice(0, 15);
+  const maxCount = top[0]?.count || 1;
+
+  document.getElementById('top-pkg-count').textContent = `top ${top.length}`;
+
+  document.getElementById('top-pkg-body').innerHTML = `
+    <div class="bar-chart">
+      ${top.map(p => `
+        <div class="bar-row">
+          <div class="bar-row__name" title="${p.name}">${p.name}</div>
+          <div class="bar-row__track"><div class="bar-row__fill" style="width:${(p.count/maxCount*100).toFixed(1)}%"></div></div>
+          <div class="bar-row__val">${p.count}</div>
+        </div>`).join('')}
+    </div>`;
+
+  // also update pkg-list counts
+  updatePkgCounts(results);
+}
+
+/* ── Package list ─────────────────────────────────────────────── */
+function renderPkgList(packages) {
+  document.getElementById('pkg-list').innerHTML = packages.map(name => `
+    <div class="pkg-item" id="pkgi-${CSS.escape(name)}" onclick="selectPkg('${name.replace(/'/g,"\\'")}')">
+      <div class="pkg-item__name">${name}</div>
+      <div class="pkg-item__count" id="pkgc-${CSS.escape(name)}">…</div>
+    </div>`).join('');
+}
+
+function updatePkgCounts(results) {
+  for (const { name, count } of results) {
+    const el = document.getElementById(`pkgc-${CSS.escape(name)}`);
+    if (el) el.textContent = count;
+  }
+}
+
+function filterPkgs(q) {
+  const filtered = allPackages.filter(n => n.toLowerCase().includes(q.toLowerCase()));
+  renderPkgList(filtered);
+  // re-apply counts from cache
+  for (const name of filtered) {
+    const d = pkgCache[name];
+    if (d) {
+      const el = document.getElementById(`pkgc-${CSS.escape(name)}`);
+      if (el) el.textContent = d.itemCount || (d.metadata||[]).length;
+    }
+  }
+  if (activePackage && filtered.includes(activePackage)) {
+    document.getElementById(`pkgi-${CSS.escape(activePackage)}`)?.classList.add('active');
+  }
+}
+
+async function selectPkg(name) {
+  // deactivate old
+  if (activePackage) {
+    document.getElementById(`pkgi-${CSS.escape(activePackage)}`)?.classList.remove('active');
+  }
+  activePackage = name;
+  document.getElementById(`pkgi-${CSS.escape(name)}`)?.classList.add('active');
+
+  const pane = document.getElementById('pkg-detail-pane');
+  pane.innerHTML = '<div class="loading"><div class="spinner"></div>Loading fields…</div>';
+
+  let data = pkgCache[name];
+  if (!data) {
+    try {
+      const r = await fetch(`${BASE}/api/package?name=${encodeURIComponent(name)}`);
+      data = await r.json();
+      pkgCache[name] = data;
+    } catch(e) {
+      pane.innerHTML = `<div class="error-msg">Failed to load package: ${e.message}</div>`;
+      return;
+    }
+  }
+
+  const meta = data.metadata || [];
+  const total = data.itemCount || meta.length;
+
+  // Count requirements
+  const reqCount = {};
+  const levelCount = {};
+  for (const item of meta) {
+    const req = item.requirement || 'OPTIONAL';
+    const lvl = item.level || item.sheetName || 'Unknown';
+    reqCount[req] = (reqCount[req]||0) + 1;
+    levelCount[lvl] = (levelCount[lvl]||0) + 1;
+  }
+
+  const REQ_COLORS = {
+    MANDATORY: { fill:'#ff6b6b', cls:'mandatory' },
+    RECOMMENDED: { fill:'var(--accent)', cls:'recommended' },
+    PREFERRED: { fill:'var(--preferred)', cls:'preferred' },
+    OPTIONAL: { fill:'rgba(255,255,255,0.25)', cls:'optional' },
+    IGNORE: { fill:'rgba(255,255,255,0.1)', cls:'ignore' },
+  };
+
+  const barsHtml = Object.entries(reqCount).sort(([,a],[,b])=>b-a).map(([req,cnt]) => {
+    const c = REQ_COLORS[req] || REQ_COLORS.OPTIONAL;
+    const pct = (cnt/total*100).toFixed(1);
+    return `<div class="req-bar">
+      <div class="req-bar__label" style="color:${c.fill}">${req}</div>
+      <div class="req-bar__track"><div class="req-bar__fill" style="width:${pct}%;background:${c.fill}"></div></div>
+      <div class="req-bar__val">${cnt}</div>
+    </div>`;
+  }).join('');
+
+  const levelHtml = Object.entries(levelCount).map(([lvl, cnt]) =>
+    `<div class="level-chip">${lvl} <span class="level-chip__count">${cnt}</span></div>`
+  ).join('');
+
+  const rows = meta.slice(0,200).map(item => {
+    const req = item.requirement || 'OPTIONAL';
+    const term = item.term || {};
+    const def = term.definition || item.definition || '';
+    const unit = term.preferredUnit || '';
+    const lvl = item.level || item.sheetName || '—';
+    return `<tr>
+      <td class="field-label">${item.label || '—'}</td>
+      <td><span class="req-tag req-tag--${req}">${req}</span></td>
+      <td>${lvl}</td>
+      <td class="field-def" title="${def.replace(/"/g,'&quot;')}">${def || '—'}</td>
+      <td class="field-unit">${unit || ''}</td>
+    </tr>`;
+  }).join('');
+
+  pane.innerHTML = `
+    <div class="detail-header">
+      <div>
+        <div class="detail-title">${data.packageName || name}</div>
+        <div class="detail-total">${total} fields total</div>
+      </div>
+    </div>
+    <div class="req-bars">${barsHtml}</div>
+    <div class="level-chips">${levelHtml}</div>
+    <div class="table-wrap">
+      <table class="field-table">
+        <thead><tr>
+          <th>Label</th><th>Requirement</th><th>Level</th><th>Definition</th><th>Unit</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    ${meta.length > 200 ? `<div style="padding:0.75rem 0;color:var(--text-faint);font-size:0.78rem;text-align:center">Showing first 200 of ${total} fields</div>` : ''}
+  `;
+}
+
+/* ── Boot ─────────────────────────────────────────────────────── */
+loadAll();
+</script>
+</body>
+</html>

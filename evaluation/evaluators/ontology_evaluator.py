@@ -45,7 +45,7 @@ class OntologyEvaluator:
         Evaluate ontology usage in FAIRiAgent output.
         
         Args:
-            fairifier_output: Parsed metadata_json.json from FAIRiAgent
+            fairifier_output: Parsed metadata.json from FAIRiAgent
             
         Returns:
             Dict with ontology metrics

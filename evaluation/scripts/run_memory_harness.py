@@ -24,6 +24,11 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from dotenv import dotenv_values
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from fairifier.output_paths import run_has_metadata_output
+
 
 def _slug(value: str) -> str:
     cleaned = []
@@ -75,7 +80,7 @@ def _summarize_run_output(run_dir: Path) -> Dict[str, Any]:
         "failed_steps": None,
         "steps_requiring_retry": None,
         "retry_agents": [],
-        "metadata_json_exists": (run_dir / "metadata_json.json").exists(),
+        "metadata_json_exists": run_has_metadata_output(run_dir),
     }
     report_path = run_dir / "workflow_report.json"
     if not report_path.exists():
