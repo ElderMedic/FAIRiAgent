@@ -30,6 +30,7 @@ from evaluation.analysis.config import (
     EXCLUDED_MODELS,
     EXCLUDED_DOCUMENTS,
     EXCLUDED_DIRECTORIES,
+    normalize_document_id,
 )
 
 
@@ -47,7 +48,9 @@ def load_ground_truth(gt_path: Path) -> Dict[str, Dict[str, Any]]:
 def evaluate_single_run(
     run_dir: Path,
     ground_truth_docs: Dict[str, Dict[str, Any]],
-    env_file: Optional[Path] = None
+    env_file: Optional[Path] = None,
+    *,
+    persist: bool = True,
 ) -> Dict[str, Any]:
     """为单个运行计算评估指标"""
     
@@ -62,15 +65,16 @@ def evaluate_single_run(
     # Skip if already has NEW confidence-aware correctness metrics
     correctness = eval_result.get('correctness', {})
     has_adjusted_metrics = 'adjusted_f1' in correctness and correctness.get('adjusted_f1', 0.0) > 0
-    
+
     if has_adjusted_metrics:
         return eval_result
     
-    # Get document ID
-    doc_id = eval_result.get('document_id', '')
+    # Get document ID (baselines may use alternate IDs, e.g. hash → canonical)
+    raw_doc_id = eval_result.get("document_id", "")
+    doc_id = normalize_document_id(str(raw_doc_id)) if raw_doc_id else ""
     if not doc_id or doc_id not in ground_truth_docs:
         return None
-    
+
     ground_truth_doc = ground_truth_docs[doc_id]
     
     # Load metadata.json (or legacy metadata_json.json)
@@ -261,13 +265,16 @@ def evaluate_single_run(
         print(f"  ⚠️  Internal metrics 计算失败: {e}")
         metrics['internal_metrics'] = {}
     
+    # Use canonical document_id in stored/returned payload (matches ground-truth keys)
+    eval_result["document_id"] = doc_id
+
     # Update eval_result.json
     eval_result.update(metrics)
-    
-    # Save updated result
-    with open(eval_result_file, 'w', encoding='utf-8') as f:
-        json.dump(eval_result, f, indent=2, ensure_ascii=False)
-    
+
+    if persist:
+        with open(eval_result_file, 'w', encoding='utf-8') as f:
+            json.dump(eval_result, f, indent=2, ensure_ascii=False)
+
     return eval_result
 
 

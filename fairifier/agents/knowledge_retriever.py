@@ -13,7 +13,7 @@ from .response_models import KnowledgeResponse
 from ..models import FAIRifierState, KnowledgeItem
 from ..config import config
 from ..services.evidence_packets import build_evidence_context
-from ..skills import load_skill_files
+from ..skills import load_skill_files, skills_catalog_seed_files
 from ..services.fair_data_station import FAIRDataStationClient
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.llm_helper import get_llm_helper
@@ -239,14 +239,19 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             "Favor package names and field labels that exist in FAIR-DS. "
             "If a useful metadata concept is not represented as a real FAIR-DS package, do not invent "
             "a package name; keep selected_packages constrained to real FAIR-DS packages and record the "
-            "uncovered concept in metadata_gap_hints instead."
+            "uncovered concept in metadata_gap_hints instead. "
+            "Skills live under /skills/ with a summary at /workspace/skills_catalog.md (Anthropic-style SKILL.md + "
+            "optional sibling .md). You MUST read /workspace/skills_catalog.md on the first tool-capable turn, "
+            "match skills to doc_info and evidence, open matching SKILL.md files, and use them to prioritize optional "
+            "fields, ontology search terms, and gap hints—without inventing non-existent FAIR-DS packages."
         )
         subagents = [
             {
                 "name": "package-selector",
                 "description": "Choose the minimal but sufficient FAIR-DS packages for the document.",
                 "system_prompt": (
-                    "Select real FAIR-DS packages only. Bias toward investigation/study completeness."
+                    "Select real FAIR-DS packages only. Bias toward investigation/study completeness. "
+                    "When /workspace/skills_catalog.md matches the study type, align package choice with those skills."
                 ),
                 "tools": [list_packages, get_package_info],
             },
@@ -254,7 +259,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 "name": "field-selector",
                 "description": "Choose high-value optional FAIR-DS fields per ISA sheet.",
                 "system_prompt": (
-                    "Return field labels exactly as they appear in FAIR-DS when possible."
+                    "Return field labels exactly as they appear in FAIR-DS when possible. "
+                    "If skills in /workspace/skills_catalog.md apply, read their SKILL.md and bias optional fields "
+                    "and search terms accordingly."
                 ),
                 "tools": [get_package_info, search_metadata_term, search_package_fields],
             },
@@ -300,7 +307,10 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         if evidence_file is not None:
             seed_files["/workspace/evidence_packets.json"] = evidence_file
 
-        seed_files.update(load_skill_files(config.skills_dir))
+        seed_files.update(load_skill_files(*config.skill_roots))
+        seed_files.update(
+            skills_catalog_seed_files(*config.skill_roots, self._maybe_create_file_data)
+        )
         return seed_files
 
     def _select_optional_fields_from_structured(

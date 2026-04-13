@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from ..config import config
 from ..models import FAIRifierState
 from ..services.evidence_packets import build_evidence_context
+from ..skills import format_skills_catalog_for_task, list_skill_virtual_paths
 
 QWEN_MAX_TOKENS_LIMIT = 65536
 
@@ -120,8 +121,9 @@ class ReactLoopMixin:
         if memory_files:
             kwargs["memory"] = memory_files
 
-        skills_dir = config.skills_dir
-        if skills_dir.exists():
+        # Only register the skills mount when at least one SKILL.md exists; otherwise
+        # deepagents would expose an empty /skills tree and models may waste turns probing it.
+        if list_skill_virtual_paths(*config.skill_roots):
             kwargs["skills"] = ["/skills"]
 
         return create_deep_agent(**kwargs)
@@ -240,6 +242,12 @@ class ReactLoopMixin:
         previous_attempt = feedback.get("previous_attempt")
         if previous_attempt:
             sections.append(f"Previous attempt snapshot:\n{previous_attempt}")
+
+        skill_paths = list_skill_virtual_paths(*config.skill_roots)
+        if skill_paths:
+            catalog = format_skills_catalog_for_task(*config.skill_roots)
+            if catalog:
+                sections.append(catalog)
 
         return "\n\n".join(section for section in sections if section)
 

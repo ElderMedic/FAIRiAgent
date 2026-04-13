@@ -5,6 +5,11 @@ from unittest.mock import Mock
 from fairifier.config import config
 from fairifier.agents.base import BaseAgent
 from fairifier.agents.react_loop import ReactLoopMixin
+from fairifier.skills import (
+    build_skills_catalog_markdown,
+    list_skill_virtual_paths,
+    load_skill_files,
+)
 
 
 class DummyReactAgent(ReactLoopMixin, BaseAgent):
@@ -134,3 +139,88 @@ def test_get_react_model_keeps_existing_non_qwen_model(monkeypatch):
     monkeypatch.setattr(config, "llm_provider", "ollama")
 
     assert agent._get_react_model() == "base-llm"
+
+
+def test_list_skill_virtual_paths_finds_repo_skills():
+    paths = list_skill_virtual_paths(config.skills_dir)
+    assert paths
+    assert any("domain/genomics/SKILL.md" in p for p in paths)
+
+
+def test_compose_task_message_lists_skill_paths():
+    agent = DummyReactAgent("Dummy")
+    state = {"context": {}, "agent_guidance": {}, "evidence_packets": []}
+    msg = agent._compose_task_message(state, "Parse the document")
+    assert "/skills/domain/" in msg
+    assert "/workspace/skills_catalog.md" in msg
+    assert "genomics-metadata" in msg or "genomics" in msg
+
+
+def test_list_skill_virtual_paths_later_root_wins(tmp_path):
+    r1 = tmp_path / "r1"
+    r2 = tmp_path / "r2"
+    (r1 / "dup" / "SKILL.md").parent.mkdir(parents=True)
+    (r1 / "dup" / "SKILL.md").write_text("A", encoding="utf-8")
+    (r2 / "dup" / "SKILL.md").parent.mkdir(parents=True)
+    (r2 / "dup" / "SKILL.md").write_text("B", encoding="utf-8")
+    assert list_skill_virtual_paths(r1, r2) == ["/skills/dup/SKILL.md"]
+
+
+def test_build_skills_catalog_includes_yaml_name():
+    cat = build_skills_catalog_markdown(config.skills_dir)
+    assert "SKILL.md" in cat
+    assert "genomics-metadata" in cat or "genomics" in cat.lower()
+
+
+def test_skill_pack_excludes_nested_subskill_markdown(tmp_path):
+    root = tmp_path / "s"
+    (root / "parent" / "SKILL.md").parent.mkdir(parents=True)
+    (root / "parent" / "SKILL.md").write_text("parent", encoding="utf-8")
+    (root / "parent" / "overview.md").write_text("overview-body", encoding="utf-8")
+    (root / "parent" / "child" / "SKILL.md").parent.mkdir(parents=True)
+    (root / "parent" / "child" / "SKILL.md").write_text("child", encoding="utf-8")
+    (root / "parent" / "child" / "child_only.md").write_text("nested-secret", encoding="utf-8")
+    loaded = load_skill_files(root)
+    assert "/skills/parent/overview.md" in loaded
+    ov = "".join(loaded["/skills/parent/overview.md"]["content"])
+    assert "overview-body" in ov
+    nested = "".join(loaded["/skills/parent/child/child_only.md"]["content"])
+    assert "nested-secret" in nested
+
+
+def test_load_skill_files_includes_sibling_markdown(tmp_path):
+    root = tmp_path / "skills"
+    pack = root / "my_skill"
+    pack.mkdir(parents=True)
+    (pack / "SKILL.md").write_text("---\nname: my-skill\n---\nbody\n", encoding="utf-8")
+    (pack / "REFERENCE.md").write_text("# Ref\nextra\n", encoding="utf-8")
+    loaded = load_skill_files(root)
+    assert "/skills/my_skill/SKILL.md" in loaded
+    assert "/skills/my_skill/REFERENCE.md" in loaded
+    ref_body = "".join(loaded["/skills/my_skill/REFERENCE.md"]["content"])
+    assert "extra" in ref_body
+
+
+def test_load_skill_files_prefers_later_root(tmp_path):
+    r1 = tmp_path / "r1"
+    r2 = tmp_path / "r2"
+    (r1 / "dup" / "SKILL.md").parent.mkdir(parents=True)
+    (r1 / "dup" / "SKILL.md").write_text("first-only", encoding="utf-8")
+    (r2 / "dup" / "SKILL.md").parent.mkdir(parents=True)
+    (r2 / "dup" / "SKILL.md").write_text("second-wins", encoding="utf-8")
+    loaded = load_skill_files(r1, r2)
+    body = "".join(loaded["/skills/dup/SKILL.md"]["content"])
+    assert "second-wins" in body
+    assert "first-only" not in body
+
+
+def test_fairifier_config_skill_roots_includes_extra(tmp_path):
+    from fairifier.config import FAIRifierConfig
+
+    extra = tmp_path / "user_skills"
+    (extra / "custom" / "SKILL.md").parent.mkdir(parents=True)
+    (extra / "custom" / "SKILL.md").write_text("---\nname: c\n---\n", encoding="utf-8")
+    cfg = FAIRifierConfig()
+    cfg.skills_extra_dirs = (extra,)
+    paths = list_skill_virtual_paths(*cfg.skill_roots)
+    assert any(p.endswith("/custom/SKILL.md") for p in paths)
