@@ -3,7 +3,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 from dataclasses import dataclass
 
 # Load .env file if it exists
@@ -64,6 +64,11 @@ class FAIRifierConfig:
     shapes_path: Path = kb_path / "shapes"
     output_path: Path = project_root / "output"  # Default, will be overridden with timestamp in CLI
     skills_dir: Path = project_root / "fairifier" / "skills"
+    # Extra SKILL.md roots merged into the same /skills/ virtual tree (later wins on collision).
+    # Populated from FAIRIFIER_SKILLS_EXTRA_DIRS and CLAUDE_SKILLS_PATH (see apply_env_overrides).
+    skills_extra_dirs: Tuple[Path, ...] = ()
+    # When true, also load ~/.claude/skills and <project>/.claude/skills if present (Claude Code layout).
+    import_claude_skills: bool = False
     
     # LLM Configuration
     # Providers: "ollama", "openai", "qwen", "gemini", or "anthropic" (claude)
@@ -193,6 +198,18 @@ class FAIRifierConfig:
     mem0_collection_name: str = "fairifier_memories"  # Qdrant collection name
     memory_scope_id: Optional[str] = None  # Override mem0 scope independently from project_id/thread_id
     
+    @property
+    def skill_roots(self) -> List[Path]:
+        """Ordered filesystem roots for Anthropic-style skills (SKILL.md discovery)."""
+        from .skills import normalize_existing_skill_roots
+
+        candidates: List[Path] = [self.skills_dir]
+        candidates.extend(self.skills_extra_dirs)
+        if self.import_claude_skills:
+            candidates.append(Path.home() / ".claude" / "skills")
+            candidates.append(self.project_root / ".claude" / "skills")
+        return normalize_existing_skill_roots(candidates)
+
     def __post_init__(self):
         """Create necessary directories."""
         self.output_path.mkdir(exist_ok=True)
@@ -213,6 +230,19 @@ class FAIRifierConfig:
                     self.mineru_cache_dir,
                     exc,
                 )
+
+
+def _parse_path_list_from_env(key: str) -> List[Path]:
+    """Split an env var by ``os.pathsep`` into non-empty expanded paths."""
+    raw = os.getenv(key)
+    if not raw:
+        return []
+    out: List[Path] = []
+    for part in raw.split(os.pathsep):
+        part = part.strip()
+        if part:
+            out.append(Path(part).expanduser())
+    return out
 
 
 def apply_env_overrides(config_instance: FAIRifierConfig):
@@ -243,6 +273,18 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.llm_base_url = os.getenv("FAIRIFIER_LLM_BASE_URL")
     if os.getenv("FAIRIFIER_SKILLS_DIR"):
         config_instance.skills_dir = Path(os.getenv("FAIRIFIER_SKILLS_DIR"))
+
+    extra_skill_roots = _parse_path_list_from_env("FAIRIFIER_SKILLS_EXTRA_DIRS")
+    extra_skill_roots.extend(_parse_path_list_from_env("CLAUDE_SKILLS_PATH"))
+    config_instance.skills_extra_dirs = tuple(extra_skill_roots)
+
+    if os.getenv("FAIRIFIER_IMPORT_CLAUDE_SKILLS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        config_instance.import_claude_skills = True
     if os.getenv("FAIRIFIER_ENABLE_DEEP_AGENTS"):
         value = os.getenv("FAIRIFIER_ENABLE_DEEP_AGENTS").strip().lower()
         config_instance.enable_deep_agents = value in ("1", "true", "yes", "on")

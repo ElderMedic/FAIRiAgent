@@ -1,7 +1,7 @@
 # Evaluation Framework Documentation Index
 
 **Purpose**: Minimal navigation for maintainable, push-ready evaluation docs  
-**Last Updated**: 2026-03-13
+**Last Updated**: 2026-04-12
 
 ---
 
@@ -11,14 +11,14 @@
 
 1. `evaluation/analysis/README.md` - start here for a non-technical walkthrough
 2. `evaluation/runs/qwen35_pomato_publication_fix/workflow_report.json` - easiest example result
-3. `evaluation/runs/qwen35_pomato_publication_fix/metadata_json.json` - example generated metadata
+3. `evaluation/runs/qwen35_pomato_publication_fix/metadata.json` (or legacy `metadata_json.json`) - example generated metadata
 4. `evaluation/runs/qwen35_no_langfuse_eval_all_pubfix/results/evaluation_results.json` - latest aggregate evaluation
 
 ### Historical benchmark reports
 
 1. `evaluation/reports/FINAL_EVALUATION_RESULTS.md` - legacy benchmark report for earlier multi-model comparisons
-2. `evaluation/analysis/key_figures/evaluation_summary.png`
-3. `evaluation/analysis/key_figures/field_analysis_report.png`
+2. `evaluation/analysis/output/key_figures/evaluation_summary.png`
+3. `evaluation/analysis/output/key_figures/field_analysis_report.png`
 
 ---
 
@@ -33,7 +33,7 @@ Location: `evaluation/reports/`
 
 ## Key Figures (Keep)
 
-Location: `evaluation/analysis/key_figures/`
+Location: `evaluation/analysis/output/key_figures/`
 
 - `evaluation_summary.png` (legacy benchmark-oriented summary figure)
 - `field_analysis_report.png` (legacy benchmark-oriented field analysis figure)

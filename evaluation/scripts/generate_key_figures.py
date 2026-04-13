@@ -31,7 +31,7 @@ MODEL_META = {
     'ollama_gpt-oss': ('Ollama', 'GPT-OSS', 'local', '#9b59b6'),
 }
 
-SKIP = {'archive', 'api_20260116_125717', 'api_20260116_134938', 'ollama_20260116_141815', 'openai_test'}
+SKIP = {'archive', 'api_20260116_134938', 'ollama_20260116_141815'}
 
 def normalize_field(name):
     """规范化字段名：统一为小写，下划线替换空格"""

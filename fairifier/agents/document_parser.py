@@ -12,7 +12,7 @@ from .react_loop import ReactLoopMixin
 from .response_models import DocumentInfoResponse
 from ..models import FAIRifierState
 from ..config import config
-from ..skills import load_skill_files
+from ..skills import load_skill_files, skills_catalog_seed_files
 from ..services.evidence_packets import build_evidence_packets
 from ..services.retrieval_cache import get_cache_bucket
 from ..tools.science_tools import create_science_tools
@@ -109,7 +109,13 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             "Read /workspace/document.md, use tools to inspect structure, and return "
             "a concise structured metadata object that matches existing FAIRifier "
             "document_info conventions such as document_type, title, abstract, "
-            "authors, keywords, research_domain, methodology, location, and coordinates."
+            "authors, keywords, research_domain, methodology, location, and coordinates. "
+            "Skills (built-in and user-imported) follow the Anthropic pattern: YAML frontmatter on SKILL.md "
+            "plus optional sibling .md files under /skills/. A summary lives at /workspace/skills_catalog.md. "
+            "You MUST open /workspace/skills_catalog.md on the first tool-capable turn, select every skill whose "
+            "when_to_use or description fits this document, read those SKILL.md files (and any referenced .md in the "
+            "same skill folder), and let them drive terminology, field priorities, and extraction checklists before "
+            "you return structured metadata."
         )
         subagents = [
             {
@@ -117,6 +123,8 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
                 "description": "Inspect a single section and extract section-specific metadata.",
                 "system_prompt": (
                     "You analyze one document section at a time. "
+                    "Honor skill playbooks from /workspace/skills_catalog.md when they match the section; "
+                    "read the listed SKILL.md if you have file access. "
                     "Stay concise and return factual metadata only."
                 ),
                 "tools": [focused_field_extraction],
@@ -144,7 +152,10 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             if agent_file is not None:
                 seed_files["/AGENTS.md"] = agent_file
 
-        seed_files.update(load_skill_files(config.skills_dir))
+        seed_files.update(load_skill_files(*config.skill_roots))
+        seed_files.update(
+            skills_catalog_seed_files(*config.skill_roots, self._maybe_create_file_data)
+        )
         return seed_files
 
     def _structured_doc_info_to_dict(

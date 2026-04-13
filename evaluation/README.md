@@ -260,6 +260,7 @@ See `evaluation/EVALUATION_IMPROVEMENT_PLAN.md` for complete specification.
 ## Notes
 
 - All runs are organized by model and document: `runs/{model_name}/{document_id}/run_X/`
+- Ad hoc / tiny smoke batches (e.g. early `api_20260116_*` single-dir runs, `openai_test`) are kept under `runs/archive/` so the top-level `runs/` list stays readable.
 - Each run directory contains:
   - `metadata.json`: Extracted metadata (older runs may use `metadata_json.json`)
   - `eval_result.json`: Evaluation results

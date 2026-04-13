@@ -1,10 +1,5 @@
-# User Skills
+# User skills folder
 
-Place custom `SKILL.md` files anywhere under `fairifier/skills/user/`.
+Put **custom** skills here as `*/SKILL.md` (and optional extra `*.md` in the same folder). They are discovered together with **`../domain/`** builtins: everything under the configured skills root is scanned.
 
-Each skill should describe:
-- when it should be used
-- which metadata patterns matter
-- what terminology or package biases the agent should prefer
-
-These files are loaded automatically when deepagents inner loops are enabled.
+See **`../README.md`** for built-in examples, virtual paths (`/skills/...`), environment-based imports, and a copy-paste `SKILL.md` template.
