@@ -106,24 +106,23 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 - ⚙️ **Configuration Management**: Save and manage runtime configurations
 - 📋 **Runtime Config Export**: Automatic export of input, .env, and runtime configurations
 
-## 📁 Repository Structure
+## 📁 Repository layout
 
 ```
 FAIRiAgent/
-├── fairifier/           # Core framework
-│   ├── agents/         # Multi-agent implementations
-│   ├── graph/          # LangGraph workflow
-│   ├── services/       # External service clients
-│   ├── utils/          # Utilities and helpers
-│   └── apps/           # Web UI and API
-├── tests/              # Test suite (155 tests ✅)
-├── kb/                 # Knowledge base
+├── fairifier/          # Core: agents, graph, services, apps (API + UI assets), tools, validation
+├── frontend/           # React UI source (see Quick Start for npm install)
+├── kb/                 # Local knowledge base
+├── examples/           # Sample documents
 ├── docs/               # Documentation
-├── run_tests.py        # Test runner (cross-platform)
-└── .memory/            # Temporary files (gitignored)
+├── docker/             # Compose stack (API, Qdrant, FAIR-DS) and image helpers
+├── tests/              # Pytest suite (for contributors)
+├── run_fairifier.py    # CLI entry
+├── run_tests.py        # Test runner (development)
+└── langgraph.json      # LangGraph Studio
 ```
 
-> **📝 Note**: `.memory/` contains temporary reports and is not tracked by git. See `.memory/README.md`.
+Run outputs go under `output/`; optional local scratch under `.memory/` (gitignored).
 
 ## 🏗️ Architecture
 
@@ -290,9 +289,9 @@ Open `http://localhost:8000`.
 python run_fairifier.py process examples/inputs/your_document.pdf
 ```
 
-### Docker
+### Docker (full stack: API + Qdrant + FAIR-DS)
 
-See [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md).
+The [Docker Compose file](docker/compose.yaml) starts the API, optional Qdrant for mem0, and **FAIR Data Station** so `FAIR_DS_API_URL` works out of the box inside the stack. See [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md).
 
 ### 📦 Installation
 
@@ -531,8 +530,11 @@ When connected to a FAIR Data Station instance, FAIRiAgent can:
 
 ### Setup FAIR Data Station
 
+**Option A — Docker Compose (recommended for a full stack):** the [Docker Compose file](docker/compose.yaml) builds and runs FAIR-DS next to the API; see [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md).
+
+**Option B — JAR on the host:**
+
 ```bash
-# Download and start FAIR Data Station
 wget http://download.systemsbiology.nl/unlock/fairds-latest.jar
 java -jar fairds-latest.jar
 
@@ -572,47 +574,6 @@ local_kb.add_term(LocalTerm(
 ```
 
 Local terms are automatically included with `source=local` and `status=provisional`.
-
-## 📁 Project Structure
-
-```
-fairifier/
-├── agents/              # Multi-agent implementations
-│   ├── document_parser.py
-│   ├── knowledge_retriever.py
-│   ├── json_generator.py
-│   ├── critic.py
-│   └── orchestrator.py
-├── graph/               # LangGraph workflow
-│   ├── langgraph_app.py # Main LangGraph application
-│   └── __dev__.py       # LangGraph Studio entry point
-├── apps/                # Web UI and API
-│   └── api/             # FastAPI backend + React static assets
-├── services/            # FAIR-DS and local knowledge
-├── utils/               # Utilities
-│   ├── llm_helper.py    # LLM interaction utilities
-│   ├── config_saver.py # Runtime config export
-│   └── json_logger.py  # JSON logging
-├── cli.py               # Command-line interface
-├── config.py            # Configuration management
-└── models.py            # Data models
-
-kb/                      # Knowledge base
-├── local_terms.json     # Local provisional terms
-├── local_packages.json  # Local packages
-└── ontologies.json      # Ontology mappings
-
-output/                  # Generated outputs
-└── <project_id>/
-    ├── metadata.json
-    ├── processing_log.jsonl
-    ├── llm_responses.json
-    └── runtime_config.json
-
-examples/                # Sample documents
-docs/                    # Documentation
-langgraph.json           # LangGraph Studio config
-```
 
 ## 📈 Quality Metrics
 
@@ -701,89 +662,24 @@ python run_fairifier.py webui
 
 Open `http://localhost:8000`.
 
-## 🧪 Testing & Examples
+## 🧪 Examples & checks
 
-### 🎯 Quick Test
+### Quick run
 
 ```bash
-# Test basic functionality (CLI)
 python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf
-
-# Pre-flight environment validation
 python run_fairifier.py validate-document --env-only
-
-# Test web UI
 python run_fairifier.py webui
-# Then use the example file option in the UI
 ```
 
-### 🧬 Running Unit Tests
+Use an example file from `examples/inputs/` in the Web UI when prompted.
 
-We provide **67 comprehensive tests** covering all components:
+**Contributors:** automated test commands are documented in [`tests/README.md`](tests/README.md).
 
-```bash
-# Run all tests (Bash)
-python run_tests.py all
-
-# Run all tests (Python, cross-platform)
-python run_tests.py all
-
-# Run fast unit tests only (~3s, no external services needed)
-python run_tests.py fast
-python run_tests.py fast
-
-# Run integration tests only (~25s, requires FAIR-DS + MinerU)
-python run_tests.py integration
-python run_tests.py integration
-
-# Generate coverage report
-python run_tests.py coverage
-python run_tests.py coverage
-
-# Run specific test file
-python run_tests.py specific test_critic_utils.py
-python run_tests.py specific test_critic_utils.py
-```
-
-**Test Statistics:**
-- ✅ 155 tests (148 unit + 7 integration)
-- ✅ All tests passing
-- ⚡ Fast tests: ~3s
-- 📊 Coverage: See `tests/README.md` for details
-- 📝 Reports: Saved to `.memory/test-reports/` (not in git)
-
-**Direct pytest commands:**
-```bash
-# All tests
-pytest tests/ -v
-
-# Fast tests only
-pytest tests/ -v -m "not integration and not slow"
-
-# Integration tests
-pytest tests/ -v -m "integration"
-
-# With coverage
-pytest tests/ --cov=fairifier --cov-report=html
-```
-
-### 🔍 Check MinerU Service
+### MinerU (optional PDF parsing service)
 
 ```bash
-# Quick check via CLI command
-python -m fairifier.cli check-mineru
-
-# Or run unit tests
-pytest tests/test_mineru_client.py -v
-
-# Run only non-integration tests (faster)
-pytest tests/test_mineru_client.py -v -m "not integration"
-
-# Run all tests including integration tests
-pytest tests/test_mineru_client.py -v
-
-# Get detailed status summary
-pytest tests/test_mineru_client.py::test_mineru_status_summary -v -s
+python run_fairifier.py check-mineru
 ```
 
 ### 📚 Example Files
@@ -906,7 +802,7 @@ MIT License - Free for academic and research use.
 
 ### 🌟 Made with ❤️ for the FAIR Data Community
 
-[![Star History Chart](https://api.star-history.com/svg?repos=eldermedic/FAIRiAgent_local&type=Date)](https://star-history.com/#eldermedic/FAIRiAgent_local&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=ElderMedic/FAIRiAgent&type=Date)](https://star-history.com/#ElderMedic/FAIRiAgent&Date)
 
 </div>
 
@@ -917,4 +813,4 @@ MIT License - Free for academic and research use.
 - ✅ **Langfuse Observability**: Added optional Langfuse tracing integration for richer run observability
 - ✅ **Post-output Metadata Validation**: Added validation checks after metadata JSON generation
 - ✅ **Release Readiness Refresh**: Updated release docs/changelog for merge to `main`
-- ✅ **Latest Test Run**: `155 passed, 4 skipped, 79 warnings` (~12s)
+- ✅ **Docker Compose**: FAIR Data Station service for a reproducible full stack (see [Docker guide](docs/en/guides/DOCKER_DEPLOYMENT.md))

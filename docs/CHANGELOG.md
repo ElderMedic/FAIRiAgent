@@ -18,8 +18,7 @@
 - **Release documentation refresh**: Updated release-oriented documentation and changelog content for merge readiness.
 
 ### Testing
-- **Automated tests**: `155 passed, 4 skipped, 79 warnings` (approx. 12s).
-- **Skipped tests**: 4 tests are optional MinerU-environment skips when `localhost:30000` service is unavailable.
+- **Automated tests**: Full suite run as part of release checks; optional MinerU-dependent tests skip when no service is available on `localhost:30000`.
 - **Environment validation**: `validate-document --env-only` confirms FAIR-DS API reachable and LLM configuration valid.
 
 ---
