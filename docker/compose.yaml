@@ -1,4 +1,22 @@
 services:
+  # FAIR Data Station API — default image downloads fairds-latest.jar at build time (reproducible, no JAR in git).
+  # Optional: copy a local JAR with docker/pack-fairds-jar.sh and set FAIRDS_DOCKERFILE=Dockerfile.from-local in .env
+  fairds:
+    build:
+      context: ./fairds
+      dockerfile: ${FAIRDS_DOCKERFILE:-Dockerfile}
+    ports:
+      - "8083:8083"
+    environment:
+      JAVA_TOOL_OPTIONS: ${FAIRDS_JAVA_TOOL_OPTIONS:--Xmx2g}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/api/package"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 120s
+    restart: unless-stopped
+
   fairifier-api:
     build:
       context: ..
@@ -15,7 +33,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       LLM_ENABLE_THINKING: ${LLM_ENABLE_THINKING:-false}
       FAIRIFIER_ENABLE_DEEP_AGENTS: ${FAIRIFIER_ENABLE_DEEP_AGENTS:-true}
-      FAIR_DS_API_URL: ${FAIR_DS_API_URL:-http://host.docker.internal:8083}
+      FAIR_DS_API_URL: ${FAIR_DS_API_URL:-http://fairds:8083}
       CROSSREF_MAILTO: ${CROSSREF_MAILTO:-}
       MINERU_ENABLED: ${MINERU_ENABLED:-false}
       MINERU_SERVER_URL: ${MINERU_SERVER_URL:-http://host.docker.internal:30000}
@@ -38,7 +56,10 @@ services:
       - ../kb:/app/kb
       - ../examples:/app/examples:ro
     depends_on:
-      - qdrant
+      fairds:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
     restart: unless-stopped
 
   qdrant:

@@ -1,46 +1,61 @@
 # FAIRiAgent Docker Deployment
 
-This directory contains the container build, compose stack, and smoke-test scripts for FAIRiAgent.
+This directory contains the Compose stack, FAIR-DS image helpers, and smoke-test scripts.
 
-## Quick Start
+## Quick start (API + FAIR-DS + Qdrant)
 
-### Build the image
+```bash
+cd docker
+docker build -t fairiagent:latest -f ../Dockerfile ..
+cp ../env.example .env
+# Edit .env: set LLM provider and API keys (FAIR_DS_API_URL defaults to the in-stack fairds service)
+docker compose up -d --build
+docker compose logs -f fairifier-api
+curl http://localhost:8000/health
+```
+
+Services:
+
+- **fairifier-api** — `http://localhost:8000`
+- **fairds** — FAIR Data Station, `http://localhost:8083` (image builds from the public JAR URL by default)
+- **qdrant** — `http://localhost:6333` (for mem0 when enabled)
+
+### Local FAIR-DS JAR (optional)
+
+JARs are large and not committed to git. To build the `fairds` image from a file on your machine (e.g. a dev-channel JAR from `~/Downloads`):
+
+```bash
+./pack-fairds-jar.sh
+# In .env: FAIRDS_DOCKERFILE=Dockerfile.from-local
+docker compose build fairds && docker compose up -d
+```
+
+### Build the API image only
+
+From repository root:
 
 ```bash
 docker build -t fairiagent:latest -f Dockerfile .
 ```
 
-### Build and publish to GitHub Container Registry (same repo)
+### Publish to GitHub Container Registry
 
 ```bash
-# Authenticate once (requires gh auth login done locally)
 gh auth token | docker login ghcr.io -u ElderMedic --password-stdin
 
-# Build tags
+# Run from repository root
 docker build -f Dockerfile \
   -t ghcr.io/eldermedic/fairiagent:latest \
-  -t ghcr.io/eldermedic/fairiagent:1.3.0 \
+  -t ghcr.io/eldermedic/fairiagent:1.3.1 \
   .
 
-# Push tags
 docker push ghcr.io/eldermedic/fairiagent:latest
-docker push ghcr.io/eldermedic/fairiagent:1.3.0
+docker push ghcr.io/eldermedic/fairiagent:1.3.1
 ```
 
-### Run the API with Docker Compose
+### One-shot CLI (no Compose)
 
-```bash
-cd docker
-cp ../env.example .env
-# Edit .env and set at least: LLM_PROVIDER, FAIRIFIER_LLM_MODEL, and provider key
-docker compose up -d
-docker compose logs -f fairifier-api
-```
-
-Services exposed by the compose stack:
-- API: `http://localhost:8000`
-- Health: `http://localhost:8000/health`
-- Qdrant: `http://localhost:6333`
+The image does not bundle FAIR-DS; point `FAIR_DS_API_URL` at a running instance (often `host.docker.internal:8083`). See [Docker Deployment Guide](../docs/en/guides/DOCKER_DEPLOYMENT.md).
 
 ### Run one-shot CLI processing
 
@@ -48,23 +63,26 @@ Services exposed by the compose stack:
 docker run --rm \
   -v "$(pwd)/output:/app/output" \
   -v "$(pwd)/examples:/app/examples:ro" \
+  --add-host=host.docker.internal:host-gateway \
   -e LLM_PROVIDER=gemini \
   -e FAIRIFIER_LLM_MODEL=gemini-3.1-pro-preview \
   -e GEMINI_API_KEY=your_gemini_key \
   -e FAIR_DS_API_URL=http://host.docker.internal:8083 \
   fairiagent:latest \
-  python run_fairifier.py process /app/examples/inputs/earthworm_4n_paper_bioRxiv.pdf
+  python run_fairifier.py process /app/examples/inputs/earthworm_4n_paper_bioRXiv.pdf
 ```
 
-## Recommended Environment
+## Recommended environment
 
-For the current project setup, the container defaults assume:
+For the current project setup, containers often use:
+
 - `LLM_PROVIDER=qwen`
 - `FAIRIFIER_LLM_MODEL=qwen-flash`
 - `LLM_ENABLE_THINKING=false`
 - `FAIRIFIER_ENABLE_DEEP_AGENTS=true`
 
-Common API key variables accepted by container config:
+Common API key variables:
+
 - `LLM_API_KEY` (generic)
 - `DASHSCOPE_API_KEY` (Qwen fallback)
 - `GOOGLE_API_KEY` or `GEMINI_API_KEY` (Gemini fallback)
@@ -83,7 +101,7 @@ MEM0_EMBEDDING_DIMS=1024
 
 Set `CROSSREF_MAILTO` to a real contact email if Crossref lookups are enabled.
 
-## Useful Commands
+## Useful commands
 
 ```bash
 docker run --rm fairiagent:latest python run_fairifier.py --help
@@ -94,7 +112,8 @@ curl http://localhost:8000/health
 
 ## Troubleshooting
 
-- If FAIR-DS runs on the host, keep `FAIR_DS_API_URL=http://host.docker.internal:8083`.
+- If FAIR-DS runs on the host, either stop the compose `fairds` service or avoid port 8083 conflicts; set `FAIR_DS_API_URL=http://host.docker.internal:8083` when using only the host JAR.
 - If MinerU runs on the host, set `MINERU_ENABLED=true` and `MINERU_SERVER_URL=http://host.docker.internal:30000`.
-- On Linux, compose injects `host.docker.internal:host-gateway`; keep that mapping unless you use host networking.
-- If mem0 is enabled, ensure Qdrant is reachable and the embedding dimensions match the configured model.
+- On Linux, compose injects `host.docker.internal:host-gateway` for `fairifier-api` unless you change it.
+- If mem0 is enabled, ensure Qdrant is reachable and embedding dimensions match the model.
+- For `fairds` build failures (download), check network access to `http://download.systemsbiology.nl/unlock/fairds-latest.jar` or use `Dockerfile.from-local` after `./pack-fairds-jar.sh`.
