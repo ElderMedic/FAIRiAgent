@@ -23,6 +23,7 @@ from .output_paths import (
 from .utils.json_logger import get_logger
 from .utils.llm_helper import get_llm_helper, save_llm_responses, check_ollama_model_available
 from .validation import check_metadata_json_output
+from .services.fairds_excel_export import try_export_fairds_metadata_excel
 
 # LangSmith: config.apply_env_overrides() already set LANGCHAIN_TRACING_V2 and LANGCHAIN_PROJECT
 
@@ -583,6 +584,16 @@ async def _run_workflow(
         _post_write_metadata_json_checks(
             output_path, do_syntax=do_syntax, do_fair=do_fair
         )
+
+        fairds_xlsx = try_export_fairds_metadata_excel(output_path)
+        if fairds_xlsx is not None:
+            sz_kb = fairds_xlsx.stat().st_size / 1024
+            click.echo(f"  ✓ {fairds_xlsx.name} ({sz_kb:.1f} KB)")
+            json_logger.info(
+                "artifact_saved",
+                filename=fairds_xlsx.name,
+                size_bytes=fairds_xlsx.stat().st_size,
+            )
         
         # Save processing log
         log_file = output_path / "processing_log.jsonl"
@@ -1027,6 +1038,16 @@ async def _resume_workflow(
                     
                     size_kb = len(content) / 1024
                     click.echo(f"  ✓ {filename} ({size_kb:.1f} KB)")
+
+        fairds_xlsx = try_export_fairds_metadata_excel(output_path)
+        if fairds_xlsx is not None:
+            sz_kb = fairds_xlsx.stat().st_size / 1024
+            click.echo(f"  ✓ {fairds_xlsx.name} ({sz_kb:.1f} KB)")
+            json_logger.info(
+                "artifact_saved",
+                filename=fairds_xlsx.name,
+                size_bytes=fairds_xlsx.stat().st_size,
+            )
         
         # Save processing log (append mode)
         processing_log_file = output_path / "processing_log.jsonl"

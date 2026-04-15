@@ -39,12 +39,11 @@ export default function HomeValueSection({ cards }: HomeValueSectionProps) {
           viewport={{ once: true, amount: 0.35 }}
           variants={item}
         >
-          <p className="home-section__eyebrow">Why this system</p>
-          <h2 className="home-section__title">Built around the curation bottleneck in real biology papers.</h2>
+          <p className="home-section__eyebrow">Why FAIRiAgent</p>
+          <h2 className="home-section__title">Curation that scales with full papers.</h2>
           <p className="home-section__body">
-            The hard part is not generating a plausible paragraph. It is recovering enough context from a
-            complete paper to produce metadata another researcher, curator, or repository system can
-            actually work with.
+            Manual MIxS-style metadata from a manuscript can take hours. This system targets the same job with
+            inspectable, multi-agent runs—not a single opaque prompt.
           </p>
         </motion.div>
 

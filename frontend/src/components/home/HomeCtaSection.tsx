@@ -21,12 +21,10 @@ export default function HomeCtaSection({ onStart, onAbout }: HomeCtaSectionProps
         >
           <div className="home-cta-card__copy">
             <p className="home-section__eyebrow">Next step</p>
-            <h2 className="home-section__title">
-              Start from a real paper, then follow the run through to reviewable FAIR metadata files.
-            </h2>
+            <h2 className="home-section__title">Run a paper. Review the metadata bundle.</h2>
             <p className="home-section__body">
-              The working screens are meant to support one practical job: turning existing scientific
-              description into a structured draft that a researcher can inspect, correct, and reuse.
+              Upload a PDF or try the bundled sample—then download JSON, validation, and reports from the
+              results screen.
             </p>
           </div>
 

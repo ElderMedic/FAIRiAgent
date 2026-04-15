@@ -44,13 +44,12 @@ export default function HomeWorkflowSection({ steps }: HomeWorkflowSectionProps)
             <div className="home-workflow__copy">
               <p className="home-section__eyebrow home-section__eyebrow--dark">System</p>
               <h2 className="home-section__title home-section__title--dark">
-                A research system built to handle context, retrieval, critique, and review.
+                Parse, ground, draft—then critique before export.
               </h2>
             </div>
             <p className="home-workflow__lede">
-              FAIRiAgent is not a single linear prompt. It is a coordinated system that parses the
-              document, selects the right metadata structure, grounds the draft against FAIR Data Station
-              context, then critiques and validates the result before export.
+              LangGraph orchestrates specialised agents with a Plan → Execute → Critique → Refine loop:
+              structured intake, FAIR Data Station grounding, and validation-aware retries.
             </p>
           </motion.div>
 
@@ -58,7 +57,7 @@ export default function HomeWorkflowSection({ steps }: HomeWorkflowSectionProps)
             <div className="home-ops-panel__copy">
               <p className="home-section__eyebrow home-section__eyebrow--dark">Operating model</p>
               <h3 className="home-ops-panel__title">
-                Built for researchers who need a draft they can inspect, correct, and hand forward.
+                Drafts you can inspect—not a black-box answer.
               </h3>
             </div>
 
@@ -66,22 +65,20 @@ export default function HomeWorkflowSection({ steps }: HomeWorkflowSectionProps)
               <article className="home-ops-card">
                 <div className="home-ops-card__heading">
                   <FlaskConical className="home-ops-card__icon" aria-hidden="true" />
-                  <span>Complete papers, not snippets</span>
+                  <span>Full documents</span>
                 </div>
                 <p className="home-ops-card__body">
-                  The system is meant for long biological documents where key metadata are spread across
-                  methods, tables, and supporting sections.
+                  Methods, tables, and supplements matter—metadata is rarely in one paragraph.
                 </p>
               </article>
 
               <article className="home-ops-card">
                 <div className="home-ops-card__heading">
                   <BadgeCheck className="home-ops-card__icon" aria-hidden="true" />
-                  <span>Same path as a real run</span>
+                  <span>Bundled sample = real path</span>
                 </div>
                 <p className="home-ops-card__body">
-                  The bundled earthworm paper goes through the same backend path as an uploaded document, so
-                  the interface can be tested without switching into a toy mode.
+                  The demo manuscript uses the same pipeline as your uploads—no toy shortcut.
                 </p>
               </article>
             </div>

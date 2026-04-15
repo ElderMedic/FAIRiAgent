@@ -53,6 +53,7 @@ class FAIRDataStationClient:
         - GET /api — discovery / available subpaths
         - GET /api/terms — all terms or ``?label=`` / ``?definition=`` filters
         - GET /api/package — package name list (no query) or ``?name=`` for metadata
+        - POST /api/isa — submit ISA JSON, receive generated metadata Excel (``.xlsx`` bytes)
         - POST /api/upload — Excel upload/validation
 
     Package ``metadata`` rows may use ``level`` (current) or ``sheetName`` (legacy)
@@ -344,6 +345,63 @@ class FAIRDataStationClient:
         
         logger.info(f"✅ Found {len(matching_fields)} fields matching '{field_label}' across {len(package_names)} packages")
         return matching_fields
+
+    def generate_excel_from_isa_structure(self, isa_structure: Dict[str, Any]) -> bytes:
+        """Generate a FAIR-DS metadata Excel file from an ISA structure (JSON).
+
+        Calls ``POST {base}/api/isa`` with body ``{"isa_structure": ...}`` per the
+        FAIR Data Station OpenAPI schema. The workbook uses **one sheet per ISA
+        level** that contains fields (e.g. investigation, study, observationunit,
+        sample, assay), plus a ``Help`` sheet. Multiple metadata packages are not
+        separate tabs: use each field's ``package_source`` (and related columns)
+        inside those sheets.
+
+        Args:
+            isa_structure: Mapping with optional keys ``investigation``, ``study``,
+                ``observationunit``, ``sample``, ``assay``. Each value is typically
+                ``{"description": str, "fields": [Field, ...]}``, matching
+                :mod:`fairifier.agents.json_generator` output under ``isa_structure``.
+
+        Returns:
+            Raw ``.xlsx`` file bytes (ZIP-based Office Open XML).
+
+        Raises:
+            RuntimeError: If the server returns a non-success status (e.g. 400
+                for invalid ISA JSON).
+        """
+        url = f"{self._base_url}/api/isa"
+        payload = {"isa_structure": isa_structure}
+        try:
+            response = self._session.post(
+                url,
+                json=payload,
+                timeout=max(self._timeout, 60),
+                headers={
+                    "Accept": (
+                        "application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet, application/octet-stream, */*"
+                    ),
+                },
+            )
+        except Exception as exc:
+            logger.warning("FAIR-DS POST /api/isa failed: %s", exc)
+            raise RuntimeError(f"FAIR-DS Excel generation request failed: {exc}") from exc
+
+        if response.status_code != 200:
+            detail = (response.text or "")[:2000]
+            logger.warning(
+                "FAIR-DS /api/isa returned %s: %s",
+                response.status_code,
+                detail[:500],
+            )
+            raise RuntimeError(
+                f"FAIR-DS /api/isa failed with HTTP {response.status_code}: {detail}"
+            )
+
+        data = response.content
+        if not data:
+            raise RuntimeError("FAIR-DS /api/isa returned an empty body")
+        return data
 
     def get_package_fields(
         self, 
