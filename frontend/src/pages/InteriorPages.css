@@ -1267,6 +1267,11 @@ code.page-inline-code {
   word-break: break-word;
 }
 
+.result-summary-card__value--muted {
+  color: var(--color-text-tertiary);
+  font-size: 0.9rem;
+}
+
 .result-summary-table {
   width: 100%;
   margin-top: 0.6rem;
