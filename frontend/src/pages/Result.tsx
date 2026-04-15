@@ -262,33 +262,41 @@ export default function Result() {
                   {summary.map(([key, value]) => {
                     if (isRetriesByAgentKey(key)) {
                       const rows = coerceRetriesByAgent(value);
-                      if (rows) {
+                      if (rows === null) {
                         return (
                           <div key={key} className="result-summary-card">
                             <p className="result-summary-card__label">{scoreLabel(key)}</p>
-                            {rows.length === 0 ? (
-                              <p className="result-summary-card__value">0</p>
-                            ) : (
-                              <table className="result-summary-table" aria-label="Retries by agent">
-                                <thead>
-                                  <tr>
-                                    <th scope="col">Agent</th>
-                                    <th scope="col">Retries</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {rows.map((row) => (
-                                    <tr key={row.agent}>
-                                      <td>{row.agent}</td>
-                                      <td>{row.retries}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            )}
+                            <p className="result-summary-card__value result-summary-card__value--muted">
+                              Retry counts are unavailable (invalid or non-numeric values in summary data).
+                            </p>
                           </div>
                         );
                       }
+                      return (
+                        <div key={key} className="result-summary-card">
+                          <p className="result-summary-card__label">{scoreLabel(key)}</p>
+                          {rows.length === 0 ? (
+                            <p className="result-summary-card__value">0</p>
+                          ) : (
+                            <table className="result-summary-table" aria-label="Retries by agent">
+                              <thead>
+                                <tr>
+                                  <th scope="col">Agent</th>
+                                  <th scope="col">Retries</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {rows.map((row) => (
+                                  <tr key={row.agent}>
+                                    <td>{row.agent}</td>
+                                    <td>{row.retries}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      );
                     }
 
                     return (
