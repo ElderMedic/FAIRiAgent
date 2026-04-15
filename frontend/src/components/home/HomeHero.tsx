@@ -11,6 +11,9 @@ import { useEffect, useRef, useState } from 'react';
 import HomeHeroBackdrop from './HomeHeroBackdrop';
 import type { HomeConsoleSlide, HomeSignal } from './content';
 
+const CONSOLE_AUTO_MS = 9000;
+const CONSOLE_PAUSE_AFTER_MANUAL_MS = 20000;
+
 interface HomeHeroProps {
   onStart: () => void;
   onSample: () => void;
@@ -27,6 +30,7 @@ export default function HomeHero({
   const sectionRef = useRef<HTMLElement | null>(null);
   const reduceMotion = useReducedMotion();
   const [activeConsoleIndex, setActiveConsoleIndex] = useState(0);
+  const consolePauseUntilRef = useRef(0);
   const heroStagger: Variants | undefined = reduceMotion
     ? undefined
     : {
@@ -64,10 +68,18 @@ export default function HomeHero({
       return undefined;
     }
     const timer = window.setInterval(() => {
+      if (Date.now() < consolePauseUntilRef.current) {
+        return;
+      }
       setActiveConsoleIndex((current) => (current + 1) % consoleSlides.length);
-    }, 4200);
+    }, CONSOLE_AUTO_MS);
     return () => window.clearInterval(timer);
   }, [consoleSlides.length, reduceMotion]);
+
+  const selectConsoleSlide = (index: number) => {
+    consolePauseUntilRef.current = Date.now() + CONSOLE_PAUSE_AFTER_MANUAL_MS;
+    setActiveConsoleIndex(index);
+  };
 
   return (
     <motion.section
@@ -94,19 +106,22 @@ export default function HomeHero({
         >
           <motion.div className="home-chip" variants={heroItem}>
             <Sparkles className="home-chip__icon" aria-hidden="true" />
-            Agentic FAIR metadata generation for biological research
+            Multi-agent LLM system · biological research
           </motion.div>
 
           <motion.div className="home-copy" variants={heroItem}>
             <p className="home-eyebrow">Full papers in. FAIR metadata drafts out.</p>
             <h1 className="home-title">
-              Context Engineering of Your Project For Autonomous Research
+              Multi-agent FAIR metadata for biological research
             </h1>
             <p className="home-lede">
-              FAIRiAgent is a multi-agent system for the part of curation that usually takes hours:
-              reading a full paper, recovering methods and sample context, selecting the right MIxS-style
-              checklist, grounding terms against FAIR Data Station resources, and producing structured
-              metadata drafts that can be reviewed before reuse or submission.
+              Turn unstructured manuscripts into structured, review-ready metadata drafts: parse the full
+              document, ground against FAIR Data Station, iterate with a critic, then export artifacts.
+            </p>
+            <p className="home-keywords" aria-label="Highlights">
+              <span className="home-keyword">Plan → Execute → Critique → Refine</span>
+              <span className="home-keyword">MIxS / ISA-Tab</span>
+              <span className="home-keyword">MinerU · FDS · skills</span>
             </p>
           </motion.div>
 
@@ -125,6 +140,7 @@ export default function HomeHero({
               <motion.article
                 key={signal.label}
                 className="home-signal-card"
+                tabIndex={0}
                 whileHover={reduceMotion ? undefined : { y: -3 }}
                 transition={{ duration: 0.18, ease: 'easeOut' }}
               >
@@ -143,7 +159,7 @@ export default function HomeHero({
           <header className="home-console__header">
             <div>
               <p className="home-console__eyebrow">Run overview</p>
-              <h2 className="home-console__title">Paper-to-metadata system</h2>
+              <h2 className="home-console__title">Paper → FAIR metadata</h2>
             </div>
             <div className="home-status-pill">
               <BadgeCheck className="home-status-pill__icon" aria-hidden="true" />
@@ -163,10 +179,10 @@ export default function HomeHero({
                     key={slide.label}
                     type="button"
                     role="tab"
-                    aria-selected={index === activeConsoleIndex}
+                    aria-selected={index === activeConsoleIndex ? 'true' : 'false'}
                     aria-label={`Show ${slide.label.toLowerCase()} view`}
                     className={`home-dots__button ${index === activeConsoleIndex ? 'is-active' : ''}`}
-                    onClick={() => setActiveConsoleIndex(index)}
+                    onClick={() => selectConsoleSlide(index)}
                   >
                     <span />
                   </button>

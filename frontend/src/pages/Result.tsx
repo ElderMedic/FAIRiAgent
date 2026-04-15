@@ -23,11 +23,39 @@ function formatSize(size: number) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatSummaryValue(value: unknown) {
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+function formatSummaryValueWithKey(key: string, value: unknown) {
+  if (typeof value === 'number') {
+    const lowerKey = key.toLowerCase();
+    const isConfidence = lowerKey.includes('confidence');
+    if (isConfidence && value >= 0 && value <= 1) {
+      return `${(value * 100).toFixed(2)}%`;
+    }
+    if (Number.isInteger(value)) return String(value);
+    return value.toFixed(2);
+  }
+  if (typeof value === 'string' || typeof value === 'boolean') {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+function isRetriesByAgentKey(key: string) {
+  const k = key.toLowerCase();
+  return k.includes('retries') && k.includes('agent');
+}
+
+function coerceRetriesByAgent(value: unknown): Array<{ agent: string; retries: number }> | null {
+  if (!value || typeof value !== 'object') return null;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return [];
+  const rows: Array<{ agent: string; retries: number }> = [];
+  for (const [agent, raw] of entries) {
+    const retries = typeof raw === 'number' ? raw : Number(raw);
+    if (!Number.isFinite(retries)) return null;
+    rows.push({ agent, retries });
+  }
+  rows.sort((a, b) => b.retries - a.retries || a.agent.localeCompare(b.agent));
+  return rows;
 }
 
 function scoreToneClass(score: number) {
@@ -143,7 +171,12 @@ export default function Result() {
 
   const scores = Object.entries(project.confidence_scores || {});
   const summary = Object.entries(project.execution_summary || {});
-  const recommendedArtifacts = ['metadata.json', 'validation_report.txt', 'workflow_report.json'];
+  const recommendedArtifacts = [
+    'metadata.json',
+    'metadata_fairds.xlsx',
+    'validation_report.txt',
+    'workflow_report.json',
+  ];
 
   const mainArtifacts = artifacts.filter((a) => !a.name.startsWith('mineru_'));
   const mineruArtifacts = artifacts.filter((a) => a.name.startsWith('mineru_'));
@@ -226,12 +259,47 @@ export default function Result() {
                   </div>
                 </div>
                 <div className="result-summary-grid">
-                  {summary.map(([key, value]) => (
-                    <div key={key} className="result-summary-card">
-                      <p className="result-summary-card__label">{scoreLabel(key)}</p>
-                      <p className="result-summary-card__value">{formatSummaryValue(value)}</p>
-                    </div>
-                  ))}
+                  {summary.map(([key, value]) => {
+                    if (isRetriesByAgentKey(key)) {
+                      const rows = coerceRetriesByAgent(value);
+                      if (rows) {
+                        return (
+                          <div key={key} className="result-summary-card">
+                            <p className="result-summary-card__label">{scoreLabel(key)}</p>
+                            {rows.length === 0 ? (
+                              <p className="result-summary-card__value">0</p>
+                            ) : (
+                              <table className="result-summary-table" aria-label="Retries by agent">
+                                <thead>
+                                  <tr>
+                                    <th scope="col">Agent</th>
+                                    <th scope="col">Retries</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {rows.map((row) => (
+                                    <tr key={row.agent}>
+                                      <td>{row.agent}</td>
+                                      <td>{row.retries}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        );
+                      }
+                    }
+
+                    return (
+                      <div key={key} className="result-summary-card">
+                        <p className="result-summary-card__label">{scoreLabel(key)}</p>
+                        <p className="result-summary-card__value">
+                          {formatSummaryValueWithKey(key, value)}
+                        </p>
+                      </div>
+                    );
+                  })}
                 </div>
               </article>
             )}

@@ -13,6 +13,9 @@ from typing import Any, Dict, Optional
 from ..storage.base import ProjectStore
 from .event_bus import WorkflowEvent, event_bus
 from fairifier.output_paths import artifact_output_filename
+from fairifier.services.fairds_excel_export import (
+    try_export_fairds_metadata_excel,
+)
 from fairifier.utils.json_logger import JSONLogger
 from fairifier.utils.config_saver import save_runtime_config
 from fairifier.utils.run_control import reset_run_stop_requested
@@ -190,11 +193,19 @@ def run_workflow_task(
         persisted_output_dir = (
             result.get("output_dir") or output_dir
         )
+        fair_ds_for_export: Optional[str] = None
+        if config_overrides and isinstance(
+            config_overrides, dict
+        ):
+            raw_fd = config_overrides.get("fair_ds_api_url")
+            if isinstance(raw_fd, str) and raw_fd.strip():
+                fair_ds_for_export = raw_fd.strip()
         persistence_errors = _persist_run_outputs(
             project_id=project_id,
             result=result,
             output_dir=persisted_output_dir,
             json_logger=json_logger,
+            fair_ds_api_url=fair_ds_for_export,
         )
         if persisted_output_dir:
             try:
@@ -366,6 +377,7 @@ def _persist_run_outputs(
     result: Dict[str, Any],
     output_dir: Optional[str],
     json_logger: JSONLogger,
+    fair_ds_api_url: Optional[str] = None,
 ) -> list[str]:
     """Persist downloadable files for the Web UI result page."""
     if not output_dir:
@@ -441,6 +453,18 @@ def _persist_run_outputs(
         msg = f"Failed to save llm_responses.json: {exc}"
         logger.warning(msg)
         errors.append(msg)
+
+    fairds_path = try_export_fairds_metadata_excel(
+        output_path,
+        fair_ds_api_url=fair_ds_api_url,
+    )
+    if fairds_path is not None:
+        json_logger.info(
+            "artifact_saved",
+            project_id=project_id,
+            filename=fairds_path.name,
+            size_bytes=fairds_path.stat().st_size,
+        )
 
     return errors
 

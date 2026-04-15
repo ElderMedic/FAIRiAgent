@@ -16,6 +16,7 @@
 | `GET /api/terms` | GET | 可用 | 获取所有元数据术语或按标签/定义过滤 |
 | `GET /api/package` | GET | 可用 | 获取所有包或按名称获取特定包 |
 | `POST /api/upload` | POST | 可用 | 验证元数据 Excel 文件 |
+| `POST /api/isa` | POST | 可用 | 提交 ISA JSON；返回生成的元数据 Excel（`.xlsx`） |
 
 ---
 
@@ -196,6 +197,39 @@ curl "http://localhost:8083/api/package?name=miappe"
 - 单包查询可减少约 98% 的数据传输
 - 包含 `itemCount` 用于快速参考
 - `metadata` 是字段数组（未按 ISA sheet 分组）
+
+---
+
+## POST `/api/isa`
+
+以 JSON 提交 ISA（Investigation、Study、Assay 等）结构，返回**元数据 Excel 工作簿**（二进制 `.xlsx`）。Swagger：[submitIsaStructure](https://fairds.fairbydesign.nl/swagger-ui/index.html#/FAIR%20Data%20Station%20API/submitIsaStructure)。
+
+### 请求体
+
+顶层格式：`{"isa_structure": { ... }}`。`isa_structure` 可包含：
+
+- `investigation`、`study`、`observationunit`、`sample`、`assay`
+
+每一层一般为 `{"description": 字符串, "fields": [ ... ]}`。字段符合 API 的 `Field` 模型（如 `field_name`、`value`，以及可选的 `evidence`、`confidence`、`origin`、`status`、`package_source`）。FAIRiAgent 工作流输出的根级字段 `isa_structure` 可直接作为该内层对象传给 API。
+
+### 工作表与 metadata package 的关系
+
+- 生成的工作簿按 **ISA 层级**分工作表（有字段的层级各一张），并通常含 **`Help`** 表。层级对应上述块（如 `investigation`、`study`），**不是**按 MIxS/GSC **包名**（如 `soil`、`water`、`miappe`）每种包一张表。
+- 同一数据集中使用**多个包**时，字段仍落在上述 ISA 表中，通过每条字段上的 `package_source` 等列区分，**不会**为每个包单独建一张表。
+
+### 示例
+
+```bash
+curl -sS -X POST "https://fairds.fairbydesign.nl/api/isa" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" \
+  -d '{"isa_structure":{"study":{"description":"…","fields":[{"field_name":"study title","value":"My study"}]}}}' \
+  -o metadata.xlsx
+```
+
+Python 中可使用 `fairifier.services.fair_data_station` 中的 `FAIRDataStationClient.generate_excel_from_isa_structure`。
+
+工作流成功结束后，若 FAIR-DS 可访问且 `isa_structure` 中至少有一条字段，CLI 与 Web API 还会在 `metadata.json` 旁写入 **`metadata_fairds.xlsx`**（见 `fairifier.services.fairds_excel_export`）。
 
 ---
 

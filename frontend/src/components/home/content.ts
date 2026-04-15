@@ -40,151 +40,134 @@ export interface HomeConsoleSlide {
   highlights: string[];
 }
 
+/** Hero “signal” cards: short label; hover/focus reveals detail (see Home.css). */
 export const heroSignals: HomeSignal[] = [
   {
-    label: 'Full-paper input',
-    detail: 'Built for papers, methods sections, tables, and supplements rather than isolated text snippets',
+    label: 'Full-paper intake',
+    detail: 'PDFs, methods, tables, and supplements—not abstract-only snippets.',
   },
   {
-    label: 'MIxS and FAIR-DS aware',
-    detail: 'Checklist choice, field structure, and term grounding are part of the run instead of being patched in later',
+    label: 'MIxS / FAIR-DS grounded',
+    detail: 'Checklist choice, field structure, and term grounding run in the pipeline.',
   },
   {
-    label: 'Review before reuse',
-    detail: 'Runs keep evidence, validation, and downloadable artifacts together so a researcher can inspect the draft properly',
+    label: 'Review-first output',
+    detail: 'Evidence, validation, and artifacts stay with the run for curator review.',
   },
 ];
 
 export const valueCards: HomeCard[] = [
   {
     icon: FileSearch,
-    title: 'From papers to metadata drafts',
+    title: 'Paper → metadata draft',
     description:
-      'FAIRiAgent starts from the scientific document itself and works toward a structured draft, so the burden of reconstructing metadata from memory is reduced.',
+      'Starts from the document and moves toward structured, submission-oriented metadata.',
   },
   {
     icon: Bot,
-    title: 'Specialized agents with explicit roles',
+    title: 'Specialised agents',
     description:
-      'Planner, parser, retriever, generator, and critic roles stay separate. That makes the system easier to inspect and improve than a single-pass extraction prompt.',
+      'Planner, parser, retriever, generator, and critic—inspectable roles, not one giant prompt.',
   },
   {
     icon: ShieldCheck,
-    title: 'A review surface around each run',
+    title: 'A run you can audit',
     description:
-      'Service checks, live logs, confidence signals, and artifacts stay attached to each run. For wet-lab teams, that means the draft can be checked against the paper instead of trusted blindly.',
+      'Logs, confidence signals, and downloads stay attached so outputs can be checked against the paper.',
   },
 ];
 
 export const workflowSteps: HomeStep[] = [
   {
     icon: FileSearch,
-    title: 'Parse the paper',
-    body: 'Convert a PDF or related document into structured text so methods, tables, and supplementary detail can enter the same system.',
+    title: 'Parse',
+    body: 'Structured text from full PDFs (e.g. MinerU), including tables and supplements.',
   },
   {
     icon: Network,
-    title: 'Choose the right schema',
-    body: 'Select the relevant MIxS package and retrieve FAIR Data Station context before field-level drafting begins.',
+    title: 'Ground',
+    body: 'Choose MIxS-style packages and FAIR Data Station context before drafting fields.',
   },
   {
     icon: Workflow,
-    title: 'Draft and critique',
-    body: 'Generate metadata, inspect evidence coverage, and retry when the critic finds missing context or weak support.',
+    title: 'Draft & critique',
+    body: 'Plan → execute → critique → refine: retry when evidence or schema checks fail.',
   },
   {
     icon: Database,
-    title: 'Review the result',
-    body: 'Export JSON metadata, validation output, and workflow reports with the operational trail still attached.',
+    title: 'Export & review',
+    body: 'ISA-oriented JSON, validation, and reports—ready for correction and handoff.',
   },
-];
-
-export const consoleHighlights = [
-  'Built for complete biological papers, not abstract-only extraction',
-  'Supports local and hosted model backends',
-  'Designed for curator review instead of one-shot output',
 ];
 
 export const consoleSlides: HomeConsoleSlide[] = [
   {
     label: 'Plan',
-    eyebrow: 'System architecture',
-    summary: 'The system starts from the source paper and moves toward a specific metadata package, not a generic summary.',
+    eyebrow: 'Architecture',
+    summary: 'From manuscript to checklist-aware metadata—not a generic summary.',
     wideCard: {
       icon: FileSearch,
-      title: 'Paper-scale intake',
-      body: 'PDF, TXT, and Markdown enter the same backend path so papers, methods notes, and lighter supporting documents can be processed consistently.',
+      title: 'Paper-scale input',
+      body: 'PDF, text, or Markdown share one backend path for consistent processing.',
     },
     cards: [
       {
         icon: Workflow,
-        title: 'Checklist selection',
-        body: 'The planner steers the system toward the appropriate MIxS-style package before the drafting stage starts.',
+        title: 'Planner',
+        body: 'Selects the appropriate MIxS-style package before field drafting.',
       },
       {
         icon: Database,
-        title: 'Grounded drafting',
-        body: 'Field structure and term lookup are tied to FAIR Data Station resources so the output is shaped for downstream use.',
+        title: 'FAIR Data Station',
+        body: 'Schema search and curated context shape the draft for downstream use.',
       },
     ],
-    highlights: [
-      'Complete papers use the same path as bundled examples',
-      'Planner, parser, retriever, generator, and critic stay distinct',
-      'Output is aimed at metadata submission work, not generic chat',
-    ],
+    highlights: ['Full-document path', 'Distinct agent roles', 'Repository-oriented output'],
   },
   {
     label: 'Run',
-    eyebrow: 'Runtime view',
-    summary: 'The run keeps enough state visible that a researcher can follow what happened and why.',
+    eyebrow: 'Execution',
+    summary: 'Enough state visible to see what happened and why.',
     wideCard: {
       icon: ShieldCheck,
-      title: 'Preflight checks',
-      body: 'MinerU, FAIR-DS, Ollama, Qdrant, and memory readiness are checked before launch so obvious environment problems show up early.',
+      title: 'Preflight',
+      body: 'Key services are checked before launch so environment issues surface early.',
     },
     cards: [
       {
         icon: Workflow,
-        title: 'Critique-guided retries',
-        body: 'The system can retry a weak draft instead of returning the first plausible answer it produced.',
+        title: 'Critique loop',
+        body: 'Retries target weak drafts instead of returning the first plausible answer.',
       },
       {
         icon: Bot,
-        title: 'Context stays attached',
-        body: 'Retrieved knowledge, model output, and critique signals remain part of the same run rather than being scattered across tools.',
+        title: 'One run object',
+        body: 'Retrieval, model output, and critic signals stay in one trace.',
       },
     ],
-    highlights: [
-      'Service status reflects actual local reachability',
-      'Live events keep long runs inspectable',
-      'Useful when a difficult paper needs closer review',
-    ],
+    highlights: ['Live progress', 'SSE-friendly runs', 'Suited to difficult papers'],
   },
   {
     label: 'Review',
-    eyebrow: 'Result surface',
-    summary: 'A run ends with concrete files that can be reviewed, corrected, and handed forward.',
+    eyebrow: 'Outputs',
+    summary: 'Concrete files to inspect, correct, and pass forward.',
     wideCard: {
       icon: Database,
-      title: 'Artifact review',
-      body: 'Metadata JSON, validation reports, workflow summaries, and conversion outputs are listed together instead of being buried in logs.',
+      title: 'Artifacts',
+      body: 'Metadata JSON, validation, and workflow reports listed together—not buried in logs.',
     },
     cards: [
       {
         icon: ShieldCheck,
-        title: 'Confidence summary',
-        body: 'Confidence scores and execution details make it easier to decide whether a draft is close to submission-ready or still needs work.',
+        title: 'Confidence',
+        body: 'Scores and summaries help judge how close a draft is to submission-ready.',
       },
       {
         icon: FileSearch,
-        title: 'Persistent outputs',
-        body: 'Core downloadable files are written to the output directory so a run can be revisited later or moved into the next FAIR step.',
+        title: 'Persistent files',
+        body: 'Written to your output area for revisit or downstream FAIR steps.',
       },
     ],
-    highlights: [
-      'Files stay attached to the run',
-      'Artifact downloads include nested outputs',
-      'Designed for downstream FAIR-DS handoff',
-    ],
+    highlights: ['Downloadable bundle', 'Nested outputs supported', 'Handoff to FAIR-DS workflows'],
   },
 ];

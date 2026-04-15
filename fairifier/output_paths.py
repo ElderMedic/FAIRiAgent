@@ -13,6 +13,9 @@ from typing import Optional
 METADATA_OUTPUT_FILENAME = "metadata.json"
 LEGACY_METADATA_OUTPUT_FILENAME = "metadata_json.json"
 
+# FAIR Data Station: POST /api/isa output (one workbook, ISA-level tabs + Help)
+FAIRDS_METADATA_EXCEL_FILENAME = "metadata_fairds.xlsx"
+
 _NON_METADATA_ARTIFACT_EXTENSIONS = {
     "validation_report": ".txt",
     "processing_log": ".jsonl",

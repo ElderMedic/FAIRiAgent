@@ -16,6 +16,7 @@ This document describes the FAIR Data Station (FAIR-DS) API structure and usage 
 | `GET /api/terms` | GET | Available | Get all metadata terms or filter by label/definition |
 | `GET /api/package` | GET | Available | Get all packages or a specific package by name |
 | `POST /api/upload` | POST | Available | Validates metadata Excel file |
+| `POST /api/isa` | POST | Available | Submit ISA JSON; receive generated metadata Excel (`.xlsx`) |
 
 ---
 
@@ -196,6 +197,39 @@ curl "http://localhost:8083/api/package?name=miappe"
 - Reduces data transfer by ~98% for single package queries
 - Includes `itemCount` for quick reference
 - `metadata` is an array of fields (not grouped by ISA sheet)
+
+---
+
+## POST `/api/isa`
+
+Submits an ISA (Investigation, Study, Assay, …) structure as JSON and returns a **metadata Excel workbook** (binary `.xlsx`). See Swagger: [submitIsaStructure](https://fairds.fairbydesign.nl/swagger-ui/index.html#/FAIR%20Data%20Station%20API/submitIsaStructure).
+
+### Request body
+
+Top-level shape: `{"isa_structure": { ... }}`. The `isa_structure` object may include any of:
+
+- `investigation`, `study`, `observationunit`, `sample`, `assay`
+
+Each block is typically `{"description": string, "fields": [ ... ]}`. Each field follows the API `Field` model (e.g. `field_name`, `value`, optional `evidence`, `confidence`, `origin`, `status`, `package_source`). FAIRiAgent’s workflow JSON uses the same `isa_structure` tree under the root key `isa_structure`; pass that object (or the whole file’s `isa_structure` value) as the inner payload when calling the API.
+
+### Sheets vs metadata packages
+
+- The generated workbook uses **one worksheet per ISA level** that has at least one field, and usually a **`Help`** sheet. Levels correspond to the blocks above (e.g. `investigation`, `study`), not to MIxS/GSC **package names** (`soil`, `water`, `miappe`, …).
+- **Multiple packages** in one dataset are represented **inside those ISA sheets**, e.g. via `package_source` on each field—not as separate tabs per package.
+
+### Example
+
+```bash
+curl -sS -X POST "https://fairds.fairbydesign.nl/api/isa" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" \
+  -d '{"isa_structure":{"study":{"description":"…","fields":[{"field_name":"study title","value":"My study"}]}}}' \
+  -o metadata.xlsx
+```
+
+In Python, use `FAIRDataStationClient.generate_excel_from_isa_structure` in `fairifier.services.fair_data_station`.
+
+After a successful workflow run, the CLI and Web API also write **`metadata_fairds.xlsx`** next to `metadata.json` when FAIR-DS is reachable and `isa_structure` contains at least one field (see `fairifier.services.fairds_excel_export`).
 
 ---
 
