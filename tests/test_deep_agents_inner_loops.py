@@ -1130,7 +1130,7 @@ def test_json_generator_builds_field_specific_source_evidence(tmp_path, monkeypa
     agent = JSONGeneratorAgent()
     monkeypatch.setattr("fairifier.agents.json_generator.config.source_max_search_results", 3)
 
-    context = agent._build_field_source_evidence_context(
+    context, _ = agent._build_field_source_evidence_context(
         {
             "root_dir": str(workspace.root_dir),
             "manifest_path": str(workspace.manifest_path),
@@ -1179,7 +1179,7 @@ def test_json_generator_field_source_evidence_searches_full_tables(tmp_path, mon
     agent = JSONGeneratorAgent()
     monkeypatch.setattr("fairifier.agents.json_generator.config.metadata_max_evidence_snippets_per_field", 2)
 
-    context = agent._build_field_source_evidence_context(
+    context, _ = agent._build_field_source_evidence_context(
         {
             "root_dir": str(workspace.root_dir),
             "manifest_path": str(workspace.manifest_path),
@@ -1197,3 +1197,33 @@ def test_json_generator_field_source_evidence_searches_full_tables(tmp_path, mon
 
     assert "row 1 column organism" in context
     assert "Eisenia fetida" in context
+
+
+def test_json_generator_postcheck_downgrades_high_confidence_without_source_reference():
+    from fairifier.models import MetadataField
+
+    agent = JSONGeneratorAgent()
+    fields = [
+        MetadataField(
+            field_name="sampling site",
+            value="Wadden Sea",
+            evidence="Methods section",
+            confidence=0.92,
+            status="confirmed",
+        ),
+        MetadataField(
+            field_name="organism",
+            value="Eisenia fetida",
+            evidence="source_001:20-34",
+            confidence=0.91,
+            status="confirmed",
+        ),
+    ]
+
+    reviewed = agent._postcheck_source_grounding(fields, {"manifest_path": "/tmp/source_manifest.json"})
+
+    assert reviewed[0].confidence == 0.6
+    assert reviewed[0].status == "provisional"
+    assert "missing source reference" in reviewed[0].evidence
+    assert reviewed[1].confidence == 0.91
+    assert reviewed[1].status == "confirmed"

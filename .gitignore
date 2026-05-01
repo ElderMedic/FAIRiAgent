@@ -280,7 +280,8 @@ evaluation/analysis/output_*/
 evaluation/analysis/comprehensive_output/
 evaluation/analysis/improved_output_*/
 evaluation/run_completeness_check.json
-evaluation/datasets/raw/
+evaluation/datasets/
+!evaluation/datasets/DATASET_README.md
 evaluation/*.log
 
 # Keep evaluation code and configs, but ignore generated data
@@ -292,10 +293,7 @@ evaluation/config/**/*.env
 evaluation/config/**/*.env.*
 !evaluation/config/**/*.template
 !evaluation/config/**/*.example
-!evaluation/datasets/annotated/
-# Local-only ground truth (confidential project data; never push)
-evaluation/datasets/annotated/*.local.json
-!evaluation/datasets/DATASET_README.md
+
 !evaluation/analysis/analyzers/
 !evaluation/analysis/data_loaders/
 !evaluation/analysis/reports/

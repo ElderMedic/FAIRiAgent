@@ -111,6 +111,8 @@ class FAIRifierConfig:
     metadata_max_evidence_snippets_per_field: int = 5
     metadata_max_context_chars_per_field: int = 12000
     metadata_allow_direct_document_fallback: bool = True
+    metadata_source_ref_min_confidence: float = 0.75
+    metadata_source_ref_downgrade_confidence: float = 0.6
     table_full_scan_enabled: bool = True
     table_search_max_rows: int = 5000
     table_search_max_matches: int = 50
@@ -365,6 +367,14 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("FAIRIFIER_METADATA_MAX_CONTEXT_CHARS_PER_FIELD"):
         config_instance.metadata_max_context_chars_per_field = int(
             os.getenv("FAIRIFIER_METADATA_MAX_CONTEXT_CHARS_PER_FIELD")
+        )
+    if os.getenv("FAIRIFIER_METADATA_SOURCE_REF_MIN_CONFIDENCE"):
+        config_instance.metadata_source_ref_min_confidence = float(
+            os.getenv("FAIRIFIER_METADATA_SOURCE_REF_MIN_CONFIDENCE")
+        )
+    if os.getenv("FAIRIFIER_METADATA_SOURCE_REF_DOWNGRADE_CONFIDENCE"):
+        config_instance.metadata_source_ref_downgrade_confidence = float(
+            os.getenv("FAIRIFIER_METADATA_SOURCE_REF_DOWNGRADE_CONFIDENCE")
         )
     if os.getenv("FAIRIFIER_METADATA_ALLOW_DIRECT_DOCUMENT_FALLBACK"):
         v = os.getenv("FAIRIFIER_METADATA_ALLOW_DIRECT_DOCUMENT_FALLBACK", "").strip().lower()

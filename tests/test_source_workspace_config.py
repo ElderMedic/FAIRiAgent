@@ -13,6 +13,8 @@ def test_source_workspace_env_overrides(monkeypatch):
     monkeypatch.setenv("FAIRIFIER_SOURCE_OUTLIER_POLICY", "exclude")
     monkeypatch.setenv("FAIRIFIER_METADATA_CONTEXT_MODE", "evidence_only")
     monkeypatch.setenv("FAIRIFIER_METADATA_MAX_CONTEXT_CHARS_PER_FIELD", "2222")
+    monkeypatch.setenv("FAIRIFIER_METADATA_SOURCE_REF_MIN_CONFIDENCE", "0.81")
+    monkeypatch.setenv("FAIRIFIER_METADATA_SOURCE_REF_DOWNGRADE_CONFIDENCE", "0.55")
     monkeypatch.setenv("FAIRIFIER_TABLE_SEARCH_MAX_ROWS", "3333")
 
     cfg = FAIRifierConfig()
@@ -29,4 +31,6 @@ def test_source_workspace_env_overrides(monkeypatch):
     assert cfg.source_outlier_policy == "exclude"
     assert cfg.metadata_context_mode == "evidence_only"
     assert cfg.metadata_max_context_chars_per_field == 2222
+    assert cfg.metadata_source_ref_min_confidence == 0.81
+    assert cfg.metadata_source_ref_downgrade_confidence == 0.55
     assert cfg.table_search_max_rows == 3333

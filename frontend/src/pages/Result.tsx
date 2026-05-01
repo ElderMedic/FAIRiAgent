@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  DatabaseZap,
   Download,
   FileDown,
   RefreshCw,
@@ -171,6 +172,11 @@ export default function Result() {
 
   const scores = Object.entries(project.confidence_scores || {});
   const summary = Object.entries(project.execution_summary || {});
+  const sourceGrounding = (
+    project.quality_metrics?.source_grounding as
+      | { source_grounded_fields?: number; ungrounded_high_confidence_fields?: number; table_backed_fields?: number }
+      | undefined
+  ) ?? null;
   const recommendedArtifacts = [
     'metadata.json',
     'metadata_fairds.xlsx',
@@ -247,6 +253,59 @@ export default function Result() {
                     );
                   })}
                 </div>
+              </article>
+            )}
+
+            {sourceGrounding && (
+              <article className="page-card" id="source-grounding-card">
+                <div className="page-card__header">
+                  <div>
+                    <p className="page-card__eyebrow">Provenance</p>
+                    <h2 className="page-card__title">Source grounding</h2>
+                    <p className="page-card__body">
+                      How many fields are backed by a traceable reference in the source workspace.
+                      High-confidence fields without a source citation are flagged for review.
+                    </p>
+                  </div>
+                  <DatabaseZap
+                    className="w-6 h-6"
+                    style={{ color: 'var(--color-primary)', opacity: 0.7 }}
+                    aria-hidden="true"
+                  />
+                </div>
+                <div className="result-grounding-grid">
+                  <div className="result-grounding-stat result-grounding-stat--success">
+                    <p className="result-grounding-stat__value">
+                      {sourceGrounding.source_grounded_fields ?? 0}
+                    </p>
+                    <p className="result-grounding-stat__label">Source-grounded fields</p>
+                  </div>
+                  <div className="result-grounding-stat result-grounding-stat--neutral">
+                    <p className="result-grounding-stat__value">
+                      {sourceGrounding.table_backed_fields ?? 0}
+                    </p>
+                    <p className="result-grounding-stat__label">Table-backed fields</p>
+                  </div>
+                  <div
+                    className={`result-grounding-stat ${
+                      (sourceGrounding.ungrounded_high_confidence_fields ?? 0) > 0
+                        ? 'result-grounding-stat--warning'
+                        : 'result-grounding-stat--success'
+                    }`}
+                  >
+                    <p className="result-grounding-stat__value">
+                      {sourceGrounding.ungrounded_high_confidence_fields ?? 0}
+                    </p>
+                    <p className="result-grounding-stat__label">Ungrounded (high-confidence)</p>
+                  </div>
+                </div>
+                {(sourceGrounding.ungrounded_high_confidence_fields ?? 0) > 0 && (
+                  <p className="result-grounding-hint">
+                    ⚠ {sourceGrounding.ungrounded_high_confidence_fields} high-confidence
+                    {sourceGrounding.ungrounded_high_confidence_fields === 1 ? ' field lacks' : ' fields lack'} a
+                    source reference. Review the <strong>validation_report.txt</strong> for field names.
+                  </p>
+                )}
               </article>
             )}
 

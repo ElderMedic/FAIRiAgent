@@ -105,9 +105,18 @@ class WorkflowReportGenerator:
                 "packages_used": metadata_data.get("packages_used", []),
                 "total_fields": metadata_data.get("statistics", {}).get("total_fields", 0),
                 "confirmed_fields": metadata_data.get("statistics", {}).get("confirmed_fields", 0),
-                "provisional_fields": metadata_data.get("statistics", {}).get("provisional_fields", 0)
+                "provisional_fields": metadata_data.get("statistics", {}).get("provisional_fields", 0),
             })
-        
+            source_grounding = metadata_data.get("statistics", {}).get("source_grounding_summary", {})
+            if source_grounding:
+                quality["source_grounding"] = {
+                    "source_grounded_fields": source_grounding.get("source_grounded_fields", 0),
+                    "ungrounded_high_confidence_fields": source_grounding.get(
+                        "ungrounded_high_confidence_fields", 0
+                    ),
+                    "table_backed_fields": source_grounding.get("table_backed_fields", 0),
+                }
+
         return quality
     
     def _analyze_fields(
@@ -382,7 +391,18 @@ class WorkflowReportGenerator:
         lines.append(f"Provisional Fields: {quality.get('provisional_fields', 0)}")
         lines.append(f"Packages Used: {', '.join(quality.get('packages_used', []))}")
         lines.append("")
-        
+
+        # Source grounding
+        sg = quality.get("source_grounding")
+        if sg:
+            lines.append("SOURCE GROUNDING")
+            lines.append("-" * 80)
+            lines.append(f"Source-grounded fields:          {sg.get('source_grounded_fields', 0)}")
+            lines.append(f"Table-backed fields:             {sg.get('table_backed_fields', 0)}")
+            ungrounded = sg.get('ungrounded_high_confidence_fields', 0)
+            flag = "⚠️ " if ungrounded > 0 else "✅ "
+            lines.append(f"Ungrounded high-confidence fields:{flag}{ungrounded}")
+            lines.append("")
         # Field Analysis
         field_analysis = report.get("field_analysis", {})
         if "error" not in field_analysis:

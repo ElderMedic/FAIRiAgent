@@ -40,6 +40,11 @@ When evidence is found, prompts ask the model to cite source references such as
 `source_001:123-145` or `source_002 table samples row 4` in the generated
 metadata evidence field.
 
+After generation, high-confidence metadata fields are checked for these source
+references. If a field is above `FAIRIFIER_METADATA_SOURCE_REF_MIN_CONFIDENCE`
+but lacks a source reference, FAIRiAgent downgrades it to
+`FAIRIFIER_METADATA_SOURCE_REF_DOWNGRADE_CONFIDENCE` and keeps it provisional.
+
 ## Configuration
 
 Use `.env` or shell variables:
@@ -57,6 +62,8 @@ FAIRIFIER_SOURCE_MIN_RELEVANCE_SCORE=0.35
 FAIRIFIER_SOURCE_OUTLIER_POLICY=downweight
 FAIRIFIER_METADATA_CONTEXT_MODE=agentic_search
 FAIRIFIER_METADATA_MAX_CONTEXT_CHARS_PER_FIELD=12000
+FAIRIFIER_METADATA_SOURCE_REF_MIN_CONFIDENCE=0.75
+FAIRIFIER_METADATA_SOURCE_REF_DOWNGRADE_CONFIDENCE=0.6
 FAIRIFIER_TABLE_FULL_SCAN_ENABLED=true
 FAIRIFIER_TABLE_SEARCH_MAX_ROWS=5000
 FAIRIFIER_TABLE_SEARCH_MAX_MATCHES=50

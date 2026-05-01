@@ -6,8 +6,10 @@ Used by the CLI after workflow output and by evaluation.SchemaValidator.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from urllib.parse import urlparse
+
+from fairifier.config import config
 
 # Mandatory field names per ISA sheet (lowercase match against field_name)
 REQUIRED_FIELDS_BY_SHEET: Dict[str, List[str]] = {
@@ -238,6 +240,72 @@ def validate_value_formats(
     return True
 
 
+# Pattern matching source reference citations in evidence strings.
+_SOURCE_REF_PATTERN = re.compile(
+    r"(source_\d+:\d+-\d+|source_\d+\s+table\s+.+?\s+row\s+\d+)",
+    re.IGNORECASE,
+)
+
+
+def _classify_field_grounding(
+    field: Dict[str, Any],
+) -> Tuple[bool, bool]:
+    """Return (has_source_ref, has_table_ref) for a single field dict."""
+    evidence = str(field.get("evidence") or "")
+    has_source = bool(_SOURCE_REF_PATTERN.search(evidence))
+    has_table = bool(
+        re.search(r"source_\d+\s+table\s+.+?\s+row\s+\d+", evidence, re.IGNORECASE)
+    )
+    return has_source, has_table
+
+
+def validate_source_grounding(
+    data: Dict[str, Any], errors: List[str], warnings: List[str]
+) -> Dict[str, int]:
+    """Count source-grounded, ungrounded, and table-backed fields.
+
+    Returns a summary dict with:
+      - source_grounded_fields
+      - ungrounded_high_confidence_fields
+      - table_backed_fields
+
+    Emits a warning (not error) for each high-confidence field missing a source
+    reference so that reports surface provenance gaps without failing the check.
+    """
+    isa_structure = data.get("isa_structure", {})
+    grounded = 0
+    ungrounded_high = 0
+    table_backed = 0
+
+    for sheet_name, sheet_data in isa_structure.items():
+        if sheet_name == "description":
+            continue
+        for field in sheet_data.get("fields", []):
+            has_source, has_table = _classify_field_grounding(field)
+            if has_source:
+                grounded += 1
+            if has_table:
+                table_backed += 1
+            confidence = field.get("confidence")
+            if (
+                not has_source
+                and isinstance(confidence, (int, float))
+                and confidence >= float(config.metadata_source_ref_min_confidence)
+            ):
+                ungrounded_high += 1
+                field_name = field.get("field_name", "unknown")
+                warnings.append(
+                    f"High-confidence field '{field_name}' in {sheet_name} "
+                    f"(confidence={confidence:.2f}) lacks a source reference"
+                )
+
+    return {
+        "source_grounded_fields": grounded,
+        "ungrounded_high_confidence_fields": ungrounded_high,
+        "table_backed_fields": table_backed,
+    }
+
+
 def check_metadata_json_output(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Run all FAIR / ISA format checks on a parsed metadata_json object.
@@ -263,6 +331,9 @@ def check_metadata_json_output(data: Dict[str, Any]) -> Dict[str, Any]:
     format_valid = validate_value_formats(data, errors, warnings)
     validations["value_formats"] = format_valid
 
+    source_grounding = validate_source_grounding(data, errors, warnings)
+    validations["source_grounding"] = source_grounding.get("ungrounded_high_confidence_fields", 0) == 0
+
     total_checks = len(validations)
     passed_checks = sum(1 for v in validations.values() if v)
     compliance_rate = passed_checks / total_checks if total_checks > 0 else 0.0
@@ -281,4 +352,5 @@ def check_metadata_json_output(data: Dict[str, Any]) -> Dict[str, Any]:
             "warnings": len(warnings),
             "status": "PASS" if is_valid else "FAIL",
         },
+        "source_grounding": source_grounding,
     }

@@ -187,6 +187,33 @@ def _source_entries(workspace: SourceWorkspace) -> List[Dict[str, Any]]:
     ]
 
 
+_ROLE_PRIORITY: Dict[str, int] = {
+    "main_manuscript": 0,
+    "protocol": 1,
+    "table": 2,
+    "metadata_table": 3,
+    "supplement": 4,
+    "unknown": 5,
+}
+
+
+def source_role_priority(role: str) -> int:
+    """Return a sort-priority for a source role (lower = more authoritative)."""
+    return _ROLE_PRIORITY.get(role, 5)
+
+
+def rank_source_entries(workspace: SourceWorkspace) -> List[Dict[str, Any]]:
+    """Return manifest entries sorted by role priority then relevance score."""
+    entries = _source_entries(workspace)
+    return sorted(
+        entries,
+        key=lambda e: (
+            source_role_priority(e.get("source_role", "unknown")),
+            -(e.get("relevance_score") or 0.0),
+        ),
+    )
+
+
 def grep_sources(
     workspace: SourceWorkspace,
     query: str,
@@ -204,7 +231,7 @@ def grep_sources(
     pattern = re.compile(re.escape(query), re.IGNORECASE)
     results: List[Dict[str, Any]] = []
 
-    for entry in _source_entries(workspace):
+    for entry in rank_source_entries(workspace):
         source_id = str(entry["source_id"])
         if allowed and source_id not in allowed:
             continue

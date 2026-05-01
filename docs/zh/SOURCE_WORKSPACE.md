@@ -34,6 +34,10 @@ value 不在 table preview 里，也可以被送入 LLM 的字段上下文。
 找到 evidence 时，prompt 会要求模型在 metadata evidence 字段里优先引用
 `source_001:123-145` 或 `source_002 table samples row 4` 这类 source reference。
 
+生成后，系统会检查高置信度 metadata field 是否包含这类 source reference。如果字段高于
+`FAIRIFIER_METADATA_SOURCE_REF_MIN_CONFIDENCE` 但没有 source reference，FAIRiAgent
+会把它降到 `FAIRIFIER_METADATA_SOURCE_REF_DOWNGRADE_CONFIDENCE`，并保持 provisional。
+
 ## 配置
 
 可以通过 `.env` 或 shell 环境变量配置：
@@ -51,6 +55,8 @@ FAIRIFIER_SOURCE_MIN_RELEVANCE_SCORE=0.35
 FAIRIFIER_SOURCE_OUTLIER_POLICY=downweight
 FAIRIFIER_METADATA_CONTEXT_MODE=agentic_search
 FAIRIFIER_METADATA_MAX_CONTEXT_CHARS_PER_FIELD=12000
+FAIRIFIER_METADATA_SOURCE_REF_MIN_CONFIDENCE=0.75
+FAIRIFIER_METADATA_SOURCE_REF_DOWNGRADE_CONFIDENCE=0.6
 FAIRIFIER_TABLE_FULL_SCAN_ENABLED=true
 FAIRIFIER_TABLE_SEARCH_MAX_ROWS=5000
 FAIRIFIER_TABLE_SEARCH_MAX_MATCHES=50

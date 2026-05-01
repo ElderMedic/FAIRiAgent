@@ -1,7 +1,8 @@
 """JSON metadata generator for FAIR-DS compatible output."""
 
 import json
-from typing import Dict, Any, List, Optional
+from dataclasses import dataclass, field as dc_field
+from typing import Dict, Any, List, Optional, Tuple
 import re
 from datetime import datetime
 from pathlib import Path
@@ -14,10 +15,45 @@ from ..services.evidence_packets import build_evidence_context
 from ..services.source_workspace import (
     grep_sources,
     load_source_workspace,
+    rank_source_entries,
     search_table,
+    source_role_priority,
 )
 from ..utils.llm_helper import get_llm_helper
 from ..services.fairds_api_parser import FAIRDSAPIParser
+
+
+@dataclass
+class FieldCandidate:
+    """A single source-backed candidate value for a metadata field.
+
+    Attributes:
+        field_name:     Lowercase field name as used in ISA schema.
+        value:          The extracted value string.
+        source_id:      Source workspace ID (e.g. "source_001").
+        source_role:    Role as inferred by _infer_role (e.g. "main_manuscript").
+        relevance_score: Float in [0, 1]; higher = more relevant match.
+        evidence:       Structured evidence reference string.
+        confidence:     LLM-assigned confidence (0–1); 0 when constructed from search.
+        char_start:     Optional character offset in the source file.
+        char_end:       Optional character offset in the source file.
+    """
+
+    field_name: str
+    value: str
+    source_id: str
+    source_role: str
+    relevance_score: float
+    evidence: str
+    confidence: float = 0.0
+    char_start: Optional[int] = None
+    char_end: Optional[int] = None
+
+    @property
+    def sort_key(self) -> Tuple[int, float, float]:
+        """Primary sort: (role_priority ASC, -relevance DESC, -confidence DESC)."""
+        return (source_role_priority(self.source_role), -self.relevance_score, -self.confidence)
+
 
 
 class JSONGeneratorAgent(BaseAgent):
@@ -42,10 +78,13 @@ class JSONGeneratorAgent(BaseAgent):
             workspace_context = self._build_source_workspace_context(
                 state.get("source_workspace", {}) or {}
             )
-            field_evidence_context = self._build_field_source_evidence_context(
+            field_evidence_context, all_candidates = self._build_field_source_evidence_context(
                 state.get("source_workspace", {}) or {},
                 knowledge_items,
             )
+            # Store candidates in state so _generate_with_llm or postcheck can access them
+            state["_field_candidates"] = all_candidates
+
             context_parts = [
                 part
                 for part in (evidence_context, workspace_context, field_evidence_context)
@@ -94,6 +133,8 @@ class JSONGeneratorAgent(BaseAgent):
                 planner_instruction,
                 prior_memory_context=prior_memory_context or None,
                 selected_packages=state.get("selected_packages"),
+                source_workspace=state.get("source_workspace", {}) or {},
+                field_candidates=all_candidates,
             )
             metadata_fields = self._ensure_mandatory_fields_present(
                 metadata_fields=metadata_fields,
@@ -189,16 +230,30 @@ class JSONGeneratorAgent(BaseAgent):
         self,
         source_workspace: Dict[str, Any],
         knowledge_items: List[Dict[str, Any]],
-    ) -> str:
-        """Search preserved sources for per-field candidate evidence."""
+    ) -> Tuple[str, Dict[str, List[FieldCandidate]]]:
+        """Search preserved sources for per-field candidate evidence.
+
+        Improvements over the initial implementation:
+        - Ranks text/table snippets by *source role* and *relevance score*.
+        - Prefers exact field-name / table-column matches over loose token hits.
+        - De-duplicates overlapping text spans from the same source.
+        - Formats evidence with structured source coordinates for traceability.
+        """
         if not (config.metadata_field_search_enabled and source_workspace and knowledge_items):
-            return ""
+            return "", {}
         try:
             workspace = load_source_workspace(source_workspace)
         except (KeyError, OSError, json.JSONDecodeError):
-            return ""
+            return "", {}
 
-        max_fields = max(1, int(config.metadata_max_evidence_snippets_per_field))
+        # Build a lookup for source role and relevance from the manifest.
+        source_meta: Dict[str, Dict[str, Any]] = {}
+        for entry in workspace.manifest.get("sources", []):
+            sid = str(entry.get("source_id", ""))
+            if sid:
+                source_meta[sid] = entry
+
+        max_snippets = max(1, int(config.metadata_max_evidence_snippets_per_field))
         budget = max(1, int(config.metadata_max_context_chars_per_field))
         lines = [
             "Field-specific source evidence:",
@@ -206,14 +261,19 @@ class JSONGeneratorAgent(BaseAgent):
         ]
         total = sum(len(line) for line in lines)
 
+        all_candidates: Dict[str, List[FieldCandidate]] = {}
+
         for field in knowledge_items:
             field_name = str(field.get("name") or field.get("field_name") or "").strip()
             description = str(field.get("description") or "").strip()
             if not field_name:
                 continue
             queries = self._field_search_queries(field_name, description)
-            snippets: List[str] = []
-            seen = set()
+            field_name_lower = field_name.lower()
+
+            # -- Collect raw text matches --------------------------------
+            raw_text_matches: List[Dict[str, Any]] = []
+            seen_text: set = set()
             for query in queries:
                 for match in grep_sources(
                     workspace,
@@ -222,19 +282,19 @@ class JSONGeneratorAgent(BaseAgent):
                     max_results=config.source_max_search_results,
                 ):
                     marker = (match.get("source_id"), match.get("start"), match.get("end"))
-                    if marker in seen:
+                    if marker in seen_text:
                         continue
-                    seen.add(marker)
-                    excerpt = " ".join(str(match.get("excerpt") or "").split())
-                    snippets.append(
-                        f"- {match.get('source_id')}:{match.get('start')}-{match.get('end')} "
-                        f"({match.get('source_path')}): {excerpt}"
-                    )
-                    if len(snippets) >= max_fields:
-                        break
-                if len(snippets) >= max_fields:
-                    break
-            if config.table_full_scan_enabled and len(snippets) < max_fields:
+                    seen_text.add(marker)
+                    match["_query"] = query
+                    raw_text_matches.append(match)
+
+            # De-duplicate overlapping text spans from the same source.
+            raw_text_matches = self._dedup_overlapping_text_spans(raw_text_matches)
+
+            # -- Collect raw table matches --------------------------------
+            raw_table_matches: List[Dict[str, Any]] = []
+            seen_table_rows: set = set()
+            if config.table_full_scan_enabled:
                 for query in queries:
                     for match in search_table(
                         workspace,
@@ -242,17 +302,29 @@ class JSONGeneratorAgent(BaseAgent):
                         max_rows=config.table_search_max_rows,
                         max_matches=config.table_search_max_matches,
                     ):
-                        row = match.get("row") or {}
-                        snippets.append(
-                            f"- {match.get('source_id')} table {match.get('table')} "
-                            f"row {match.get('row_index')} column {match.get('column')}: {row}"
-                        )
-                        if len(snippets) >= max_fields:
-                            break
-                    if len(snippets) >= max_fields:
-                        break
-            if not snippets:
+                        row_key = (match.get("source_id"), match.get("table"), match.get("row_index"))
+                        if row_key in seen_table_rows:
+                            continue
+                        seen_table_rows.add(row_key)
+                        match["_query"] = query
+                        raw_table_matches.append(match)
+
+            # -- Rank & merge ------------------------------------------
+            ranked_snippets = self._rank_field_snippets(
+                field_name_lower, raw_text_matches, raw_table_matches, source_meta
+            )
+            
+            # -- Collect candidates ------------------------------------
+            candidates = self._collect_field_candidates(
+                field_name_lower, raw_text_matches, raw_table_matches, source_meta
+            )
+            if candidates:
+                all_candidates[field_name_lower] = candidates
+
+            if not ranked_snippets:
                 continue
+
+            snippets = ranked_snippets[:max_snippets]
             block = [f"\nField: {field_name}", *snippets]
             block_text = "\n".join(block)
             if total + len(block_text) > budget:
@@ -261,7 +333,171 @@ class JSONGeneratorAgent(BaseAgent):
             lines.append(block_text)
             total += len(block_text)
 
-        return "\n".join(lines) if len(lines) > 2 else ""
+        return "\n".join(lines) if len(lines) > 2 else "", all_candidates
+
+    # -- helpers for _build_field_source_evidence_context ----------------
+
+    def _collect_field_candidates(
+        self,
+        field_name: str,
+        text_matches: List[Dict[str, Any]],
+        table_matches: List[Dict[str, Any]],
+        source_meta: Dict[str, Dict[str, Any]],
+    ) -> List[FieldCandidate]:
+        """Convert raw matches into FieldCandidate objects."""
+        candidates = []
+        for m in text_matches:
+            sid = str(m.get("source_id", ""))
+            meta = source_meta.get(sid, {})
+            role = meta.get("source_role", "unknown")
+            relevance = meta.get("relevance_score") or 0.0
+            excerpt = " ".join(str(m.get("excerpt") or "").split())
+            evidence = f"{sid}:{m.get('start')}-{m.get('end')} [role={role}] ({m.get('source_path')}): {excerpt}"
+            
+            candidates.append(FieldCandidate(
+                field_name=field_name,
+                value=excerpt,
+                source_id=sid,
+                source_role=role,
+                relevance_score=relevance,
+                evidence=evidence,
+                confidence=0.0,  # LLM extracted is 0.0 before reconciliation
+                char_start=m.get("start"),
+                char_end=m.get("end"),
+            ))
+
+        for m in table_matches:
+            sid = str(m.get("source_id", ""))
+            meta = source_meta.get(sid, {})
+            role = meta.get("source_role", "unknown")
+            relevance = meta.get("relevance_score") or 0.0
+            row = m.get("row") or {}
+            value = str(row)
+            evidence = f"{sid} table {m.get('table')} row {m.get('row_index')} column {m.get('column')} [role={role}]: {row}"
+            
+            candidates.append(FieldCandidate(
+                field_name=field_name,
+                value=value,
+                source_id=sid,
+                source_role=role,
+                relevance_score=relevance,
+                evidence=evidence,
+                confidence=0.0,
+            ))
+            
+        # Deduplicate candidates based on evidence text
+        seen = set()
+        unique_candidates = []
+        for c in sorted(candidates, key=lambda x: x.sort_key):
+            if c.evidence not in seen:
+                seen.add(c.evidence)
+                unique_candidates.append(c)
+        return unique_candidates
+
+    def _reconcile_candidates(
+        self,
+        candidates: List[FieldCandidate],
+    ) -> Tuple[Optional[FieldCandidate], List[FieldCandidate]]:
+        """Select the primary candidate and return the rest as secondary evidence.
+        
+        Assumes candidates are already sorted by `sort_key` (best first).
+        """
+        if not candidates:
+            return None, []
+            
+        primary = candidates[0]
+        secondary = candidates[1:]
+        
+        # Check for conflicts (different values for same field with high relevance)
+        # This is a placeholder for future conflict detection logic.
+        
+        return primary, secondary
+
+    @staticmethod
+    def _dedup_overlapping_text_spans(
+        matches: List[Dict[str, Any]],
+        overlap_threshold: float = 0.5,
+    ) -> List[Dict[str, Any]]:
+        """Remove text spans that overlap by >= *overlap_threshold* character range."""
+        kept: List[Dict[str, Any]] = []
+        for match in matches:
+            sid = match.get("source_id")
+            start = match.get("start", 0)
+            end = match.get("end", 0)
+            span_len = max(1, end - start)
+            is_dup = False
+            for existing in kept:
+                if existing.get("source_id") != sid:
+                    continue
+                e_start = existing.get("start", 0)
+                e_end = existing.get("end", 0)
+                overlap = max(0, min(end, e_end) - max(start, e_start))
+                if overlap / span_len >= overlap_threshold:
+                    is_dup = True
+                    break
+            if not is_dup:
+                kept.append(match)
+        return kept
+
+    def _rank_field_snippets(
+        self,
+        field_name_lower: str,
+        text_matches: List[Dict[str, Any]],
+        table_matches: List[Dict[str, Any]],
+        source_meta: Dict[str, Dict[str, Any]],
+    ) -> List[str]:
+        """Rank and format text + table matches into evidence snippet strings.
+
+        Ranking key (ascending is better):
+        1. Source role priority (main_manuscript < supplement < unknown).
+        2. Exact field-name match in query vs. loose token match.
+        3. Relevance score (higher is better, negated for ascending sort).
+        4. Match position (earlier in text is better).
+        """
+
+        def _text_sort_key(m: Dict[str, Any]):
+            sid = str(m.get("source_id", ""))
+            meta = source_meta.get(sid, {})
+            role = source_role_priority(meta.get("source_role", "unknown"))
+            relevance = -(meta.get("relevance_score") or 0.0)
+            query = str(m.get("_query", "")).lower()
+            exact_match = 0 if query == field_name_lower else 1
+            position = m.get("start", 0)
+            return (role, exact_match, relevance, position)
+
+        def _table_sort_key(m: Dict[str, Any]):
+            sid = str(m.get("source_id", ""))
+            meta = source_meta.get(sid, {})
+            role = source_role_priority(meta.get("source_role", "unknown"))
+            relevance = -(meta.get("relevance_score") or 0.0)
+            column = str(m.get("column", "")).lower()
+            exact_col = 0 if field_name_lower in column or column in field_name_lower else 1
+            return (role, exact_col, relevance, m.get("row_index", 0))
+
+        sorted_text = sorted(text_matches, key=_text_sort_key)
+        sorted_table = sorted(table_matches, key=_table_sort_key)
+
+        snippets: List[str] = []
+        for m in sorted_text:
+            sid = m.get("source_id")
+            meta = source_meta.get(str(sid), {})
+            role = meta.get("source_role", "unknown")
+            excerpt = " ".join(str(m.get("excerpt") or "").split())
+            snippets.append(
+                f"- {sid}:{m.get('start')}-{m.get('end')} "
+                f"[role={role}] ({m.get('source_path')}): {excerpt}"
+            )
+        for m in sorted_table:
+            sid = m.get("source_id")
+            meta = source_meta.get(str(sid), {})
+            role = meta.get("source_role", "unknown")
+            row = m.get("row") or {}
+            snippets.append(
+                f"- {sid} table {m.get('table')} "
+                f"row {m.get('row_index')} column {m.get('column')} "
+                f"[role={role}]: {row}"
+            )
+        return snippets
 
     def _field_search_queries(self, field_name: str, description: str) -> List[str]:
         """Build conservative literal search queries from a FAIR-DS field."""
@@ -312,6 +548,8 @@ class JSONGeneratorAgent(BaseAgent):
         planner_instruction: Optional[str] = None,
         prior_memory_context: Optional[str] = None,
         selected_packages: Optional[List[str]] = None,
+        source_workspace: Optional[Dict[str, Any]] = None,
+        field_candidates: Optional[Dict[str, List[FieldCandidate]]] = None,
     ) -> List[MetadataField]:
         """
         Generate metadata fields with LLM-based value extraction.
@@ -446,6 +684,55 @@ class JSONGeneratorAgent(BaseAgent):
             )
             fields.append(field)
         
+        return self._postcheck_source_grounding(fields, source_workspace or {}, field_candidates)
+
+    def _postcheck_source_grounding(
+        self,
+        fields: List[MetadataField],
+        source_workspace: Dict[str, Any],
+        field_candidates: Optional[Dict[str, List[FieldCandidate]]] = None,
+    ) -> List[MetadataField]:
+        """Downgrade high-confidence fields that lack source references."""
+        if not (config.metadata_field_search_enabled and source_workspace):
+            return fields
+        source_ref_pattern = re.compile(
+            r"(source_\d+:\d+-\d+|source_\d+\s+table\s+.+?\s+row\s+\d+)",
+            re.IGNORECASE,
+        )
+        min_confidence = float(config.metadata_source_ref_min_confidence)
+        downgrade_confidence = float(config.metadata_source_ref_downgrade_confidence)
+        for field in fields:
+            evidence = str(field.evidence or "")
+            
+            # Phase C: Candidate reconciliation for provenance
+            if field_candidates:
+                candidates = field_candidates.get(field.field_name.lower(), [])
+                if candidates:
+                    # The LLM extracted this field, so we assign the LLM's confidence to candidates
+                    for c in candidates:
+                        c.confidence = field.confidence
+                    # Reconcile
+                    primary, secondary = self._reconcile_candidates(
+                        sorted(candidates, key=lambda x: x.sort_key)
+                    )
+                    if primary and not source_ref_pattern.search(evidence):
+                        # Enrich evidence if LLM missed it but we have a structured candidate
+                        field.evidence = primary.evidence if not evidence else f"{evidence}; {primary.evidence}"
+                        evidence = field.evidence
+                    
+                    # Store provenance in metadata
+                    if isinstance(field.metadata, dict):
+                        if primary:
+                            field.metadata["primary_provenance"] = primary.evidence
+                        if secondary:
+                            field.metadata["secondary_provenance"] = [s.evidence for s in secondary]
+
+            if field.confidence < min_confidence or source_ref_pattern.search(evidence):
+                continue
+            field.confidence = min(field.confidence, downgrade_confidence)
+            field.status = "provisional"
+            suffix = "source grounding check: missing source reference"
+            field.evidence = f"{evidence}; {suffix}" if evidence else suffix
         return fields
     
     def _field_to_dict(self, field: MetadataField) -> Dict[str, Any]:
@@ -633,6 +920,7 @@ class JSONGeneratorAgent(BaseAgent):
                 "confirmed_fields": sum(1 for f in fields if f.status == "confirmed"),
                 "provisional_fields": sum(1 for f in fields if f.status == "provisional"),
                 "inferred_extension_fields": len(state.get("inferred_metadata_extensions", [])),
+                "source_grounding_summary": self._compute_source_grounding_summary(fields),
             },
             
             # Confidence breakdown
@@ -1264,6 +1552,34 @@ class JSONGeneratorAgent(BaseAgent):
         
         return grouped
     
+    @staticmethod
+    def _compute_source_grounding_summary(fields: List[MetadataField]) -> Dict[str, int]:
+        """Compute source-grounding counters for the output statistics block."""
+        source_ref_pattern = re.compile(
+            r"(source_\d+:\d+-\d+|source_\d+\s+table\s+.+?\s+row\s+\d+)",
+            re.IGNORECASE,
+        )
+        grounded = 0
+        ungrounded_high = 0
+        table_backed = 0
+        for field in fields:
+            evidence = str(field.evidence or "")
+            has_source = bool(source_ref_pattern.search(evidence))
+            has_table = bool(
+                re.search(r"source_\d+\s+table\s+.+?\s+row\s+\d+", evidence, re.IGNORECASE)
+            )
+            if has_source:
+                grounded += 1
+            if has_table:
+                table_backed += 1
+            if not has_source and field.confidence >= float(config.metadata_source_ref_min_confidence):
+                ungrounded_high += 1
+        return {
+            "source_grounded_fields": grounded,
+            "ungrounded_high_confidence_fields": ungrounded_high,
+            "table_backed_fields": table_backed,
+        }
+
     def _calculate_confidence(self, fields: List[MetadataField]) -> float:
         """Calculate overall confidence for JSON generation."""
         if not fields:
