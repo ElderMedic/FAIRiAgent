@@ -2130,6 +2130,20 @@ class FAIRifierLangGraphApp:
             ".csv", ".tsv", ".xlsx", ".xls", ".json",
         }
 
+    def _is_generated_bundle_artifact(self, root_dir: "Path", path: "Path") -> bool:
+        """Skip derived directories produced by FAIRifier or MinerU during recursive bundle scans."""
+        try:
+            rel_parts = path.relative_to(root_dir).parts
+        except ValueError:
+            rel_parts = path.parts
+        lowered_parts = [part.lower() for part in rel_parts[:-1]]
+        for part in lowered_parts:
+            if part.startswith("mineru_"):
+                return True
+            if part in {"source_workspace", "output", "__pycache__"}:
+                return True
+        return False
+
     def _prioritize_bundle_files(self, files: List["Path"]) -> List["Path"]:
         """Prefer likely research sources before applying the file-count cap."""
         if not config.source_role_detection_enabled:
@@ -2171,7 +2185,9 @@ class FAIRifierLangGraphApp:
         )
         all_files = sorted(
             p for p in root_dir.rglob("*")
-            if p.is_file() and not any(part.startswith(".") for part in p.parts)
+            if p.is_file()
+            and not any(part.startswith(".") for part in p.parts)
+            and not self._is_generated_bundle_artifact(root_dir, p)
         )
         supported_files = self._prioritize_bundle_files(
             [p for p in all_files if self._is_supported_bundle_file(p)]
@@ -2337,7 +2353,8 @@ class FAIRifierLangGraphApp:
         tables: List[Dict[str, Any]] = []
         for sheet_name in workbook.sheet_names:
             df = pd.read_excel(path, sheet_name=sheet_name)
-            rows = df.fillna("").to_dict(orient="records")
+            # Cast to string to prevent JSON serialization errors with Timestamp objects
+            rows = df.fillna("").astype(str).to_dict(orient="records")
             tables.append({"name": str(sheet_name), "rows": rows})
         return tables
     

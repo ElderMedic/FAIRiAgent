@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -64,6 +65,29 @@ def _inventory_excerpt(content: str, max_chars: int) -> str:
     return text[: max(0, max_chars - 24)].rstrip() + "\n[... preview truncated ...]"
 
 
+def _json_safe_value(value: Any) -> Any:
+    """Normalize common pandas/numpy scalars into JSON-safe values."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(item) for item in value]
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    if hasattr(value, "item"):
+        try:
+            return _json_safe_value(value.item())
+        except Exception:
+            pass
+    return str(value)
+
+
 def build_source_workspace(
     records: Iterable[SourceRecord],
     output_dir: Path,
@@ -100,7 +124,7 @@ def build_source_workspace(
             table_path = tables_dir / f"{source_id}_{table_index:02d}.jsonl"
             with table_path.open("w", encoding="utf-8") as fh:
                 for row in rows:
-                    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    fh.write(json.dumps(_json_safe_value(row), ensure_ascii=False) + "\n")
             table_key = f"{source_id}:{table_name}"
             table_paths[table_key] = table_path
             table_refs.append(

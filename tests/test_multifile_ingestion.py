@@ -1,6 +1,8 @@
 import zipfile
 from pathlib import Path
 
+import pandas as pd
+
 from fairifier.config import config
 from fairifier.graph.langgraph_app import FAIRifierLangGraphApp
 
@@ -205,3 +207,59 @@ def test_read_directory_bundle_records_failed_sources(tmp_path: Path, monkeypatc
     assert info["truncated_by_limit"] is False
     assert len(info["failed_sources"]) == 1
     assert info["failed_sources"][0]["path"] == "99_bad.pdf"
+
+
+def test_read_directory_bundle_ignores_existing_mineru_artifacts(tmp_path: Path, monkeypatch):
+    app = _make_app_without_init()
+    monkeypatch.setattr(config, "multi_file_max_inputs", 8)
+
+    (tmp_path / "earthworm_4n_paper_bioRxiv.pdf").write_text("root pdf placeholder", encoding="utf-8")
+    mineru_dir = tmp_path / "mineru_earthworm_4n_paper_bioRxiv" / "earthworm_4n_paper_bioRxiv" / "vlm"
+    mineru_dir.mkdir(parents=True)
+    (mineru_dir / "earthworm_4n_paper_bioRxiv.md").write_text("# Converted\n", encoding="utf-8")
+    (mineru_dir / "earthworm_4n_paper_bioRxiv_layout.pdf").write_text("layout pdf", encoding="utf-8")
+    (mineru_dir / "earthworm_4n_paper_bioRxiv_origin.pdf").write_text("origin pdf", encoding="utf-8")
+
+    seen_paths = []
+
+    def fake_read_single(path: str, output_dir=None):
+        seen_paths.append(Path(path).name)
+        return f"content for {Path(path).name}", {"method": "direct_read"}
+
+    monkeypatch.setattr(app, "_read_single_document_content", fake_read_single)
+
+    text, info = app._read_multi_file_bundle(
+        root_dir=tmp_path,
+        output_dir=None,
+        source_method="directory_bundle",
+    )
+
+    assert "earthworm_4n_paper_bioRxiv.pdf" in text
+    assert "earthworm_4n_paper_bioRxiv_layout.pdf" not in text
+    assert "earthworm_4n_paper_bioRxiv_origin.pdf" not in text
+    assert seen_paths == ["earthworm_4n_paper_bioRxiv.pdf"]
+    assert info["files_discovered_supported"] == 1
+
+
+def test_read_tabular_tables_normalizes_timestamp_values(tmp_path: Path):
+    app = _make_app_without_init()
+    output_dir = tmp_path / "out"
+    xlsx_path = tmp_path / "samples.xlsx"
+
+    df = pd.DataFrame(
+        [
+            {
+                "sample_id": "S1",
+                "collection_time": pd.Timestamp("2024-01-02T03:04:05"),
+            }
+        ]
+    )
+    df.to_excel(xlsx_path, index=False)
+
+    _, info = app._read_document_content(str(xlsx_path), output_dir=str(output_dir))
+
+    workspace = info["source_workspace"]
+    table_path = Path(next(iter(workspace["table_paths"].values())))
+    serialized = table_path.read_text(encoding="utf-8")
+
+    assert "2024-01-02T03:04:05" in serialized

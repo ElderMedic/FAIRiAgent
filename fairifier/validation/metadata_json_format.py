@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Tuple
 from urllib.parse import urlparse
 
 from fairifier.config import config
+from fairifier.utils.grounding import SOURCE_REF_PATTERN, SOURCE_TABLE_PATTERN
 
 # Mandatory field names per ISA sheet (lowercase match against field_name)
 REQUIRED_FIELDS_BY_SHEET: Dict[str, List[str]] = {
@@ -240,11 +241,8 @@ def validate_value_formats(
     return True
 
 
-# Pattern matching source reference citations in evidence strings.
-_SOURCE_REF_PATTERN = re.compile(
-    r"(source_\d+:\d+-\d+|source_\d+\s+table\s+.+?\s+row\s+\d+)",
-    re.IGNORECASE,
-)
+# Canonical source-reference patterns are defined in fairifier.utils.grounding.
+# Imported as SOURCE_REF_PATTERN and SOURCE_TABLE_PATTERN above.
 
 
 def _classify_field_grounding(
@@ -252,10 +250,8 @@ def _classify_field_grounding(
 ) -> Tuple[bool, bool]:
     """Return (has_source_ref, has_table_ref) for a single field dict."""
     evidence = str(field.get("evidence") or "")
-    has_source = bool(_SOURCE_REF_PATTERN.search(evidence))
-    has_table = bool(
-        re.search(r"source_\d+\s+table\s+.+?\s+row\s+\d+", evidence, re.IGNORECASE)
-    )
+    has_source = bool(SOURCE_REF_PATTERN.search(evidence))
+    has_table = bool(SOURCE_TABLE_PATTERN.search(evidence))
     return has_source, has_table
 
 

@@ -21,6 +21,7 @@ from ..services.source_workspace import (
 )
 from ..utils.llm_helper import get_llm_helper
 from ..services.fairds_api_parser import FAIRDSAPIParser
+from ..utils.grounding import SOURCE_REF_PATTERN, SOURCE_TABLE_PATTERN
 
 
 @dataclass
@@ -48,6 +49,7 @@ class FieldCandidate:
     confidence: float = 0.0
     char_start: Optional[int] = None
     char_end: Optional[int] = None
+    normalized_value: Optional[str] = None
 
     @property
     def sort_key(self) -> Tuple[int, float, float]:
@@ -84,6 +86,29 @@ class JSONGeneratorAgent(BaseAgent):
             )
             # Store candidates in state so _generate_with_llm or postcheck can access them
             state["_field_candidates"] = all_candidates
+
+            # ── START UPSTREAM RECONCILIATION ──
+            import asyncio
+            # Run normalization concurrently for all fields if we have candidates
+            if all_candidates:
+                await self._normalize_candidates_with_llm(all_candidates)
+            pre_reconciled = self._upstream_reconcile_candidates(all_candidates)
+            state["_field_candidates"] = pre_reconciled
+            
+            # Inject reconciled values into context to guide LLM
+            if pre_reconciled:
+                reconciled_lines = [
+                    "\nPre-reconciled Source Fields (High Confidence):", 
+                    "Use these exact values for the corresponding fields as they represent cross-source consensus:"
+                ]
+                added = False
+                for fname, cands in pre_reconciled.items():
+                    if cands and getattr(cands[0], "normalized_value", None):
+                        reconciled_lines.append(f"- {fname}: {cands[0].normalized_value}")
+                        added = True
+                if added:
+                    field_evidence_context += "\n" + "\n".join(reconciled_lines)
+            # ── END UPSTREAM RECONCILIATION ──
 
             context_parts = [
                 part
@@ -394,6 +419,120 @@ class JSONGeneratorAgent(BaseAgent):
                 unique_candidates.append(c)
         return unique_candidates
 
+    async def _normalize_candidates_with_llm(self, all_candidates: Dict[str, List[FieldCandidate]]) -> None:
+        """Batch-normalize candidate values using the LLM."""
+        if not all_candidates:
+            return
+            
+        candidate_map = {}
+        idx = 0
+        prompt_parts = [
+            "Extract the exact, concise, normalized field value from the following evidence snippets or table rows.",
+            "Do not include surrounding context, explanation, or markdown formatting.",
+            "If the evidence does not clearly contain a value for the field, return an empty string.",
+            "Return a JSON object mapping the Candidate ID to the extracted normalized value string.",
+            ""
+        ]
+        
+        for field_name, candidates in all_candidates.items():
+            for c in candidates:
+                cid = f"c_{idx}"
+                candidate_map[cid] = c
+                # Cap the evidence length to avoid huge prompts
+                evidence_text = c.evidence[:1500] if c.evidence else ""
+                prompt_parts.append(f"Candidate ID: {cid}\\nField Name: {field_name}\\nEvidence: {evidence_text}\\n")
+                idx += 1
+                
+        prompt = "\\n".join(prompt_parts)
+        
+        try:
+            from langchain_core.messages import SystemMessage, HumanMessage
+            from fairifier.utils.llm_helper import _parse_json_with_fallback
+            
+            messages = [
+                SystemMessage(content="You are a data extraction assistant. Return only the requested JSON object mapping Candidate IDs to their extracted normalized string values."),
+                HumanMessage(content=prompt)
+            ]
+            
+            result = await self.llm_helper._call_llm(messages, "Candidate Normalization")
+            content = result.content if hasattr(result, "content") else str(result)
+            
+            parsed = _parse_json_with_fallback(content)
+            if parsed and isinstance(parsed, dict):
+                for cid, normalized in parsed.items():
+                    if cid in candidate_map and normalized:
+                        val_str = str(normalized).strip()
+                        if val_str:
+                            candidate_map[cid].normalized_value = val_str
+                            
+        except Exception as e:
+            self.log_execution({}, f"Failed to normalize candidates with LLM: {e}", "warning")
+
+    def _upstream_reconcile_candidates(self, all_candidates: Dict[str, List[FieldCandidate]]) -> Dict[str, List[FieldCandidate]]:
+        """
+        Group candidates by normalized value, score their consensus, and determine the primary candidate.
+        Returns a dictionary of reconciled candidates for each field.
+        """
+        reconciled = {}
+        for field_name, candidates in all_candidates.items():
+            if not candidates:
+                continue
+                
+            # Group by normalized value
+            value_groups = {}
+            for c in candidates:
+                # Fallback to raw value if normalization failed or returned empty
+                val = c.normalized_value if c.normalized_value else c.value
+                val_lower = val.lower().strip()
+                if not val_lower:
+                    continue
+                    
+                if val_lower not in value_groups:
+                    value_groups[val_lower] = {
+                        "value": val,  # Keep the original casing of the first one
+                        "candidates": [],
+                        "score": 0.0
+                    }
+                
+                value_groups[val_lower]["candidates"].append(c)
+                
+                # Scoring: base score is relevance, bonus for role priority, bonus for agreement
+                role_score = 0.0
+                if c.source_role == "main_manuscript":
+                    role_score = 1.0
+                elif c.source_role == "table":
+                    role_score = 0.8
+                elif c.source_role == "supplement":
+                    role_score = 0.5
+                    
+                value_groups[val_lower]["score"] += (c.relevance_score + role_score)
+                
+            if not value_groups:
+                reconciled[field_name] = candidates
+                continue
+                
+            # Sort groups by score descending
+            sorted_groups = sorted(value_groups.values(), key=lambda x: x["score"], reverse=True)
+            
+            # The winning group is the primary
+            winning_group = sorted_groups[0]
+            winning_candidates = sorted(winning_group["candidates"], key=lambda c: c.sort_key)
+            primary = winning_candidates[0]
+            # Set its normalized value so it can be used later
+            primary.normalized_value = winning_group["value"]
+            
+            # Secondary candidates are all others
+            secondary = []
+            for c in winning_candidates[1:]:
+                secondary.append(c)
+            for group in sorted_groups[1:]:
+                for c in group["candidates"]:
+                    secondary.append(c)
+                    
+            reconciled[field_name] = [primary] + secondary
+            
+        return reconciled
+
     def _reconcile_candidates(
         self,
         candidates: List[FieldCandidate],
@@ -695,10 +834,7 @@ class JSONGeneratorAgent(BaseAgent):
         """Downgrade high-confidence fields that lack source references."""
         if not (config.metadata_field_search_enabled and source_workspace):
             return fields
-        source_ref_pattern = re.compile(
-            r"(source_\d+:\d+-\d+|source_\d+\s+table\s+.+?\s+row\s+\d+)",
-            re.IGNORECASE,
-        )
+        source_ref_pattern = SOURCE_REF_PATTERN
         min_confidence = float(config.metadata_source_ref_min_confidence)
         downgrade_confidence = float(config.metadata_source_ref_downgrade_confidence)
         for field in fields:
@@ -1555,19 +1691,13 @@ class JSONGeneratorAgent(BaseAgent):
     @staticmethod
     def _compute_source_grounding_summary(fields: List[MetadataField]) -> Dict[str, int]:
         """Compute source-grounding counters for the output statistics block."""
-        source_ref_pattern = re.compile(
-            r"(source_\d+:\d+-\d+|source_\d+\s+table\s+.+?\s+row\s+\d+)",
-            re.IGNORECASE,
-        )
         grounded = 0
         ungrounded_high = 0
         table_backed = 0
         for field in fields:
             evidence = str(field.evidence or "")
-            has_source = bool(source_ref_pattern.search(evidence))
-            has_table = bool(
-                re.search(r"source_\d+\s+table\s+.+?\s+row\s+\d+", evidence, re.IGNORECASE)
-            )
+            has_source = bool(SOURCE_REF_PATTERN.search(evidence))
+            has_table = bool(SOURCE_TABLE_PATTERN.search(evidence))
             if has_source:
                 grounded += 1
             if has_table:
