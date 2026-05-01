@@ -1,5 +1,75 @@
 # Changelog
 
+## [1.4.0] - 2026-05-02 – Source Grounding and Multi-file Provenance Stabilization
+
+### Added
+
+- **`fairifier/utils/grounding.py`** (new module): Single source of truth for
+  `SOURCE_REF_PATTERN` and `SOURCE_TABLE_PATTERN`. All sites that classify
+  source citation evidence now import from this module, preventing independent
+  regex copies from silently drifting apart.
+
+- **Upstream candidate merging** (`json_generator.py`):
+  - `FieldCandidate.normalized_value`: new attribute carrying the concise
+    LLM-normalized value for each raw evidence candidate.
+  - `_normalize_candidates_with_llm()`: batched LLM call that extracts a
+    normalized string from every evidence snippet before generation starts.
+  - `_upstream_reconcile_candidates()`: groups candidates by normalized value,
+    scores by source role (`main_manuscript > table > supplement`), agreement
+    count, and relevance score; selects the cross-source consensus value.
+  - Pre-reconciled values are injected into the final generation prompt,
+    guiding the LLM away from outlier snippets.
+
+- **Multi-file Timestamp fix** (`langgraph_app.py`): `_read_tabular_tables()`
+  now casts all DataFrame columns to `str` before `.to_dict()`, preventing
+  `Timestamp` JSON serialization crashes on Excel inputs.
+
+- **Tests** (three new files):
+  - `tests/test_source_ref_regex.py`: regression tests for `SOURCE_REF_PATTERN`
+    and `SOURCE_TABLE_PATTERN` using the *imported* canonical constants, not a
+    copied string — covers all real production evidence citation formats.
+  - `tests/test_candidate_normalization.py`: unit tests for upstream
+    reconciliation determinism and batch normalization.
+  - `tests/test_multifile_ingestion.py` (extended): Timestamp serialization
+    and multi-file bundle reading.
+
+### Changed
+
+- **Source grounding post-check** (`_postcheck_source_grounding`): now uses
+  `SOURCE_REF_PATTERN` from `grounding.py`; no local regex definition.
+- **Grounding summary** (`_compute_source_grounding_summary`): likewise uses
+  shared constants; `statistics.source_grounding_summary` in `metadata.json`
+  and `quality_metrics.source_grounding` in `workflow_report.json` are now
+  always consistent.
+- **Validation** (`metadata_json_format.py`): `_classify_field_grounding()` and
+  `validate_source_grounding()` replaced their inline regex with the shared
+  imports — eliminates the last independent copy.
+- **MinerU output exclusion** (`source_workspace.py`): files whose names start
+  with `mineru_` are filtered before indexing to prevent recursive re-ingestion.
+
+### Verified Outcome (run `output/20260501_233327`, model `qwen3.6:35b`)
+
+| Metric | Before (v1.3.1) | After (v1.4.0) |
+|---|---|---|
+| `source_grounded_fields` | 0 | **38** |
+| `table_backed_fields` | 0 | **15** |
+| `ungrounded_high_confidence_fields` | 17 | **0** |
+| `confirmed_fields` | 17 | **31** |
+| Grounding-related warnings | 16 | **0** |
+| Fields with `missing source ref` | 32 | **5** (all conf ≤ 0.6) |
+
+### Known Remaining Gaps (deferred to next phase)
+
+- `sample identifier` and `observation unit identifier` are structurally absent
+  when source documents do not provide FAIR-DS-compatible identifiers (FAIR/ISA
+  format errors, not provenance errors).
+- `collection date` may contain multiple values; single-value constraint not yet
+  enforced.
+- Fields with no source evidence in the paper remain provisional at confidence
+  0.1–0.6 — this is correct system behavior, not a bug.
+
+---
+
 ## [1.3.1] - 2026-04-10
 
 ### Changed
