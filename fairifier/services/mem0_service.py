@@ -989,31 +989,22 @@ def get_mem0_service() -> Optional[Mem0Service]:
 
         embedding_provider = config.mem0_embedding_provider
         embedding_model = config.mem0_embedding_model
-        embedding_base_url = (
-            config.mem0_embedding_base_url
-            or config.mem0_ollama_base_url
-            or config.mem0_llm_base_url
-            or config.llm_base_url
-        )
         embedding_api_key = config.mem0_embedding_api_key or mem0_llm_api_key
         embedding_dims = config.mem0_embedding_dims
 
-        # Compatibility default: qwen + default ollama embedding settings -> DashScope embedding API.
-        if (
-            config.llm_provider == "qwen"
-            and embedding_provider == "ollama"
-            and embedding_model == "nomic-embed-text"
-            and embedding_dims == 768
-        ):
-            embedding_provider = "openai"
-            embedding_model = "text-embedding-v4"
-            embedding_dims = 1024
-            embedding_base_url = config.llm_base_url
-            embedding_api_key = config.llm_api_key
-            logger.info(
-                "Mem0 embedding default switched to API profile for Qwen (model=%s, dims=%s).",
-                embedding_model,
-                embedding_dims,
+        # Ollama embeddings must use an Ollama base URL — never fall through to the main LLM URL
+        # (e.g. DashScope when LLM_PROVIDER=qwen). OpenAI-compatible embedding APIs use explicit base URL.
+        if embedding_provider == "ollama":
+            embedding_base_url = (
+                config.mem0_embedding_base_url
+                or config.mem0_ollama_base_url
+                or "http://localhost:11434"
+            )
+        else:
+            embedding_base_url = (
+                config.mem0_embedding_base_url
+                or config.mem0_llm_base_url
+                or config.llm_base_url
             )
 
         if config.mem0_auto_setup:

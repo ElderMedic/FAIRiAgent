@@ -90,6 +90,30 @@ class FAIRifierConfig:
     multi_file_max_inputs: int = 8  # Cap number of files aggregated from directory/zip input
     table_preview_max_rows: int = 120  # Cap tabular rows rendered into text context
     table_preview_max_cols: int = 24  # Cap tabular columns rendered into text context
+
+    # Source workspace + agentic search budgets. These limit what is exposed to
+    # prompts per tool call, not what is preserved on disk.
+    source_workspace_enabled: bool = True
+    source_workspace_dir_name: str = "source_workspace"
+    source_max_selected_inputs: int = 8
+    source_inventory_max_chars_per_source: int = 4000
+    source_read_max_chars: int = 8000
+    source_grep_context_chars: int = 600
+    source_max_search_results: int = 20
+    source_role_detection_enabled: bool = True
+    source_min_relevance_score: float = 0.35
+    source_outlier_policy: str = "downweight"
+    source_main_role_bonus: float = 0.25
+    source_supplement_role_bonus: float = 0.10
+    source_require_study_identity_match: bool = False
+    metadata_context_mode: str = "agentic_search"
+    metadata_field_search_enabled: bool = True
+    metadata_max_evidence_snippets_per_field: int = 5
+    metadata_max_context_chars_per_field: int = 12000
+    metadata_allow_direct_document_fallback: bool = True
+    table_full_scan_enabled: bool = True
+    table_search_max_rows: int = 5000
+    table_search_max_matches: int = 50
     
     # Processing limits
     max_document_size_mb: int = 50
@@ -298,6 +322,60 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.table_preview_max_rows = int(os.getenv("FAIRIFIER_TABLE_PREVIEW_MAX_ROWS"))
     if os.getenv("FAIRIFIER_TABLE_PREVIEW_MAX_COLS"):
         config_instance.table_preview_max_cols = int(os.getenv("FAIRIFIER_TABLE_PREVIEW_MAX_COLS"))
+    if os.getenv("FAIRIFIER_SOURCE_WORKSPACE_ENABLED"):
+        v = os.getenv("FAIRIFIER_SOURCE_WORKSPACE_ENABLED", "").strip().lower()
+        config_instance.source_workspace_enabled = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_SOURCE_WORKSPACE_DIR_NAME"):
+        config_instance.source_workspace_dir_name = os.getenv("FAIRIFIER_SOURCE_WORKSPACE_DIR_NAME")
+    if os.getenv("FAIRIFIER_SOURCE_MAX_SELECTED_INPUTS"):
+        config_instance.source_max_selected_inputs = int(os.getenv("FAIRIFIER_SOURCE_MAX_SELECTED_INPUTS"))
+    if os.getenv("FAIRIFIER_SOURCE_INVENTORY_MAX_CHARS_PER_SOURCE"):
+        config_instance.source_inventory_max_chars_per_source = int(
+            os.getenv("FAIRIFIER_SOURCE_INVENTORY_MAX_CHARS_PER_SOURCE")
+        )
+    if os.getenv("FAIRIFIER_SOURCE_READ_MAX_CHARS"):
+        config_instance.source_read_max_chars = int(os.getenv("FAIRIFIER_SOURCE_READ_MAX_CHARS"))
+    if os.getenv("FAIRIFIER_SOURCE_GREP_CONTEXT_CHARS"):
+        config_instance.source_grep_context_chars = int(os.getenv("FAIRIFIER_SOURCE_GREP_CONTEXT_CHARS"))
+    if os.getenv("FAIRIFIER_SOURCE_MAX_SEARCH_RESULTS"):
+        config_instance.source_max_search_results = int(os.getenv("FAIRIFIER_SOURCE_MAX_SEARCH_RESULTS"))
+    if os.getenv("FAIRIFIER_SOURCE_ROLE_DETECTION_ENABLED"):
+        v = os.getenv("FAIRIFIER_SOURCE_ROLE_DETECTION_ENABLED", "").strip().lower()
+        config_instance.source_role_detection_enabled = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_SOURCE_MIN_RELEVANCE_SCORE"):
+        config_instance.source_min_relevance_score = float(os.getenv("FAIRIFIER_SOURCE_MIN_RELEVANCE_SCORE"))
+    if os.getenv("FAIRIFIER_SOURCE_OUTLIER_POLICY"):
+        config_instance.source_outlier_policy = os.getenv("FAIRIFIER_SOURCE_OUTLIER_POLICY")
+    if os.getenv("FAIRIFIER_SOURCE_MAIN_ROLE_BONUS"):
+        config_instance.source_main_role_bonus = float(os.getenv("FAIRIFIER_SOURCE_MAIN_ROLE_BONUS"))
+    if os.getenv("FAIRIFIER_SOURCE_SUPPLEMENT_ROLE_BONUS"):
+        config_instance.source_supplement_role_bonus = float(os.getenv("FAIRIFIER_SOURCE_SUPPLEMENT_ROLE_BONUS"))
+    if os.getenv("FAIRIFIER_SOURCE_REQUIRE_STUDY_IDENTITY_MATCH"):
+        v = os.getenv("FAIRIFIER_SOURCE_REQUIRE_STUDY_IDENTITY_MATCH", "").strip().lower()
+        config_instance.source_require_study_identity_match = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_METADATA_CONTEXT_MODE"):
+        config_instance.metadata_context_mode = os.getenv("FAIRIFIER_METADATA_CONTEXT_MODE")
+    if os.getenv("FAIRIFIER_METADATA_FIELD_SEARCH_ENABLED"):
+        v = os.getenv("FAIRIFIER_METADATA_FIELD_SEARCH_ENABLED", "").strip().lower()
+        config_instance.metadata_field_search_enabled = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_METADATA_MAX_EVIDENCE_SNIPPETS_PER_FIELD"):
+        config_instance.metadata_max_evidence_snippets_per_field = int(
+            os.getenv("FAIRIFIER_METADATA_MAX_EVIDENCE_SNIPPETS_PER_FIELD")
+        )
+    if os.getenv("FAIRIFIER_METADATA_MAX_CONTEXT_CHARS_PER_FIELD"):
+        config_instance.metadata_max_context_chars_per_field = int(
+            os.getenv("FAIRIFIER_METADATA_MAX_CONTEXT_CHARS_PER_FIELD")
+        )
+    if os.getenv("FAIRIFIER_METADATA_ALLOW_DIRECT_DOCUMENT_FALLBACK"):
+        v = os.getenv("FAIRIFIER_METADATA_ALLOW_DIRECT_DOCUMENT_FALLBACK", "").strip().lower()
+        config_instance.metadata_allow_direct_document_fallback = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_TABLE_FULL_SCAN_ENABLED"):
+        v = os.getenv("FAIRIFIER_TABLE_FULL_SCAN_ENABLED", "").strip().lower()
+        config_instance.table_full_scan_enabled = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_TABLE_SEARCH_MAX_ROWS"):
+        config_instance.table_search_max_rows = int(os.getenv("FAIRIFIER_TABLE_SEARCH_MAX_ROWS"))
+    if os.getenv("FAIRIFIER_TABLE_SEARCH_MAX_MATCHES"):
+        config_instance.table_search_max_matches = int(os.getenv("FAIRIFIER_TABLE_SEARCH_MAX_MATCHES"))
     if os.getenv("FAIRIFIER_CROSS_LAYER_MAX_RESTARTS"):
         config_instance.cross_layer_max_restarts = int(
             os.getenv("FAIRIFIER_CROSS_LAYER_MAX_RESTARTS")

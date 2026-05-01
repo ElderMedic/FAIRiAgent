@@ -1889,10 +1889,6 @@ REQUIREMENTS:
         if not selected_fields:
             return []
 
-        # Truncate document text
-        if len(document_text) > 6000:
-            document_text = document_text[:6000] + "\n[... truncated ...]"
-
         batches = self._split_metadata_generation_batches(selected_fields)
         if len(batches) > 1:
             logger.info(
@@ -1947,6 +1943,29 @@ REQUIREMENTS:
         if provider == "openai":
             return 24
         return 16
+
+    def _metadata_context_budget(self, field_count: int) -> int:
+        """Return configurable context budget for one metadata batch."""
+        per_field = max(1, int(config.metadata_max_context_chars_per_field))
+        return max(per_field, per_field * max(1, field_count))
+
+    def _prepare_metadata_document_context(
+        self,
+        document_text: str,
+        selected_fields: List[Dict[str, Any]],
+    ) -> str:
+        """Bound direct prompt context without discarding source workspace content."""
+        budget = self._metadata_context_budget(len(selected_fields))
+        if len(document_text) <= budget:
+            return document_text
+        keep_start = int(budget * 0.75)
+        keep_end = max(0, budget - keep_start)
+        omitted = len(document_text) - keep_start - keep_end
+        return (
+            document_text[:keep_start].rstrip()
+            + f"\n\n[... metadata context budget omitted {omitted:,} characters; use source workspace search for exact evidence ...]\n\n"
+            + document_text[-keep_end:].lstrip()
+        )
 
     def _split_metadata_generation_batches(
         self,
@@ -2069,12 +2088,16 @@ REQUIREMENTS:
         batch_note = ""
         if batch_label:
             batch_note = f"\nCurrent batch: {batch_label}. Only return fields from this batch.\n"
+        prepared_document_text = self._prepare_metadata_document_context(
+            document_text,
+            selected_fields,
+        )
 
         user_prompt = f"""Document information:
 {json.dumps(document_info, indent=2, ensure_ascii=False)}
 
 Document excerpt:
-{document_text[:3000]}
+{prepared_document_text}
 
 Metadata fields to populate (TOTAL: {len(selected_fields)} fields):
 {json.dumps(field_descriptions, indent=2)}

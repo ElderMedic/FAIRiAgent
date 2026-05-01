@@ -15,6 +15,7 @@ import re
 import csv
 import zipfile
 import tempfile
+from pathlib import Path
 from typing import Dict, Any, Literal, Optional, Tuple, List, Callable
 from datetime import datetime
 from langsmith import traceable
@@ -37,6 +38,7 @@ from ..services.mineru_client import MinerUClient, MinerUConversionError
 from ..services import mineru_cache as mineru_cache_service
 from ..services.confidence_aggregator import aggregate_confidence
 from ..services.fairds_api_parser import FAIRDSAPIParser
+from ..services.source_workspace import SourceRecord, build_source_workspace
 from ..tools.mineru_tools import create_mineru_convert_tool
 
 # Mem0 service (optional)
@@ -331,13 +333,37 @@ class FAIRifierLangGraphApp:
                 issue_summary = "; ".join(prior_issues[:3])
                 query = f"{query} — previous failures: {issue_summary}"
 
-            # Search with cross-agent support
-            memory_scope_id = state.get("memory_scope_id") or session_id
-            memories = self.mem0_service.search(
-                query=query,
-                session_id=memory_scope_id,
-                limit=top_k
-            )
+            # Search both scopes:
+            # - session_id/project_id: current run, enabling agent-to-agent handoff
+            # - memory_scope_id: cross-run user/global memory
+            memories = []
+            seen_memory_ids = set()
+            seen_memory_texts = set()
+            for memory_scope_id in self._memory_scope_ids(state, session_id):
+                scope_memories = self.mem0_service.search(
+                    query=query,
+                    session_id=memory_scope_id,
+                    limit=top_k,
+                )
+                for memory in scope_memories:
+                    memory_id = memory.get("id") if isinstance(memory, dict) else None
+                    memory_text = memory.get("memory") if isinstance(memory, dict) else str(memory)
+                    dedupe_key = memory_id or memory_text
+                    if not dedupe_key:
+                        continue
+                    if memory_id and memory_id in seen_memory_ids:
+                        continue
+                    if memory_text and memory_text in seen_memory_texts:
+                        continue
+                    if memory_id:
+                        seen_memory_ids.add(memory_id)
+                    if memory_text:
+                        seen_memory_texts.add(memory_text)
+                    memories.append(memory)
+                    if len(memories) >= top_k:
+                        break
+                if len(memories) >= top_k:
+                    break
             
             if memories:
                 logger.info(
@@ -349,6 +375,49 @@ class FAIRifierLangGraphApp:
         except Exception as e:
             logger.warning(f"Memory retrieval failed for {agent_name}: {e}")
             return []
+
+    def _memory_scope_ids(
+        self,
+        state: FAIRifierState,
+        session_id: str,
+    ) -> List[str]:
+        """Return unique memory scopes for current-run and cross-run memory."""
+        scope_ids: List[str] = []
+        for raw_scope in (session_id, state.get("memory_scope_id")):
+            if isinstance(raw_scope, str):
+                scope = raw_scope.strip()
+                if scope and scope not in scope_ids:
+                    scope_ids.append(scope)
+        return scope_ids
+
+    def _store_memory_insight(
+        self,
+        *,
+        state: FAIRifierState,
+        session_id: str,
+        agent_id: str,
+        insight: str,
+        metadata: Dict[str, Any],
+    ) -> None:
+        """Store one insight in both run-scope and long-term memory scopes."""
+        if not self.mem0_service:
+            return
+
+        for memory_scope_id in self._memory_scope_ids(state, session_id):
+            scope_type = "run" if memory_scope_id == session_id else "long_term"
+            self.mem0_service.add(
+                messages=[{
+                    "role": "assistant",
+                    "content": insight,
+                }],
+                session_id=memory_scope_id,
+                agent_id=agent_id,
+                metadata={
+                    **metadata,
+                    "memory_scope_id": memory_scope_id,
+                    "memory_scope_type": scope_type,
+                },
+            )
     
     def _should_write_memory(
         self,
@@ -1161,7 +1230,6 @@ class FAIRifierLangGraphApp:
                 # [W] Write memory with gating (only valuable insights)
                 if self.mem0_service and session_id:
                     try:
-                        memory_scope_id = state.get("memory_scope_id") or session_id
                         # Check if this output deserves memory storage
                         should_write = self._should_write_memory(
                             agent_name, state, critic_eval, attempt
@@ -1176,20 +1244,18 @@ class FAIRifierLangGraphApp:
                             if insights:
                                 # Store each insight separately for better retrieval
                                 for insight in insights:
-                                    self.mem0_service.add(
-                                        messages=[{
-                                            "role": "assistant",
-                                            "content": insight
-                                        }],
-                                        session_id=memory_scope_id,
+                                    self._store_memory_insight(
+                                        state=state,
+                                        session_id=session_id,
                                         agent_id=agent_name,
+                                        insight=insight,
                                         metadata={
                                             "workflow_step": agent_name,
                                             "score": score,
                                             "attempt": attempt,
                                             "decision": decision,
-                                            "timestamp": datetime.now().isoformat()
-                                        }
+                                            "timestamp": datetime.now().isoformat(),
+                                        },
                                     )
                                 logger.info(
                                     f"💾 Stored {len(insights)} memories for {agent_name}"
@@ -1682,6 +1748,7 @@ class FAIRifierLangGraphApp:
             
             state["document_content"] = text
             state["document_conversion"] = conversion_info
+            state["source_workspace"] = conversion_info.get("source_workspace", {})
             input_documents = conversion_info.get("input_documents")
             if not isinstance(input_documents, list) or not input_documents:
                 input_documents = [
@@ -1689,6 +1756,8 @@ class FAIRifierLangGraphApp:
                         "path": os.path.basename(document_path) or document_path or "input",
                         "content": text,
                         "method": conversion_info.get("method", "direct_read"),
+                        "content_type": conversion_info.get("content_type", "text"),
+                        "tables": conversion_info.get("tables", []),
                     }
                 ]
             state["input_documents"] = input_documents
@@ -1820,7 +1889,47 @@ class FAIRifierLangGraphApp:
                     source_method="zip_bundle",
                 )
 
-        return self._read_single_document_content(document_path, output_dir)
+        text, conversion_info = self._read_single_document_content(document_path, output_dir)
+        self._attach_source_workspace(
+            conversion_info,
+            output_dir=output_dir,
+            records=[
+                SourceRecord(
+                    source_id="source_001",
+                    path=str(_filesystem_document_path(document_path).name),
+                    method=conversion_info.get("method", "unknown"),
+                    content=text,
+                    content_type=conversion_info.get("content_type", "text"),
+                    tables=conversion_info.get("tables", []),
+                )
+            ],
+        )
+        return text, conversion_info
+
+    def _attach_source_workspace(
+        self,
+        conversion_info: Dict[str, Any],
+        *,
+        output_dir: Optional[str],
+        records: List[SourceRecord],
+    ) -> None:
+        """Materialize a source workspace and attach paths to conversion metadata."""
+        if not (config.source_workspace_enabled and output_dir and records):
+            return
+        workspace = build_source_workspace(records, Path(output_dir))
+        conversion_info["source_workspace"] = {
+            "root_dir": str(workspace.root_dir),
+            "manifest_path": str(workspace.manifest_path),
+            "summary_path": str(workspace.summary_path),
+            "source_paths": {
+                source_id: str(path)
+                for source_id, path in workspace.source_paths.items()
+            },
+            "table_paths": {
+                table_id: str(path)
+                for table_id, path in workspace.table_paths.items()
+            },
+        }
 
     def _read_single_document_content(
         self,
@@ -1839,6 +1948,8 @@ class FAIRifierLangGraphApp:
         if suffix in {".csv", ".tsv", ".xlsx", ".xls"}:
             table_text = self._read_tabular_content(fs_str)
             conversion_info["method"] = f"tabular_{suffix.lstrip('.')}"
+            conversion_info["content_type"] = "table"
+            conversion_info["tables"] = self._read_tabular_tables(fs_str)
             return table_text, conversion_info
 
         if suffix == ".json":
@@ -1846,6 +1957,7 @@ class FAIRifierLangGraphApp:
                 parsed = json.load(file)
             pretty = json.dumps(parsed, indent=2, ensure_ascii=False)
             conversion_info["method"] = "json_pretty"
+            conversion_info["content_type"] = "json"
             return pretty, conversion_info
 
         if suffix == ".pdf":
@@ -1903,6 +2015,7 @@ class FAIRifierLangGraphApp:
                         "method": "mineru_cache"
                         if cache_hit
                         else "mineru_preconverted",
+                        "content_type": "markdown",
                     }
                     if file_digest:
                         conversion_info["source_sha256"] = file_digest
@@ -1939,6 +2052,7 @@ class FAIRifierLangGraphApp:
                         "output_dir": result["output_dir"],
                         "images_dir": result["images_dir"],
                         "method": result["method"],
+                        "content_type": "markdown",
                     }
                     if file_digest:
                         conversion_info["source_sha256"] = file_digest
@@ -1975,6 +2089,7 @@ class FAIRifierLangGraphApp:
                     text += page.get_text()
                 doc.close()
                 conversion_info["method"] = "pymupdf"
+                conversion_info["content_type"] = "text"
                 if text.strip():
                     return text, conversion_info
                 logger.warning(
@@ -1993,6 +2108,7 @@ class FAIRifierLangGraphApp:
                     text_chunks.append(page.extract_text() or "")
                 text = "\n".join(text_chunks)
                 conversion_info["method"] = "pypdf"
+                conversion_info["content_type"] = "text"
                 if text.strip():
                     return text, conversion_info
             except Exception as exc:
@@ -2004,6 +2120,7 @@ class FAIRifierLangGraphApp:
         with open(fs_str, "r", encoding="utf-8") as file:
             text = file.read()
         conversion_info["method"] = "direct_read"
+        conversion_info["content_type"] = "markdown" if suffix in {".md", ".markdown"} else "text"
         return text, conversion_info
 
     def _is_supported_bundle_file(self, path: "Path") -> bool:
@@ -2013,6 +2130,31 @@ class FAIRifierLangGraphApp:
             ".csv", ".tsv", ".xlsx", ".xls", ".json",
         }
 
+    def _prioritize_bundle_files(self, files: List["Path"]) -> List["Path"]:
+        """Prefer likely research sources before applying the file-count cap."""
+        if not config.source_role_detection_enabled:
+            return files
+
+        def score(path: "Path") -> Tuple[int, str]:
+            name = str(path).lower()
+            suffix = path.suffix.lower()
+            points = 0
+            if any(token in name for token in ("main", "paper", "article", "manuscript")):
+                points += 80
+            if any(token in name for token in ("supp", "supplement", "appendix")):
+                points += 70
+            if any(token in name for token in ("metadata", "sample", "isa")):
+                points += 60
+            if suffix in {".csv", ".tsv", ".xlsx", ".xls", ".json"}:
+                points += 40
+            if any(token in name for token in ("protocol", "method")):
+                points += 30
+            if any(token in name for token in ("readme", "license", "admin", "random")):
+                points -= 20
+            return (-points, str(path))
+
+        return sorted(files, key=score)
+
     def _read_multi_file_bundle(
         self,
         root_dir: "Path",
@@ -2020,12 +2162,20 @@ class FAIRifierLangGraphApp:
         source_method: str,
     ) -> Tuple[str, Dict[str, Any]]:
         """Read and aggregate multiple supported files from a directory-like bundle."""
-        max_files = max(1, int(config.multi_file_max_inputs))
+        max_files = max(
+            1,
+            min(
+                int(config.multi_file_max_inputs),
+                int(config.source_max_selected_inputs),
+            ),
+        )
         all_files = sorted(
             p for p in root_dir.rglob("*")
             if p.is_file() and not any(part.startswith(".") for part in p.parts)
         )
-        supported_files = [p for p in all_files if self._is_supported_bundle_file(p)]
+        supported_files = self._prioritize_bundle_files(
+            [p for p in all_files if self._is_supported_bundle_file(p)]
+        )
         selected_files = supported_files[:max_files]
         truncated_by_limit = len(supported_files) > max_files
 
@@ -2060,6 +2210,7 @@ class FAIRifierLangGraphApp:
                     "path": rel_name,
                     "method": info.get("method", "unknown"),
                     "chars": len(text),
+                    "content_type": info.get("content_type", "text"),
                 }
             )
             input_documents.append(
@@ -2067,6 +2218,8 @@ class FAIRifierLangGraphApp:
                     "path": rel_name,
                     "content": text,
                     "method": info.get("method", "unknown"),
+                    "content_type": info.get("content_type", "text"),
+                    "tables": info.get("tables", []),
                 }
             )
 
@@ -2089,6 +2242,21 @@ class FAIRifierLangGraphApp:
             "input_documents": input_documents,
             "failed_sources": failed_sources,
         }
+        self._attach_source_workspace(
+            conversion_info,
+            output_dir=output_dir,
+            records=[
+                SourceRecord(
+                    source_id=f"source_{idx:03d}",
+                    path=str(input_doc.get("path") or f"input_{idx}"),
+                    method=str(input_doc.get("method") or "unknown"),
+                    content=str(input_doc.get("content") or ""),
+                    content_type=str(input_doc.get("content_type") or "text"),
+                    tables=input_doc.get("tables", []) or [],
+                )
+                for idx, input_doc in enumerate(input_documents, start=1)
+            ],
+        )
         return "".join(sections).strip(), conversion_info
 
     def _read_tabular_content(self, document_path: str) -> str:
@@ -2150,6 +2318,28 @@ class FAIRifierLangGraphApp:
                 f"... ({len(workbook.sheet_names) - 6} more sheets omitted)"
             )
         return "\n\n".join(sheet_text_blocks)
+
+    def _read_tabular_tables(self, document_path: str) -> List[Dict[str, Any]]:
+        """Read full tabular rows for source-workspace search tools."""
+        path = Path(document_path)
+        suffix = path.suffix.lower()
+
+        if suffix in {".csv", ".tsv"}:
+            delimiter = "," if suffix == ".csv" else "\t"
+            with open(path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f, delimiter=delimiter)
+                rows = [dict(row) for row in reader]
+            return [{"name": path.stem, "rows": rows}]
+
+        import pandas as pd
+
+        workbook = pd.ExcelFile(path)
+        tables: List[Dict[str, Any]] = []
+        for sheet_name in workbook.sheet_names:
+            df = pd.read_excel(path, sheet_name=sheet_name)
+            rows = df.fillna("").to_dict(orient="records")
+            tables.append({"name": str(sheet_name), "rows": rows})
+        return tables
     
     @traceable(name="PlanWorkflow", tags=["workflow", "planning"])
     async def _plan_workflow_node(self, state: FAIRifierState) -> FAIRifierState:
@@ -2254,7 +2444,6 @@ Return JSON in the following format:
             # [W] Store planning insights (if valuable)
             if self.mem0_service and session_id:
                 try:
-                    memory_scope_id = state.get("memory_scope_id") or session_id
                     strategy = plan.get('strategy', '')
                     doc_type = plan.get('document_type', '')
                     domain = plan.get('research_domain', '')
@@ -2266,17 +2455,18 @@ Return JSON in the following format:
                             f"in {domain}: "
                             f"{plan.get('reasoning', '')[:100]}"
                         )
-                        self.mem0_service.add(
-                            messages=[{"role": "assistant", "content": insight}],
-                            session_id=memory_scope_id,
+                        self._store_memory_insight(
+                            state=state,
+                            session_id=session_id,
                             agent_id="Planner",
+                            insight=insight,
                             metadata={
                                 "workflow_step": "Planner",
                                 "strategy": strategy,
                                 "document_type": doc_type,
                                 "research_domain": domain,
-                                "timestamp": datetime.now().isoformat()
-                            }
+                                "timestamp": datetime.now().isoformat(),
+                            },
                         )
                         logger.info("💾 Stored planning insight")
                 except Exception as e:
@@ -3107,6 +3297,7 @@ Return JSON in the following format:
                 "document_content": "",
                 "document_conversion": {},
                 "input_documents": [],
+                "source_workspace": {},
                 "output_dir": output_dir,
                 "document_info": {},
                 "document_info_by_source": [],

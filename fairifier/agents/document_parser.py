@@ -110,6 +110,8 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             "a concise structured metadata object that matches existing FAIRifier "
             "document_info conventions such as document_type, title, abstract, "
             "authors, keywords, research_domain, methodology, location, and coordinates. "
+            "When /workspace/source_workspace.md exists, use it as the source inventory; "
+            "read files under /workspace/sources/ only when you need more exact evidence. "
             "Skills (built-in and user-imported) follow the Anthropic pattern: YAML frontmatter on SKILL.md "
             "plus optional sibling .md files under /skills/. A summary lives at /workspace/skills_catalog.md. "
             "You MUST open /workspace/skills_catalog.md on the first tool-capable turn, select every skill whose "
@@ -139,12 +141,37 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             memory_files=self._get_memory_files(),
         )
 
-    def _build_dp_seed_files(self, document_text: str) -> Dict[str, Any]:
+    def _build_dp_seed_files(
+        self,
+        document_text: str,
+        source_workspace: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Build virtual files for the deepagents document parsing loop."""
         seed_files: Dict[str, Any] = {}
         document_file = self._maybe_create_file_data(document_text)
         if document_file is not None:
             seed_files["/workspace/document.md"] = document_file
+
+        if source_workspace:
+            summary_path = source_workspace.get("summary_path")
+            if summary_path:
+                try:
+                    summary_file = self._maybe_create_file_data(
+                        Path(summary_path).read_text(encoding="utf-8")
+                    )
+                    if summary_file is not None:
+                        seed_files["/workspace/source_workspace.md"] = summary_file
+                except OSError:
+                    self.logger.warning("Failed to read source workspace summary: %s", summary_path)
+            for source_id, source_path in (source_workspace.get("source_paths") or {}).items():
+                try:
+                    source_file = self._maybe_create_file_data(
+                        Path(source_path).read_text(encoding="utf-8")
+                    )
+                    if source_file is not None:
+                        seed_files[f"/workspace/sources/{source_id}.md"] = source_file
+                except OSError:
+                    self.logger.warning("Failed to read source workspace file: %s", source_path)
 
         agents_path = Path(config.project_root) / "AGENTS.md"
         if agents_path.exists():
@@ -154,7 +181,10 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
 
         seed_files.update(load_skill_files(*config.skill_roots))
         seed_files.update(
-            skills_catalog_seed_files(*config.skill_roots, self._maybe_create_file_data)
+            skills_catalog_seed_files(
+                *config.skill_roots,
+                create_file_data=self._maybe_create_file_data,
+            )
         )
         return seed_files
 
@@ -283,7 +313,10 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
                 structured = await self._invoke_react_agent(
                     self._inner_dp_agent,
                     task_message=self._compose_task_message(state, task_desc),
-                    seed_files=self._build_dp_seed_files(text),
+                    seed_files=self._build_dp_seed_files(
+                        text,
+                        source_workspace=state.get("source_workspace", {}) or {},
+                    ),
                     thread_id=f"{state.get('session_id', 'default')}-dp-inner",
                     state=state,
                     scratchpad_name=self.name,

@@ -230,7 +230,11 @@ def skills_catalog_seed_files(
     *roots: Path,
     create_file_data: Optional[Callable[[str], Any]],
 ) -> Dict[str, Any]:
-    """Virtual file so the model can always open the catalog without scanning ``/skills/``."""
+    """Virtual file so the model can always open the catalog without scanning ``/skills/``.
+
+    ``create_file_data`` is keyword-only (same factory as deepagents file payloads). Do not pass
+    it positionally after ``*roots`` — use ``create_file_data=...``.
+    """
     if not roots or create_file_data is None:
         return {}
     body = build_skills_catalog_markdown(*roots)

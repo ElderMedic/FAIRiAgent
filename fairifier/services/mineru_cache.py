@@ -3,6 +3,10 @@
 Avoids re-running GPU-heavy MinerU when the same file is uploaded again (any user).
 Cache entries are stored under ``mineru_cache_dir/<sha256_hex>/`` and marked complete
 with ``.mineru_cache_complete`` after a successful copy.
+
+Lookup uses **content checksum only** (not the filename). The PDF basename is used only when
+materializing into the run output tree as ``{output_dir}/mineru_<stem>/``; inner MinerU folders
+may still reflect an earlier conversion basename (see ``langgraph_app._find_existing_mineru_result``).
 """
 
 from __future__ import annotations

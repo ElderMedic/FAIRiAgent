@@ -73,6 +73,61 @@ def test_read_zip_bundle_via_entrypoint(tmp_path: Path, monkeypatch):
     assert info["files_processed"] == 2
 
 
+def test_read_single_file_materializes_source_workspace(tmp_path: Path):
+    app = _make_app_without_init()
+    input_path = tmp_path / "paper.md"
+    output_dir = tmp_path / "out"
+    input_path.write_text("# Study\n\nrare accession PRJNA999999", encoding="utf-8")
+
+    text, info = app._read_document_content(str(input_path), output_dir=str(output_dir))
+
+    assert "rare accession" in text
+    workspace = info["source_workspace"]
+    manifest_path = Path(workspace["manifest_path"])
+    assert manifest_path.exists()
+    assert "paper.md" in manifest_path.read_text(encoding="utf-8")
+    assert Path(workspace["summary_path"]).exists()
+
+
+def test_read_directory_bundle_materializes_source_workspace(tmp_path: Path, monkeypatch):
+    app = _make_app_without_init()
+    monkeypatch.setattr(config, "multi_file_max_inputs", 8)
+
+    output_dir = tmp_path / "out"
+    (tmp_path / "main.md").write_text("# Main\n\nprimary study", encoding="utf-8")
+    (tmp_path / "supplement.md").write_text("# Supplement\n\nextra method", encoding="utf-8")
+
+    _, info = app._read_multi_file_bundle(
+        root_dir=tmp_path,
+        output_dir=str(output_dir),
+        source_method="directory_bundle",
+    )
+
+    workspace = info["source_workspace"]
+    manifest = Path(workspace["manifest_path"]).read_text(encoding="utf-8")
+    assert '"source_count": 2' in manifest
+    assert "supplement.md" in manifest
+
+
+def test_read_tabular_file_workspace_preserves_rows_outside_preview(tmp_path: Path, monkeypatch):
+    app = _make_app_without_init()
+    monkeypatch.setattr(config, "table_preview_max_rows", 1)
+    csv_path = tmp_path / "samples.csv"
+    output_dir = tmp_path / "out"
+    csv_path.write_text(
+        "sample_id,organism\nS1,not relevant\nS2,Eisenia fetida\n",
+        encoding="utf-8",
+    )
+
+    _, info = app._read_document_content(str(csv_path), output_dir=str(output_dir))
+
+    workspace = info["source_workspace"]
+    table_paths = workspace["table_paths"]
+    assert table_paths
+    table_text = Path(next(iter(table_paths.values()))).read_text(encoding="utf-8")
+    assert "Eisenia fetida" in table_text
+
+
 def test_read_directory_bundle_tracks_failures_and_limit_truncation(tmp_path: Path, monkeypatch):
     app = _make_app_without_init()
     monkeypatch.setattr(config, "multi_file_max_inputs", 1)
@@ -100,6 +155,26 @@ def test_read_directory_bundle_tracks_failures_and_limit_truncation(tmp_path: Pa
     assert info["files_processed"] == 1
     assert info["truncated_by_limit"] is True
     assert info["failed_sources"] == []
+
+
+def test_read_directory_bundle_prioritizes_research_sources_before_limit(tmp_path: Path, monkeypatch):
+    app = _make_app_without_init()
+    monkeypatch.setattr(config, "multi_file_max_inputs", 2)
+
+    (tmp_path / "00_random_notes.txt").write_text("unrelated admin notes", encoding="utf-8")
+    (tmp_path / "main_paper.md").write_text("# Main paper\n\nstudy title", encoding="utf-8")
+    (tmp_path / "supplement_methods.md").write_text("# Supplement\n\nprotocol", encoding="utf-8")
+
+    text, info = app._read_multi_file_bundle(
+        root_dir=tmp_path,
+        output_dir=None,
+        source_method="directory_bundle",
+    )
+
+    assert "main_paper.md" in text
+    assert "supplement_methods.md" in text
+    assert "00_random_notes.txt" not in text
+    assert info["truncated_by_limit"] is True
 
 
 def test_read_directory_bundle_records_failed_sources(tmp_path: Path, monkeypatch):

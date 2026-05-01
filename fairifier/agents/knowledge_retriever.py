@@ -309,7 +309,10 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
 
         seed_files.update(load_skill_files(*config.skill_roots))
         seed_files.update(
-            skills_catalog_seed_files(*config.skill_roots, self._maybe_create_file_data)
+            skills_catalog_seed_files(
+                *config.skill_roots,
+                create_file_data=self._maybe_create_file_data,
+            )
         )
         return seed_files
 

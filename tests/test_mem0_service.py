@@ -403,8 +403,8 @@ class TestMem0ConfigIntegration:
         assert config.mem0_collection_name == "fairifier_memories"
 
 
-def test_get_mem0_service_uses_dashscope_embeddings_for_qwen(monkeypatch):
-    """Qwen main LLM should map mem0 embeddings to DashScope-compatible OpenAI config."""
+def test_get_mem0_service_keeps_explicit_ollama_embeddings_for_qwen(monkeypatch):
+    """Qwen main LLM should not make Ollama embeddings use the DashScope URL."""
     from fairifier.config import config as runtime_config
     from fairifier.services.mem0_service import get_mem0_service, reset_mem0_service
 
@@ -455,11 +455,11 @@ def test_get_mem0_service_uses_dashscope_embeddings_for_qwen(monkeypatch):
         assert service is mock_service
         mem0_config = mock_service_cls.call_args.args[0]
         assert mem0_config["llm"]["provider"] == "openai"
-        assert mem0_config["embedder"]["provider"] == "openai"
-        assert mem0_config["embedder"]["config"]["model"] == "text-embedding-v4"
-        assert mem0_config["embedder"]["config"]["openai_base_url"].startswith("https://dashscope")
-        assert mem0_config["embedder"]["config"]["api_key"] == "dashscope-key"
-        assert mem0_config["vector_store"]["config"]["embedding_model_dims"] == 1024
+        assert mem0_config["embedder"]["provider"] == "ollama"
+        assert mem0_config["embedder"]["config"]["model"] == "nomic-embed-text"
+        assert mem0_config["embedder"]["config"]["ollama_base_url"] == "http://localhost:11434"
+        assert "api_key" not in mem0_config["embedder"]["config"]
+        assert mem0_config["vector_store"]["config"]["embedding_model_dims"] == 768
         assert (
             mem0_config["vector_store"]["config"]["collection_name"]
             != "fairifier_memories_quicktest"
@@ -593,6 +593,67 @@ class TestMem0StateIntegration:
         assert 'Optional[str]' in str(annotations['session_id'])
         assert 'memory_scope_id' in annotations
         assert 'Optional[str]' in str(annotations['memory_scope_id'])
+
+    def test_store_memory_insight_writes_run_and_long_term_scopes(self):
+        """Agent memory writes should support both current-run and cross-session use."""
+        from fairifier.graph.langgraph_app import FAIRifierLangGraphApp
+
+        app = FAIRifierLangGraphApp.__new__(FAIRifierLangGraphApp)
+        app.mem0_service = Mock()
+        state = {
+            "session_id": "project-123",
+            "memory_scope_id": "user-abc",
+        }
+
+        app._store_memory_insight(
+            state=state,
+            session_id="project-123",
+            agent_id="KnowledgeRetriever",
+            insight="soil studies prefer MIxS fields",
+            metadata={"workflow_step": "KnowledgeRetriever"},
+        )
+
+        assert app.mem0_service.add.call_count == 2
+        calls = app.mem0_service.add.call_args_list
+        assert [call.kwargs["session_id"] for call in calls] == [
+            "project-123",
+            "user-abc",
+        ]
+        assert [
+            call.kwargs["metadata"]["memory_scope_type"]
+            for call in calls
+        ] == ["run", "long_term"]
+
+    def test_retrieve_relevant_memories_merges_run_and_long_term_scopes(self):
+        """Memory retrieval should expose prior agent writes and user-level history."""
+        from fairifier.graph.langgraph_app import FAIRifierLangGraphApp
+
+        app = FAIRifierLangGraphApp.__new__(FAIRifierLangGraphApp)
+        app.mem0_service = Mock()
+        app.mem0_service.search.side_effect = [
+            [{"id": "run-1", "memory": "current run package choice"}],
+            [{"id": "user-1", "memory": "long term ontology preference"}],
+        ]
+
+        memories = app._retrieve_relevant_memories(
+            agent_name="JSONGenerator",
+            state={
+                "session_id": "project-123",
+                "memory_scope_id": "user-abc",
+                "document_info": {"research_domain": "soil ecology"},
+            },
+            session_id="project-123",
+            top_k=10,
+        )
+
+        assert [memory["id"] for memory in memories] == [
+            "run-1",
+            "user-1",
+        ]
+        assert [
+            call.kwargs["session_id"]
+            for call in app.mem0_service.search.call_args_list
+        ] == ["project-123", "user-abc"]
 
 
 class TestBaseAgentMemoryMethods:

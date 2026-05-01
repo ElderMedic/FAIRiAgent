@@ -5,10 +5,13 @@ from unittest.mock import Mock
 from fairifier.config import config
 from fairifier.agents.base import BaseAgent
 from fairifier.agents.react_loop import ReactLoopMixin
+import pytest
+
 from fairifier.skills import (
     build_skills_catalog_markdown,
     list_skill_virtual_paths,
     load_skill_files,
+    skills_catalog_seed_files,
 )
 
 
@@ -224,3 +227,25 @@ def test_fairifier_config_skill_roots_includes_extra(tmp_path):
     cfg.skills_extra_dirs = (extra,)
     paths = list_skill_virtual_paths(*cfg.skill_roots)
     assert any(p.endswith("/custom/SKILL.md") for p in paths)
+
+
+def test_skills_catalog_seed_files_requires_keyword_create_file_data(tmp_path):
+    """Regression: callback must be passed as create_file_data=..., not positionally after roots."""
+    root = tmp_path / "skills"
+    (root / "pack" / "SKILL.md").parent.mkdir(parents=True)
+    (root / "pack" / "SKILL.md").write_text(
+        "---\nname: test-skill\n---\nbody\n",
+        encoding="utf-8",
+    )
+
+    def fake_create_file_data(content: str):
+        return {"content": content}
+
+    out = skills_catalog_seed_files(root, create_file_data=fake_create_file_data)
+    assert "/workspace/skills_catalog.md" in out
+    payload = out["/workspace/skills_catalog.md"]
+    assert "Skill catalog" in "".join(payload["content"])
+    assert "test-skill" in "".join(payload["content"])
+
+    with pytest.raises(TypeError):
+        skills_catalog_seed_files(root, fake_create_file_data)

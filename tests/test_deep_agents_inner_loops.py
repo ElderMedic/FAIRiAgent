@@ -875,8 +875,10 @@ def test_json_generator_emits_inferred_extensions_for_metadata_gaps():
     )
 
     assert len(extensions) == 1
-    assert extensions[0]["field_name"] == "transcriptomics"
+    assert extensions[0]["field_name"] == "assay type"
     assert extensions[0]["value"] == "RNA-seq gene expression measurements"
+    assert extensions[0]["suggested_isa_level"] == "assay"
+    assert extensions[0]["suggested_requirement"] == "recommended"
     assert extensions[0]["status"] == "provisional_extension"
 
 
@@ -1007,3 +1009,105 @@ def test_json_generator_extension_output_is_compact_and_deduplicated():
     assert extensions[0]["field_name"] == "sample coordinate completeness"
     assert len(extensions[0]["value"]) <= 260
     assert len(extensions[0]["evidence"]) <= 220
+
+
+def test_json_generator_extension_cleans_search_phrases_and_adds_schema_hints():
+    agent = JSONGeneratorAgent()
+
+    extensions = agent._build_inferred_metadata_extensions(
+        [
+            {
+                "label": "FAIR-DS fields for de novo transcriptome assembly methods",
+                "source": "package_request",
+                "reason": "Planner requested an uncovered concept.",
+                "confidence": 0.72,
+            },
+            {
+                "label": "FAIR-DS fields for Gene Ontology enrichment analysis results",
+                "source": "package_request",
+                "reason": "Planner requested an uncovered concept.",
+                "confidence": 0.72,
+            },
+        ],
+        {
+            "methodology": [
+                "De novo transcriptome assembly was performed with Trinity.",
+                "Gene Ontology enrichment analysis was performed with GOseq.",
+            ],
+        },
+        [
+            {
+                "packet_id": "ep-methods-1",
+                "field_candidate": "methodology",
+                "value": "De novo transcriptome assembly was performed with Trinity.",
+                "evidence_text": (
+                    "Methods state that de novo transcriptome assembly was "
+                    "performed with Trinity."
+                ),
+                "section": "Methods",
+                "confidence": 0.88,
+            },
+            {
+                "packet_id": "ep-methods-2",
+                "field_candidate": "methodology",
+                "value": "Gene Ontology enrichment analysis was performed with GOseq.",
+                "evidence_text": "Methods report Gene Ontology enrichment analysis with GOseq.",
+                "section": "Methods",
+                "confidence": 0.86,
+            },
+        ],
+    )
+
+    assert [item["field_name"] for item in extensions] == [
+        "transcriptome assembly method",
+        "gene ontology enrichment analysis",
+    ]
+    assert all("FAIR-DS fields" not in item["field_name"] for item in extensions)
+    assert extensions[0]["value"] == "De novo transcriptome assembly was performed with Trinity."
+    assert "Trinity" in extensions[0]["evidence"]
+    assert extensions[0]["suggested_isa_level"] == "assay"
+    assert extensions[0]["suggested_requirement"] == "recommended"
+    assert len({item["confidence"] for item in extensions}) > 1
+
+
+def test_json_generator_extension_does_not_use_unrelated_packet_value():
+    agent = JSONGeneratorAgent()
+
+    extensions = agent._build_inferred_metadata_extensions(
+        [
+            {
+                "label": "FAIR-DS fields for bioinformatics quality control metrics",
+                "source": "package_request",
+                "reason": "Planner requested an uncovered concept.",
+                "confidence": 0.72,
+            }
+        ],
+        {"research_domain": "Ecotoxicology"},
+        [
+            {
+                "field_candidate": "keywords",
+                "value": "ZnO nanomaterials",
+                "evidence_text": "The abstract mentions ZnO nanomaterials and earthworm exposure.",
+                "section": "Abstract",
+                "confidence": 0.9,
+            }
+        ],
+    )
+
+    assert extensions[0]["field_name"] == "bioinformatics quality metric"
+    assert extensions[0]["value"] == "not reported in source evidence"
+    assert "ZnO nanomaterials" not in extensions[0]["value"]
+    assert extensions[0]["evidence"] == "No source excerpt matched this inferred metadata concept."
+    assert extensions[0]["confidence"] < 0.75
+
+
+def test_json_generator_builds_source_workspace_context(tmp_path):
+    agent = JSONGeneratorAgent()
+    summary = tmp_path / "source_workspace.md"
+    summary.write_text("# Source Workspace\n\n## source_001: main.md\nrare accession", encoding="utf-8")
+
+    context = agent._build_source_workspace_context({"summary_path": str(summary)})
+
+    assert "Source workspace inventory" in context
+    assert "source_001" in context
+    assert "rare accession" in context

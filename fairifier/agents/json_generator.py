@@ -4,6 +4,7 @@ import json
 from typing import Dict, Any, List, Optional
 import re
 from datetime import datetime
+from pathlib import Path
 from langsmith import traceable
 
 from .base import BaseAgent
@@ -33,7 +34,13 @@ class JSONGeneratorAgent(BaseAgent):
             evidence_packets = state.get("evidence_packets", []) or []
             metadata_gap_hints = state.get("metadata_gap_hints", []) or []
             evidence_context = build_evidence_context(evidence_packets, max_packets=20, max_chars=3200)
-            document_context = evidence_context or document_text
+            workspace_context = self._build_source_workspace_context(
+                state.get("source_workspace", {}) or {}
+            )
+            context_parts = [part for part in (evidence_context, workspace_context) if part]
+            document_context = "\n\n".join(context_parts)
+            if not document_context and config.metadata_allow_direct_document_fallback:
+                document_context = document_text
             
             self.log_execution(
                 state, 
@@ -141,6 +148,29 @@ class JSONGeneratorAgent(BaseAgent):
                 state["metadata_fields"] = []
         
         return state
+
+    def _build_source_workspace_context(self, source_workspace: Dict[str, Any]) -> str:
+        """Build a compact source inventory for metadata generation prompts."""
+        summary_path = source_workspace.get("summary_path")
+        if not summary_path:
+            return ""
+        try:
+            summary = Path(summary_path).read_text(encoding="utf-8")
+        except OSError:
+            return ""
+        budget = max(1, int(config.metadata_max_context_chars_per_field))
+        if len(summary) > budget:
+            keep = max(1, budget - 80)
+            summary = (
+                summary[:keep].rstrip()
+                + "\n[... source workspace inventory truncated by configurable metadata budget ...]"
+            )
+        return (
+            "Source workspace inventory:\n"
+            "Use source_id/path references in evidence when possible. "
+            "Full source files are preserved in the run output source_workspace directory.\n"
+            f"{summary}"
+        )
     
     async def _generate_with_llm(
         self,
@@ -518,12 +548,15 @@ class JSONGeneratorAgent(BaseAgent):
             seen_labels.add(lowered)
             packet = self._select_supporting_packet(label, evidence_packets, hint)
             value, evidence, confidence = self._infer_extension_value(label, doc_info, packet, hint)
+            suggested_isa_level, suggested_requirement = self._infer_extension_schema(label, hint)
             extensions.append(
                 {
                     "field_name": label,
                     "value": value,
                     "evidence": evidence,
                     "confidence": confidence,
+                    "suggested_isa_level": suggested_isa_level,
+                    "suggested_requirement": suggested_requirement,
                     "status": "provisional_extension",
                     "reason": hint.get("reason"),
                     "source": hint.get("source"),
@@ -541,9 +574,13 @@ class JSONGeneratorAgent(BaseAgent):
             "No FAIR-DS package for ",
             "No standardized field for ",
             "No field for ",
+            "FAIR-DS fields for ",
+            "FAIR-DS field for ",
+            "FAIR-DS package specific to ",
+            "FAIR-DS package for ",
         ]
         for prefix in replacements:
-            if label.startswith(prefix):
+            if label.lower().startswith(prefix.lower()):
                 label = label[len(prefix):].strip()
                 break
         if label.startswith("No "):
@@ -555,6 +592,10 @@ class JSONGeneratorAgent(BaseAgent):
             compact = self._compress_extension_sentence(label)
             if compact:
                 label = compact
+
+        concept_label = self._canonical_extension_label(label)
+        if concept_label:
+            label = concept_label
 
         label = re.sub(
             r"\b(not represented|not captured|not covered|outside fair-?ds.*)$",
@@ -569,7 +610,62 @@ class JSONGeneratorAgent(BaseAgent):
             label = label.strip(" ,;:.")
         while label.lower().endswith((" not", " and", " or", " but")):
             label = label.rsplit(" ", 1)[0].strip(" ,;:.")
+        label = self._repair_unbalanced_label(label)
         return label
+
+    def _canonical_extension_label(self, label: str) -> str:
+        """Map noisy search concepts to concise metadata-style labels."""
+        text = " ".join(str(label or "").split()).strip(" .")
+        lower = text.lower()
+        concept_map = [
+            (
+                ["de novo transcriptome assembly", "transcriptome assembly"],
+                "transcriptome assembly method",
+            ),
+            (
+                ["gene ontology enrichment", "go enrichment"],
+                "gene ontology enrichment analysis",
+            ),
+            (["analysis pipeline", "deseq2", "masigpro"], "analysis pipeline"),
+            (
+                ["bioinformatics quality control", "quality control metric"],
+                "bioinformatics quality metric",
+            ),
+            (
+                ["time-series experimental design", "time series experimental design"],
+                "time-series design",
+            ),
+            (["nanomaterial characterization"], "nanomaterial characterization"),
+            (["toxicology", "ecotoxicology", "exposure"], "exposure domain"),
+            (["icp-oes", "icp-ms", "elemental analysis"], "elemental analysis method"),
+            (["library strategy", "rna-seq"], "library strategy"),
+            (["library source"], "library source"),
+            (["experimental factor"], "experimental factor"),
+            (
+                ["chemical administration", "chemical perturbation", "perturbation"],
+                "chemical perturbation",
+            ),
+            (["differential gene expression"], "analysis method"),
+            (["soil exposure"], "exposure environment"),
+            (["transcriptomics"], "assay type"),
+        ]
+        for tokens, normalized in concept_map:
+            if any(token in lower for token in tokens):
+                return normalized
+        if re.fullmatch(r"[A-Z][a-z]+ [a-z]+", text):
+            return "organism"
+        if re.search(r"\b(zno|nanomaterial|nanoparticle|mncl2)\b", lower):
+            return "exposure material"
+        return ""
+
+    def _repair_unbalanced_label(self, label: str) -> str:
+        """Avoid labels ending in truncated punctuation such as an open parenthesis."""
+        text = str(label or "").strip(" ,;:.")
+        if text.count("(") > text.count(")"):
+            text = text.rsplit("(", 1)[0].strip(" ,;:.")
+        if text.count("[") > text.count("]"):
+            text = text.rsplit("[", 1)[0].strip(" ,;:.")
+        return text
 
     def _compress_extension_sentence(self, label: str) -> str:
         """Compress long planner-style sentences into short semantic labels."""
@@ -600,6 +696,30 @@ class JSONGeneratorAgent(BaseAgent):
             clause = " ".join(words[:8])
         return clause.strip(" ,;.")
 
+    def _extension_concept_tokens(self, label: str) -> set[str]:
+        """Extract informative tokens for evidence matching."""
+        stop = {
+            "fair", "fields", "field", "package", "specific", "metadata",
+            "method", "methods", "metric", "metrics", "result", "results",
+            "analysis", "assay", "type", "domain", "source", "strategy",
+            "study", "sample", "experimental",
+        }
+        normalized = re.sub(r"[^a-zA-Z0-9]+", " ", str(label or "").lower())
+        return {
+            token for token in normalized.split()
+            if len(token) > 2 and token not in stop
+        }
+
+    def _packet_relevance_score(self, label: str, packet: Dict[str, Any]) -> int:
+        tokens = self._extension_concept_tokens(label)
+        if not tokens:
+            return 0
+        haystack = " ".join(
+            str(packet.get(key, ""))
+            for key in ["field_candidate", "value", "evidence_text", "section"]
+        ).lower()
+        return sum(1 for token in tokens if token in haystack)
+
     def _select_supporting_packet(
         self,
         label: str,
@@ -608,27 +728,23 @@ class JSONGeneratorAgent(BaseAgent):
     ) -> Optional[Dict[str, Any]]:
         """Pick the most relevant evidence packet for a metadata gap hint."""
         requested_packet_id = hint.get("packet_id")
+        evidence_label = f"{label} {hint.get('label') or ''}"
         if requested_packet_id:
             for packet in evidence_packets:
-                if packet.get("packet_id") == requested_packet_id:
+                if (
+                    packet.get("packet_id") == requested_packet_id
+                    and self._packet_relevance_score(evidence_label, packet) > 0
+                ):
                     return packet
 
-        label_tokens = {
-            token for token in label.lower().replace("-", " ").replace("_", " ").split()
-            if len(token) > 2
-        }
         best_packet: Optional[Dict[str, Any]] = None
         best_score = 0
         for packet in evidence_packets[:30]:
-            haystack = " ".join(
-                str(packet.get(key, ""))
-                for key in ["field_candidate", "value", "evidence_text", "section"]
-            ).lower()
-            score = sum(1 for token in label_tokens if token in haystack)
+            score = self._packet_relevance_score(evidence_label, packet)
             if score > best_score:
                 best_score = score
                 best_packet = packet
-        return best_packet
+        return best_packet if best_score > 0 else None
 
     def _infer_extension_value(
         self,
@@ -649,36 +765,88 @@ class JSONGeneratorAgent(BaseAgent):
 
         if packet:
             packet_value = packet.get("value") or packet.get("supporting_value")
-            packet_evidence = packet.get("evidence_text") or packet.get("supporting_evidence") or packet.get("section")
+            packet_evidence = (
+                packet.get("evidence_text")
+                or packet.get("supporting_evidence")
+                or packet.get("section")
+            )
             if packet_value:
+                packet_confidence = float(packet.get("confidence") or hint.get("confidence") or 0.6)
                 return (
                     self._clip_text(str(packet_value), max_chars=260),
                     self._clip_text(str(packet_evidence or "Evidence packet"), max_chars=220),
-                    round(min(float(packet.get("confidence") or 0.6), 0.82), 2),
+                    round(max(0.45, min(packet_confidence - 0.08, 0.84)), 2),
                 )
 
         support = hint.get("supporting_value") or hint.get("supporting_evidence")
-        if support:
+        supporting_evidence = str(hint.get("supporting_evidence") or "")
+        if support and self._text_matches_extension_label(label, str(support), supporting_evidence):
             return (
                 self._clip_text(str(support), max_chars=260),
                 self._clip_text(
                     str(
-                        hint.get("supporting_evidence")
+                        supporting_evidence
                         or "KnowledgeRetriever metadata gap hint"
                     ),
                     max_chars=220,
                 ),
-                round(min(float(hint.get("confidence") or 0.55), 0.75), 2),
+                round(max(0.4, min(float(hint.get("confidence") or 0.55) - 0.1, 0.72)), 2),
             )
 
         return (
-            "not explicitly captured in FAIR-DS package set",
+            "not reported in source evidence",
             self._clip_text(
-                "Planner/KnowledgeRetriever identified this metadata concept but FAIR-DS had no direct package/field match",
+                "No source excerpt matched this inferred metadata concept.",
                 max_chars=220,
             ),
-            round(min(float(hint.get("confidence") or 0.45), 0.65), 2),
+            round(max(0.3, min(float(hint.get("confidence") or 0.45) - 0.18, 0.62)), 2),
         )
+
+    def _text_matches_extension_label(self, label: str, *texts: str) -> bool:
+        tokens = self._extension_concept_tokens(label)
+        if not tokens:
+            return False
+        haystack = " ".join(str(text or "") for text in texts).lower()
+        return any(token in haystack for token in tokens)
+
+    def _infer_extension_schema(
+        self,
+        label: str,
+        hint: Dict[str, Any],
+    ) -> tuple[str, str]:
+        """Infer where an extension would likely sit if curated into FAIR-DS."""
+        text = " ".join(
+            [
+                str(label or ""),
+                str(hint.get("label") or ""),
+                str(hint.get("reason") or ""),
+            ]
+        ).lower()
+        if any(
+            token in text
+            for token in ["organism", "exposure", "material", "environment", "nanomaterial"]
+        ):
+            isa_level = "sample"
+        elif any(
+            token in text
+            for token in [
+                "library", "rna-seq", "sequencing", "assay", "analysis",
+                "pipeline", "assembly", "ontology", "quality",
+            ]
+        ):
+            isa_level = "assay"
+        elif any(token in text for token in ["domain", "design"]):
+            isa_level = "study"
+        else:
+            isa_level = "study"
+
+        if any(token in text for token in ["required", "mandatory", "identifier", "accession"]):
+            requirement = "mandatory"
+        elif "not reported" in text or "gap" in text:
+            requirement = "recommended"
+        else:
+            requirement = "recommended"
+        return isa_level, requirement
 
     def _clip_text(self, value: str, max_chars: int) -> str:
         """Clip noisy long strings in extension output while keeping readability."""

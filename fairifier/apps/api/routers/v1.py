@@ -1471,7 +1471,6 @@ def _build_word_entries(pairs: list) -> list[MemoryWordEntry]:
             category=cat_map[word].most_common(1)[0][0],
         )
         for word, count in freq.most_common(80)
-        if count >= 2
     ]
 
 
@@ -1504,14 +1503,17 @@ async def memory_cloud(project_id: str, request: Request) -> MemoryCloudResponse
     except Exception:
         project_data = {}
 
-    # session scope = this run only
-    session_id = project_data.get("session_id") or project_id
-    session_mems = mem0.list_memories(session_id=session_id)
+    # Run scope = this project/workflow execution. LangGraph uses project_id as
+    # state["session_id"], while the WebUI browser UUID is the long-term user scope.
+    run_scope_id = project_id
+    session_mems = mem0.list_memories(session_id=run_scope_id)
 
-    # shared scope = cross-run learning pool (may equal session_id if not configured)
+    # Shared scope = cross-run learning pool. In WebUI this is the browser session UUID;
+    # CLI can override it through FAIRIFIER_MEMORY_SCOPE_ID.
     from fairifier.config import config as fc
-    scope_id = fc.memory_scope_id or session_id
-    if scope_id != session_id:
+    user_scope_id = project_data.get("session_id")
+    scope_id = fc.memory_scope_id or user_scope_id or run_scope_id
+    if scope_id != run_scope_id:
         scope_mems = mem0.list_memories(session_id=scope_id)
     else:
         scope_mems = session_mems

@@ -412,6 +412,11 @@ LANGSMITH_PROJECT=fairifier-testing
 # Deep inner loops
 FAIRIFIER_ENABLE_DEEP_AGENTS=true
 
+# Source workspace / agentic source search
+FAIRIFIER_SOURCE_WORKSPACE_ENABLED=true
+FAIRIFIER_METADATA_CONTEXT_MODE=agentic_search
+FAIRIFIER_METADATA_MAX_CONTEXT_CHARS_PER_FIELD=12000
+
 # Crossref polite pool contact
 CROSSREF_MAILTO=your-email@example.org
 
@@ -420,6 +425,9 @@ CROSSREF_MAILTO=your-email@example.org
 CHECKPOINTER_BACKEND=sqlite  # Default: sqlite
 # CHECKPOINT_DB_PATH=output/.checkpoints.db  # Optional: custom DB path
 ```
+
+For source workspace and multi-file behavior, see
+[`docs/en/SOURCE_WORKSPACE.md`](docs/en/SOURCE_WORKSPACE.md).
 
 **Checkpointer modes:**
 - `none`: Stateless, no resume support (for one-shot workflows)

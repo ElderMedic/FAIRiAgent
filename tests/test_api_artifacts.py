@@ -1,8 +1,13 @@
+import asyncio
+from types import SimpleNamespace
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from fairifier.apps.api.routers.v1 import (
+    _build_word_entries,
     _resolve_default_demo_document_key,
+    memory_cloud,
     router,
 )
 from fairifier.apps.api.services.runner import (
@@ -156,3 +161,110 @@ def test_default_demo_document_key_falls_back_to_available_sample():
         _resolve_default_demo_document_key(documents)
         == "earthworm_paper"
     )
+
+
+def test_memory_cloud_separates_run_and_user_memory(
+    monkeypatch,
+    tmp_path,
+):
+    store = SQLiteProjectStore(
+        str(tmp_path / "projects.db")
+    )
+    app = FastAPI()
+    app.state.store = store
+    app.include_router(router)
+
+    store.create_project(
+        "proj-memory",
+        {
+            "project_id": "proj-memory",
+            "project_name": "Memory Project",
+            "session_id": SESSION_HEADERS[
+                "X-FAIRifier-Session-Id"
+            ],
+            "session_started_at": SESSION_HEADERS[
+                "X-FAIRifier-Session-Started-At"
+            ],
+            "status": "completed",
+        },
+    )
+
+    class FakeMem0:
+        def is_available(self):
+            return True
+
+        def list_memories(self, session_id, agent_id=None):
+            if session_id == "proj-memory":
+                return [
+                    {
+                        "memory": "nanotoxicology uses soil package",
+                        "metadata": {"agent_id": "KnowledgeRetriever"},
+                    },
+                ]
+            if session_id == SESSION_HEADERS[
+                "X-FAIRifier-Session-Id"
+            ]:
+                return [
+                    {
+                        "memory": "earthworm studies use ENVO ontology",
+                        "metadata": {"agent_id": "DocumentParser"},
+                    },
+                    {
+                        "memory": "soil studies prefer MIxS fields",
+                        "metadata": {"agent_id": "JSONGenerator"},
+                    },
+                ]
+            return []
+
+    monkeypatch.setattr(
+        "fairifier.services.mem0_service.get_mem0_service",
+        lambda: FakeMem0(),
+    )
+    monkeypatch.setattr(
+        "fairifier.config.config.memory_scope_id",
+        None,
+    )
+
+    try:
+        request = SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(store=store)
+            )
+        )
+        response = asyncio.run(
+            memory_cloud("proj-memory", request)
+        )
+        payload = response.model_dump()
+        assert payload["memory_enabled"] is True
+        assert payload["session_total"] == 1
+        assert payload["scope_total"] == 2
+        assert {
+            entry["text"] for entry in payload["session_words"]
+        } >= {"nanotoxicology", "soil", "package"}
+        assert {
+            entry["text"] for entry in payload["scope_words"]
+        } >= {"earthworm", "ontology", "prefer"}
+    finally:
+        store.close()
+
+
+def test_memory_word_entries_include_singletons():
+    entries = _build_word_entries(
+        [
+            ("nanotoxicology", "KnowledgeRetriever"),
+            ("package", "KnowledgeRetriever"),
+        ]
+    )
+
+    assert [entry.model_dump() for entry in entries] == [
+        {
+            "text": "nanotoxicology",
+            "value": 1,
+            "category": "KnowledgeRetriever",
+        },
+        {
+            "text": "package",
+            "value": 1,
+            "category": "KnowledgeRetriever",
+        },
+    ]
