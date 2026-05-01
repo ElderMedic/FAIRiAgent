@@ -29,7 +29,7 @@ Welcome to the FAIRiAgent documentation. Please select your preferred language:
 ### Development
 - [**FAIR-DS API Manual**](en/development/FAIRDS_API_MANUAL.md): Complete API reference for FAIR Data Station integration.
 - [**Prompt Engineering Guide**](en/development/PROMPT_ENGINEERING_GUIDE.md): Best practices for designing LLM prompts and context engineering.
-- [**Source Workspace Developer Handoff**](en/development/SOURCE_WORKSPACE_DEVELOPER_HANDOFF.md): Implementation status, tests, and next steps for source-grounded metadata generation.
+- [**Source Grounding Architecture**](en/development/SOURCE_GROUNDING_ARCHITECTURE.md): Implementation status, tests, and next steps for source-grounded metadata generation.
 - [**Critic Rubric**](en/development/critic_rubric.yaml): The rubric used by the Critic Agent.
 
 ---

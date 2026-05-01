@@ -1,11 +1,11 @@
-# Source Workspace Developer Handoff
+# Source Grounding and Provenance Architecture
 
 > **Last updated: v1.4.0 (2026-05-02)**
 > For the upstream candidate merging architecture added in this version, see
 > [UPSTREAM_CANDIDATE_MERGING.md](UPSTREAM_CANDIDATE_MERGING.md).
 
-This note is for coding agents and developers continuing the source-workspace
-and metadata-grounding work.  It summarizes the current implementation,
+This document outlines the architecture, guardrails, and testing strategy for
+the source workspace and metadata grounding implementation.
 guardrails, tests, and recommended next steps.
 
 ---
@@ -146,7 +146,7 @@ mamba run -n FAIRiAgent python -m compileall -q \
 
 ## Implementation Status of Previous Next-Steps
 
-Items from the v1.3.x handoff, now resolved:
+Items from the v1.3.x phase, now resolved:
 
 | Item | Status |
 |---|---|

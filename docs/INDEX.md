@@ -40,7 +40,7 @@
 |----------|-------------|
 | [FAIR-DS API Manual](en/development/FAIRDS_API_MANUAL.md) | REST API usage reference |
 | [Prompt Engineering Guide](en/development/PROMPT_ENGINEERING_GUIDE.md) | Prompt and context design |
-| [Source Workspace Developer Handoff](en/development/SOURCE_WORKSPACE_DEVELOPER_HANDOFF.md) | Source-grounded metadata implementation notes and next steps |
+| [Source Grounding Architecture](en/development/SOURCE_GROUNDING_ARCHITECTURE.md) | Source-grounded metadata implementation notes and next steps |
 | [Architecture & Flow](en/ARCHITECTURE_AND_FLOW.md) | System architecture |
 
 ### Development Resources

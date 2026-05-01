@@ -2,7 +2,7 @@
 
 This document describes the **upstream candidate merging** architecture
 introduced in v1.4.0.  It complements
-[SOURCE_WORKSPACE_DEVELOPER_HANDOFF.md](SOURCE_WORKSPACE_DEVELOPER_HANDOFF.md)
+[SOURCE_GROUNDING_ARCHITECTURE.md](SOURCE_GROUNDING_ARCHITECTURE.md)
 and is aimed at developers modifying the `JSONGeneratorAgent` or the grounding
 pipeline.
 
