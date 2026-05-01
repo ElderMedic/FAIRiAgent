@@ -1111,3 +1111,89 @@ def test_json_generator_builds_source_workspace_context(tmp_path):
     assert "Source workspace inventory" in context
     assert "source_001" in context
     assert "rare accession" in context
+
+
+def test_json_generator_builds_field_specific_source_evidence(tmp_path, monkeypatch):
+    from fairifier.services.source_workspace import SourceRecord, build_source_workspace
+
+    workspace = build_source_workspace(
+        [
+            SourceRecord(
+                source_id="source_001",
+                path="main.md",
+                method="direct_read",
+                content="The sampling site was the Wadden Sea near Texel.",
+            )
+        ],
+        tmp_path,
+    )
+    agent = JSONGeneratorAgent()
+    monkeypatch.setattr("fairifier.agents.json_generator.config.source_max_search_results", 3)
+
+    context = agent._build_field_source_evidence_context(
+        {
+            "root_dir": str(workspace.root_dir),
+            "manifest_path": str(workspace.manifest_path),
+            "summary_path": str(workspace.summary_path),
+            "source_paths": {key: str(path) for key, path in workspace.source_paths.items()},
+            "table_paths": {},
+        },
+        [
+            {
+                "name": "sampling site",
+                "description": "Location where samples were collected",
+            }
+        ],
+    )
+
+    assert "Field-specific source evidence" in context
+    assert "sampling site" in context
+    assert "source_001" in context
+    assert "Wadden Sea" in context
+
+
+def test_json_generator_field_source_evidence_searches_full_tables(tmp_path, monkeypatch):
+    from fairifier.services.source_workspace import SourceRecord, build_source_workspace
+
+    workspace = build_source_workspace(
+        [
+            SourceRecord(
+                source_id="source_001",
+                path="samples.csv",
+                method="tabular_csv",
+                content="Table file: samples.csv\nPreview rows: 1 / 2",
+                content_type="table",
+                tables=[
+                    {
+                        "name": "samples",
+                        "rows": [
+                            {"sample_id": "S1", "organism": "not relevant"},
+                            {"sample_id": "S2", "organism": "Eisenia fetida"},
+                        ],
+                    }
+                ],
+            )
+        ],
+        tmp_path,
+    )
+    agent = JSONGeneratorAgent()
+    monkeypatch.setattr("fairifier.agents.json_generator.config.metadata_max_evidence_snippets_per_field", 2)
+
+    context = agent._build_field_source_evidence_context(
+        {
+            "root_dir": str(workspace.root_dir),
+            "manifest_path": str(workspace.manifest_path),
+            "summary_path": str(workspace.summary_path),
+            "source_paths": {key: str(path) for key, path in workspace.source_paths.items()},
+            "table_paths": {key: str(path) for key, path in workspace.table_paths.items()},
+        },
+        [
+            {
+                "name": "organism",
+                "description": "Taxonomic organism name",
+            }
+        ],
+    )
+
+    assert "row 1 column organism" in context
+    assert "Eisenia fetida" in context

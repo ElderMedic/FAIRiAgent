@@ -1479,8 +1479,10 @@ async def memory_cloud(project_id: str, request: Request) -> MemoryCloudResponse
     """Return word-frequency data extracted from this project's memories.
 
     Two views are returned:
-    - session_words: memories scoped to this specific run (session_id = project_id)
-    - scope_words:   memories scoped to the shared memory_scope_id (cross-run learning)
+    - session_words: memories for this workflow run (Mem0 session_id = project_id, matching
+      LangGraph state session_id)
+    - scope_words:   memories for cross-run learning (memory_scope_id: WebUI session UUID,
+      FAIRIFIER_MEMORY_SCOPE_ID, or fairifier-global — aligned with LangGraph initial state)
 
     Only word frequencies and agent categories are exposed — no raw memory text,
     no file paths, no user identifiers.
@@ -1503,16 +1505,16 @@ async def memory_cloud(project_id: str, request: Request) -> MemoryCloudResponse
     except Exception:
         project_data = {}
 
-    # Run scope = this project/workflow execution. LangGraph uses project_id as
-    # state["session_id"], while the WebUI browser UUID is the long-term user scope.
+    # Run scope = this project/workflow execution. LangGraph sets state["session_id"] to
+    # project_id for Mem0 run-scope reads/writes.
     run_scope_id = project_id
     session_mems = mem0.list_memories(session_id=run_scope_id)
 
-    # Shared scope = cross-run learning pool. In WebUI this is the browser session UUID;
-    # CLI can override it through FAIRIFIER_MEMORY_SCOPE_ID.
+    # Cross-run scope matches FAIRifierLangGraphApp initial_state memory_scope_id:
+    # user_session_id (WebUI) → config.memory_scope_id → "fairifier-global".
     from fairifier.config import config as fc
     user_scope_id = project_data.get("session_id")
-    scope_id = fc.memory_scope_id or user_scope_id or run_scope_id
+    scope_id = fc.memory_scope_id or user_scope_id or "fairifier-global"
     if scope_id != run_scope_id:
         scope_mems = mem0.list_memories(session_id=scope_id)
     else:

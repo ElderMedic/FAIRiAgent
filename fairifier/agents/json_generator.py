@@ -11,6 +11,11 @@ from .base import BaseAgent
 from ..models import FAIRifierState, MetadataField
 from ..config import config
 from ..services.evidence_packets import build_evidence_context
+from ..services.source_workspace import (
+    grep_sources,
+    load_source_workspace,
+    search_table,
+)
 from ..utils.llm_helper import get_llm_helper
 from ..services.fairds_api_parser import FAIRDSAPIParser
 
@@ -37,7 +42,15 @@ class JSONGeneratorAgent(BaseAgent):
             workspace_context = self._build_source_workspace_context(
                 state.get("source_workspace", {}) or {}
             )
-            context_parts = [part for part in (evidence_context, workspace_context) if part]
+            field_evidence_context = self._build_field_source_evidence_context(
+                state.get("source_workspace", {}) or {},
+                knowledge_items,
+            )
+            context_parts = [
+                part
+                for part in (evidence_context, workspace_context, field_evidence_context)
+                if part
+            ]
             document_context = "\n\n".join(context_parts)
             if not document_context and config.metadata_allow_direct_document_fallback:
                 document_context = document_text
@@ -171,6 +184,124 @@ class JSONGeneratorAgent(BaseAgent):
             "Full source files are preserved in the run output source_workspace directory.\n"
             f"{summary}"
         )
+
+    def _build_field_source_evidence_context(
+        self,
+        source_workspace: Dict[str, Any],
+        knowledge_items: List[Dict[str, Any]],
+    ) -> str:
+        """Search preserved sources for per-field candidate evidence."""
+        if not (config.metadata_field_search_enabled and source_workspace and knowledge_items):
+            return ""
+        try:
+            workspace = load_source_workspace(source_workspace)
+        except (KeyError, OSError, json.JSONDecodeError):
+            return ""
+
+        max_fields = max(1, int(config.metadata_max_evidence_snippets_per_field))
+        budget = max(1, int(config.metadata_max_context_chars_per_field))
+        lines = [
+            "Field-specific source evidence:",
+            "Use these source_id/path snippets preferentially when filling matching fields.",
+        ]
+        total = sum(len(line) for line in lines)
+
+        for field in knowledge_items:
+            field_name = str(field.get("name") or field.get("field_name") or "").strip()
+            description = str(field.get("description") or "").strip()
+            if not field_name:
+                continue
+            queries = self._field_search_queries(field_name, description)
+            snippets: List[str] = []
+            seen = set()
+            for query in queries:
+                for match in grep_sources(
+                    workspace,
+                    query,
+                    context_chars=config.source_grep_context_chars,
+                    max_results=config.source_max_search_results,
+                ):
+                    marker = (match.get("source_id"), match.get("start"), match.get("end"))
+                    if marker in seen:
+                        continue
+                    seen.add(marker)
+                    excerpt = " ".join(str(match.get("excerpt") or "").split())
+                    snippets.append(
+                        f"- {match.get('source_id')}:{match.get('start')}-{match.get('end')} "
+                        f"({match.get('source_path')}): {excerpt}"
+                    )
+                    if len(snippets) >= max_fields:
+                        break
+                if len(snippets) >= max_fields:
+                    break
+            if config.table_full_scan_enabled and len(snippets) < max_fields:
+                for query in queries:
+                    for match in search_table(
+                        workspace,
+                        query,
+                        max_rows=config.table_search_max_rows,
+                        max_matches=config.table_search_max_matches,
+                    ):
+                        row = match.get("row") or {}
+                        snippets.append(
+                            f"- {match.get('source_id')} table {match.get('table')} "
+                            f"row {match.get('row_index')} column {match.get('column')}: {row}"
+                        )
+                        if len(snippets) >= max_fields:
+                            break
+                    if len(snippets) >= max_fields:
+                        break
+            if not snippets:
+                continue
+            block = [f"\nField: {field_name}", *snippets]
+            block_text = "\n".join(block)
+            if total + len(block_text) > budget:
+                lines.append("\n[... field-specific source evidence truncated by configurable metadata budget ...]")
+                break
+            lines.append(block_text)
+            total += len(block_text)
+
+        return "\n".join(lines) if len(lines) > 2 else ""
+
+    def _field_search_queries(self, field_name: str, description: str) -> List[str]:
+        """Build conservative literal search queries from a FAIR-DS field."""
+        raw_candidates = [
+            field_name,
+            field_name.replace("_", " "),
+            field_name.replace("-", " "),
+        ]
+        for phrase in re.split(r"[.;:,()\\[\\]\\n]+", description):
+            phrase = phrase.strip()
+            if 3 <= len(phrase) <= 80:
+                raw_candidates.append(phrase)
+
+        queries: List[str] = []
+        seen = set()
+        stopwords = {
+            "the", "and", "for", "with", "from", "that", "this", "where",
+            "metadata", "field", "value", "values", "sample", "study",
+        }
+        for candidate in raw_candidates:
+            cleaned = " ".join(candidate.split()).strip()
+            if not cleaned:
+                continue
+            lowered = cleaned.lower()
+            if lowered not in seen:
+                seen.add(lowered)
+                queries.append(cleaned)
+            tokens = [
+                token
+                for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", cleaned)
+                if token.lower() not in stopwords
+            ]
+            for token in tokens[:4]:
+                lowered_token = token.lower()
+                if lowered_token not in seen:
+                    seen.add(lowered_token)
+                    queries.append(token)
+            if len(queries) >= 8:
+                break
+        return queries[:8]
     
     async def _generate_with_llm(
         self,
@@ -820,6 +951,12 @@ class JSONGeneratorAgent(BaseAgent):
                 str(label or ""),
                 str(hint.get("label") or ""),
                 str(hint.get("reason") or ""),
+                str(hint.get("requirement") or ""),
+                *(
+                    str(hint[k]).strip()
+                    for k in ("priority", "severity", "status")
+                    if isinstance(hint.get(k), str) and str(hint[k]).strip()
+                ),
             ]
         ).lower()
         if any(
@@ -835,17 +972,18 @@ class JSONGeneratorAgent(BaseAgent):
             ]
         ):
             isa_level = "assay"
-        elif any(token in text for token in ["domain", "design"]):
-            isa_level = "study"
         else:
             isa_level = "study"
 
-        if any(token in text for token in ["required", "mandatory", "identifier", "accession"]):
+        requirement = "recommended"
+        req_hint = str(hint.get("requirement") or "").strip().upper()
+        if hint.get("mandatory") is True or req_hint in {"MANDATORY", "REQUIRED"}:
             requirement = "mandatory"
-        elif "not reported" in text or "gap" in text:
-            requirement = "recommended"
-        else:
-            requirement = "recommended"
+        elif any(
+            token in text
+            for token in ["required", "mandatory", "identifier", "accession"]
+        ):
+            requirement = "mandatory"
         return isa_level, requirement
 
     def _clip_text(self, value: str, max_chars: int) -> str:

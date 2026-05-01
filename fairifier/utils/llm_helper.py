@@ -2013,6 +2013,7 @@ REQUIREMENTS:
 3. Provide brief evidence (not full quotes)
 4. Assign realistic confidence scores (0.0-1.0)
 5. If information truly isn't available, use "not specified" but STILL include the field
+6. If field-specific source evidence is provided, cite its source_id/span/table row in evidence.
 
 **For each field, provide:**
 - field_name: MUST match exactly one of the field names in the provided list
@@ -2027,6 +2028,7 @@ REQUIREMENTS:
 - For fields with limited information, use "not specified" but still include the field
 - Keep all values concise (< 500 chars each)
 - Keep all evidence brief (< 200 chars each)
+- Prefer evidence like "source_001:123-145" or "source_002 table samples row 4" when available.
 
 **OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**
 Wrap your JSON array in markdown code blocks EXACTLY like this:
@@ -2115,6 +2117,7 @@ Fields by ISA hierarchy:
 6. **Assay-level fields** ({field_counts.get('assay', 0)} fields): Must generate values from methods section
 7. **Sample-level fields** ({field_counts.get('sample', 0)} fields): Must generate values from methods or results
 8. **ObservationUnit-level fields** ({field_counts.get('observationunit', 0)} fields): Must generate values from methods or environmental context
+9. If the document excerpt contains "Field-specific source evidence", use matching source_id/span/table row references in the evidence field.
 
 **For fields where information is not explicitly stated:**
 - Investigation/Study fields: Derive from document title/abstract
