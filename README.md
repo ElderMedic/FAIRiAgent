@@ -91,6 +91,7 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 
 - 🤖 **Multi-Agent Architecture**: Specialized agents for document parsing, knowledge retrieval, and JSON generation
 - 📄 **Document Processing**: Extract metadata from PDF and text documents with MinerU integration
+- 🧬 **Bioinformatics Agentic Analysis**: Active recovery of missing metadata directly from raw biological files (BAM, VCF, FASTQ) using containerized tools (Samtools, Bcftools) from **quay.io/biocontainers**.
 - 🧠 **Knowledge Retrieval**: Integrate with FAIR Data Station API (59 packages, 892 terms) and local knowledge base
 - 🏷️ **Evidence-based Fields**: Every field includes evidence, confidence, origin, and package source
 - 📊 **JSON-only Output**: FAIR-DS compatible metadata format (no RDF/RO-Crate)

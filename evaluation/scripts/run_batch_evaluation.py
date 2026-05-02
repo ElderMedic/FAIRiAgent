@@ -226,7 +226,7 @@ class BatchEvaluationRunner:
         print(f"⚡ Parallel workers: {max_workers}\n")
         
         # Create output directory for this config
-        config_output_dir = self.output_dir / 'outputs' / config_name
+        config_output_dir = self.output_dir / config_name
         config_output_dir.mkdir(parents=True, exist_ok=True)
         
         model_results = {}

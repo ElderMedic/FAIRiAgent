@@ -103,6 +103,7 @@ class CriticAgent(BaseAgent):
         self.rubric = self._load_rubric(config.critic_rubric_path)
         self.node_key_map = {
             "DocumentParser": "document_parser",
+            "BioMetadataAgent": "bio_metadata_agent",
             "KnowledgeRetriever": "knowledge_retriever",
             "JSONGenerator": "json_generator",
         }

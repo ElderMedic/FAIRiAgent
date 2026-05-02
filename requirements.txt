@@ -19,7 +19,7 @@ playwright>=1.40.0
 beautifulsoup4>=4.12.0
 
 # API and CLI
-fastapi>=0.104.0,<0.118
+fastapi>=0.104.0
 uvicorn>=0.24.0
 python-multipart>=0.0.6
 click>=8.1.0
@@ -48,9 +48,9 @@ python-dotenv>=1.0.0
 # pytest>=7.4.0
 # pytest-asyncio>=0.21.0
 
-# Memory layer (optional, for mem0 integration)
+# Persistent memory layer (optional, for mem0 integration)
 # Provides persistent semantic memory for context compression and retrieval
 # Requires Qdrant server running at localhost:6333
 # Enable with: MEM0_ENABLED=true in .env
-mem0ai>=1.0.0
+mem0ai>=2.0.1
 qdrant-client>=1.7.0

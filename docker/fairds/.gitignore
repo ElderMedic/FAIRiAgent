@@ -1,2 +1,0 @@
-# FAIR-DS JARs are large (~180MB+) and exceed GitHub single-file limits; keep local copies only.
-*.jar

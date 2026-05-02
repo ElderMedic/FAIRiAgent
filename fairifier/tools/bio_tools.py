@@ -16,6 +16,18 @@ from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
+# Known biocontainer images — the agent can use the short alias (e.g. "samtools")
+# and the tool resolves the full quay.io image automatically.
+_BIO_TOOL_IMAGES = {
+    "samtools": "quay.io/biocontainers/samtools:1.23.1--ha83d96e_0",
+    "bcftools": "quay.io/biocontainers/bcftools:1.23.1--hb2cee57_0",
+}
+
+
+def _resolve_image(image: str) -> str:
+    """If image is a short alias, resolve to the full quay.io image."""
+    return _BIO_TOOL_IMAGES.get(image.lower(), image)
+
 
 def _ensure_docker_image(image: str) -> bool:
     """Pull a Docker image if it is not already present. Returns True on success."""
@@ -58,9 +70,12 @@ def run_biocontainer_tool(
     Mounts the parent directory of host_path into the container at /data,
     so the file is accessible as /data/<filename>. Auto-pulls the image if missing.
 
+    Use a short alias like "samtools" or "bcftools" for image — the tool
+    resolves it to the correct quay.io image automatically.
+
     Args:
-        image: Docker image, e.g. "quay.io/biocontainers/samtools:1.19.2--h50dae1a_1"
-        command: Command + args to run, e.g. ["samtools", "stats", "/data/file.bam"]
+        image: Docker image or alias ("samtools" or "bcftools")
+        command: Command + args, e.g. ["samtools", "stats", "/data/file.bam"]
         host_path: Absolute host path to the data file
         workdir: Working directory inside the container (default /data)
 
@@ -72,15 +87,16 @@ def run_biocontainer_tool(
         return f"Error: host_path does not exist: {host}"
 
     mount_src = str(host.parent) if host.is_file() else str(host)
+    resolved_image = _resolve_image(image)
 
-    if not _ensure_docker_image(image):
+    if not _ensure_docker_image(resolved_image):
         return f"Error: failed to pull Docker image {image}"
 
     docker_cmd = [
         "docker", "run", "--rm",
         "-v", f"{mount_src}:{workdir}",
         "-w", workdir,
-        image,
+        resolved_image,
     ] + command
 
     try:

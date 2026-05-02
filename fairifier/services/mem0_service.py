@@ -107,7 +107,7 @@ class Mem0Service:
             self._seen_message_fingerprints: set[str] = set()
             # Quick health check: try a lightweight operation to catch version mismatches
             try:
-                self.memory.search(query="health_check", user_id="_health_", limit=1)
+                self.memory.search(query="health_check", filters={"user_id": "_health_"}, top_k=1)
             except Exception:
                 pass  # 404 or other errors here are fine — the collection may be empty
 
@@ -154,12 +154,16 @@ class Mem0Service:
             return []
         
         try:
-            # mem0 uses user_id for scoping
+            # mem0 v3 uses filters for scoping
+            filters = {"user_id": session_id}
+            if agent_id:
+                filters["agent_id"] = agent_id
+                
             results = self.memory.search(
                 query=query,
-                user_id=session_id,
-                agent_id=agent_id,
-                limit=limit
+                filters=filters,
+                top_k=limit,
+                threshold=0.0  # Retain v2 behavior
             )
             memories = results.get("results", [])
             logger.debug(f"Memory search returned {len(memories)} results for session={session_id}, agent={agent_id}")
@@ -209,10 +213,14 @@ class Mem0Service:
                 logger.debug("Skipping duplicate mem0 add for session=%s agent=%s", session_id, agent_id)
                 return {"results": [], "skipped": "duplicate_messages"}
 
+            filters: Dict[str, Any] = {"user_id": session_id}
+            if agent_id:
+                filters["agent_id"] = agent_id
+            # Scope matches search()/list_memories(); Memory.add maps these via _build_filters_and_metadata.
             result = self.memory.add(
                 messages=normalized_messages,
-                user_id=session_id,
-                agent_id=agent_id,
+                user_id=filters["user_id"],
+                agent_id=filters.get("agent_id"),
                 metadata=metadata or {}
             )
             self._seen_message_fingerprints.add(fingerprint)
@@ -258,7 +266,11 @@ class Mem0Service:
             return []
         
         try:
-            results = self.memory.get_all(user_id=session_id, agent_id=agent_id)
+            filters = {"user_id": session_id}
+            if agent_id:
+                filters["agent_id"] = agent_id
+            # Use a large top_k to emulate v2 get_all behavior which returned everything
+            results = self.memory.get_all(filters=filters, top_k=1000)
             memories = results.get("results", [])
             logger.debug(f"Listed {len(memories)} memories for session={session_id}, agent={agent_id}")
             return memories
@@ -674,7 +686,7 @@ def build_mem0_config(
                 "embedding_model_dims": embedding_model_dims,
             }
         },
-        "custom_fact_extraction_prompt": FAIR_FACT_EXTRACTION_PROMPT,
+        "custom_instructions": FAIR_FACT_EXTRACTION_PROMPT,
     }
 
 

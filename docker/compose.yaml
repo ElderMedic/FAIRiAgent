@@ -1,17 +1,16 @@
 services:
-  # FAIR Data Station API — default image downloads fairds-latest.jar at build time (reproducible, no JAR in git).
-  # Optional: copy a local JAR with docker/pack-fairds-jar.sh and set FAIRDS_DOCKERFILE=Dockerfile.from-local in .env
+  # FAIR Data Station API (Official Image)
   fairds:
-    build:
-      context: ./fairds
-      dockerfile: ${FAIRDS_DOCKERFILE:-Dockerfile}
+    image: docker-registry.wur.nl/m-unlock/docker/fairds:latest
     ports:
       - "8083:8083"
     environment:
       JAVA_TOOL_OPTIONS: ${FAIRDS_JAVA_TOOL_OPTIONS:--Xmx2g}
+    volumes:
+      - ./fairds_storage:/fairds_storage
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8083/api/package"]
-      interval: 15s
+      interval: 20s
       timeout: 10s
       retries: 40
       start_period: 120s
@@ -20,7 +19,7 @@ services:
   fairifier-api:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: ${FAIRIFIER_DOCKERFILE:-Dockerfile}
     ports:
       - "8000:8000"
     environment:
@@ -55,6 +54,7 @@ services:
       - ../output:/app/output
       - ../kb:/app/kb
       - ../examples:/app/examples:ro
+      - /var/run/docker.sock:/var/run/docker.sock  # Required for BioMetadataAgent to spawn BioContainers
     depends_on:
       fairds:
         condition: service_healthy
@@ -63,7 +63,7 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:v1.7.0
+    image: qdrant/qdrant:v1.13.0
     ports:
       - "6333:6333"
     volumes:

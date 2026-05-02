@@ -1445,9 +1445,10 @@ def _tokenize_memories(
     pairs: list[tuple[str, str]] = []
     for m in memories:
         text = m.get("memory", "")
+        meta = m.get("metadata") or {}
         category = (
-            m.get("metadata", {}).get("agent_id")
-            or m.get("metadata", {}).get("workflow_step")
+            meta.get("agent_id")
+            or meta.get("workflow_step")
             or "unknown"
         )
         for word in re.findall(r"[a-zA-Z]{3,}", text):

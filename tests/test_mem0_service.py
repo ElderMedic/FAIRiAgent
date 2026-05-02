@@ -191,9 +191,9 @@ class TestMem0Service:
         assert mock_mem.search.call_count == 2
         mock_mem.search.assert_called_with(
             query="test query",
-            user_id="session_123",
-            agent_id="TestAgent",
-            limit=5
+            filters={"user_id": "session_123", "agent_id": "TestAgent"},
+            top_k=5,
+            threshold=0.0
         )
     
     @patch('mem0.Memory')
@@ -283,8 +283,8 @@ class TestMem0Service:
         
         assert len(results) == 2
         mock_mem.get_all.assert_called_once_with(
-            user_id="session_123",
-            agent_id="TestAgent"
+            filters={"user_id": "session_123", "agent_id": "TestAgent"},
+            top_k=1000
         )
     
     @patch('mem0.Memory')

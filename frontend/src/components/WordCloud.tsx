@@ -4,6 +4,7 @@ import type { MemoryWord } from '../api/client';
 // Agent category → color mapping
 const CATEGORY_COLORS: Record<string, string> = {
   DocumentParser:        '#3b82f6', // blue
+  BioMetadataAgent:      '#059669', // emerald (darker)
   KnowledgeRetriever:    '#10b981', // emerald
   Planner:               '#8b5cf6', // violet
   MetadataJSONGenerator: '#f59e0b', // amber

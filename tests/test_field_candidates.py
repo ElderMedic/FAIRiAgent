@@ -140,7 +140,8 @@ def test_postcheck_enriches_evidence_with_primary_candidate():
         ]
     }
     
-    result = agent._postcheck_source_grounding(fields, {"some": "workspace"}, field_candidates)
+    result, downgrades = agent._postcheck_source_grounding(fields, {"some": "workspace"}, field_candidates)
+    assert downgrades == 0
     
     # Because of candidate reconciliation, evidence is enriched and confidence is kept high!
     assert result[0].confidence == 0.9
@@ -164,7 +165,8 @@ def test_postcheck_downgrades_when_no_candidates():
         )
     ]
     
-    result = agent._postcheck_source_grounding(fields, {"some": "workspace"}, {})
+    result, downgrades = agent._postcheck_source_grounding(fields, {"some": "workspace"}, {})
+    assert downgrades == 1
     
     # Downgraded because no source ref and no candidates
     from fairifier.config import config

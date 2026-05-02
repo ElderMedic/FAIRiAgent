@@ -2460,6 +2460,8 @@ class FAIRifierLangGraphApp:
         tables: List[Dict[str, Any]] = []
         for sheet_name in workbook.sheet_names:
             df = pd.read_excel(path, sheet_name=sheet_name)
+            for col in df.select_dtypes(include=['datetime64', 'datetime64[ns]', 'datetimetz']).columns:
+                df[col] = df[col].dt.strftime('%Y-%m-%dT%H:%M:%S')
             # Cast to string to prevent JSON serialization errors with Timestamp objects
             rows = df.fillna("").astype(str).to_dict(orient="records")
             tables.append({"name": str(sheet_name), "rows": rows})

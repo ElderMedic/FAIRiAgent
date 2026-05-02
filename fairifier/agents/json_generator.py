@@ -150,7 +150,7 @@ class JSONGeneratorAgent(BaseAgent):
                 f"🤖 Using LLM to generate values for all {len(knowledge_items)} fields "
                 f"from KnowledgeRetriever (already filtered for relevance)"
             )
-            metadata_fields = await self._generate_with_llm(
+            metadata_fields, source_ref_downgrades = await self._generate_with_llm(
                 doc_info,
                 knowledge_items,
                 document_context,
@@ -159,7 +159,7 @@ class JSONGeneratorAgent(BaseAgent):
                 prior_memory_context=prior_memory_context or None,
                 selected_packages=state.get("selected_packages"),
                 source_workspace=state.get("source_workspace", {}) or {},
-                field_candidates=all_candidates,
+                field_candidates=pre_reconciled,
             )
             metadata_fields = self._ensure_mandatory_fields_present(
                 metadata_fields=metadata_fields,
@@ -182,7 +182,10 @@ class JSONGeneratorAgent(BaseAgent):
             
             # Generate final JSON output
             json_output = self._generate_json_output(
-                metadata_fields, doc_info, state
+                metadata_fields,
+                doc_info,
+                state,
+                source_ref_downgrades=source_ref_downgrades,
             )
             
             # Store in artifacts
@@ -440,10 +443,12 @@ class JSONGeneratorAgent(BaseAgent):
                 candidate_map[cid] = c
                 # Cap the evidence length to avoid huge prompts
                 evidence_text = c.evidence[:1500] if c.evidence else ""
-                prompt_parts.append(f"Candidate ID: {cid}\\nField Name: {field_name}\\nEvidence: {evidence_text}\\n")
+                prompt_parts.append(
+                    f"Candidate ID: {cid}\nField Name: {field_name}\nEvidence: {evidence_text}\n"
+                )
                 idx += 1
-                
-        prompt = "\\n".join(prompt_parts)
+
+        prompt = "\n".join(prompt_parts)
         
         try:
             from langchain_core.messages import SystemMessage, HumanMessage
@@ -689,7 +694,7 @@ class JSONGeneratorAgent(BaseAgent):
         selected_packages: Optional[List[str]] = None,
         source_workspace: Optional[Dict[str, Any]] = None,
         field_candidates: Optional[Dict[str, List[FieldCandidate]]] = None,
-    ) -> List[MetadataField]:
+    ) -> Tuple[List[MetadataField], Optional[int]]:
         """
         Generate metadata fields with LLM-based value extraction.
         
@@ -830,13 +835,21 @@ class JSONGeneratorAgent(BaseAgent):
         fields: List[MetadataField],
         source_workspace: Dict[str, Any],
         field_candidates: Optional[Dict[str, List[FieldCandidate]]] = None,
-    ) -> List[MetadataField]:
-        """Downgrade high-confidence fields that lack source references."""
+    ) -> Tuple[List[MetadataField], Optional[int]]:
+        """Downgrade high-confidence fields that lack source references.
+
+        Returns:
+            Mutated fields and optional count of fields downgraded for missing source
+            references while still above the threshold (pre-downgrade/high-confidence
+            grounding failures). None means post-check did not run — summaries should
+            derive this metric from field evidence + confidence only.
+        """
         if not (config.metadata_field_search_enabled and source_workspace):
-            return fields
+            return fields, None
         source_ref_pattern = SOURCE_REF_PATTERN
         min_confidence = float(config.metadata_source_ref_min_confidence)
         downgrade_confidence = float(config.metadata_source_ref_downgrade_confidence)
+        source_ref_downgrades = 0
         for field in fields:
             evidence = str(field.evidence or "")
             
@@ -865,11 +878,12 @@ class JSONGeneratorAgent(BaseAgent):
 
             if field.confidence < min_confidence or source_ref_pattern.search(evidence):
                 continue
+            source_ref_downgrades += 1
             field.confidence = min(field.confidence, downgrade_confidence)
             field.status = "provisional"
             suffix = "source grounding check: missing source reference"
             field.evidence = f"{evidence}; {suffix}" if evidence else suffix
-        return fields
+        return fields, source_ref_downgrades
     
     def _field_to_dict(self, field: MetadataField) -> Dict[str, Any]:
         """Convert MetadataField to dictionary for FAIR-DS format."""
@@ -962,10 +976,11 @@ class JSONGeneratorAgent(BaseAgent):
         return metadata_fields
     
     def _generate_json_output(
-        self, 
-        fields: List[MetadataField], 
+        self,
+        fields: List[MetadataField],
         doc_info: Dict[str, Any],
-        state: FAIRifierState
+        state: FAIRifierState,
+        source_ref_downgrades: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Generate ISA-structured metadata template (5 layers) - uses ONLY real FAIR-DS data."""
         
@@ -1056,7 +1071,9 @@ class JSONGeneratorAgent(BaseAgent):
                 "confirmed_fields": sum(1 for f in fields if f.status == "confirmed"),
                 "provisional_fields": sum(1 for f in fields if f.status == "provisional"),
                 "inferred_extension_fields": len(state.get("inferred_metadata_extensions", [])),
-                "source_grounding_summary": self._compute_source_grounding_summary(fields),
+                "source_grounding_summary": self._compute_source_grounding_summary(
+                    fields, source_ref_downgrades=source_ref_downgrades
+                ),
             },
             
             # Confidence breakdown
@@ -1689,11 +1706,22 @@ class JSONGeneratorAgent(BaseAgent):
         return grouped
     
     @staticmethod
-    def _compute_source_grounding_summary(fields: List[MetadataField]) -> Dict[str, int]:
-        """Compute source-grounding counters for the output statistics block."""
+    def _compute_source_grounding_summary(
+        fields: List[MetadataField],
+        *,
+        source_ref_downgrades: Optional[int] = None,
+    ) -> Dict[str, int]:
+        """Compute source-grounding counters for the output statistics block.
+
+        When *source_ref_downgrades* is set, the post-check ran: fields that were
+        high-confidence without a source reference are downgraded and no longer
+        meet the threshold, so we add that count to any remaining high-confidence
+        ungrounded fields (e.g. added after post-check) instead of under-reporting.
+        """
         grounded = 0
-        ungrounded_high = 0
+        ungrounded_high_remaining = 0
         table_backed = 0
+        min_c = float(config.metadata_source_ref_min_confidence)
         for field in fields:
             evidence = str(field.evidence or "")
             has_source = bool(SOURCE_REF_PATTERN.search(evidence))
@@ -1702,8 +1730,12 @@ class JSONGeneratorAgent(BaseAgent):
                 grounded += 1
             if has_table:
                 table_backed += 1
-            if not has_source and field.confidence >= float(config.metadata_source_ref_min_confidence):
-                ungrounded_high += 1
+            if not has_source and field.confidence >= min_c:
+                ungrounded_high_remaining += 1
+        if source_ref_downgrades is not None:
+            ungrounded_high = source_ref_downgrades + ungrounded_high_remaining
+        else:
+            ungrounded_high = ungrounded_high_remaining
         return {
             "source_grounded_fields": grounded,
             "ungrounded_high_confidence_fields": ungrounded_high,

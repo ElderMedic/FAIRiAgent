@@ -22,8 +22,10 @@
 | Document | Description |
 |----------|-------------|
 | [**Memory Management**](MEMORY_GUIDE.md) ⭐ | How to use the memory system |
+| [**Bioinformatics Agentic Analysis**](en/BIOINFO_AGENTIC_ANALYSIS.md) 🧬 | Active recovery from raw biological data |
 | [Docker Guide](en/guides/DOCKER_DEPLOYMENT.md) | Running with Docker |
 | [LangGraph Studio Guide](en/guides/LANGGRAPH_STUDIO_SETUP.md) | Local Studio setup |
+| [May 2026 Updates](en/guides/DEPENDENCY_UPDATES_MAY2026.md) 🔄 | Dependency upgrades & compatibility |
 
 ### Memory Features (v1.3.0)
 | Document | Description |

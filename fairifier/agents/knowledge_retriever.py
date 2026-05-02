@@ -883,15 +883,19 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             if all_terms_to_search and self.fair_ds_client:
                 self.log_execution(state, f"🔍 Phase 4: Searching for {len(all_terms_to_search)} additional terms...")
                 term_search_outcomes: Dict[str, Dict[str, int]] = {}
-                # Only attribute fields to packages the workflow actually selected (Phase 1).
-                # Searching all available packages and deduping by label alone used to pull
-                # MIxS duplicates (e.g. "target gene" from "human oral") even when that package
-                # was never selected — disagreeing with LangSmith package-selection traces.
+                
+                # Allow searching across all packages to find fields the LLM might have missed
+                # during initial package selection.
+                search_scope_packages = selected_package_names
+                package_names_str = ",".join(search_scope_packages) if search_scope_packages else None
+
+                # Keep all found fields, prioritizing those from selected packages later if needed.
                 selected_pkg_norm = {
                     str(p).strip().lower()
-                    for p in selected_package_names
+                    for p in search_scope_packages
                     if str(p).strip()
                 }
+                
                 for term in all_terms_to_search:
                     term_key = str(term).strip().lower()
                     if not term_key:
@@ -915,12 +919,6 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                         state["additional_terms"].extend(found_terms)
                     
                     # Also search across packages for fields with matching labels (tool).
-                    # Scope is selected + publication/domain hints — never the full registry
-                    # (required terms used to search everything and pick arbitrary MIxS duplicates).
-                    search_scope_packages = list(
-                        dict.fromkeys(selected_package_names + priority_package_hints)
-                    )
-                    package_names_str = ",".join(search_scope_packages) if search_scope_packages else None
                     fields_search_result = self.tools["search_fields_in_packages"].invoke({
                         "field_label": term,
                         "package_names": package_names_str

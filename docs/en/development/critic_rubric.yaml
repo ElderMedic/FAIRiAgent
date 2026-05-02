@@ -101,3 +101,25 @@ nodes:
           - "For weak fields, recommend exact sections or terms to re-extract."
           - "Highlight structural gaps (e.g., missing secondment table, ethics statement)."
 
+  bio_metadata_agent:
+    accept_threshold: 0.70
+    revise_min: 0.40
+    description: "Agent analyzed raw biological data (BAM, VCF, etc.) using bioinformatics tools."
+    criteria:
+      accuracy:
+        checks:
+          - "Metadata recovered (read length, paired-end, assembly) is scientifically plausible for the file type."
+          - "Tool outputs were parsed correctly (e.g., samtools stats values)."
+      coverage:
+        checks:
+          - "Recovered missing metadata fields that were absent in documentation."
+          - "Appropriate tools (samtools, bcftools) were used for the specific file types."
+      faithfulness:
+        checks:
+          - "Evidence references specific tool output or file headers."
+          - "No hallucination of sequencing parameters not found in the raw data."
+      actionability:
+        checks:
+          - "Suggest alternative tools or commands if primary analysis failed to yield results."
+          - "Point to specific data files that may need deeper inspection."
+

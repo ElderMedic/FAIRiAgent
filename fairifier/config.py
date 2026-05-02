@@ -714,6 +714,25 @@ def apply_budget_guardrails(config_instance: FAIRifierConfig):
     if allow_expensive:
         return
 
+    config_instance.llm_max_tokens = min(config_instance.llm_max_tokens, 8192)
+    config_instance.max_doc_context_markdown = min(
+        config_instance.max_doc_context_markdown, 200000
+    )
+    config_instance.max_doc_context_text = min(
+        config_instance.max_doc_context_text, 120000
+    )
+    config_instance.max_step_retries = min(config_instance.max_step_retries, 2)
+    config_instance.max_global_retries = min(config_instance.max_global_retries, 5)
+    config_instance.react_loop_max_iterations = min(
+        config_instance.react_loop_max_iterations, 6
+    )
+    config_instance.react_loop_max_tool_calls = min(
+        config_instance.react_loop_max_tool_calls, 18
+    )
+    config_instance.cross_layer_max_restarts = min(
+        config_instance.cross_layer_max_restarts, 2
+    )
+
 
 # Global config instance
 config = FAIRifierConfig()

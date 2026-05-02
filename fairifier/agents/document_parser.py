@@ -16,6 +16,7 @@ from ..skills import load_skill_files, skills_catalog_seed_files
 from ..services.evidence_packets import build_evidence_packets
 from ..services.retrieval_cache import get_cache_bucket
 from ..tools.science_tools import create_science_tools
+from ..tools.bio_tools import create_bio_tools
 from ..utils.llm_helper import get_llm_helper
 from ..services.mineru_client import MinerUClient, MinerUConversionError
 from ..tools.mineru_tools import create_mineru_convert_tool
@@ -64,6 +65,7 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
     ):
         """Create the deepagents-backed inner loop for document parsing."""
         parser_science_tools = create_science_tools(cache_store=science_cache)
+        parser_bio_tools = create_bio_tools()
 
         @tool
         def analyze_document_outline(text: str) -> Dict[str, Any]:
@@ -112,6 +114,9 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             "authors, keywords, research_domain, methodology, location, and coordinates. "
             "When /workspace/source_workspace.md exists, use it as the source inventory; "
             "read files under /workspace/sources/ only when you need more exact evidence. "
+            "If you are provided with raw biological data files (BAM, VCF, etc.) in /workspace/sources/ "
+            "and narrative documentation is sparse, use bioinformatics tools via biocontainers "
+            "to inspect headers and statistics to recover missing metadata. "
             "Skills (built-in and user-imported) follow the Anthropic pattern: YAML frontmatter on SKILL.md "
             "plus optional sibling .md files under /skills/. A summary lives at /workspace/skills_catalog.md. "
             "You MUST open /workspace/skills_catalog.md on the first tool-capable turn, select every skill whose "
@@ -132,7 +137,12 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
                 "tools": [focused_field_extraction],
             }
         ]
-        tools = [analyze_document_outline, focused_field_extraction, *parser_science_tools]
+        tools = [
+            analyze_document_outline,
+            focused_field_extraction,
+            *parser_science_tools,
+            *parser_bio_tools,
+        ]
         return self._build_react_agent(
             tools=tools,
             subagents=subagents,
@@ -164,14 +174,19 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
                 except OSError:
                     self.logger.warning("Failed to read source workspace summary: %s", summary_path)
             for source_id, source_path in (source_workspace.get("source_paths") or {}).items():
+                s_path = Path(source_path)
+                if s_path.suffix.lower() in {".bam", ".vcf", ".h5ad", ".gz", ".fq", ".fastq"}:
+                    continue # Skip binary files in virtual FS
                 try:
                     source_file = self._maybe_create_file_data(
-                        Path(source_path).read_text(encoding="utf-8")
+                        s_path.read_text(encoding="utf-8")
                     )
                     if source_file is not None:
                         seed_files[f"/workspace/sources/{source_id}.md"] = source_file
                 except OSError:
                     self.logger.warning("Failed to read source workspace file: %s", source_path)
+                except UnicodeDecodeError:
+                    self.logger.warning("Skipping binary file in source workspace: %s", source_path)
 
         agents_path = Path(config.project_root) / "AGENTS.md"
         if agents_path.exists():

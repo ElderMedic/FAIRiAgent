@@ -1220,8 +1220,9 @@ def test_json_generator_postcheck_downgrades_high_confidence_without_source_refe
         ),
     ]
 
-    reviewed = agent._postcheck_source_grounding(fields, {"manifest_path": "/tmp/source_manifest.json"})
+    reviewed, downgrades = agent._postcheck_source_grounding(fields, {"manifest_path": "/tmp/source_manifest.json"})
 
+    assert downgrades == 1
     assert reviewed[0].confidence == 0.6
     assert reviewed[0].status == "provisional"
     assert "missing source reference" in reviewed[0].evidence

@@ -336,6 +336,25 @@ def test_compute_source_grounding_summary_uses_configured_threshold(monkeypatch)
     assert summary["ungrounded_high_confidence_fields"] == 0
 
 
+def test_compute_source_grounding_summary_counts_pre_downgrade_when_postcheck_ran():
+    """Downgraded fields fall below the threshold; include post-check count explicitly."""
+    agent = JSONGeneratorAgent()
+    fields = [
+        MetadataField(
+            field_name="sampling site",
+            value="Wadden Sea",
+            evidence="Methods section; source grounding check: missing source reference",
+            confidence=0.6,
+            status="provisional",
+        ),
+    ]
+    summary = agent._compute_source_grounding_summary(
+        fields, source_ref_downgrades=1
+    )
+    assert summary["ungrounded_high_confidence_fields"] == 1
+    without = agent._compute_source_grounding_summary(fields)
+    assert without["ungrounded_high_confidence_fields"] == 0
+
 # ── Test validation source-grounding check ────────────────────────────
 
 
