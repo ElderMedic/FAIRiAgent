@@ -77,7 +77,7 @@ class FAIRifierConfig:
     # For Ollama/Qwen (OpenAI-compatible APIs). Gemini/Anthropic use provider defaults.
     llm_base_url: str = "http://localhost:11434"
     llm_api_key: Optional[str] = None  # For OpenAI/Qwen/Gemini/Anthropic
-    embedding_model: str = "nomic-embed-text"
+    embedding_model: str = "nomic-embed-text-v2-moe:latest"
     llm_temperature: float = 0.3  # Recommended for structured extraction; keep consistent across configs (control variable)
     llm_max_tokens: int = 8192  # Conservative default for test/dev cost control
     llm_enable_thinking: bool = False  # Enable thinking mode (requires streaming for some models)
@@ -215,10 +215,10 @@ class FAIRifierConfig:
     mem0_llm_base_url: Optional[str] = None  # Base URL for mem0 when provider=openai (e.g. OpenAI-compatible API)
     mem0_llm_api_key: Optional[str] = None  # API key for mem0 when provider=openai or anthropic
     mem0_embedding_provider: str = "ollama"  # Embedder provider: ollama or openai-compatible API
-    mem0_embedding_model: str = "nomic-embed-text"  # Ollama embedding model
+    mem0_embedding_model: str = "nomic-embed-text-v2-moe:latest"  # Ollama embedding model
     mem0_embedding_base_url: Optional[str] = None  # Base URL for openai-compatible embedding APIs
     mem0_embedding_api_key: Optional[str] = None  # API key for openai-compatible embedding APIs
-    mem0_embedding_dims: int = 768  # Vector dimension (nomic-embed-text=768; OpenAI ada-002=1536)
+    mem0_embedding_dims: int = 768  # Vector dimension (nomic-embed-text-v2-moe=768; OpenAI ada-002=1536)
     mem0_qdrant_host: str = "localhost"  # Qdrant server host
     mem0_qdrant_port: int = 6333  # Qdrant server port
     mem0_collection_name: str = "fairifier_memories"  # Qdrant collection name
@@ -713,25 +713,6 @@ def apply_budget_guardrails(config_instance: FAIRifierConfig):
     )
     if allow_expensive:
         return
-
-    config_instance.llm_max_tokens = min(config_instance.llm_max_tokens, 8192)
-    config_instance.max_doc_context_markdown = min(
-        config_instance.max_doc_context_markdown, 200000
-    )
-    config_instance.max_doc_context_text = min(
-        config_instance.max_doc_context_text, 120000
-    )
-    config_instance.max_step_retries = min(config_instance.max_step_retries, 2)
-    config_instance.max_global_retries = min(config_instance.max_global_retries, 5)
-    config_instance.react_loop_max_iterations = min(
-        config_instance.react_loop_max_iterations, 6
-    )
-    config_instance.react_loop_max_tool_calls = min(
-        config_instance.react_loop_max_tool_calls, 18
-    )
-    config_instance.cross_layer_max_restarts = min(
-        config_instance.cross_layer_max_restarts, 2
-    )
 
 
 # Global config instance

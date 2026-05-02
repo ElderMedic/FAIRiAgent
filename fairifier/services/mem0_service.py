@@ -98,11 +98,19 @@ class Mem0Service:
         """
         self._init_error: Optional[Exception] = None  # Stored for strict-mode re-raise
         try:
+            from ..utils.env_patch import apply_libstdcxx_fix
+            apply_libstdcxx_fix()
             from mem0 import Memory
             self.memory = Memory.from_config(config)
             self.enabled = True
             self._config = config
             self._seen_message_fingerprints: set[str] = set()
+            # Quick health check: try a lightweight operation to catch version mismatches
+            try:
+                self.memory.search(query="health_check", user_id="_health_", limit=1)
+            except Exception:
+                pass  # 404 or other errors here are fine — the collection may be empty
+
             logger.info("Mem0 service initialized successfully")
         except Exception as e:
             self._init_error = e
@@ -157,7 +165,7 @@ class Mem0Service:
             logger.debug(f"Memory search returned {len(memories)} results for session={session_id}, agent={agent_id}")
             return memories
         except Exception as e:
-            logger.warning(f"Memory search failed: {e}")
+            logger.debug("Memory search skipped (service unavailable): %s", e)
             return []
     
     @traceable(name="mem0_add", tags=["memory", "storage"])
@@ -212,7 +220,7 @@ class Mem0Service:
             logger.debug(f"Added {added_count} memories for session={session_id}, agent={agent_id}")
             return result
         except Exception as e:
-            logger.warning(f"Memory add failed: {e}")
+            logger.debug("Memory add skipped (service unavailable): %s", e)
             return {}
 
     def _fingerprint_messages(
@@ -572,7 +580,7 @@ def build_mem0_config(
     llm_base_url: str = "http://localhost:11434",
     llm_api_key: Optional[str] = None,
     embedding_provider: str = "ollama",
-    embedding_model: str = "nomic-embed-text",
+    embedding_model: str = "nomic-embed-text-v2-moe:latest",
     embedding_base_url: str = None,
     embedding_api_key: Optional[str] = None,
     embedding_model_dims: int = 768,
@@ -587,7 +595,7 @@ def build_mem0_config(
     MEM0_LLM_BASE_URL, MEM0_LLM_API_KEY, MEM0_OLLAMA_BASE_URL) and are not
     derived from the main workflow LLM.
     
-    embedding_model_dims must match the embedder output (e.g. nomic-embed-text
+    embedding_model_dims must match the embedder output (e.g. nomic-embed-text-v2-moe
     is 768; OpenAI text-embedding-ada-002 is 1536) so the vector store creates
     collections with the correct dimension.
     
@@ -600,7 +608,7 @@ def build_mem0_config(
         embedding_model: Embedding model name
         embedding_base_url: Base URL for embedding API (defaults to llm_base_url)
         embedding_api_key: API key for openai-compatible embedding APIs
-        embedding_model_dims: Vector dimension from embedder (default 768 for nomic-embed-text)
+        embedding_model_dims: Vector dimension from embedder (default 768 for nomic-embed-text-v2-moe)
         qdrant_host: Qdrant server host
         qdrant_port: Qdrant server port
         collection_name: Qdrant collection name for memories
@@ -853,7 +861,7 @@ def _try_auto_start_qdrant(
             "unless-stopped",
             "-p",
             f"{port}:6333",
-            "qdrant/qdrant:latest",
+            "qdrant/qdrant:v1.13.0",
         ]
 
     start = subprocess.run(

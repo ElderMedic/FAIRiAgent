@@ -100,6 +100,7 @@ class FAIRifierState(TypedDict):
     output_dir: Optional[str]  # Output directory for artifacts (including MinerU)
     input_documents: List[Dict[str, Any]]  # Normalized input units for per-file parsing
     source_workspace: Dict[str, Any]  # Paths for source manifest, source files, and table indexes
+    bio_file_paths: List[str]  # Absolute host paths for BIO_BINARY files (BAM, VCF, FASTQ, h5ad)
     
     # Processing stages
     document_info: Dict[str, Any]

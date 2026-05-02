@@ -102,7 +102,7 @@ class TestBuildMem0Config:
         first = resolve_mem0_collection_name(
             "fairifier_memories_quicktest",
             embedding_provider="ollama",
-            embedding_model="nomic-embed-text",
+            embedding_model="nomic-embed-text-v2-moe:latest",
             embedding_dims=768,
             embedding_base_url="http://localhost:11434",
         )
@@ -187,7 +187,9 @@ class TestMem0Service:
         
         assert len(results) == 2
         assert results[0]["memory"] == "Test memory 1"
-        mock_mem.search.assert_called_once_with(
+        # Called twice: health_check during init + actual search
+        assert mock_mem.search.call_count == 2
+        mock_mem.search.assert_called_with(
             query="test query",
             user_id="session_123",
             agent_id="TestAgent",
@@ -397,7 +399,7 @@ class TestMem0ConfigIntegration:
         assert config.mem0_auto_setup is True
         assert config.mem0_auto_start_qdrant is True
         assert config.mem0_embedding_provider == "ollama"
-        assert config.mem0_embedding_model == "nomic-embed-text"
+        assert config.mem0_embedding_model == "nomic-embed-text-v2-moe:latest"
         assert config.mem0_qdrant_host == "localhost"
         assert config.mem0_qdrant_port == 6333
         assert config.mem0_collection_name == "fairifier_memories"
@@ -440,7 +442,7 @@ def test_get_mem0_service_keeps_explicit_ollama_embeddings_for_qwen(monkeypatch)
         "fairifier_memories_quicktest",
     )
     monkeypatch.setattr(runtime_config, "mem0_embedding_provider", "ollama")
-    monkeypatch.setattr(runtime_config, "mem0_embedding_model", "nomic-embed-text")
+    monkeypatch.setattr(runtime_config, "mem0_embedding_model", "nomic-embed-text-v2-moe:latest")
     monkeypatch.setattr(runtime_config, "mem0_embedding_base_url", None)
     monkeypatch.setattr(runtime_config, "mem0_embedding_api_key", None)
     monkeypatch.setattr(runtime_config, "mem0_embedding_dims", 768)
@@ -456,7 +458,7 @@ def test_get_mem0_service_keeps_explicit_ollama_embeddings_for_qwen(monkeypatch)
         mem0_config = mock_service_cls.call_args.args[0]
         assert mem0_config["llm"]["provider"] == "openai"
         assert mem0_config["embedder"]["provider"] == "ollama"
-        assert mem0_config["embedder"]["config"]["model"] == "nomic-embed-text"
+        assert mem0_config["embedder"]["config"]["model"] == "nomic-embed-text-v2-moe:latest"
         assert mem0_config["embedder"]["config"]["ollama_base_url"] == "http://localhost:11434"
         assert "api_key" not in mem0_config["embedder"]["config"]
         assert mem0_config["vector_store"]["config"]["embedding_model_dims"] == 768
@@ -506,7 +508,7 @@ def test_get_mem0_service_fallbacks_embedding_when_ollama_unavailable(monkeypatc
         "fairifier_memories_quicktest",
     )
     monkeypatch.setattr(runtime_config, "mem0_embedding_provider", "ollama")
-    monkeypatch.setattr(runtime_config, "mem0_embedding_model", "nomic-embed-text")
+    monkeypatch.setattr(runtime_config, "mem0_embedding_model", "nomic-embed-text-v2-moe:latest")
     monkeypatch.setattr(runtime_config, "mem0_embedding_dims", 768)
     monkeypatch.setattr(runtime_config, "mem0_qdrant_host", "localhost")
     monkeypatch.setattr(runtime_config, "mem0_qdrant_port", 6333)
@@ -558,7 +560,7 @@ def test_get_mem0_service_attempts_qdrant_autostart(monkeypatch):
     monkeypatch.setattr(runtime_config, "mem0_qdrant_host", "localhost")
     monkeypatch.setattr(runtime_config, "mem0_qdrant_port", 6333)
     monkeypatch.setattr(runtime_config, "mem0_embedding_provider", "ollama")
-    monkeypatch.setattr(runtime_config, "mem0_embedding_model", "nomic-embed-text")
+    monkeypatch.setattr(runtime_config, "mem0_embedding_model", "nomic-embed-text-v2-moe:latest")
     monkeypatch.setattr(runtime_config, "mem0_ollama_base_url", "http://localhost:11434")
 
     with patch("fairifier.services.mem0_service._is_qdrant_available", side_effect=[False, True]), \

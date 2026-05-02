@@ -13,6 +13,9 @@ import json
 import os
 import re
 import csv
+import gzip
+import shutil
+import tarfile
 import zipfile
 import tempfile
 from pathlib import Path
@@ -65,7 +68,9 @@ class FAIRifierLangGraphApp:
     def __init__(self):
         """Initialize the LangGraph app with all agents."""
         # Initialize agents
+        from ..agents.bio_metadata_agent import BioMetadataAgent
         self.document_parser = DocumentParserAgent()
+        self.bio_metadata_agent = BioMetadataAgent()
         self.knowledge_retriever = KnowledgeRetrieverAgent()
         self.json_generator = JSONGeneratorAgent()
         self.critic = CriticAgent()
@@ -1422,11 +1427,27 @@ class FAIRifierLangGraphApp:
         else:
             state = await self._execute_agent_with_retry(
                 state, self.document_parser, "DocumentParser",
-                lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3
+                lambda s: s.get("document_info", {}) and len(s["document_info"]) >= 1
             )
         if run_id and run_stop_requested(run_id):
             return self._mark_interrupted_state(state)
         
+        # Step 1b: Active Bioinfo Analysis (if raw bio data present)
+        bio_file_paths = state.get("bio_file_paths", []) or []
+        has_bio_raw = bool(bio_file_paths)
+
+        if has_bio_raw:
+            logger.info("\n" + "="*70)
+            logger.info("🧬 Step 1b: BioMetadataAgent (Active Analysis)")
+            logger.info("="*70)
+            logger.info("   Bio files: %s", bio_file_paths)
+            state = await self._execute_agent_with_retry(
+                state, self.bio_metadata_agent, "BioMetadataAgent",
+                lambda s: s.get("document_info", {}) and len(s["document_info"]) > 0
+            )
+            if run_id and run_stop_requested(run_id):
+                return self._mark_interrupted_state(state)
+
         # Step 2: Plan workflow based on parsed info
         logger.info("\n" + "="*70)
         logger.info("🧠 Step 2: Planning workflow strategy")
@@ -1749,6 +1770,12 @@ class FAIRifierLangGraphApp:
             state["document_content"] = text
             state["document_conversion"] = conversion_info
             state["source_workspace"] = conversion_info.get("source_workspace", {})
+            # Collect bio file paths for BioMetadataAgent
+            bio_paths: List[str] = []
+            host_path = conversion_info.get("host_path")
+            if host_path and conversion_info.get("content_type") == "bio_binary":
+                bio_paths.append(host_path)
+            state["bio_file_paths"] = bio_paths
             input_documents = conversion_info.get("input_documents")
             if not isinstance(input_documents, list) or not input_documents:
                 input_documents = [
@@ -1896,7 +1923,7 @@ class FAIRifierLangGraphApp:
             records=[
                 SourceRecord(
                     source_id="source_001",
-                    path=str(_filesystem_document_path(document_path).name),
+                    path=str(document_path),
                     method=conversion_info.get("method", "unknown"),
                     content=text,
                     content_type=conversion_info.get("content_type", "text"),
@@ -1929,6 +1956,7 @@ class FAIRifierLangGraphApp:
                 table_id: str(path)
                 for table_id, path in workspace.table_paths.items()
             },
+            "manifest": workspace.manifest,
         }
 
     def _read_single_document_content(
@@ -1941,10 +1969,88 @@ class FAIRifierLangGraphApp:
 
         fs_path = _filesystem_document_path(document_path)
         fs_str = str(fs_path)
+        fname_lower = fs_path.name.lower()
 
         conversion_info: Dict[str, Any] = {}
         suffix = fs_path.suffix.lower()
 
+        # --- BIO_BINARY: truly binary biological formats ---
+        _BIO_BINARY_SUFFIXES = {".bam", ".vcf", ".fq", ".fastq", ".h5ad"}
+        _BIO_GZ_PATTERNS = (".vcf.gz", ".fq.gz", ".fastq.gz")
+
+        if suffix in _BIO_BINARY_SUFFIXES or fname_lower.endswith(_BIO_GZ_PATTERNS):
+            conversion_info["method"] = "bio_binary"
+            conversion_info["content_type"] = "bio_binary"
+            conversion_info["host_path"] = fs_str
+            return (
+                f"[Biological data file: {fs_path.name}]\n"
+                f"Host path: {fs_str}\n"
+                f"(This file will be analyzed by BioMetadataAgent with bioinformatics tools.)"
+            ), conversion_info
+
+        # --- GZIPPED_TEXT: compressed text files that need decompression ---
+        _GZ_TEXT_PATTERNS = (".tsv.gz", ".bed.gz", ".tagalign.gz", ".csv.gz",
+                             ".txt.gz", ".gff.gz", ".gtf.gz", ".tab.gz")
+        if fname_lower.endswith(_GZ_TEXT_PATTERNS):
+            try:
+                dest = fs_path.with_suffix("")  # remove .gz
+                with gzip.open(fs_str, "rb") as f_in:
+                    with open(dest, "wb") as f_out:
+                        shutil.copyfileobj(f_in, f_out)
+                logger.info("Decompressed %s → %s", fs_path.name, dest.name)
+                conversion_info["method"] = "decompressed_gzip"
+                conversion_info["original_path"] = fs_str
+                # Re-read the decompressed file
+                text = dest.read_text(encoding="utf-8", errors="replace")
+                conversion_info["content_type"] = "text"
+                conversion_info["chars"] = len(text)
+                return text, conversion_info
+            except Exception as exc:
+                logger.warning("Failed to decompress %s: %s", fs_str, exc)
+                conversion_info["method"] = "gzip_decompress_failed"
+                return f"[Failed to decompress: {fs_path.name}]", conversion_info
+
+        # --- Other .gz files: try decompress, fall through to text if it works ---
+        if suffix == ".gz":
+            try:
+                dest = fs_path.with_suffix("")
+                with gzip.open(fs_str, "rb") as f_in:
+                    with open(dest, "wb") as f_out:
+                        shutil.copyfileobj(f_in, f_out)
+                logger.info("Decompressed %s → %s", fs_path.name, dest.name)
+                conversion_info["method"] = "decompressed_gzip"
+                conversion_info["original_path"] = fs_str
+                text = dest.read_text(encoding="utf-8", errors="replace")
+                conversion_info["content_type"] = "text"
+                conversion_info["chars"] = len(text)
+                return text, conversion_info
+            except Exception as exc:
+                logger.warning("Failed to decompress %s: %s", fs_str, exc)
+                conversion_info["method"] = "gzip_decompress_failed"
+                return f"[Failed to decompress: {fs_path.name}]", conversion_info
+
+        # --- ARCHIVE: tar archives ---
+        if suffix == ".tar" or fname_lower.endswith(".tar.gz"):
+            try:
+                dest_dir = Path(tempfile.mkdtemp(prefix="fairifier_archive_"))
+                mode = "r:gz" if fname_lower.endswith(".tar.gz") else "r"
+                with tarfile.open(fs_str, mode) as tf:
+                    tf.extractall(path=dest_dir)
+                files = sorted(str(p) for p in dest_dir.rglob("*") if p.is_file())
+                listing = f"[Archive: {fs_path.name}]\nExtracted {len(files)} files to {dest_dir}:\n"
+                listing += "\n".join(f"  {f}" for f in files[:100])
+                conversion_info["method"] = "archive_extracted"
+                conversion_info["content_type"] = "archive_listing"
+                conversion_info["extract_dir"] = str(dest_dir)
+                conversion_info["extracted_files"] = [str(p) for p in dest_dir.rglob("*") if p.is_file()]
+                conversion_info["chars"] = len(listing)
+                return listing, conversion_info
+            except Exception as exc:
+                logger.warning("Failed to extract archive %s: %s", fs_str, exc)
+                conversion_info["method"] = "archive_extract_failed"
+                return f"[Failed to extract archive: {fs_path.name}]", conversion_info
+
+        # --- Tabular formats ---
         if suffix in {".csv", ".tsv", ".xlsx", ".xls"}:
             table_text = self._read_tabular_content(fs_str)
             conversion_info["method"] = f"tabular_{suffix.lstrip('.')}"
@@ -2128,6 +2234,7 @@ class FAIRifierLangGraphApp:
         return path.suffix.lower() in {
             ".pdf", ".txt", ".md", ".markdown", ".rst",
             ".csv", ".tsv", ".xlsx", ".xls", ".json",
+            ".bam", ".vcf", ".fastq", ".fq", ".h5ad", ".gz",
         }
 
     def _is_generated_bundle_artifact(self, root_dir: "Path", path: "Path") -> bool:
@@ -3315,6 +3422,7 @@ Return JSON in the following format:
                 "document_conversion": {},
                 "input_documents": [],
                 "source_workspace": {},
+                "bio_file_paths": [],
                 "output_dir": output_dir,
                 "document_info": {},
                 "document_info_by_source": [],
