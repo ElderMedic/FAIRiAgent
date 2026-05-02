@@ -1,0 +1,486 @@
+{
+  "description": "CompBioBench metadata extraction benchmark — FAIR-DS ground truth. Each document maps to realistic FAIR metadata fields across ISA sheets.",
+  "version": "2.0",
+  "updated": "2026-05-02",
+  "documents": [
+    {
+      "document_id": "cb_mt_sorted_bam",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/mt.sorted.bam",
+      "file_format": "BAM",
+      "domain": "Genomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Mitochondrial DNA Sequencing Alignment", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Sorted BAM alignment of mitochondrial DNA sequencing reads", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "mtDNA Read Alignment Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "study_description", "expected_value": "Paired-end sequencing reads aligned to mitochondrial reference genome", "isa_sheet": "study", "package_source": "default", "is_required": false},
+        {"field_name": "assay_type", "expected_value": "DNA sequencing", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "assay_platform", "expected_value": "Illumina", "isa_sheet": "assay", "package_source": "Illumina", "is_required": false},
+        {"field_name": "read_length_bp", "expected_value": "101", "isa_sheet": "assay", "package_source": "Illumina", "is_required": true},
+        {"field_name": "paired_end", "expected_value": "true", "isa_sheet": "assay", "package_source": "Illumina", "is_required": true},
+        {"field_name": "reference_genome", "expected_value": "mitochondrial", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "file_format", "expected_value": "BAM", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "tissue_type", "expected_value": "mitochondria", "isa_sheet": "sample", "package_source": "default", "is_required": false}
+      ]
+    },
+    {
+      "document_id": "cb_finding_geo_q1_h5ad",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/finding.geo.q1.h5ad",
+      "file_format": "h5ad",
+      "domain": "Single-cell",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Single-cell Gene Expression from GEO Dataset", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Single-cell RNA-seq data retrieved from GEO in h5ad format", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "scRNA-seq GEO Dataset Analysis", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "study_description", "expected_value": "Single-cell transcriptomics profiling", "isa_sheet": "study", "package_source": "default", "is_required": false},
+        {"field_name": "assay_type", "expected_value": "single-cell RNA sequencing", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "assay_platform", "expected_value": "10x Genomics", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "file_format", "expected_value": "h5ad", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "sample_type", "expected_value": "single cells", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "cell_count", "expected_value": "detect from file", "isa_sheet": "observationunit", "package_source": "default", "is_required": false},
+        {"field_name": "gene_count", "expected_value": "detect from file", "isa_sheet": "observationunit", "package_source": "default", "is_required": false}
+      ]
+    },
+    {
+      "document_id": "cb_pbmc3k_h5ad",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/pbmc3k.h5ad",
+      "file_format": "h5ad",
+      "domain": "Single-cell",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "PBMC 3k Single-cell Gene Expression", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "3k PBMC single-cell RNA-seq dataset", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "PBMC 3k scRNA-seq Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "single-cell RNA sequencing", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "assay_platform", "expected_value": "10x Genomics", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "file_format", "expected_value": "h5ad", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "sample_type", "expected_value": "PBMC", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "tissue_type", "expected_value": "peripheral blood", "isa_sheet": "sample", "package_source": "default", "is_required": false},
+        {"field_name": "cell_count", "expected_value": "3000", "isa_sheet": "observationunit", "package_source": "default", "is_required": false}
+      ]
+    },
+    {
+      "document_id": "cb_covid_patients_q1_h5ad",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/covid.patients.q1.h5ad",
+      "file_format": "h5ad",
+      "domain": "Single-cell",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "COVID-19 Patient Single-cell Analysis", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Single-cell RNA-seq analysis of COVID-19 patient samples", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "COVID-19 scRNA-seq Patient Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "single-cell RNA sequencing", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "assay_platform", "expected_value": "10x Genomics", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "file_format", "expected_value": "h5ad", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "disease_state", "expected_value": "COVID-19", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "sample_type", "expected_value": "single cells", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_perturb_seq_align_q1_ref_h5ad",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/perturb.seq.align.q1.ref.h5ad",
+      "file_format": "h5ad",
+      "domain": "Single-cell",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Perturb-seq Alignment Reference", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Reference h5ad dataset for Perturb-seq CRISPR perturbation alignment", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Perturb-seq Reference Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "single-cell RNA sequencing with CRISPR perturbation", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "experimental_method", "expected_value": "Perturb-seq", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "h5ad", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "sample_type", "expected_value": "single cells", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_vcf_infer_build_q1_vcf_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/vcf.infer.build.q1.vcf.gz",
+      "file_format": "VCF (gzipped)",
+      "domain": "Population Genetics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "VCF Variant Calling — Genome Build Inference", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "VCF file containing variant calls for population genetics analysis", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Variant Calling Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "whole genome sequencing", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "file_format", "expected_value": "VCF", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "reference_genome_build", "expected_value": "detect from file", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "sample_count", "expected_value": "detect from file", "isa_sheet": "sample", "package_source": "default", "is_required": false}
+      ]
+    },
+    {
+      "document_id": "cb_vcf_infer_ancestry_q1_vcf_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/vcf.infer.ancestry.q1.vcf.gz",
+      "file_format": "VCF (gzipped)",
+      "domain": "Population Genetics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "VCF Variant Calling — Ancestry Inference", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "VCF file for inferring population ancestry from variant data", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Population Ancestry Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "whole genome sequencing", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "file_format", "expected_value": "VCF", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "population", "expected_value": "detect from file", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_reverse_search_gwas_q1_tsv_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/reverse.search.gwas.q1.tsv.gz",
+      "file_format": "TSV (GWAS summary statistics)",
+      "domain": "Population Genetics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "GWAS Summary Statistics — Reverse Search", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "GWAS summary statistics file containing variant-trait associations", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "GWAS Reverse Search Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "genome-wide association study", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TSV", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "data_type", "expected_value": "GWAS summary statistics", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_reverse_search_gwas_q2_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/reverse.search.gwas.q2.gz",
+      "file_format": "GZ (GWAS data)",
+      "domain": "Population Genetics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "GWAS Summary Statistics — Reverse Search Q2", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Compressed GWAS summary statistics for reverse-search analysis", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "GWAS Reverse Search Study Q2", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "genome-wide association study", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "file_format", "expected_value": "gzip-compressed TSV", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "compression", "expected_value": "gzip", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_gwas_ancestry_q1_tsv_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/gwas.ancestry.q1.tsv.gz",
+      "file_format": "TSV (gzipped)",
+      "domain": "Population Genetics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "GWAS Ancestry Analysis", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "GWAS data for inferring population ancestry from genetic variants", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Population Ancestry GWAS", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "genome-wide association study", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TSV", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "population", "expected_value": "detect from data", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_identify_donor_R1_fq_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/identify.donor.R1.fq.gz",
+      "file_format": "FASTQ (gzipped, R1)",
+      "domain": "Population Genetics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "1000 Genomes Donor Identification", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Paired-end FASTQ reads from a 1000 Genomes donor for genotype matching", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "1000G Donor Identification Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "DNA sequencing", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "assay_platform", "expected_value": "Illumina", "isa_sheet": "assay", "package_source": "Illumina", "is_required": false},
+        {"field_name": "file_format", "expected_value": "FASTQ", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "read_pair", "expected_value": "R1", "isa_sheet": "assay", "package_source": "Illumina", "is_required": true},
+        {"field_name": "paired_end", "expected_value": "true", "isa_sheet": "assay", "package_source": "Illumina", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "reference_population", "expected_value": "1000 Genomes", "isa_sheet": "sample", "package_source": "default", "is_required": false}
+      ]
+    },
+    {
+      "document_id": "cb_identify_related_q1_tfam",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/identify.related.q1.tfam",
+      "file_format": "TFAM (PLINK)",
+      "domain": "Population Genetics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Relatedness Inference from Genotypes", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "PLINK TFAM file for inferring familial relationships from genotype data", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Genetic Relatedness Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "genotyping", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "file_format", "expected_value": "PLINK TFAM", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "data_type", "expected_value": "genotype pedigree data", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_match_genotypes_q1_tar_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/match.genotypes.q1.tar.gz",
+      "file_format": "TAR.GZ (genotype data archive)",
+      "domain": "Population Genetics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Genotype Matching Analysis", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Tarball archive containing genotype data for cross-cohort matching", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Cross-Cohort Genotype Match", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "genotyping", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TAR.GZ archive", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_pooled_infer_donors_q1_bam",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/pooled.infer.donors.q1.bam",
+      "file_format": "BAM",
+      "domain": "Single-cell",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Pooled Donor scRNA-seq Deconvolution", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Aligned scRNA-seq BAM from a pooled human sample with cell barcode tags for donor inference", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Pooled Donor Deconvolution Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "study_description", "expected_value": "Pooled single-cell RNA-seq with genetic demultiplexing by donor", "isa_sheet": "study", "package_source": "default", "is_required": false},
+        {"field_name": "assay_type", "expected_value": "single-cell RNA sequencing", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "BAM", "isa_sheet": "assay", "package_source": "Genome", "is_required": true},
+        {"field_name": "barcode_technology", "expected_value": "cell barcode tags in BAM", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "sample_pooling", "expected_value": "pooled donors", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_sample_swap_rna_q1_tsv_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/sample.swap.rna.q1.tsv.gz",
+      "file_format": "TSV (gzipped)",
+      "domain": "Single-cell",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "scRNA-seq Sample Swap Detection", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Single-cell RNA-seq count data for detecting sample swaps", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Sample Swap Detection Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "single-cell RNA sequencing", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TSV", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "sample_type", "expected_value": "single cells", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_sample_swap_rna_q2_tsv_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/sample.swap.rna.q2.tsv.gz",
+      "file_format": "TSV (gzipped)",
+      "domain": "Single-cell",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "scRNA-seq Sample Swap Detection Q2", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Single-cell RNA-seq data for sample swap detection (question 2)", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Sample Swap Detection Study Q2", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "single-cell RNA sequencing", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TSV", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_sample_swap_atac_q1_tsv_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/sample.swap.atac.q1.tsv.gz",
+      "file_format": "TSV (gzipped)",
+      "domain": "Single-cell",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "scATAC-seq Sample Swap Detection", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Single-cell ATAC-seq data for detecting sample swaps", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "ATAC-seq Sample Swap Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "single-cell ATAC sequencing", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TSV", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_sample_swap_atac_q2_tsv_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/sample.swap.atac.q2.tsv.gz",
+      "file_format": "TSV (gzipped)",
+      "domain": "Single-cell",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "scATAC-seq Sample Swap Detection Q2", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Single-cell ATAC-seq data for sample swap detection (question 2)", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "ATAC-seq Sample Swap Study Q2", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "single-cell ATAC sequencing", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TSV", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_overexpress_tf_q1_ref_bed_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/overexpress.tf.q1.ref.bed.gz",
+      "file_format": "BED (gzipped, reference)",
+      "domain": "Epigenomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Transcription Factor Overexpression — Reference BED", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Reference BED file for TF overexpression perturbation analysis", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "TF Overexpression Perturbation Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "ChIP-seq", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "BED", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "data_role", "expected_value": "reference", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_overexpress_tf_q1_perturb_bed_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/overexpress.tf.q1.perturb.bed.gz",
+      "file_format": "BED (gzipped, perturbation)",
+      "domain": "Epigenomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Transcription Factor Overexpression — Perturbation BED", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Perturbation BED file for TF overexpression analysis", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "TF Overexpression Perturbation Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "ChIP-seq", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "BED", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "data_role", "expected_value": "perturbation", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_unknown_shift_frag_bed_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/unknown.shift.frag.bed.gz",
+      "file_format": "BED (gzipped)",
+      "domain": "Epigenomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "scATAC-seq Fragment Shift Analysis", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "BED file of scATAC-seq fragments for Tn5 shift calculation", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "ATAC-seq Tn5 Shift Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "scATAC-seq", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "BED", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_mystery_peak_set_q1_bed_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/mystery.peak.set.q1.bed.gz",
+      "file_format": "BED (gzipped)",
+      "domain": "Epigenomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Mystery Peak Set Identification", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "BED file containing unknown peak calls for assay type identification", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Peak Set Identification Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "peak calling", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "BED", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_reverse_encode_q1_tsv_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/reverse.encode.q1.tsv.gz",
+      "file_format": "TSV (gzipped)",
+      "domain": "Epigenomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "ENCODE DNase-seq Reverse Search", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "ENCODE DNase-seq data for reverse-search identification of biosample and experiment", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "ENCODE Reverse Search Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "DNase-seq", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TSV", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_multiome_match_atac_rna_q1_rna_tsv_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/multiome.match.atac.rna.q1.rna.tsv.gz",
+      "file_format": "TSV (gzipped)",
+      "domain": "Epigenomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Multiome ATAC+RNA Cell Matching", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "RNA expression data for matching multiome ATAC and RNA profiles by cell", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Multiome Cell Matching Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "multiome ATAC+RNA sequencing", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TSV", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "modality", "expected_value": "RNA", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_histone_chip_q1_signal_tagalign_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/histone.chip.q1.signal.tagalign.gz",
+      "file_format": "TAGALIGN (gzipped, signal)",
+      "domain": "Epigenomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Histone ChIP-seq Signal Analysis", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Histone ChIP-seq signal tagAlign file for histone mark identification", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Histone ChIP-seq Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "ChIP-seq", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "tagAlign", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "target_type", "expected_value": "histone mark", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "data_role", "expected_value": "signal", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_histone_chip_q1_control_tagalign_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/histone.chip.q1.control.tagalign.gz",
+      "file_format": "TAGALIGN (gzipped, control)",
+      "domain": "Epigenomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Histone ChIP-seq Control", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Histone ChIP-seq control (input) tagAlign file", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Histone ChIP-seq Control Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "ChIP-seq", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "tagAlign", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "target_type", "expected_value": "input control", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "data_role", "expected_value": "control", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_chip_pioneer_q1_tar",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/chip.pioneer.q1.tar",
+      "file_format": "TAR (ChIP-seq archive)",
+      "domain": "Epigenomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "ChIP-seq Pioneer Factor Analysis", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Tarball containing ChIP-seq data for pioneer transcription factor identification", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Pioneer Factor ChIP-seq Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "ChIP-seq", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TAR archive", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_odd_one_out_q1_tar_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/odd.one.out.q1.tar.gz",
+      "file_format": "TAR.GZ (multi-file archive)",
+      "domain": "Epigenomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Epigenomic Dataset Anomaly Detection", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Archive of epigenomic datasets for identifying the outlier experiment", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Epigenomic Outlier Detection Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "epigenomic profiling", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TAR.GZ archive", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_disease_samples_q1_tsv",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/disease.samples.q1.tsv",
+      "file_format": "TSV",
+      "domain": "Transcriptomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Disease Sample Transcriptomics", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Gene expression data for distinguishing disease vs healthy samples", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Disease Sample Classification Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "RNA sequencing", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TSV", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "disease_condition", "expected_value": "detect from data", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_characterize_response_q1_txt",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/characterize.response.q1.txt",
+      "file_format": "TXT",
+      "domain": "Transcriptomics",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Drug Response Characterization", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Gene expression data for characterizing drug treatment response patterns", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Drug Response Transcriptomics Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "RNA sequencing", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TXT", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "treatment_type", "expected_value": "drug treatment", "isa_sheet": "assay", "package_source": "default", "is_required": false},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true}
+      ]
+    },
+    {
+      "document_id": "cb_spatial_sim_tar_gz",
+      "document_path": "evaluation/datasets/raw/compbiobench_metadata/spatial.sim.tar.gz",
+      "file_format": "TAR.GZ (spatial transcriptomics)",
+      "domain": "Spatial",
+      "ground_truth_fields": [
+        {"field_name": "investigation_title", "expected_value": "Spatial Transcriptomics Simulation", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "investigation_description", "expected_value": "Archive of simulated spatial transcriptomics data for analysis", "isa_sheet": "investigation", "package_source": "default", "is_required": true},
+        {"field_name": "study_title", "expected_value": "Spatial Transcriptomics Study", "isa_sheet": "study", "package_source": "default", "is_required": true},
+        {"field_name": "assay_type", "expected_value": "spatial transcriptomics", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "file_format", "expected_value": "TAR.GZ archive", "isa_sheet": "assay", "package_source": "default", "is_required": true},
+        {"field_name": "organism", "expected_value": "Homo sapiens", "isa_sheet": "sample", "package_source": "default", "is_required": true},
+        {"field_name": "tissue_type", "expected_value": "spatial tissue", "isa_sheet": "sample", "package_source": "default", "is_required": false}
+      ]
+    }
+  ]
+}

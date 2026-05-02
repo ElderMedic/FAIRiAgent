@@ -27,14 +27,14 @@ Extract `.tar` or `.tar.gz` archives to a temp directory. Returns list of extrac
 ## Common Recipes
 
 ### Inspecting BAM files (samtools)
-- Image: `quay.io/biocontainers/samtools:1.19.2--h50dae1a_1`
+- Image: `quay.io/biocontainers/samtools:1.23.1--ha83d96e_0`
 - Command: `["samtools", "stats", "/data/mt.sorted.bam"]`
 - host_path: the absolute path, e.g. `/home/.../mt.sorted.bam`
 - Goal: Find "is paired:", "average length:", "insert size average:", reference name.
 
 ### Inspecting VCF files (bcftools)
 - First decompress with `decompress_gzip_tool` if `.vcf.gz`
-- Image: `quay.io/biocontainers/bcftools:1.19--h8b25389_1`
+- Image: `quay.io/biocontainers/bcftools:1.23.1--hb2cee57_0`
 - Command: `["bcftools", "view", "-H", "/data/file.vcf"]`
 - Goal: Check chromosome names (hg19 vs hg38) and sample names.
 
