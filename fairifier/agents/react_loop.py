@@ -70,14 +70,18 @@ class ReactLoopMixin:
     def _get_react_model(self):
         """Return a deepagents-safe model instance for the current provider."""
         base_model = self.llm_helper.llm
-        if config.llm_provider != "qwen":
+        # Providers where thinking mode breaks deep agents tool calling:
+        # - Qwen (DashScope): rejects tool_choice with thinking enabled
+        # - DeepSeek: reasoning_content must be passed back across turns,
+        #   which deepagents does not support
+        if config.llm_provider not in ("qwen", "deepseek"):
             return base_model
 
         try:
             from langchain_openai import ChatOpenAI
         except Exception as exc:  # pragma: no cover - optional dependency
             self.logger.warning(
-                "Unable to create Qwen deepagents model wrapper, using base model: %s",
+                "Unable to create deepagents model wrapper, using base model: %s",
                 exc,
             )
             return base_model
@@ -88,8 +92,8 @@ class ReactLoopMixin:
             base_url=config.llm_base_url,
             temperature=config.llm_temperature,
             max_tokens=self._resolved_react_max_tokens(),
-            # DashScope Qwen rejects tool_choice=required/object when thinking mode
-            # is active. deepagents uses tool calling heavily, so force it off here.
+            # Deep agents use multi-turn tool calling which is incompatible
+            # with thinking/reasoning modes on DeepSeek and Qwen.
             extra_body={"enable_thinking": False},
         )
 
