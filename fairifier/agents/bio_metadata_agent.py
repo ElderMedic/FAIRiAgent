@@ -27,26 +27,27 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
         bio_tools = create_bio_tools()
 
         system_prompt = (
-            "You are the BioMetadataAgent for FAIRiAgent. "
-            "Your ONLY task: use bioinformatics tools to inspect raw biological data "
-            "files and extract metadata that is missing from documentation.\n\n"
-            "## Available Tools\n"
-            "- run_biocontainer_tool(image, command, host_path): run a tool inside Docker.\n"
-            "  Use image=\"samtools\" for .bam, image=\"bcftools\" for .vcf.\n"
-            "  host_path MUST be an exact path from the task message.\n"
-            "  command example: [\"samtools\", \"stats\", \"/data/filename.bam\"]\n"
-            "- decompress_gzip_tool(host_path): decompress .gz files.\n"
-            "- extract_archive_tool(host_path): extract tar archives.\n\n"
-            "## Critical Rules\n"
-            "1. You MUST call at least one tool before responding. Do NOT respond "
-            "without first calling a tool to inspect the data.\n"
-            "2. Read /skills/bioinfo-analysis/SKILL.md first for exact commands.\n"
-            "3. After collecting tool output, call the respond tool with a "
-            "DocumentInfoResponse: at minimum provide title, abstract, and any "
-            "extracted metadata fields like read_length_bp, paired_end, "
-            "reference_genome, file_format, organism.\n"
-            "4. Every field value must be grounded in the tool output you received. "
-            "Do not invent or guess values."
+            "You are the BioMetadataAgent for FAIRiAgent.\n"
+            "Your ONLY purpose: call bioinformatics tools via Docker, then report "
+            "what you found. You are NOT allowed to infer or guess metadata "
+            "without running a tool first.\n\n"
+            "## Available Tools (you MUST use these)\n"
+            "- run_biocontainer_tool(image, command, host_path): run a tool in Docker.\n"
+            "  image={samtools|bcftools}. command=[\"tool\", \"subcmd\", \"/data/file\"]\n"
+            "- decompress_gzip_tool(host_path): decompress .gz before analysis.\n"
+            "- extract_archive_tool(host_path): extract archives before analysis.\n\n"
+            "## Workflow (follow exactly)\n"
+            "1. If file is .gz → call decompress_gzip_tool first.\n"
+            "2. If file is .bam → call run_biocontainer_tool with image=\"samtools\", "
+            "command=[\"samtools\",\"stats\",\"/data/FILENAME\"], host_path=<from task>.\n"
+            "3. If file is .vcf or .vcf.gz → call run_biocontainer_tool with "
+            "image=\"bcftools\", command=[\"bcftools\",\"view\",\"-h\",\"/data/FILENAME\"], "
+            "host_path=<from task>.\n"
+            "4. If file is .h5ad → call extract_archive_tool or decompress_gzip_tool "
+            "if compressed; otherwise note the shape/key metadata you can infer.\n"
+            "5. ONLY after receiving tool output, call respond with "
+            "DocumentInfoResponse using the actual values from the tool output.\n"
+            "6. Do NOT respond before calling at least one tool. Do NOT guess values."
         )
 
         return self._build_react_agent(
@@ -121,34 +122,37 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
         # Build task with file paths and context
         doc_info = state.get("document_info", {})
         lines = [
-            "Analyze the following biological data files and extract metadata "
-            "that is missing from documentation.",
+            "Your FIRST AND ONLY action before responding: call run_biocontainer_tool "
+            "for each biological data file below. You MUST call a tool — do NOT respond "
+            "with text until you have received tool output.",
             "",
-            "## Bio File Paths (use these as host_path in run_biocontainer_tool)",
+            "## Files to Analyze",
         ]
         for p in bio_file_paths:
             fname = Path(p).name
             ext = fname.split(".")[-1] if "." in fname else ""
-            tool_hint = {"bam": "samtools", "vcf": "bcftools"}.get(ext, "")
-            lines.append(f"- {p}  (filename in container: /data/{fname})")
-            if tool_hint:
-                lines.append(f"  This is a {ext.upper()} file → use image=\"{tool_hint}\"")
+            if ext == "bam":
+                lines.append(f"- BAM file: {p}")
+                lines.append(f"  → Call: run_biocontainer_tool(image=\"samtools\", command=[\"samtools\",\"stats\",\"/data/{fname}\"], host_path=\"{p}\")")
+            elif ext in ("vcf", "gz") and "vcf" in fname:
+                lines.append(f"- VCF file: {p}")
+                lines.append(f"  → Call: run_biocontainer_tool(image=\"bcftools\", command=[\"bcftools\",\"view\",\"-h\",\"/data/{fname}\"], host_path=\"{p}\")")
+            elif "h5ad" in fname:
+                lines.append(f"- h5ad file: {p}")
+                lines.append(f"  → This is an AnnData/HDF5 single-cell file. No Docker tool needed.")
+                lines.append(f"  → Note the file extension (.h5ad) and infer: organism, cell count, tissue if possible.")
+            else:
+                lines.append(f"- {p}  (in container: /data/{fname})")
 
         if doc_info and doc_info.get("abstract"):
-            lines.append(f"\n## Document Context\nabstract: {doc_info['abstract']}")
+            lines.append(f"\n## Companion Document Context\n{doc_info['abstract']}")
 
         lines += [
             "",
-            "## Required Actions (do these in order)",
-            "1. Read /skills/bioinfo-analysis/SKILL.md for tool recipes and exact commands.",
-            "2. For each file above, call run_biocontainer_tool ONCE with the specific "
-            "host_path. For example, for a .bam file:",
-            '  run_biocontainer_tool(image="samtools", command=["samtools", "stats", "/data/filename.bam"], host_path="<the host_path from above>")',
-            "3. Parse the tool output. Look for metadata like: read length, paired-end status, "
-            "reference genome, organism, sample names, sequencing platform.",
-            "4. When you have extracted all available metadata, call the respond tool "
-            "with a DocumentInfoResponse containing title, abstract, research_domain, "
-            "and any other fields you discovered.",
+            "## Instructions",
+            "1. Call run_biocontainer_tool NOW with the exact parameters listed above.",
+            "2. Read the tool output. Extract every numeric and categorical fact.",
+            "3. Only then call the respond tool. Every field must come from tool output.",
         ]
         task = "\n".join(lines)
 
