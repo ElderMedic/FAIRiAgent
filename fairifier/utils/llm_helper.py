@@ -726,11 +726,13 @@ class LLMHelper:
 
         Thinking mode is controlled by config.llm_enable_thinking (LLM_ENABLE_THINKING env).
         Provider-specific mapping:
-        - qwen: extra_body={"enable_thinking": bool} (DashScope/百炼)
-        - openai: no provider-specific thinking payload
-        - gemini: no provider-specific thinking payload (basic integration path)
+        - qwen: extra_body={"enable_thinking": bool} (DashScope/百炼) — requires streaming
+        - deepseek: extra_body={"thinking": {"type": "enabled"/"disabled"}} (DeepSeek thinking mode)
+        - openai: reasoning_effort="medium" via bind (o1/o3/gpt-5 reasoning models)
+        - gemini: thinking_budget=N via bind (Gemini 2.0+ thinking)
         - ollama: think=bool (Ollama /api/chat think parameter)
-        - anthropic: extra_body={"reasoning": {"enabled": bool}} (Claude Extended Thinking; may vary by API)
+        - anthropic: extra_body={"reasoning": {"enabled": bool}} (Claude Extended Thinking)
+        All providers fall back gracefully to plain invoke when thinking is unsupported.
 
         Args:
             messages: List of messages to send to LLM
@@ -779,7 +781,72 @@ class LLMHelper:
                     result = await self.llm.ainvoke(messages, config=run_config)
                     self._log_llm_response(result, messages, operation_name)
                     return result
-        elif self.provider in {"openai", "gemini", "google"}:
+        elif self.provider == "deepseek":
+            # DeepSeek thinking mode: {"thinking": {"type": "enabled"/"disabled"}}
+            # Default is enabled; be explicit to match config intent.
+            # reasoning_effort="high" controls thinking depth (low/medium→high, xhigh→max).
+            if enable_thinking:
+                try:
+                    llm_with_params = self.llm.bind(
+                        extra_body={"thinking": {"type": "enabled"}},
+                        reasoning_effort="high",
+                    )
+                    result = await llm_with_params.ainvoke(messages, config=run_config)
+                    self._log_llm_response(result, messages, operation_name)
+                    return result
+                except Exception as e:
+                    logger.warning(
+                        "DeepSeek thinking call failed for model %s, falling back: %s",
+                        self.model, e,
+                    )
+            else:
+                try:
+                    llm_with_params = self.llm.bind(
+                        extra_body={"thinking": {"type": "disabled"}},
+                    )
+                    result = await llm_with_params.ainvoke(messages, config=run_config)
+                    self._log_llm_response(result, messages, operation_name)
+                    return result
+                except Exception as e:
+                    logger.warning(
+                        "DeepSeek disable-thinking call failed for model %s, falling back: %s",
+                        self.model, e,
+                    )
+            result = await self.llm.ainvoke(messages, config=run_config)
+            self._log_llm_response(result, messages, operation_name)
+            return result
+        elif self.provider == "openai":
+            # OpenAI reasoning models (o1, o3, gpt-5) use reasoning_effort; non-reasoning
+            # models will reject this parameter — fall back to plain invoke on error.
+            if enable_thinking:
+                try:
+                    llm_with_params = self.llm.bind(reasoning_effort="medium")
+                    result = await llm_with_params.ainvoke(messages, config=run_config)
+                    self._log_llm_response(result, messages, operation_name)
+                    return result
+                except Exception as e:
+                    logger.warning(
+                        "OpenAI reasoning_effort not supported by model %s, falling back: %s",
+                        self.model, e,
+                    )
+            result = await self.llm.ainvoke(messages, config=run_config)
+            self._log_llm_response(result, messages, operation_name)
+            return result
+        elif self.provider in {"gemini", "google"}:
+            # Gemini 2.0+ supports thinking_budget; older models ignore it.
+            if enable_thinking and config.llm_thinking_budget > 0:
+                try:
+                    llm_with_params = self.llm.bind(
+                        thinking_budget=config.llm_thinking_budget
+                    )
+                    result = await llm_with_params.ainvoke(messages, config=run_config)
+                    self._log_llm_response(result, messages, operation_name)
+                    return result
+                except Exception as e:
+                    logger.warning(
+                        "Gemini thinking_budget failed for model %s, falling back: %s",
+                        self.model, e,
+                    )
             result = await self.llm.ainvoke(messages, config=run_config)
             self._log_llm_response(result, messages, operation_name)
             return result
@@ -886,13 +953,22 @@ class LLMHelper:
                 logger.error(f"Provider: {self.provider}, Model: {self.model}, Base URL: {config.llm_base_url}")
                 raise
         elif self.provider == "anthropic" or self.provider == "claude":
-            try:
-                llm_with_params = self.llm.bind(
-                    extra_body={"reasoning": {"enabled": enable_thinking}} if enable_thinking else {}
-                )
-                result = await llm_with_params.ainvoke(messages, config=run_config)
-            except Exception as e:
-                logger.debug(f"Anthropic extra_body for thinking failed: {e}, using plain invoke")
+            if enable_thinking:
+                reasoning_cfg: dict = {"enabled": True}
+                if config.llm_thinking_budget > 0:
+                    reasoning_cfg["budget_tokens"] = config.llm_thinking_budget
+                try:
+                    llm_with_params = self.llm.bind(
+                        extra_body={"reasoning": reasoning_cfg}
+                    )
+                    result = await llm_with_params.ainvoke(messages, config=run_config)
+                except Exception as e:
+                    logger.warning(
+                        "Anthropic extended thinking failed for model %s: %s, falling back",
+                        self.model, e,
+                    )
+                    result = await self.llm.ainvoke(messages, config=run_config)
+            else:
                 result = await self.llm.ainvoke(messages, config=run_config)
 
             self._log_llm_response(result, messages, operation_name)
@@ -909,6 +985,7 @@ class LLMHelper:
         - ollama: Local Ollama instance (default)
         - openai: OpenAI API (gpt-4, gpt-3.5-turbo, etc.)
         - qwen: Alibaba Cloud Qwen API (OpenAI-compatible)
+        - deepseek: DeepSeek API (OpenAI-compatible, supports thinking mode)
         - gemini: Google Gemini API
         - anthropic: Anthropic Claude API
         """
@@ -956,6 +1033,22 @@ class LLMHelper:
                 temperature=config.llm_temperature,
                 max_tokens=self._resolved_max_tokens(),  # DashScope rejects values above provider limit
             )
+        elif self.provider == "deepseek":
+            if ChatOpenAI is None:
+                raise ImportError("langchain_openai not installed. Install with: pip install langchain-openai")
+            if not config.llm_api_key:
+                raise ValueError("LLM_API_KEY or DEEPSEEK_API_KEY environment variable is required for DeepSeek provider")
+            # DeepSeek uses OpenAI-compatible API
+            base_url = config.llm_base_url
+            logger.info(f"Initializing DeepSeek LLM: {self.model} at {base_url}")
+            # Thinking is controlled per-call via extra_body in _call_llm
+            return ChatOpenAI(
+                model=self.model,
+                api_key=config.llm_api_key,
+                base_url=base_url,
+                temperature=config.llm_temperature,
+                max_tokens=self._resolved_max_tokens(),
+            )
         elif self.provider in {"gemini", "google"}:
             if ChatGoogleGenerativeAI is None:
                 raise ImportError(
@@ -987,7 +1080,7 @@ class LLMHelper:
         else:
             raise ValueError(
                 f"Unsupported LLM provider: {self.provider}. "
-                f"Supported providers: ollama, openai, qwen, gemini, anthropic (claude)"
+                f"Supported providers: ollama, openai, qwen, deepseek, gemini, anthropic (claude)"
             )
     
     @traceable(name="LLM.ExtractDocumentInfo")

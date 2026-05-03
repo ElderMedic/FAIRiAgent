@@ -76,8 +76,8 @@ def test_document_info_normalization_salvages_nested_metadata():
 
 
 @pytest.mark.anyio
-async def test_openai_calls_do_not_send_enable_thinking(monkeypatch):
-    """Official OpenAI requests should not include DashScope-specific extra_body flags."""
+async def test_openai_uses_reasoning_effort_not_enable_thinking(monkeypatch):
+    """OpenAI reasoning models use reasoning_effort, not DashScope extra_body flags."""
 
     class DummyLLM:
         def __init__(self):
@@ -100,6 +100,39 @@ async def test_openai_calls_do_not_send_enable_thinking(monkeypatch):
     helper._log_llm_response = lambda *args, **kwargs: None
 
     monkeypatch.setattr(config, "llm_enable_thinking", True)
+
+    result = await helper._call_llm(["hello"], operation_name="test-openai")
+
+    assert result.content == "OK"
+    assert helper.llm.bind_calls == [{"reasoning_effort": "medium"}]
+    assert len(helper.llm.ainvoke_calls) == 1
+
+
+@pytest.mark.anyio
+async def test_openai_thinking_disabled_no_bind(monkeypatch):
+    """When thinking is disabled, OpenAI should not bind any extra parameters."""
+
+    class DummyLLM:
+        def __init__(self):
+            self.bind_calls = []
+            self.ainvoke_calls = []
+
+        def bind(self, **kwargs):
+            self.bind_calls.append(kwargs)
+            return self
+
+        async def ainvoke(self, messages, config=None):
+            self.ainvoke_calls.append({"messages": messages, "config": config})
+            return SimpleNamespace(content="OK")
+
+    helper = LLMHelper.__new__(LLMHelper)
+    helper.provider = "openai"
+    helper.model = "gpt-4.1"
+    helper.llm = DummyLLM()
+    helper._langfuse_handler = None
+    helper._log_llm_response = lambda *args, **kwargs: None
+
+    monkeypatch.setattr(config, "llm_enable_thinking", False)
 
     result = await helper._call_llm(["hello"], operation_name="test-openai")
 

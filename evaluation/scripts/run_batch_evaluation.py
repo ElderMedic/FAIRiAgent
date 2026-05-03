@@ -51,22 +51,25 @@ class BatchEvaluationRunner:
         model_configs: List[Path],
         output_dir: Path,
         env_file: Path,
-        exclude_documents: List[str] = None
+        exclude_documents: List[str] = None,
+        timeout: int = 3600
     ):
         """
         Initialize batch runner.
-        
+
         Args:
             ground_truth_path: Path to ground truth JSON
             model_configs: List of model config .env files
             output_dir: Output directory for all runs
             env_file: Main evaluation env file
             exclude_documents: List of document IDs to exclude (default: None)
+            timeout: Timeout per document run in seconds (default: 3600)
         """
         self.ground_truth_path = ground_truth_path
         self.model_configs = model_configs
         self.output_dir = output_dir
         self.env_file = env_file
+        self.timeout = timeout
         
         # Load ground truth
         with open(ground_truth_path, 'r', encoding='utf-8') as f:
@@ -262,27 +265,14 @@ class BatchEvaluationRunner:
                             config_name=config_name,
                             config_path=config_path,
                             config_output_dir=config_output_dir,
-                            run_idx=run_idx
+                            run_idx=run_idx,
+                            timeout=self.timeout
                         )
                         doc_results.append(result)
                         
                         status = "✅ SUCCESS" if result['success'] else "❌ FAILED"
                         print(f"   Run {run_idx}: {status}")
-                        
-                        # CRITICAL: If JSON parsing failed, stop all further runs for this document
-                        if not result['success'] and result.get('error') and 'JSON parsing failure' in result.get('error', ''):
-                            print(f"   ⛔ JSON parsing failure detected - stopping all remaining runs for {doc_id}")
-                            # Fill remaining runs with failure status
-                            for remaining_idx in range(run_idx + 1, repeats + 1):
-                                doc_results.append({
-                                    'success': False,
-                                    'error': 'Skipped due to JSON parsing failure in previous run',
-                                    'document_id': doc_id,
-                                    'config_name': config_name,
-                                    'run_idx': remaining_idx
-                                })
-                            break  # Exit the repeat loop
-                        
+
                     except Exception as e:
                         print(f"   Run {run_idx}: ❌ ERROR: {e}")
                         doc_results.append({
@@ -324,8 +314,7 @@ class BatchEvaluationRunner:
             List of result dictionaries
         """
         results = []
-        json_parse_failed = False
-        
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks
             future_to_task = {
@@ -336,7 +325,8 @@ class BatchEvaluationRunner:
                     config_name=task[2],
                     config_path=task[3],
                     config_output_dir=task[4],
-                    run_idx=task[5]
+                    run_idx=task[5],
+                    timeout=self.timeout
                 ): task
                 for task in run_tasks
             }
@@ -353,12 +343,7 @@ class BatchEvaluationRunner:
                     
                     status = "✅ SUCCESS" if result['success'] else "❌ FAILED"
                     print(f"   Run {run_idx}: {status}")
-                    
-                    # Check for JSON parsing failure
-                    if not result['success'] and result.get('error') and 'JSON parsing failure' in result.get('error', ''):
-                        json_parse_failed = True
-                        print(f"   ⛔ JSON parsing failure detected in run {run_idx} - will skip remaining runs")
-                        
+
                 except Exception as e:
                     print(f"   Run {run_idx}: ❌ ERROR: {e}")
                     completed_results[run_idx] = {
@@ -368,31 +353,10 @@ class BatchEvaluationRunner:
                         'config_name': task[2],
                         'run_idx': run_idx
                     }
-                    
-                    if 'JSON' in str(e) and 'parse' in str(e).lower():
-                        json_parse_failed = True
-                        print(f"   ⛔ JSON parsing error detected in run {run_idx} - will skip remaining runs")
-        
-        # Sort by run_idx and fill in skipped runs if JSON parsing failed
-        sorted_run_indices = sorted(completed_results.keys())
-        for run_idx in sorted_run_indices:
+
+        # Sort by run_idx
+        for run_idx in sorted(completed_results.keys()):
             results.append(completed_results[run_idx])
-        
-        # If JSON parsing failed, mark remaining incomplete runs as skipped
-        if json_parse_failed:
-            max_run_idx = max([task[5] for task in run_tasks])
-            completed_run_indices = set(completed_results.keys())
-            for run_idx in range(1, max_run_idx + 1):
-                if run_idx not in completed_run_indices:
-                    results.append({
-                        'success': False,
-                        'error': 'Skipped due to JSON parsing failure in another run',
-                        'document_id': run_tasks[0][0],
-                        'config_name': run_tasks[0][2],
-                        'run_idx': run_idx
-                    })
-            # Sort again after adding skipped runs
-            results.sort(key=lambda x: x.get('run_idx', 0))
         
         return results
     
@@ -403,11 +367,15 @@ class BatchEvaluationRunner:
         config_name: str,
         config_path: Path,
         config_output_dir: Path,
-        run_idx: int = 1
+        run_idx: int = 1,
+        timeout: int = 3600
     ) -> Dict[str, Any]:
         """
         Run FAIRiAgent on a single document using CLI (same as manual execution).
-        
+
+        Args:
+            timeout: Per-document timeout in seconds (default: 3600)
+
         Returns:
             Result dict with success status and file paths
         """
@@ -460,7 +428,7 @@ class BatchEvaluationRunner:
                 env=env,  # Pass full environment
                 capture_output=True,
                 text=True,
-                timeout=3600,  # 1 hour timeout
+                timeout=timeout,  # configurable timeout
                 check=False  # Don't raise on non-zero exit
             )
             
@@ -475,51 +443,30 @@ class BatchEvaluationRunner:
                 f.write(f"\n=== STDOUT ===\n{result.stdout}\n")
                 f.write(f"\n=== STDERR ===\n{result.stderr}\n")
             
-            # CRITICAL: Check for JSON parsing failures - if found, immediately fail
-            combined_output = (result.stdout or "") + (result.stderr or "")
-            json_parse_error_patterns = [
-                "Failed to parse LLM response as JSON",
-                "Failed to parse LLM response as JSON after all fallback strategies",
-                "❌ Failed to parse LLM response"
-            ]
-            
-            json_parse_failed = False
-            for pattern in json_parse_error_patterns:
-                if pattern in combined_output:
-                    json_parse_failed = True
-                    print(f"   ❌ CRITICAL: JSON parsing failure detected: {pattern}")
-                    print(f"   ⛔ Terminating workflow immediately")
-                    break
-            
-            if json_parse_failed:
+            success = result.returncode == 0
+
+            # Check if metadata.json was created (or legacy metadata_json.json)
+            metadata_json_path = resolve_metadata_output_read_path(doc_output_dir)
+            if metadata_json_path is None:
+                found_metadata = []
+                for _name in (METADATA_OUTPUT_FILENAME, LEGACY_METADATA_OUTPUT_FILENAME):
+                    found_metadata.extend(doc_output_dir.rglob(_name))
+                if found_metadata:
+                    metadata_json_path = found_metadata[0]
+
+            if metadata_json_path is None or not metadata_json_path.exists():
                 success = False
-                error_msg = f"JSON parsing failure detected - workflow terminated immediately"
-                metadata_json_path = None
+                error_msg = (
+                    f"{METADATA_OUTPUT_FILENAME} (or legacy "
+                    f"{LEGACY_METADATA_OUTPUT_FILENAME}) not found after workflow completion"
+                )
             else:
-                success = result.returncode == 0
-                
-                # Check if metadata.json was created (or legacy metadata_json.json)
-                metadata_json_path = resolve_metadata_output_read_path(doc_output_dir)
-                if metadata_json_path is None:
-                    found_metadata = []
-                    for _name in (METADATA_OUTPUT_FILENAME, LEGACY_METADATA_OUTPUT_FILENAME):
-                        found_metadata.extend(doc_output_dir.rglob(_name))
-                    if found_metadata:
-                        metadata_json_path = found_metadata[0]
-                
-                if metadata_json_path is None or not metadata_json_path.exists():
-                    success = False
-                    error_msg = (
-                        f"{METADATA_OUTPUT_FILENAME} (or legacy "
-                        f"{LEGACY_METADATA_OUTPUT_FILENAME}) not found after workflow completion"
-                    )
-                else:
-                    error_msg = None
-                
-                if not success and error_msg:
-                    print(f"   ⚠️  CLI returned code {result.returncode}: {error_msg}")
-                    if result.stderr:
-                        print(f"   Error: {result.stderr[:200]}")
+                error_msg = None
+
+            if not success and error_msg:
+                print(f"   ⚠️  CLI returned code {result.returncode}: {error_msg}")
+                if result.stderr:
+                    print(f"   Error: {result.stderr[:200]}")
             
         except subprocess.TimeoutExpired:
             end_time = datetime.now()
@@ -534,17 +481,31 @@ class BatchEvaluationRunner:
         
         # Extract metadata from JSON if available
         metadata_fields = []
+        n_fields_extracted = 0
         confidence_scores = {}
         if metadata_json_path and metadata_json_path.exists():
             try:
                 with open(metadata_json_path, 'r', encoding='utf-8') as f:
                     metadata_json = json.load(f)
-                    # Extract field count and confidence scores
-                    if isinstance(metadata_json, dict):
-                        metadata_fields = list(metadata_json.keys())
-                        # Try to extract confidence if available
-                        if 'confidence' in metadata_json:
-                            confidence_scores = metadata_json.get('confidence', {})
+                # Count actual FAIR-DS metadata fields from isa_structure
+                if isinstance(metadata_json, dict):
+                    isa = metadata_json.get('isa_structure', {})
+                    for sheet, content in isa.items():
+                        if isinstance(content, dict) and 'fields' in content:
+                            fields = content['fields']
+                            if isinstance(fields, list):
+                                metadata_fields.extend(fields)
+                    # Also count inferred metadata extensions
+                    extensions = metadata_json.get('inferred_metadata_extensions', {})
+                    if isinstance(extensions, list):
+                        metadata_fields.extend(extensions)
+                    elif isinstance(extensions, dict):
+                        for ext_fields in extensions.values():
+                            if isinstance(ext_fields, list):
+                                metadata_fields.extend(ext_fields)
+                    n_fields_extracted = len(metadata_fields)
+                    # Extract confidence scores
+                    confidence_scores = metadata_json.get('confidence_scores', {})
             except Exception as e:
                 print(f"   ⚠️  Could not parse metadata_json: {e}")
         
@@ -559,7 +520,7 @@ class BatchEvaluationRunner:
             'end_time': end_time.isoformat(),
             'output_dir': str(doc_output_dir),
             'metadata_json_path': str(metadata_json_path) if metadata_json_path else None,
-            'n_fields_extracted': len(metadata_fields),
+            'n_fields_extracted': n_fields_extracted,
             'confidence_scores': confidence_scores,
             'error': error_msg
         }
@@ -590,6 +551,8 @@ async def main():
                        help='Number of repeats per document (default: 1)')
     parser.add_argument('--workers', type=int, default=1,
                        help='Number of parallel workers for running multiple repeats (default: 1, sequential)')
+    parser.add_argument('--timeout', type=int, default=3600,
+                       help='Timeout per document run in seconds (default: 3600). Increase for slower models (e.g., --timeout 7200 for Ollama).')
     parser.add_argument('--exclude-documents', type=str, nargs='+', default=None,
                        help='Document IDs to exclude from evaluation (e.g., --exclude-documents biorem)')
     
@@ -604,7 +567,8 @@ async def main():
         model_configs=args.model_configs,
         output_dir=args.output_dir,
         env_file=args.env_file,
-        exclude_documents=args.exclude_documents
+        exclude_documents=args.exclude_documents,
+        timeout=args.timeout
     )
     
     # Run all evaluations

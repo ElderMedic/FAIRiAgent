@@ -88,8 +88,6 @@ class JSONGeneratorAgent(BaseAgent):
             state["_field_candidates"] = all_candidates
 
             # ── START UPSTREAM RECONCILIATION ──
-            import asyncio
-            # Run normalization concurrently for all fields if we have candidates
             if all_candidates:
                 await self._normalize_candidates_with_llm(all_candidates)
             pre_reconciled = self._upstream_reconcile_candidates(all_candidates)

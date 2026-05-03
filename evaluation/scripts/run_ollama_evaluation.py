@@ -137,7 +137,8 @@ def run_single_model_evaluation(
         "--ground-truth", str(ground_truth),
         "--output-dir", str(model_output_dir),
         "--repeats", str(repeats),
-        "--workers", "1"  # Sequential for Ollama (local resources)
+        "--workers", "1",  # Sequential for Ollama (local resources)
+        "--timeout", "7200",  # 2h per document for slower local Ollama inference
     ]
     
     # Add exclude documents if specified

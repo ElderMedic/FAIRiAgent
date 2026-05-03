@@ -70,6 +70,7 @@ def collect_runtime_config(
         "llm_temperature": config.llm_temperature,
         "llm_max_tokens": config.llm_max_tokens,
         "llm_enable_thinking": config.llm_enable_thinking,
+        "llm_thinking_budget": getattr(config, "llm_thinking_budget", 0),
         "llm_api_key": "***MASKED***" if config.llm_api_key else None,
         "fair_ds_api_url": config.fair_ds_api_url,
         "langsmith_api_key": "***MASKED***" if config.langsmith_api_key else None,

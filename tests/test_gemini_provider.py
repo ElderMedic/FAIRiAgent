@@ -42,8 +42,8 @@ def test_google_provider_alias_normalizes_to_gemini(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_gemini_calls_do_not_send_provider_specific_thinking_payload(monkeypatch):
-    """Gemini should use the plain invoke path without Qwen/Anthropic extra payloads."""
+async def test_gemini_thinking_budget_when_thinking_enabled(monkeypatch):
+    """Gemini should pass thinking_budget when thinking is enabled."""
 
     class DummyLLM:
         def __init__(self):
@@ -68,6 +68,42 @@ async def test_gemini_calls_do_not_send_provider_specific_thinking_payload(monke
     helper._log_llm_response = lambda *args, **kwargs: None
 
     monkeypatch.setattr(config, "llm_enable_thinking", True)
+    monkeypatch.setattr(config, "llm_thinking_budget", 2048)
+
+    result = await helper._call_llm(["hello"], operation_name="test-gemini")
+
+    assert result.content == "OK"
+    assert helper.llm.bind_calls == [{"thinking_budget": 2048}]
+    assert len(helper.llm.ainvoke_calls) == 1
+
+
+@pytest.mark.anyio
+async def test_gemini_thinking_disabled_no_bind(monkeypatch):
+    """When thinking is disabled, Gemini should not bind extra parameters."""
+
+    class DummyLLM:
+        def __init__(self):
+            self.bind_calls = []
+            self.ainvoke_calls = []
+
+        def bind(self, **kwargs):
+            self.bind_calls.append(kwargs)
+            return self
+
+        async def ainvoke(self, messages, config=None):
+            self.ainvoke_calls.append({"messages": messages, "config": config})
+            return SimpleNamespace(content="OK")
+
+    from fairifier.config import config
+
+    helper = LLMHelper.__new__(LLMHelper)
+    helper.provider = "gemini"
+    helper.model = "gemini-2.0-flash"
+    helper.llm = DummyLLM()
+    helper._langfuse_handler = None
+    helper._log_llm_response = lambda *args, **kwargs: None
+
+    monkeypatch.setattr(config, "llm_enable_thinking", False)
 
     result = await helper._call_llm(["hello"], operation_name="test-gemini")
 

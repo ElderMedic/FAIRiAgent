@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import json
 import logging
 import os
 import shutil
@@ -11,6 +12,8 @@ import tarfile
 import tempfile
 from pathlib import Path
 from typing import List, Optional
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 from langchain_core.tools import tool
 
@@ -18,15 +21,61 @@ logger = logging.getLogger(__name__)
 
 # Known biocontainer images — the agent can use the short alias (e.g. "samtools")
 # and the tool resolves the full quay.io image automatically.
+# These are fallback defaults; agents should prefer search_biocontainer_tags
+# to discover the latest available tag before pulling.
 _BIO_TOOL_IMAGES = {
     "samtools": "quay.io/biocontainers/samtools:1.23.1--ha83d96e_0",
     "bcftools": "quay.io/biocontainers/bcftools:1.23.1--hb2cee57_0",
 }
 
+_QUAY_API_TAGS = "https://quay.io/api/v1/repository/biocontainers/{tool}/tag/?limit=20&onlyActiveTags=true"
+
 
 def _resolve_image(image: str) -> str:
     """If image is a short alias, resolve to the full quay.io image."""
     return _BIO_TOOL_IMAGES.get(image.lower(), image)
+
+
+@tool
+def search_biocontainer_tags(tool_name: str) -> str:
+    """
+    Search the quay.io/biocontainers registry for available Docker image tags.
+
+    Use this BEFORE calling run_biocontainer_tool to verify that a valid image
+    tag exists. Returns a list of active tags sorted by recency.
+
+    Args:
+        tool_name: Short tool name, e.g. "samtools", "bcftools", "fastqc"
+
+    Returns:
+        JSON list of available tags with manifest digests, or an error message.
+    """
+    url = _QUAY_API_TAGS.format(tool=tool_name.lower())
+    try:
+        req = Request(url, headers={"Accept": "application/json"})
+        with urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+    except URLError as e:
+        return f"Error querying quay.io API: {e}"
+    except json.JSONDecodeError:
+        return f"Error: invalid JSON response from quay.io API for {tool_name}"
+
+    tags = data.get("tags", [])
+    if not tags:
+        return f"No active tags found for biocontainers/{tool_name} on quay.io"
+
+    lines = [f"Available tags for biocontainers/{tool_name}:"]
+    for tag in tags[:10]:
+        name = tag.get("name", "?")
+        digest = tag.get("manifest_digest", "")[:19] or "?"
+        last_mod = tag.get("last_modified", "?")
+        size = tag.get("size", 0)
+        size_str = f"{size / 1e6:.0f}MB" if size else "?"
+        lines.append(f"  {name}  digest={digest}  size={size_str}  modified={last_mod}")
+
+    full_image = f"quay.io/biocontainers/{tool_name}:{tags[0].get('name', 'latest')}"
+    lines.append(f"\nUse the full image path: {full_image}")
+    return "\n".join(lines)
 
 
 def _ensure_docker_image(image: str) -> bool:
@@ -174,4 +223,4 @@ def extract_archive_tool(host_path: str) -> str:
 
 
 def create_bio_tools() -> List:
-    return [run_biocontainer_tool, decompress_gzip_tool, extract_archive_tool]
+    return [search_biocontainer_tags, run_biocontainer_tool, decompress_gzip_tool, extract_archive_tool]

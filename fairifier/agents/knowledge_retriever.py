@@ -884,12 +884,13 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 self.log_execution(state, f"🔍 Phase 4: Searching for {len(all_terms_to_search)} additional terms...")
                 term_search_outcomes: Dict[str, Dict[str, int]] = {}
                 
-                # Allow searching across all packages to find fields the LLM might have missed
-                # during initial package selection.
-                search_scope_packages = selected_package_names
+                # Search across all available packages to find fields the LLM might have
+                # missed during initial package selection.  Label-level dedup at line 942
+                # prevents true duplicates; explicit critic/planner term requests should be
+                # discoverable regardless of source package.
+                search_scope_packages = available_package_names
                 package_names_str = ",".join(search_scope_packages) if search_scope_packages else None
 
-                # Keep all found fields, prioritizing those from selected packages later if needed.
                 selected_pkg_norm = {
                     str(p).strip().lower()
                     for p in search_scope_packages

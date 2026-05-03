@@ -32,22 +32,32 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
             "what you found. You are NOT allowed to infer or guess metadata "
             "without running a tool first.\n\n"
             "## Available Tools (you MUST use these)\n"
+            "- search_biocontainer_tags(tool_name): query quay.io for available image "
+            "tags BEFORE pulling. Use this first for every tool!\n"
             "- run_biocontainer_tool(image, command, host_path): run a tool in Docker.\n"
-            "  image={samtools|bcftools}. command=[\"tool\", \"subcmd\", \"/data/file\"]\n"
+            "  image={samtools|bcftools} or full quay.io path. "
+            "command=[\"tool\", \"subcmd\", \"/data/file\"]\n"
             "- decompress_gzip_tool(host_path): decompress .gz before analysis.\n"
             "- extract_archive_tool(host_path): extract archives before analysis.\n\n"
             "## Workflow (follow exactly)\n"
-            "1. If file is .gz → call decompress_gzip_tool first.\n"
-            "2. If file is .bam → call run_biocontainer_tool with image=\"samtools\", "
+            "1. Identify file type by extension. If file is .gz → call "
+            "decompress_gzip_tool first.\n"
+            "2. **CRITICAL: Call search_biocontainer_tags(\"samtools\") or "
+            "search_biocontainer_tags(\"bcftools\") BEFORE any run_biocontainer_tool "
+            "call.** Verify the image tag exists on quay.io. If the default tag "
+            "fails to pull, try another tag from the search results.\n"
+            "3. If file is .bam → call run_biocontainer_tool with "
+            "image=\"samtools\" (or verified full path), "
             "command=[\"samtools\",\"stats\",\"/data/FILENAME\"], host_path=<from task>.\n"
-            "3. If file is .vcf or .vcf.gz → call run_biocontainer_tool with "
-            "image=\"bcftools\", command=[\"bcftools\",\"view\",\"-h\",\"/data/FILENAME\"], "
+            "4. If file is .vcf or .vcf.gz → call run_biocontainer_tool with "
+            "image=\"bcftools\" (or verified full path), "
+            "command=[\"bcftools\",\"view\",\"-h\",\"/data/FILENAME\"], "
             "host_path=<from task>.\n"
-            "4. If file is .h5ad → call extract_archive_tool or decompress_gzip_tool "
+            "5. If file is .h5ad → call extract_archive_tool or decompress_gzip_tool "
             "if compressed; otherwise note the shape/key metadata you can infer.\n"
-            "5. ONLY after receiving tool output, call respond with "
+            "6. ONLY after receiving tool output, call respond with "
             "DocumentInfoResponse using the actual values from the tool output.\n"
-            "6. Do NOT respond before calling at least one tool. Do NOT guess values."
+            "7. Do NOT respond before calling at least one tool. Do NOT guess values."
         )
 
         return self._build_react_agent(
@@ -116,9 +126,11 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
         context = state.setdefault("context", {})
         if not context.get("critic_feedback"):
             context["critic_feedback"] = {
-                "critique": "You MUST call run_biocontainer_tool before producing any metadata. Without tool output, your response is invalid.",
+                "critique": "You MUST call search_biocontainer_tags first, then run_biocontainer_tool before producing any metadata. Without tool output, your response is invalid.",
                 "suggestions": [
-                    "Call run_biocontainer_tool with image=\"samtools\" or image=\"bcftools\" on every file.",
+                    "Call search_biocontainer_tags(\"samtools\") or search_biocontainer_tags(\"bcftools\") FIRST to verify the image exists.",
+                    "Then call run_biocontainer_tool with image=\"samtools\" or image=\"bcftools\" on every file.",
+                    "If the default tag fails to pull, try alternative tags from the search results.",
                     "Read the FULL tool output before summarizing.",
                     "Extract every numeric and categorical fact from the tool output.",
                 ],

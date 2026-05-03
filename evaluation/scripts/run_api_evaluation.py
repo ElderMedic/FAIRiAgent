@@ -104,7 +104,8 @@ def run_single_model_evaluation(
         "--ground-truth", str(ground_truth),
         "--output-dir", str(model_output_dir),
         "--repeats", str(repeats),
-        "--workers", str(workers)  # Parallel runs for API models
+        "--workers", str(workers),  # Parallel runs for API models
+        "--timeout", "7200",  # 2h per document for safety
     ]
     
     # Add exclude documents if specified

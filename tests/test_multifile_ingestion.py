@@ -1,3 +1,4 @@
+import json
 import zipfile
 from pathlib import Path
 
@@ -263,3 +264,52 @@ def test_read_tabular_tables_normalizes_timestamp_values(tmp_path: Path):
     serialized = table_path.read_text(encoding="utf-8")
 
     assert "2024-01-02T03:04:05" in serialized
+
+
+def test_read_tabular_tables_preserves_numeric_types_in_jsonl(tmp_path: Path):
+    app = _make_app_without_init()
+    output_dir = tmp_path / "out"
+    xlsx_path = tmp_path / "measurements.xlsx"
+    df = pd.DataFrame(
+        [
+            {
+                "sample_id": "S1",
+                "n_reads": 1000,
+                "ratio": 0.25,
+                "collection_time": pd.Timestamp("2024-01-02T03:04:05"),
+            }
+        ]
+    )
+    df.to_excel(xlsx_path, index=False)
+
+    _, info = app._read_document_content(str(xlsx_path), output_dir=str(output_dir))
+
+    workspace = info["source_workspace"]
+    table_path = Path(next(iter(workspace["table_paths"].values())))
+    row = json.loads(table_path.read_text(encoding="utf-8").splitlines()[0])
+
+    assert row["n_reads"] == 1000
+    assert isinstance(row["n_reads"], int)
+    assert row["ratio"] == 0.25
+    assert isinstance(row["ratio"], float)
+    assert row["collection_time"] == "2024-01-02T03:04:05"
+
+
+def test_directory_bundle_collects_bio_file_paths(tmp_path: Path):
+    """Multi-file bundles must aggregate host_path for BioMetadataAgent."""
+    app = _make_app_without_init()
+    out = tmp_path / "out"
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "note.txt").write_text("companion doc", encoding="utf-8")
+    bam = bundle / "reads.bam"
+    bam.write_bytes(b"")
+    _, info = app._read_document_content(str(bundle), output_dir=str(out))
+
+    assert info.get("method") == "directory_bundle"
+    bio_paths = info.get("bio_file_paths") or []
+    assert len(bio_paths) == 1
+    assert Path(bio_paths[0]).resolve() == bam.resolve()
+    bio_docs = [d for d in info["input_documents"] if d.get("content_type") == "bio_binary"]
+    assert len(bio_docs) == 1
+    assert Path(bio_docs[0]["host_path"]).resolve() == bam.resolve()
