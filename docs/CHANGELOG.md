@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.5.0] - 2026-05-03 – DeepSeek Provider, BioMetadataAgent Pipeline, and Evaluation Hardening
+
+### Added
+
+- **DeepSeek provider** (`llm_helper.py`, `config.py`): Full support for DeepSeek API as a new model provider, including thinking mode (`reasoning_effort`), JSON mode, and tool calling via OpenAI-compatible endpoint.
+- **Biocontainer registry search** (`tools/bio_tools.py`): New `search_biocontainer_tags` tool that queries quay.io API for available image tags before Docker pulls, preventing manifest-not-found failures.
+- **Dynamic JSON Schema validation** (`validation/json_schema.py`): Generates per-run JSON Schema from FAIRDS ShEx shapes (13 ISA-level shape definitions) combined with KnowledgeRetriever's selected field definitions (data_type, regex, required/optional). Uses `jsonschema` library. Replaces hardcoded `REQUIRED_FIELDS_BY_SHEET` with schema-driven validation. `_field_definitions` injected into metadata.json for post-hoc validation.
+- **Upstream candidate reconciliation** (`json_generator.py`): LLM-powered normalization groups evidence candidates by consensus value before generation, improving output consistency.
+- **Configurable evaluation timeout** (`run_batch_evaluation.py`): `--timeout` flag per document run, Ollama default raised to 7200s.
+
+### Changed
+
+- **BioMetadataAgent pipeline overhaul**: Directive system prompt mandates tool-first workflow; critic-style feedback injected to force Docker tool calls; response_format removed from deep agent loop; file-type hints stripped so agent discovers via tool calls.
+- **Thinking mode**: Enabled by default across all 6 providers with graceful fallback; DeepSeek and Qwen thinking disabled for deep agents ReAct loops (incompatible with multi-turn tool calling).
+- **Evaluation runner**: `n_fields_extracted` now counts actual ISA structure fields; aggressive JSON parse failure detection removed; output directory routing fixed for Ollama runs.
+- **CompBioBench ground truth**: Rewritten with real FAIR-DS metadata fields.
+- **Code cleanup**: Removed dead `kb/` directory, `local_knowledge` service, obsolete test files, and deprecated evaluation data. Root test scripts consolidated under `tests/`.
+
+### Fixed
+
+- `config_saver.py`: safe `getattr` for `llm_thinking_budget` to prevent `AttributeError` on stale config objects.
+- `react_loop.py`: DeepSeek thinking disabled via `thinking.type=disabled` for deep agent tool-calling compatibility.
+- `json_generator.py`: reconciliation context fallback to `candidate.value` when normalization fails.
+- API key exposure: Removed hardcoded key from tracked `deepseek_v4-pro_v1.4.0.env`.
+
+---
+
 ## [1.4.0] - 2026-05-02 – Source Grounding and Multi-file Provenance Stabilization
 
 ### Added
