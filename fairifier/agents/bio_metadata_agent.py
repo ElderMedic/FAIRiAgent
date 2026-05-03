@@ -110,6 +110,20 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
             self.logger.warning("BioMetadataAgent: Deep agents disabled, skipping active analysis.")
             return state
 
+        # Pre-populate Critic-style feedback to force tool use on first attempt.
+        # The model reliably calls tools when told to by an authority (Critic),
+        # but won't do it autonomously. This bridges the gap.
+        context = state.setdefault("context", {})
+        if not context.get("critic_feedback"):
+            context["critic_feedback"] = {
+                "critique": "You MUST call run_biocontainer_tool before producing any metadata. Without tool output, your response is invalid.",
+                "suggestions": [
+                    "Call run_biocontainer_tool with image=\"samtools\" or image=\"bcftools\" on every file.",
+                    "Read the FULL tool output before summarizing.",
+                    "Extract every numeric and categorical fact from the tool output.",
+                ],
+            }
+
         bio_file_paths: List[str] = state.get("bio_file_paths", []) or []
         if not bio_file_paths:
             self.logger.warning("BioMetadataAgent: No bio_file_paths in state, skipping.")
