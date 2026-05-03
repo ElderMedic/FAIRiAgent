@@ -20,7 +20,7 @@ SHEX_SHAPES: Dict[str, Dict[str, Any]] = {
             "investigation description":  {"required": True,  "type": "string"},
             "investigation identifier":   {"required": True,  "type": "string"},
             "investigation contributor":  {"required": False, "type": "person"},
-            "investigation contentUrl":   {"required": False, "type": "uri"},
+            "investigation contenturl":   {"required": False, "type": "uri"},
         },
     },
     "jerm:Study": {
@@ -30,7 +30,7 @@ SHEX_SHAPES: Dict[str, Dict[str, Any]] = {
             "study description":         {"required": True,  "type": "string"},
             "study identifier":          {"required": True,  "type": "string"},
             "study contributor":         {"required": False, "type": "person"},
-            "study contentUrl":          {"required": False, "type": "uri"},
+            "study contenturl":          {"required": False, "type": "uri"},
         },
     },
     "jerm:Assay": {
@@ -40,8 +40,8 @@ SHEX_SHAPES: Dict[str, Dict[str, Any]] = {
             "assay description":         {"required": True,  "type": "string"},
             "assay identifier":          {"required": True,  "type": "string"},
             "assay contributor":         {"required": False, "type": "person"},
-            "assay contentUrl":          {"required": False, "type": "uri"},
-            "assay additionalType":      {"required": False, "type": "uri"},
+            "assay contenturl":          {"required": False, "type": "uri"},
+            "assay additionaltype":      {"required": False, "type": "uri"},
         },
     },
     "jerm:Sample": {
@@ -51,7 +51,7 @@ SHEX_SHAPES: Dict[str, Dict[str, Any]] = {
             "sample description":        {"required": True,  "type": "string"},
             "sample identifier":         {"required": True,  "type": "string"},
             "sample contributor":        {"required": False, "type": "person"},
-            "sample contentUrl":         {"required": False, "type": "uri"},
+            "sample contenturl":         {"required": False, "type": "uri"},
         },
     },
     "ppeo:observation_unit": {
@@ -61,17 +61,17 @@ SHEX_SHAPES: Dict[str, Dict[str, Any]] = {
             "observation unit description": {"required": True,  "type": "string"},
             "observation unit identifier":  {"required": True,  "type": "string"},
             "observation unit contributor": {"required": False, "type": "person"},
-            "observation unit contentUrl":  {"required": False, "type": "uri"},
+            "observation unit contenturl":  {"required": False, "type": "uri"},
         },
     },
     "schema:Person": {
         "isa_sheet": "person",
         "properties": {
             "email":         {"required": True,  "type": "email"},
-            "givenName":     {"required": True,  "type": "string"},
-            "familyName":    {"required": True,  "type": "string"},
+            "givenname":     {"required": True,  "type": "string"},
+            "familyname":    {"required": True,  "type": "string"},
             "orcid":         {"required": False, "type": "uri"},
-            "jobTitle":      {"required": False, "type": "string"},
+            "jobtitle":      {"required": False, "type": "string"},
             "department":    {"required": False, "type": "string"},
             "organization":  {"required": False, "type": "string"},
         },
@@ -82,8 +82,8 @@ SHEX_SHAPES: Dict[str, Dict[str, Any]] = {
             "name":           {"required": True,  "type": "string"},
             "identifier":     {"required": True,  "type": "string"},
             "sha256":         {"required": False, "type": "string"},
-            "contentUrl":     {"required": False, "type": "uri"},
-            "contentSize":    {"required": False, "type": "integer"},
+            "contenturl":     {"required": False, "type": "uri"},
+            "contentsize":    {"required": False, "type": "integer"},
         },
     },
 }
@@ -173,11 +173,9 @@ def build_isa_schema(
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": properties,
+        "required": required,
         "additionalProperties": additional_properties,
     }
-    if required:
-        schema["required"] = required
-
     return schema
 
 
@@ -233,23 +231,9 @@ def validate_metadata(
     Returns:
         List of validation error messages (empty = valid).
     """
-    try:
-        import jsonschema
-    except ImportError:
-        return ["jsonschema library not installed — cannot validate"]
-
-    # Group selected fields by ISA sheet
-    fields_by_sheet: Dict[str, List[Dict[str, Any]]] = {}
-    for field in selected_fields:
-        sheet = (field.get("isa_sheet") or field.get("sheet") or "").strip().lower()
-        if not sheet:
-            continue
-        fields_by_sheet.setdefault(sheet, []).append(field)
-
-    schema = build_metadata_schema(fields_by_sheet)
-    validator = jsonschema.Draft202012Validator(schema)
-    errors = list(validator.iter_errors(metadata))
-    return [e.message for e in errors]
+    # Delegate to validate_isa_structure which handles the field_name/value format
+    result = validate_isa_structure(metadata.get("isa_structure", {}), selected_fields)
+    return result["errors"]
 
 
 def validate_isa_structure(
@@ -283,16 +267,33 @@ def validate_isa_structure(
         if not sheet_fields:
             continue
 
+        # Normalize sheet_data to a flat dict of {field_name: value}
+        if isinstance(sheet_data, dict) and not isinstance(sheet_data, list):
+            # May be {"fields": [...]} or already a flat dict
+            fields_list = sheet_data.get("fields", [])
+            if not fields_list and sheet_data:
+                # Already flattened: use as-is
+                flat_dict = {
+                    k.strip().lower(): v for k, v in sheet_data.items()
+                    if k != "fields"
+                }
+            else:
+                flat_dict = {}
+        else:
+            fields_list = sheet_data
+            flat_dict = {}
+        if isinstance(fields_list, list):
+            for item in fields_list:
+                if isinstance(item, dict):
+                    name = (item.get("field_name") or item.get("name") or "").strip().lower()
+                    if name:
+                        flat_dict[name] = item.get("value", item.get("field_value"))
+
         schema = build_isa_schema(sheet_name, sheet_fields, additional_properties=True)
         validator = jsonschema.Draft202012Validator(schema)
-
-        # Validate only the fields array within each sheet
-        fields_list = sheet_data if isinstance(sheet_data, list) else sheet_data.get("fields", [])
-        if isinstance(fields_list, list):
-            for idx, field_obj in enumerate(fields_list):
-                field_errors = list(validator.iter_errors(field_obj))
-                for e in field_errors:
-                    all_errors.append(f"{sheet_name}[{idx}]: {e.message}")
+        errors_list = list(validator.iter_errors(flat_dict))
+        for e in errors_list:
+            all_errors.append(f"{sheet_name}: {e.message}")
 
         # Check ShEx-mandatory fields are present
         for shape_name, shape_def in SHEX_SHAPES.items():
