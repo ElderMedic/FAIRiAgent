@@ -53,7 +53,7 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
         return self._build_react_agent(
             tools=bio_tools,
             subagents=[],
-            response_format=DocumentInfoResponse,
+            response_format=None,  # Let LLM free-explore with tools first
             system_prompt=system_prompt,
             memory_files=self._get_memory_files(),
         )
@@ -159,24 +159,50 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
         seed_files = self._build_bio_seed_files(state)
         thread_id = state.get("session_id", "default")
 
-        result = await self._invoke_react_agent(
-            inner_agent,
-            task_message=self._compose_task_message(state, task),
-            seed_files=seed_files,
-            thread_id=thread_id,
-            state=state,
-            scratchpad_name="BioMetadataAgent"
+        # Use raw ainvoke (not _invoke_react_agent) to get full messages when
+        # response_format is None — we parse the final LLM message for metadata.
+        raw_result = await inner_agent.ainvoke(
+            {
+                "messages": [{"role": "user", "content": self._compose_task_message(state, task)}],
+                "files": seed_files,
+            },
+            config={
+                "configurable": {"thread_id": thread_id},
+                "recursion_limit": 120,
+            },
         )
+        self._record_react_result(state, "BioMetadataAgent", raw_result)
 
-        if result:
-            # Merge findings into existing document_info
-            existing_info = state.get("document_info", {})
-            new_info = result.dict()
-            for key, value in new_info.items():
-                if value and (not isinstance(value, (str, list, dict)) or len(str(value).strip()) > 0):
-                    if key not in existing_info or not existing_info.get(key):
-                        existing_info[key] = value
-            state["document_info"] = existing_info
-            self.logger.info("BioMetadataAgent: Merged %d new fields into document_info", len(new_info))
+        # Extract metadata from the last assistant message
+        final_text = ""
+        messages = raw_result.get("messages", [])
+        for msg in reversed(messages):
+            if hasattr(msg, "content") and msg.content:
+                final_text = str(msg.content)
+                break
+            elif isinstance(msg, dict) and msg.get("content"):
+                final_text = str(msg["content"])
+                break
+
+        if final_text:
+            self.logger.info("BioMetadataAgent: got %d chars from agent loop, extracting metadata", len(final_text))
+            # Use LLM to extract structured document_info from the agent's findings
+            extracted = await self.llm_helper.extract_document_info(
+                final_text,
+                critic_feedback=None,
+                is_structured_markdown=False,
+                planner_instruction="Extract all metadata fields discovered by bioinformatics tool analysis.",
+                prior_memory_context=None,
+            )
+            if extracted:
+                existing_info = state.get("document_info", {})
+                for key, value in extracted.items():
+                    if value and (not isinstance(value, (str, list, dict)) or len(str(value).strip()) > 0):
+                        if key not in existing_info or not existing_info.get(key):
+                            existing_info[key] = value
+                state["document_info"] = existing_info
+                self.logger.info("BioMetadataAgent: Merged %d new fields into document_info", len(extracted))
+        else:
+            self.logger.warning("BioMetadataAgent: No text output from deep agent")
 
         return state
