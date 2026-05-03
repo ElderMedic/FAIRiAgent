@@ -86,15 +86,20 @@ class ReactLoopMixin:
             )
             return base_model
 
+        # Deep agents use multi-turn tool calling which is incompatible
+        # with thinking/reasoning modes. Disable per-provider:
+        if config.llm_provider == "deepseek":
+            extra_body = {"thinking": {"type": "disabled"}}
+        else:
+            extra_body = {"enable_thinking": False}
+
         return ChatOpenAI(
             model=config.llm_model,
             api_key=config.llm_api_key,
             base_url=config.llm_base_url,
             temperature=config.llm_temperature,
             max_tokens=self._resolved_react_max_tokens(),
-            # Deep agents use multi-turn tool calling which is incompatible
-            # with thinking/reasoning modes on DeepSeek and Qwen.
-            extra_body={"enable_thinking": False},
+            extra_body=extra_body,
         )
 
     def _build_react_agent(
