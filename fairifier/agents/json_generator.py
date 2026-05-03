@@ -101,8 +101,9 @@ class JSONGeneratorAgent(BaseAgent):
                 ]
                 added = False
                 for fname, cands in pre_reconciled.items():
-                    if cands and getattr(cands[0], "normalized_value", None):
-                        reconciled_lines.append(f"- {fname}: {cands[0].normalized_value}")
+                    val = getattr(cands[0], "normalized_value", None) or getattr(cands[0], "value", None)
+                    if cands and val:
+                        reconciled_lines.append(f"- {fname}: {val}")
                         added = True
                 if added:
                     field_evidence_context += "\n" + "\n".join(reconciled_lines)
