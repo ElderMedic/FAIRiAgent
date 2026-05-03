@@ -302,27 +302,45 @@ def validate_source_grounding(
     }
 
 
-def check_metadata_json_output(data: Dict[str, Any]) -> Dict[str, Any]:
+def check_metadata_json_output(
+    data: Dict[str, Any],
+    *,
+    selected_fields: List[Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
     """
     Run all FAIR / ISA format checks on a parsed metadata_json object.
 
-    Returns the same structure as evaluation.evaluators.schema_validator.SchemaValidator.validate().
+    If ``selected_fields`` is provided (from KnowledgeRetriever output), a
+    dynamic JSON Schema is generated from FAIRDS ShEx rules + the selected
+    fields and validated with ``jsonschema``. Otherwise falls back to the
+    legacy hardcoded field checks.
     """
     errors: List[str] = []
     warnings: List[str] = []
     validations: Dict[str, bool] = {}
 
+    # -- Dynamic JSON Schema validation (primary) --
+    if selected_fields:
+        from .json_schema import validate_isa_structure as schema_validate
+        schema_result = schema_validate(
+            data.get("isa_structure", {}),
+            selected_fields,
+        )
+        validations["json_schema"] = schema_result["valid"]
+        errors.extend(schema_result["errors"])
+        warnings.extend(schema_result["warnings"])
+    else:
+        # Legacy fallback: hardcoded field checks
+        required_valid = validate_required_fields(data, errors, warnings)
+        validations["required_fields_fallback"] = required_valid
+        isa_valid = validate_isa_structure(data, errors, warnings)
+        validations["isa_structure_fallback"] = isa_valid
+
     structure_valid = validate_json_structure(data, errors, warnings)
     validations["json_structure"] = structure_valid
 
-    required_valid = validate_required_fields(data, errors, warnings)
-    validations["required_fields"] = required_valid
-
     datatypes_valid = validate_field_datatypes(data, errors, warnings)
     validations["field_datatypes"] = datatypes_valid
-
-    isa_valid = validate_isa_structure(data, errors, warnings)
-    validations["isa_structure"] = isa_valid
 
     format_valid = validate_value_formats(data, errors, warnings)
     validations["value_formats"] = format_valid

@@ -204,7 +204,8 @@ def _post_write_metadata_json_checks(
         )
         return
 
-    result = check_metadata_json_output(parsed)
+    selected_fields = parsed.pop("_field_definitions", None) or []
+    result = check_metadata_json_output(parsed, selected_fields=selected_fields)
     err_preview = result["errors"][:10]
     warn_preview = result["warnings"][:10]
     json_logger.info(

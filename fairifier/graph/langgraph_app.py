@@ -1770,11 +1770,15 @@ class FAIRifierLangGraphApp:
             state["document_content"] = text
             state["document_conversion"] = conversion_info
             state["source_workspace"] = conversion_info.get("source_workspace", {})
-            # Collect bio file paths for BioMetadataAgent
+            # Collect bio file paths for BioMetadataAgent (single input or multi-file bundle)
             bio_paths: List[str] = []
+            for p in conversion_info.get("bio_file_paths") or []:
+                if isinstance(p, str) and p and p not in bio_paths:
+                    bio_paths.append(p)
             host_path = conversion_info.get("host_path")
             if host_path and conversion_info.get("content_type") == "bio_binary":
-                bio_paths.append(host_path)
+                if host_path not in bio_paths:
+                    bio_paths.append(host_path)
             state["bio_file_paths"] = bio_paths
             input_documents = conversion_info.get("input_documents")
             if not isinstance(input_documents, list) or not input_documents:
@@ -1830,6 +1834,7 @@ class FAIRifierLangGraphApp:
             state["errors"].append(f"File reading error: {str(e)}")
             state["document_content"] = ""
             state["input_documents"] = []
+            state["bio_file_paths"] = []
         
         return state
     
@@ -2311,6 +2316,7 @@ class FAIRifierLangGraphApp:
         sources: List[Dict[str, Any]] = []
         input_documents: List[Dict[str, Any]] = []
         failed_sources: List[Dict[str, str]] = []
+        bio_file_paths: List[str] = []
         for idx, file_path in enumerate(selected_files, start=1):
             try:
                 text, info = self._read_single_document_content(str(file_path), output_dir)
@@ -2325,6 +2331,10 @@ class FAIRifierLangGraphApp:
                 )
                 continue
             rel_name = str(file_path.relative_to(root_dir))
+            if info.get("content_type") == "bio_binary":
+                hp = info.get("host_path")
+                if isinstance(hp, str) and hp and hp not in bio_file_paths:
+                    bio_file_paths.append(hp)
             sections.append(
                 f"\n\n=== Source {idx}: {rel_name} ===\n{text}"
             )
@@ -2336,15 +2346,16 @@ class FAIRifierLangGraphApp:
                     "content_type": info.get("content_type", "text"),
                 }
             )
-            input_documents.append(
-                {
-                    "path": rel_name,
-                    "content": text,
-                    "method": info.get("method", "unknown"),
-                    "content_type": info.get("content_type", "text"),
-                    "tables": info.get("tables", []),
-                }
-            )
+            doc_entry: Dict[str, Any] = {
+                "path": rel_name,
+                "content": text,
+                "method": info.get("method", "unknown"),
+                "content_type": info.get("content_type", "text"),
+                "tables": info.get("tables", []),
+            }
+            if info.get("host_path"):
+                doc_entry["host_path"] = info.get("host_path")
+            input_documents.append(doc_entry)
 
         if not sections:
             raise ValueError(f"Bundle contained supported files but none could be parsed: {root_dir}")
@@ -2364,6 +2375,7 @@ class FAIRifierLangGraphApp:
             "sources": sources,
             "input_documents": input_documents,
             "failed_sources": failed_sources,
+            "bio_file_paths": bio_file_paths,
         }
         self._attach_source_workspace(
             conversion_info,
@@ -2460,10 +2472,11 @@ class FAIRifierLangGraphApp:
         tables: List[Dict[str, Any]] = []
         for sheet_name in workbook.sheet_names:
             df = pd.read_excel(path, sheet_name=sheet_name)
-            for col in df.select_dtypes(include=['datetime64', 'datetime64[ns]', 'datetimetz']).columns:
-                df[col] = df[col].dt.strftime('%Y-%m-%dT%H:%M:%S')
-            # Cast to string to prevent JSON serialization errors with Timestamp objects
-            rows = df.fillna("").astype(str).to_dict(orient="records")
+            for col in df.select_dtypes(include=["datetime64", "datetime64[ns]", "datetimetz"]).columns:
+                ser = df[col]
+                df[col] = ser.dt.strftime("%Y-%m-%dT%H:%M:%S").where(ser.notna(), "")
+            # Table rows are written with source_workspace._json_safe_value (numpy/datetime-safe).
+            rows = df.fillna("").to_dict(orient="records")
             tables.append({"name": str(sheet_name), "rows": rows})
         return tables
     
@@ -3280,6 +3293,24 @@ Return JSON in the following format:
         # Set final status based on whether we have the critical output
         metadata_json = state.get("artifacts", {}).get("metadata_json")
         metadata_fields = state.get("metadata_fields", [])
+
+        # Inject selected field definitions for downstream JSON Schema validation
+        retrieved_knowledge = state.get("retrieved_knowledge", []) or []
+        if metadata_json and retrieved_knowledge:
+            try:
+                parsed = json.loads(metadata_json) if isinstance(metadata_json, str) else metadata_json
+                if isinstance(parsed, dict):
+                    parsed["_field_definitions"] = [
+                        {k: v for k, v in f.items()
+                         if k in ("name", "label", "isa_sheet", "sheet", "data_type",
+                                  "syntax", "regex", "required", "requirement", "package")}
+                        for f in retrieved_knowledge
+                        if isinstance(f, dict)
+                    ]
+                    metadata_json = json.dumps(parsed, indent=2, ensure_ascii=False)
+                    state["artifacts"]["metadata_json"] = metadata_json
+            except Exception:
+                pass  # best-effort; validation still works without this
         
         if not metadata_json or not metadata_fields:
             # Critical output missing - this is a failure
