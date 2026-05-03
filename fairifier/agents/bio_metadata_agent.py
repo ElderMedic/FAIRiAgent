@@ -28,19 +28,25 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
 
         system_prompt = (
             "You are the BioMetadataAgent for FAIRiAgent. "
-            "Your task is to analyze raw biological data files (BAM, VCF, FASTQ, h5ad) "
-            "to recover metadata that is missing from documentation.\n\n"
-            "You have access to bioinformatics tools via Docker biocontainers:\n"
-            "- run_biocontainer_tool(image, command, host_path): runs a Docker container. "
-            "Use image=\"samtools\" for BAM files or image=\"bcftools\" for VCF files. "
-            "host_path MUST be the exact path from bio_file_paths. "
-            "The tool mounts the parent dir to /data, so reference files as /data/<filename>.\n"
+            "Your ONLY task: use bioinformatics tools to inspect raw biological data "
+            "files and extract metadata that is missing from documentation.\n\n"
+            "## Available Tools\n"
+            "- run_biocontainer_tool(image, command, host_path): run a tool inside Docker.\n"
+            "  Use image=\"samtools\" for .bam, image=\"bcftools\" for .vcf.\n"
+            "  host_path MUST be an exact path from the task message.\n"
+            "  command example: [\"samtools\", \"stats\", \"/data/filename.bam\"]\n"
             "- decompress_gzip_tool(host_path): decompress .gz files.\n"
             "- extract_archive_tool(host_path): extract tar archives.\n\n"
-            "Consult /skills/bioinfo-analysis/SKILL.md for recipes. "
-            "First identify file types, then use samtools for BAM or bcftools for VCF "
-            "to extract header info, stats, and metadata. "
-            "Return a structured metadata object following the DocumentInfoResponse format."
+            "## Critical Rules\n"
+            "1. You MUST call at least one tool before responding. Do NOT respond "
+            "without first calling a tool to inspect the data.\n"
+            "2. Read /skills/bioinfo-analysis/SKILL.md first for exact commands.\n"
+            "3. After collecting tool output, call the respond tool with a "
+            "DocumentInfoResponse: at minimum provide title, abstract, and any "
+            "extracted metadata fields like read_length_bp, paired_end, "
+            "reference_genome, file_format, organism.\n"
+            "4. Every field value must be grounded in the tool output you received. "
+            "Do not invent or guess values."
         )
 
         return self._build_react_agent(
@@ -114,43 +120,47 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
 
         # Build task with file paths and context
         doc_info = state.get("document_info", {})
-        task = (
-            "Analyze the following biological data files to recover metadata "
-            "that is missing from documentation.\n\n"
-            "## Bio File Paths (use these as host_path in run_biocontainer_tool)\n"
-        )
+        lines = [
+            "Analyze the following biological data files and extract metadata "
+            "that is missing from documentation.",
+            "",
+            "## Bio File Paths (use these as host_path in run_biocontainer_tool)",
+        ]
         for p in bio_file_paths:
             fname = Path(p).name
-            task += f"- {p}  (→ /data/{fname})\n"
+            ext = fname.split(".")[-1] if "." in fname else ""
+            tool_hint = {"bam": "samtools", "vcf": "bcftools"}.get(ext, "")
+            lines.append(f"- {p}  (filename in container: /data/{fname})")
+            if tool_hint:
+                lines.append(f"  This is a {ext.upper()} file → use image=\"{tool_hint}\"")
 
-        if doc_info:
-            task += "\n## Parsed Document Context\n"
-            task += f"document_type: {doc_info.get('document_type', 'unknown')}\n"
-            abstract = doc_info.get('abstract', '')
-            if abstract:
-                task += f"abstract: {abstract}\n"
-            domain = doc_info.get('research_domain', '')
-            if domain:
-                task += f"research_domain: {domain}\n"
+        if doc_info and doc_info.get("abstract"):
+            lines.append(f"\n## Document Context\nabstract: {doc_info['abstract']}")
 
-        task += (
-            "\n## Instructions\n"
-            "1. Open /skills/bioinfo-analysis/SKILL.md for tool recipes.\n"
-            "2. Use run_biocontainer_tool with the host_path values listed above.\n"
-            "3. Extract: read length, paired-end status, reference genome, "
-            "organism, sample names, or any other metadata visible in headers/stats.\n"
-            "4. Return a structured metadata object complementing the document context above."
-        )
+        lines += [
+            "",
+            "## Required Actions (do these in order)",
+            "1. Read /skills/bioinfo-analysis/SKILL.md for tool recipes and exact commands.",
+            "2. For each file above, call run_biocontainer_tool ONCE with the specific "
+            "host_path. For example, for a .bam file:",
+            '  run_biocontainer_tool(image="samtools", command=["samtools", "stats", "/data/filename.bam"], host_path="<the host_path from above>")',
+            "3. Parse the tool output. Look for metadata like: read length, paired-end status, "
+            "reference genome, organism, sample names, sequencing platform.",
+            "4. When you have extracted all available metadata, call the respond tool "
+            "with a DocumentInfoResponse containing title, abstract, research_domain, "
+            "and any other fields you discovered.",
+        ]
+        task = "\n".join(lines)
 
         seed_files = self._build_bio_seed_files(state)
         thread_id = state.get("session_id", "default")
 
         result = await self._invoke_react_agent(
             inner_agent,
-            task,
-            seed_files,
-            thread_id,
-            state,
+            task_message=self._compose_task_message(state, task),
+            seed_files=seed_files,
+            thread_id=thread_id,
+            state=state,
             scratchpad_name="BioMetadataAgent"
         )
 
