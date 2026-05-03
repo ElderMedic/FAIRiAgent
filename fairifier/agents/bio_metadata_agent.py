@@ -119,40 +119,43 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
         for p in bio_file_paths:
             self.logger.info("  %s", p)
 
-        # Build task with file paths and context
+        # Build task — deliberately VAGUE about file types so the agent MUST
+        # use tools to discover what each file contains.
         doc_info = state.get("document_info", {})
         lines = [
-            "Your FIRST AND ONLY action before responding: call run_biocontainer_tool "
-            "for each biological data file below. You MUST call a tool — do NOT respond "
-            "with text until you have received tool output.",
+            "You have been given biological data files to analyze. You do NOT know "
+            "what they contain yet. Your ONLY way to find out is by calling tools.",
             "",
-            "## Files to Analyze",
+            "## Rule: NO TOOL CALL = NO RESPONSE",
+            "You are FORBIDDEN from responding with any metadata before you have "
+            "called at least one tool per file and received its output.",
+            "Do NOT guess. Do NOT infer from filenames. Use tools ONLY.",
+            "",
+            "## Files (you MUST call tools on these)",
         ]
         for p in bio_file_paths:
             fname = Path(p).name
-            ext = fname.split(".")[-1] if "." in fname else ""
-            if ext == "bam":
-                lines.append(f"- BAM file: {p}")
-                lines.append(f"  → Call: run_biocontainer_tool(image=\"samtools\", command=[\"samtools\",\"stats\",\"/data/{fname}\"], host_path=\"{p}\")")
-            elif ext in ("vcf", "gz") and "vcf" in fname:
-                lines.append(f"- VCF file: {p}")
-                lines.append(f"  → Call: run_biocontainer_tool(image=\"bcftools\", command=[\"bcftools\",\"view\",\"-h\",\"/data/{fname}\"], host_path=\"{p}\")")
-            elif "h5ad" in fname:
-                lines.append(f"- h5ad file: {p}")
-                lines.append(f"  → This is an AnnData/HDF5 single-cell file. No Docker tool needed.")
-                lines.append(f"  → Note the file extension (.h5ad) and infer: organism, cell count, tissue if possible.")
-            else:
-                lines.append(f"- {p}  (in container: /data/{fname})")
+            lines.append(f"- {p}  (in container at /data/{fname})")
 
         if doc_info and doc_info.get("abstract"):
-            lines.append(f"\n## Companion Document Context\n{doc_info['abstract']}")
+            lines.append(f"\n## Context From Documents\n{doc_info['abstract']}")
 
         lines += [
             "",
-            "## Instructions",
-            "1. Call run_biocontainer_tool NOW with the exact parameters listed above.",
-            "2. Read the tool output. Extract every numeric and categorical fact.",
-            "3. Only then call the respond tool. Every field must come from tool output.",
+            "## Available Tools",
+            "- run_biocontainer_tool(image, command, host_path): run any bioinformatics tool in Docker",
+            "  Valid images: \"samtools\" or \"bcftools\"",
+            "  Example: run_biocontainer_tool(image=\"samtools\", command=[\"samtools\",\"stats\",\"/data/file.bam\"], host_path=\"<path>\")",
+            "- decompress_gzip_tool(host_path): unzip .gz files first if needed",
+            "- extract_archive_tool(host_path): extract archives if needed",
+            "",
+            "## Required Workflow",
+            "1. For EVERY file above, call run_biocontainer_tool with image=\"samtools\"",
+            "   OR image=\"bcftools\". Try samtools first — if it fails, try bcftools.",
+            "2. Read the full tool output carefully.",
+            "3. Extract facts: read count, length, paired-end status, reference genome,",
+            "   organism, sample names, chromosome names, variant counts, etc.",
+            "4. Summarize ALL findings in your final message.",
         ]
         task = "\n".join(lines)
 
