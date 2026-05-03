@@ -59,9 +59,6 @@ class FAIRifierConfig:
     
     # Paths
     project_root: Path = Path(__file__).parent.parent
-    kb_path: Path = project_root / "kb"
-    schemas_path: Path = kb_path / "schemas" 
-    shapes_path: Path = kb_path / "shapes"
     output_path: Path = project_root / "output"  # Default, will be overridden with timestamp in CLI
     skills_dir: Path = project_root / "fairifier" / "skills"
     # Extra SKILL.md roots merged into the same /skills/ virtual tree (later wins on collision).
@@ -79,8 +76,9 @@ class FAIRifierConfig:
     llm_api_key: Optional[str] = None  # For OpenAI/Qwen/Gemini/Anthropic
     embedding_model: str = "nomic-embed-text-v2-moe:latest"
     llm_temperature: float = 0.3  # Recommended for structured extraction; keep consistent across configs (control variable)
-    llm_max_tokens: int = 8192  # Conservative default for test/dev cost control
-    llm_enable_thinking: bool = False  # Enable thinking mode (requires streaming for some models)
+    llm_max_tokens: int = 16384  # Conservative default for test/dev cost control
+    llm_enable_thinking: bool = True  # Thinking enabled by default — models that support it benefit from reasoning traces
+    llm_thinking_budget: int = 2048  # Token budget for thinking/reasoning (Gemini, Anthropic). 0 = model default
     enable_deep_agents: bool = True  # Use deepagents inner loops when dependency is available
     
     # Document parsing context limits (characters)
@@ -239,9 +237,6 @@ class FAIRifierConfig:
     def __post_init__(self):
         """Create necessary directories."""
         self.output_path.mkdir(exist_ok=True)
-        self.kb_path.mkdir(exist_ok=True)
-        self.schemas_path.mkdir(exist_ok=True)
-        self.shapes_path.mkdir(exist_ok=True)
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         
         # Ensure checkpoint DB parent directory exists if using sqlite
@@ -292,6 +287,8 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
             config_instance.llm_model = "qwen-flash"
         elif requested_provider == "gemini":
             config_instance.llm_model = "gemini-3.1-pro-preview"
+        elif requested_provider == "deepseek":
+            config_instance.llm_model = "deepseek-v4-pro"
         else:
             config_instance.llm_model = "qwen3:30b"
 
@@ -448,6 +445,9 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     # Qwen/DashScope: fallback to DASHSCOPE_API_KEY if LLM_API_KEY not set
     if config_instance.llm_provider == "qwen" and not config_instance.llm_api_key:
         config_instance.llm_api_key = os.getenv("DASHSCOPE_API_KEY")
+    # DeepSeek: fallback to DEEPSEEK_API_KEY if LLM_API_KEY not set
+    if config_instance.llm_provider == "deepseek" and not config_instance.llm_api_key:
+        config_instance.llm_api_key = os.getenv("DEEPSEEK_API_KEY")
     # Gemini: prefer GOOGLE_API_KEY, then GEMINI_API_KEY
     if config_instance.llm_provider == "gemini" and not config_instance.llm_api_key:
         config_instance.llm_api_key = (
@@ -495,6 +495,13 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         # Anthropic SDK uses its own endpoint, base_url not applicable
         config_instance.llm_base_url = None
 
+    # DeepSeek API (OpenAI-compatible)
+    elif config_instance.llm_provider == "deepseek":
+        if os.getenv("DEEPSEEK_API_BASE_URL"):
+            config_instance.llm_base_url = os.getenv("DEEPSEEK_API_BASE_URL")
+        elif config_instance.llm_base_url == "http://localhost:11434":
+            config_instance.llm_base_url = "https://api.deepseek.com"
+
     if os.getenv("LLM_TEMPERATURE"):
         config_instance.llm_temperature = float(os.getenv("LLM_TEMPERATURE"))
 
@@ -504,6 +511,8 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     # Thinking mode configuration
     if os.getenv("LLM_ENABLE_THINKING"):
         config_instance.llm_enable_thinking = os.getenv("LLM_ENABLE_THINKING").lower() in ("true", "1", "yes")
+    if os.getenv("LLM_THINKING_BUDGET"):
+        config_instance.llm_thinking_budget = int(os.getenv("LLM_THINKING_BUDGET"))
     
     # Document parsing context limits
     if os.getenv("MAX_DOC_CONTEXT_MARKDOWN"):
@@ -714,7 +723,7 @@ def apply_budget_guardrails(config_instance: FAIRifierConfig):
     if allow_expensive:
         return
 
-    config_instance.llm_max_tokens = min(config_instance.llm_max_tokens, 8192)
+    config_instance.llm_max_tokens = min(config_instance.llm_max_tokens, 65536)
     config_instance.max_doc_context_markdown = min(
         config_instance.max_doc_context_markdown, 200000
     )
