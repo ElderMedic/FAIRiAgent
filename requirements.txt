@@ -54,3 +54,8 @@ python-dotenv>=1.0.0
 # Enable with: MEM0_ENABLED=true in .env
 mem0ai>=2.0.1
 qdrant-client>=1.7.0
+
+# Evaluation (optional, for evaluation/scripts/compare_values_against_gt.py)
+# Semantic similarity matching for GT comparison; falls back to token-F1 if absent.
+sentence-transformers>=3.0.0
+scipy>=1.10.0
