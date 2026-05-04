@@ -289,7 +289,12 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
                         )
                     state["source_workspace"] = source_ws
 
+        if final_text and extracted:
+            self.update_confidence(state, "bio_metadata", 0.95)
+        elif final_text:
+            self.update_confidence(state, "bio_metadata", 0.6)
         else:
             self.logger.warning("BioMetadataAgent: No text output from deep agent")
+            self.update_confidence(state, "bio_metadata", 0.0)
 
         return state

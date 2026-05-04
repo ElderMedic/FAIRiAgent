@@ -571,11 +571,16 @@ def try_export_fairds_metadata_excel(
         )
         return None
 
-    # Prefer dedicated matrix; fall back to isa_structure.
-    isa_values = data.get("isa_values")
-    if isinstance(isa_values, dict):
-        fill_structure = split_entities_in_isa_structure(isa_values)
-    else:
+    # Prefer dedicated matrix file; fall back to isa_structure.
+    isa_values_path = Path(output_dir) / "isa_values_json.json"
+    try:
+        with open(isa_values_path, encoding="utf-8") as fh:
+            isa_values = json.load(fh)
+        if isinstance(isa_values, dict):
+            fill_structure = split_entities_in_isa_structure(isa_values)
+        else:
+            fill_structure = split_entities_in_isa_structure(isa_structure)
+    except (OSError, json.JSONDecodeError):
         fill_structure = split_entities_in_isa_structure(isa_structure)
 
     # Check for fillable content.

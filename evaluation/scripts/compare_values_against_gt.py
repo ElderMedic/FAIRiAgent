@@ -168,7 +168,16 @@ def load_run_sheets(run_dir: Path) -> Dict[str, List[Dict[str, str]]]:
 
     out: Dict[str, List[Dict[str, str]]] = {}
 
-    isa_values = meta.get("isa_values") or meta.get("isa_structure", {})
+    # Prefer dedicated isa_values_json.json; fall back to isa_structure.fields
+    isa_values_path = run_dir / "isa_values_json.json"
+    if isa_values_path.exists():
+        try:
+            with open(isa_values_path, encoding="utf-8") as f:
+                isa_values = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            isa_values = {}
+    else:
+        isa_values = meta.get("isa_values") or meta.get("isa_structure", {})
     if isinstance(isa_values, dict):
         for sheet_name, sheet_data in isa_values.items():
             if sheet_name in ("description", "statistics"):

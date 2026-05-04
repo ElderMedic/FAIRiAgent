@@ -1075,15 +1075,6 @@ class JSONGeneratorAgent(BaseAgent):
             # ISA 5-sheet structure (legacy flat format with full provenance)
             "isa_structure": isa_structure,
 
-            # ISA values matrix (columns × rows, for Excel prefill)
-            "isa_values": {
-                sheet: {
-                    "columns": matrix_by_level.get(sheet, {}).get("columns", []),
-                    "rows": matrix_by_level.get(sheet, {}).get("rows", []),
-                }
-                for sheet in ("investigation", "study", "assay", "sample", "observationunit")
-            },
-            
             # Document information summary (compact view; derived from flexible LLM extraction)
             "document_info": self._build_document_info_compact(doc_info),
             "multi_file_parse_summary": {

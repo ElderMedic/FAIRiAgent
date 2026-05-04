@@ -156,50 +156,24 @@ class ISAValueMapperAgent(BaseAgent):
             matrix, indent=2, ensure_ascii=False
         )
 
-        self._apply_isa_matrix_to_metadata_json(state, matrix)
-
         total_rows = sum(len(s["rows"]) for s in matrix.values())
+        total_cells = sum(
+            sum(1 for v in (r.values() if isinstance(r, dict) else []) if v)
+            for s in matrix.values() for r in s.get("rows", [])
+        )
+        total_slots = sum(
+            len(s.get("columns", [])) * len(s.get("rows", []))
+            for s in matrix.values()
+        )
+        fill_ratio = total_cells / max(total_slots, 1)
+        self.update_confidence(state, "isa_value_mapping", round(fill_ratio, 3))
         self.logger.info(
-            "✅ ISAValueMapper: %d sheets, %d total rows",
+            "✅ ISAValueMapper: %d sheets, %d total rows, fill %.1f%%",
             len(matrix),
             total_rows,
+            fill_ratio * 100,
         )
         return state
-
-    def _apply_isa_matrix_to_metadata_json(
-        self,
-        state: FAIRifierState,
-        matrix: Dict[str, Dict[str, Any]],
-    ) -> None:
-        """Write the mapper matrix into ``artifacts.metadata_json`` as ``isa_values``."""
-        artifacts = state.get("artifacts") or {}
-        raw = artifacts.get("metadata_json")
-        if not raw or not matrix:
-            return
-        try:
-            parsed = json.loads(raw) if isinstance(raw, str) else raw
-        except json.JSONDecodeError as exc:
-            self.logger.warning(
-                "ISAValueMapper: cannot merge isa_values (metadata_json parse error): %s",
-                exc,
-            )
-            return
-        if not isinstance(parsed, dict):
-            return
-        parsed["isa_values"] = {
-            sheet: {
-                "columns": list(matrix.get(sheet, {}).get("columns") or []),
-                "rows": [
-                    dict(r) if isinstance(r, dict) else r
-                    for r in (matrix.get(sheet, {}) or {}).get("rows") or []
-                ],
-            }
-            for sheet in ISA_LEVELS
-        }
-        state.setdefault("artifacts", {})
-        state["artifacts"]["metadata_json"] = json.dumps(
-            parsed, indent=2, ensure_ascii=False
-        )
 
     # ── LLM-based matrix construction ─────────────────────────────────
 

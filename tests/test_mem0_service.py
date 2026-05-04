@@ -232,12 +232,16 @@ class TestMem0Service:
         
         assert "results" in result
         assert len(result["results"]) == 2
-        mock_mem.add.assert_called_once_with(
-            messages=messages,
-            user_id="session_123",
-            agent_id="TestAgent",
-            metadata=metadata
-        )
+        _, call_kwargs = mock_mem.add.call_args
+        assert call_kwargs["user_id"] == "session_123"
+        assert call_kwargs["agent_id"] == "TestAgent"
+        assert call_kwargs["messages"] == messages
+        # add() injects lifecycle metadata (written_at, expires_at, schema_version)
+        # in addition to the caller-supplied metadata; verify both are present
+        assert call_kwargs["metadata"]["test"] == "meta"
+        assert "schema_version" in call_kwargs["metadata"]
+        assert "written_at" in call_kwargs["metadata"]
+        assert "expires_at" in call_kwargs["metadata"]
 
     @patch('mem0.Memory')
     def test_add_skips_duplicate_messages(self, mock_memory):

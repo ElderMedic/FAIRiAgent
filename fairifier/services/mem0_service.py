@@ -12,6 +12,7 @@ import hashlib
 import json
 import subprocess
 import time
+from datetime import datetime, timezone, timedelta
 from urllib.request import urlopen
 from urllib.error import HTTPError, URLError
 
@@ -27,52 +28,34 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Custom fact-extraction prompt for FAIR workflow: extract REUSABLE, HIGH-VALUE facts for context
-# compression and retrieval. Focuses on domain patterns, field mappings, and quality insights rather
-# than ephemeral execution details. Includes few-shot examples and explicit negative cases.
-FAIR_FACT_EXTRACTION_PROMPT = """You extract REUSABLE, HIGH-VALUE facts from FAIR metadata workflow outputs for FUTURE runs.
+# Memory lifecycle constants
+MEMORY_SCHEMA_VERSION = "v1"          # Bump to invalidate all stored memories on schema changes
+MEMORY_TTL_DAYS_SESSION = 7           # Per-run session memories expire after 7 days
+MEMORY_TTL_DAYS_GLOBAL = 30           # Cross-run global memories expire after 30 days
+GLOBAL_MEMORY_SCOPE = "fairifier-global"  # Canonical ID for cross-session long-term scope
 
-EXTRACTION PRINCIPLES:
-1. Extract PATTERNS and KNOWLEDGE that apply to multiple documents/runs
-2. Include domain-specific associations, package preferences, and ontology mappings
-3. Capture workflow decisions and their rationale (why certain choices were made)
-4. Keep each fact concise (<120 chars) and self-contained
-5. Be generous with valuable information - if in doubt, extract it
+# Custom instructions for mem0 fact-extraction in FAIR metadata workflows.
+# These are passed as `custom_instructions` to mem0's ADDITIVE_EXTRACTION_PROMPT,
+# which means they guide WHAT to extract — not the output format (mem0 controls that).
+# Do NOT include output format instructions here; mem0 expects {"memory": [...]} format.
+FAIR_FACT_EXTRACTION_PROMPT = """These are custom extraction rules for a FAIR metadata generation workflow. Apply them with highest priority.
 
-EXTRACT (high-value, reusable):
-- Domain-package associations: "alpine ecology studies commonly use soil + GSC MIUVIGS packages"
-- Package combinations: "nanotoxicology RNA-seq requires soil + Illumina + Genome packages"
-- Field mappings: "elevation_m maps to 'geographic location (elevation)' in Sample sheet"
-- Ontology preferences: "earthworm studies use ENVO for habitats, OBI for assays"
-- Study design patterns: "time-series transcriptomics studies span multiple ISA levels"
-- Method associations: "RNA-seq nanomaterial exposure commonly uses differential expression analysis"
-- Quality patterns: "high-confidence metadata generation (>70%) indicates comprehensive source data"
+FOCUS: Extract REUSABLE, CROSS-RUN KNOWLEDGE — domain patterns, ontology preferences, package associations, and field mappings that improve future metadata generation. Prefer facts that generalize across documents.
 
-DO NOT EXTRACT (low-value, ephemeral):
-- Execution status: "DocumentParser ran successfully"
-- Exact counts alone: "retrieved 106 fields" (meaningless without context)
-- Agent names alone: "Parsed by DocumentParser" (adds no value)
-- Temporary state: "retry count is 2"
+EXTRACT with high priority:
+- Domain-to-package associations (e.g., "nanotoxicology RNA-seq studies use soil + Illumina + Genome packages")
+- Ontology mappings (e.g., "earthworm habitat studies use ENVO; assay descriptions use OBI")
+- Field-level mappings (e.g., "elevation_m maps to 'geographic location (elevation)' in Sample sheet")
+- Study design patterns (e.g., "time-series transcriptomics commonly spans multiple ISA levels")
+- Quality patterns (e.g., "comprehensive source data yields >70% high-confidence fields")
+- Workflow decisions and their rationale when the reasoning is domain-general
 
-EXAMPLES:
+DO NOT extract:
+- Ephemeral execution status ("DocumentParser ran successfully", "retry count is 2")
+- Bare counts without domain context ("retrieved 106 fields" with no other info)
+- Agent names as standalone facts ("Parsed by DocumentParser")
 
-Input: "DocumentParser extracted: ecotoxicogenomics research, organisms: Eisenia fetida, Eisenia andrei, methods: RNA-seq, differential expression"
-Output: {"facts": ["earthworm toxicology studies commonly use Eisenia fetida and Eisenia andrei as model species", "ecotoxicogenomics RNA-seq studies focus on differential expression analysis"]}
-
-Input: "KnowledgeRetriever selected packages: soil, Illumina, Genome for nanotoxicology study. Relevant ontologies: ENVO, OBI, EDAM, NPO. Complex metadata spanning 4 ISA levels"
-Output: {"facts": ["nanotoxicology soil studies use packages: soil + Illumina + Genome", "nanotoxicology metadata commonly requires ENVO, OBI, EDAM, NPO ontologies", "complex experimental designs span 4+ ISA levels"]}
-
-Input: "JSONGenerator: 89/156 high-confidence fields. Key mappings: exposure_concentration → OBI, time_point → EDAM, nanomaterial_type → NPO"
-Output: {"facts": ["exposure_concentration fields map to OBI ontology", "time_point metadata uses EDAM terms", "nanomaterial characterization uses NPO ontology"]}
-
-Input: "Quality score: 0.72. Strengths: comprehensive coverage of experimental variables"
-Output: {"facts": ["comprehensive experimental variable extraction achieves quality scores >0.7"]}
-
-Now extract from the following assistant message:
-{assistant_message}
-
-Return JSON format: {"facts": [...]}
-"""
+When in doubt, extract — cross-run knowledge is always valuable in this workflow."""
 
 # Global singleton instance
 _mem0_service: Optional["Mem0Service"] = None
@@ -166,8 +149,17 @@ class Mem0Service:
                 threshold=0.0  # Retain v2 behavior
             )
             memories = results.get("results", [])
-            logger.debug(f"Memory search returned {len(memories)} results for session={session_id}, agent={agent_id}")
-            return memories
+            valid_memories = [m for m in memories if self.is_memory_valid(m)]
+            if len(valid_memories) < len(memories):
+                logger.debug(
+                    "Filtered %d invalid/expired memories (session=%s, agent=%s)",
+                    len(memories) - len(valid_memories), session_id, agent_id,
+                )
+            logger.debug(
+                "Memory search returned %d results (%d valid) for session=%s, agent=%s",
+                len(memories), len(valid_memories), session_id, agent_id,
+            )
+            return valid_memories
         except Exception as e:
             logger.debug("Memory search skipped (service unavailable): %s", e)
             return []
@@ -216,19 +208,47 @@ class Mem0Service:
             filters: Dict[str, Any] = {"user_id": session_id}
             if agent_id:
                 filters["agent_id"] = agent_id
+
+            # Auto-inject lifecycle metadata (TTL, schema version, write timestamp)
+            now = datetime.now(timezone.utc)
+            scope_type = (metadata or {}).get("memory_scope_type", "session")
+            ttl_days = (
+                MEMORY_TTL_DAYS_GLOBAL if scope_type == "long_term"
+                else MEMORY_TTL_DAYS_SESSION
+            )
+            lifecycle_meta = {
+                "written_at": now.isoformat(),
+                "expires_at": (now + timedelta(days=ttl_days)).isoformat(),
+                "schema_version": MEMORY_SCHEMA_VERSION,
+            }
+            merged_metadata = {**lifecycle_meta, **(metadata or {})}
+
             # Scope matches search()/list_memories(); Memory.add maps these via _build_filters_and_metadata.
             result = self.memory.add(
                 messages=normalized_messages,
                 user_id=filters["user_id"],
                 agent_id=filters.get("agent_id"),
-                metadata=metadata or {}
+                metadata=merged_metadata,
             )
             self._seen_message_fingerprints.add(fingerprint)
             added_count = len(result.get("results", []))
-            logger.debug(f"Added {added_count} memories for session={session_id}, agent={agent_id}")
+            if added_count > 0:
+                logger.info(
+                    "Memory written: %d facts for session=%s, agent=%s",
+                    added_count, session_id, agent_id,
+                )
+            else:
+                logger.warning(
+                    "Memory add returned 0 facts for session=%s, agent=%s — "
+                    "check LLM fact-extraction prompt and model response",
+                    session_id, agent_id,
+                )
             return result
         except Exception as e:
-            logger.debug("Memory add skipped (service unavailable): %s", e)
+            logger.warning(
+                "Memory add FAILED for session=%s agent=%s: %s",
+                session_id, agent_id, e, exc_info=True,
+            )
             return {}
 
     def _fingerprint_messages(
@@ -246,7 +266,71 @@ class Mem0Service:
         return hashlib.sha256(
             json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()
-    
+
+    def is_memory_valid(self, memory: Dict[str, Any]) -> bool:
+        """Return False if a memory has expired or belongs to an old schema version.
+
+        Memories without lifecycle metadata are considered valid (backwards-compat
+        with memories written before TTL support was added).
+        """
+        if not isinstance(memory, dict):
+            return True
+
+        metadata = memory.get("metadata") or {}
+
+        # Schema version gate — only reject explicitly mismatched versions
+        schema_version = metadata.get("schema_version")
+        if schema_version and schema_version != MEMORY_SCHEMA_VERSION:
+            logger.debug(
+                "Memory rejected: schema_version=%s (current=%s)",
+                schema_version, MEMORY_SCHEMA_VERSION,
+            )
+            return False
+
+        # TTL gate — reject if past expiry timestamp
+        expires_at_str = metadata.get("expires_at")
+        if expires_at_str:
+            try:
+                expires_at = datetime.fromisoformat(expires_at_str)
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > expires_at:
+                    logger.debug("Memory rejected: expired at %s", expires_at_str)
+                    return False
+            except (ValueError, TypeError):
+                pass  # Unparseable timestamp → don't filter
+
+        return True
+
+    def is_cold_start(self, global_scope_id: str = GLOBAL_MEMORY_SCOPE) -> bool:
+        """Return True if no long-term cross-session memories exist yet.
+
+        A cold start means the agent has no prior cross-run context; the first
+        run must build knowledge from scratch. Subsequent runs are warm starts.
+        """
+        if not self.is_available():
+            return True
+        try:
+            memories = self.list_memories(session_id=global_scope_id)
+            return len(memories) == 0
+        except Exception:
+            return True
+
+    def purge_expired_memories(self, session_id: str) -> int:
+        """Delete memories past their TTL.  Returns the number purged."""
+        if not self.is_available():
+            return 0
+        memories = self.list_memories(session_id=session_id)
+        purged = 0
+        for memory in memories:
+            if not self.is_memory_valid(memory):
+                memory_id = memory.get("id")
+                if memory_id and self.delete_memory(memory_id):
+                    purged += 1
+        if purged:
+            logger.info("Purged %d expired memories for session=%s", purged, session_id)
+        return purged
+
     def list_memories(
         self, 
         session_id: str, 
@@ -628,6 +712,8 @@ def build_mem0_config(
     Returns:
         Configuration dictionary for mem0.Memory.from_config()
     """
+    llm_provider = llm_provider or "ollama"
+
     if embedding_base_url is None:
         embedding_base_url = llm_base_url
 
@@ -1002,7 +1088,7 @@ def get_mem0_service() -> Optional[Mem0Service]:
                 mem0_llm_model,
             )
         else:
-            mem0_llm_provider = config.mem0_llm_provider
+            mem0_llm_provider = config.mem0_llm_provider or "ollama"
             mem0_llm_base = config.mem0_llm_base_url or config.mem0_ollama_base_url or config.llm_base_url
             mem0_llm_api_key = config.mem0_llm_api_key
             mem0_llm_model = config.mem0_llm_model or config.llm_model

@@ -352,6 +352,16 @@ class FAIRifierLangGraphApp:
                 issue_summary = "; ".join(prior_issues[:3])
                 query = f"{query} — previous failures: {issue_summary}"
 
+            # Cold-start diagnostic: first agent on first run has no global memories
+            if agent_name == "DocumentParser":
+                try:
+                    if self.mem0_service.is_cold_start():
+                        logger.info("❄️  Cold start: no cross-session memories in global scope — building from scratch")
+                    else:
+                        logger.info("🌡️  Warm start: cross-session memories available for %s", agent_name)
+                except Exception:
+                    pass
+
             # Search both scopes:
             # - session_id/project_id: current run, enabling agent-to-agent handoff
             # - memory_scope_id: cross-run user/global memory
@@ -409,6 +419,26 @@ class FAIRifierLangGraphApp:
                     scope_ids.append(scope)
         return scope_ids
 
+    def _is_domain_general(self, insight: str) -> bool:
+        """Return True if an insight is domain-general enough for the global long-term scope.
+
+        Scope promotion rule (inspired by Claude Code memory discipline):
+        - Session scope (run): always write — current-run agent-to-agent context
+        - Global scope (long-term): only promote reusable cross-domain knowledge
+
+        Reject from global scope if the insight is clearly run-specific:
+        project IDs, file paths, retry counts, per-run timestamps.
+        """
+        lower = insight.lower()
+        # Run-specific signals — keep in session scope only
+        run_specific = [
+            "project_id", "session_id", "run_id",
+            "retry count", "attempt ", "restarted",
+            "/home/", "/tmp/", "output/",
+            "retry 1", "retry 2", "retry 3",
+        ]
+        return not any(sig in lower for sig in run_specific)
+
     def _store_memory_insight(
         self,
         *,
@@ -418,12 +448,26 @@ class FAIRifierLangGraphApp:
         insight: str,
         metadata: Dict[str, Any],
     ) -> None:
-        """Store one insight in both run-scope and long-term memory scopes."""
+        """Store one insight applying scope discipline.
+
+        Read/Write rules (inspired by Claude Code + ADK memory patterns):
+        - Session scope  : always write — enables within-run agent-to-agent handoff
+        - Global scope   : only promote domain-general facts (see _is_domain_general)
+        - Write gate     : caller is responsible for _should_write_memory() check
+        """
         if not self.mem0_service:
             return
 
         for memory_scope_id in self._memory_scope_ids(state, session_id):
             scope_type = "run" if memory_scope_id == session_id else "long_term"
+
+            # Scope promotion gate: skip global scope for run-specific content
+            if scope_type == "long_term" and not self._is_domain_general(insight):
+                logger.debug(
+                    "Skipping global scope promotion for run-specific insight (agent=%s)", agent_id
+                )
+                continue
+
             self.mem0_service.add(
                 messages=[{
                     "role": "assistant",
@@ -3405,12 +3449,30 @@ Field semantics for ``plan_tasks``:
         }
         
         confidence_snapshot = aggregate_confidence(state, config)
-        state["confidence_scores"] = {
-            "critic": confidence_snapshot.critic,
-            "structural": confidence_snapshot.structural,
-            "validation": confidence_snapshot.validation,
-            "overall": confidence_snapshot.overall,
+
+        # ── Build complete confidence_scores ──────────────────────────
+        # Start with per-agent self-reported scores
+        agent_scores: Dict[str, Any] = dict(state.get("confidence_scores", {}))
+
+        # Add per-agent critic scores from execution history
+        critic_by_agent: Dict[str, List[float]] = {}
+        for execution in state.get("execution_history", []):
+            agent_name = execution.get("agent_name", "")
+            critic_eval = execution.get("critic_evaluation") or {}
+            critic_score = critic_eval.get("score")
+            if agent_name and critic_score is not None:
+                critic_by_agent.setdefault(agent_name, []).append(float(critic_score))
+        for agent_name, scores in critic_by_agent.items():
+            agent_scores[f"{agent_name}_critic"] = round(sum(scores) / len(scores), 3)
+
+        # Add aggregate scores
+        agent_scores["_aggregate"] = {
+            "critic": round(confidence_snapshot.critic, 3),
+            "structural": round(confidence_snapshot.structural, 3),
+            "validation": round(confidence_snapshot.validation, 3),
+            "overall": round(confidence_snapshot.overall, 3),
         }
+        state["confidence_scores"] = agent_scores
         state["quality_metrics"] = confidence_snapshot.details
         summary["overall_confidence"] = confidence_snapshot.overall
         summary["average_confidence"] = confidence_snapshot.overall
@@ -3424,19 +3486,22 @@ Field semantics for ``plan_tasks``:
         metadata_json = state.get("artifacts", {}).get("metadata_json")
         metadata_fields = state.get("metadata_fields", [])
 
-        # Inject selected field definitions for downstream JSON Schema validation
+        # Inject selected field definitions and final confidence scores
         retrieved_knowledge = state.get("retrieved_knowledge", []) or []
-        if metadata_json and retrieved_knowledge:
+        if metadata_json:
             try:
                 parsed = json.loads(metadata_json) if isinstance(metadata_json, str) else metadata_json
                 if isinstance(parsed, dict):
-                    parsed["_field_definitions"] = [
-                        {k: v for k, v in f.items()
-                         if k in ("name", "label", "isa_sheet", "sheet", "data_type",
-                                  "syntax", "regex", "required", "requirement", "package")}
-                        for f in retrieved_knowledge
-                        if isinstance(f, dict)
-                    ]
+                    if retrieved_knowledge:
+                        parsed["_field_definitions"] = [
+                            {k: v for k, v in f.items()
+                             if k in ("name", "label", "isa_sheet", "sheet", "data_type",
+                                      "syntax", "regex", "required", "requirement", "package")}
+                            for f in retrieved_knowledge
+                            if isinstance(f, dict)
+                        ]
+                    # Update with final complete confidence_scores
+                    parsed["confidence_scores"] = state.get("confidence_scores", {})
                     metadata_json = json.dumps(parsed, indent=2, ensure_ascii=False)
                     state["artifacts"]["metadata_json"] = metadata_json
             except Exception:

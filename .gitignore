@@ -237,6 +237,8 @@ docker-test-output/
 # Local/internal documentation notes
 docs/PROJECT_MEMORY_*.md
 docs/*_INTEGRATION_SUMMARY.md
+docs/en/PAPER_OUTLINE.md
+docs/en/PAPER_WRITING_GUIDE.md
 
 # Local developer memory (private, machine-specific)
 development/
@@ -340,6 +342,7 @@ frontend/dist/
 test-results/
 test_workspace/
 .claude/
+.superpowers/
 docs/superpowers/
 
 # Agent context files
