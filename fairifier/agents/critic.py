@@ -536,11 +536,26 @@ class CriticAgent(BaseAgent):
         metadata_fields = state.get("metadata_fields", [])
         sheets_populated: list = []
         row_count = 0
+        sheet_summaries: dict = {}
         if isa_values:
             try:
                 isa_data = json.loads(isa_values) if isinstance(isa_values, str) else isa_values
                 sheets_populated = list(isa_data.keys())
-                row_count = sum(len(v) if isinstance(v, list) else 0 for v in isa_data.values())
+                for sheet_name, sheet_data in isa_data.items():
+                    if isinstance(sheet_data, dict):
+                        # {"columns": [...], "rows": [[...], ...]} structure
+                        rows = sheet_data.get("rows", [])
+                        cols = sheet_data.get("columns", [])
+                        n_rows = len(rows) if isinstance(rows, list) else 0
+                        row_count += n_rows
+                        sheet_summaries[sheet_name] = {
+                            "columns": cols[:10] if isinstance(cols, list) else [],
+                            "row_count": n_rows,
+                            "sample_row": rows[0] if n_rows > 0 else [],
+                        }
+                    elif isinstance(sheet_data, list):
+                        row_count += len(sheet_data)
+                        sheet_summaries[sheet_name] = {"row_count": len(sheet_data)}
             except Exception:
                 pass
         mapped_count = sum(
@@ -556,6 +571,7 @@ class CriticAgent(BaseAgent):
             ),
             "sheets_populated": sheets_populated,
             "total_rows": row_count,
+            "sheet_summaries": sheet_summaries,
             "confirmed_metadata_fields_available": mapped_count,
             "retrieved_knowledge_terms": len(state.get("retrieved_knowledge", [])),
         }

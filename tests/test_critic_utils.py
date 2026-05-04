@@ -107,3 +107,77 @@ def test_normalize_llm_response_content_handles_block_list():
         {"type": "text", "text": "world"},
     ]
     assert normalize_llm_response_content(payload) == "hello\nworld"
+
+
+class TestBuildIsaMapperContext:
+    """Test _build_isa_mapper_context row counting and content."""
+
+    def _make_state(self, isa_values_json):
+        import json
+        return {
+            "artifacts": {"isa_values_json": json.dumps(isa_values_json)},
+            "metadata_fields": [],
+            "retrieved_knowledge": [],
+        }
+
+    def test_counts_rows_from_columns_rows_structure(self):
+        """Fixed: nested {columns, rows} structure must count rows correctly."""
+        from fairifier.agents.critic import CriticAgent
+        import json
+        agent = CriticAgent.__new__(CriticAgent)
+        isa = {
+            "investigation": {"columns": ["col1"], "rows": [["val1"]]},
+            "study": {"columns": ["col2"], "rows": [["v1"], ["v2"]]},
+            "assay": {"columns": [], "rows": []},
+        }
+        state = self._make_state(isa)
+        ctx = json.loads(agent._build_isa_mapper_context(state))
+        assert ctx["total_rows"] == 3
+
+    def test_counts_rows_from_flat_list_structure(self):
+        """Legacy flat-list structure still counted correctly."""
+        from fairifier.agents.critic import CriticAgent
+        import json
+        agent = CriticAgent.__new__(CriticAgent)
+        isa = {
+            "investigation": [{"field": "val"}],
+            "study": [{"a": 1}, {"b": 2}],
+        }
+        state = self._make_state(isa)
+        ctx = json.loads(agent._build_isa_mapper_context(state))
+        assert ctx["total_rows"] == 3
+
+    def test_sheets_populated_includes_all_keys(self):
+        from fairifier.agents.critic import CriticAgent
+        import json
+        agent = CriticAgent.__new__(CriticAgent)
+        isa = {
+            "investigation": {"columns": [], "rows": []},
+            "sample": {"columns": [], "rows": [["r1"]]},
+            "assay": {"columns": [], "rows": []},
+        }
+        state = self._make_state(isa)
+        ctx = json.loads(agent._build_isa_mapper_context(state))
+        assert set(ctx["sheets_populated"]) == {"investigation", "sample", "assay"}
+
+    def test_sheet_summaries_included_for_columns_rows_structure(self):
+        from fairifier.agents.critic import CriticAgent
+        import json
+        agent = CriticAgent.__new__(CriticAgent)
+        isa = {
+            "investigation": {"columns": ["title", "desc"], "rows": [["My Study", "Desc"]]},
+        }
+        state = self._make_state(isa)
+        ctx = json.loads(agent._build_isa_mapper_context(state))
+        assert "sheet_summaries" in ctx
+        assert ctx["sheet_summaries"]["investigation"]["row_count"] == 1
+        assert "title" in ctx["sheet_summaries"]["investigation"]["columns"]
+
+    def test_empty_isa_values_returns_zero_rows(self):
+        from fairifier.agents.critic import CriticAgent
+        import json
+        agent = CriticAgent.__new__(CriticAgent)
+        state = {"artifacts": {}, "metadata_fields": [], "retrieved_knowledge": []}
+        ctx = json.loads(agent._build_isa_mapper_context(state))
+        assert ctx["total_rows"] == 0
+        assert ctx["sheets_populated"] == []

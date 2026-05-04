@@ -624,6 +624,10 @@ class LLMHelper:
         self.llm_responses = []  # Store all LLM interactions for debugging
         self._langfuse_handler = self._init_langfuse_handler()
 
+    def get_llm(self):
+        """Return the underlying LangChain model instance."""
+        return self.llm
+
     def _init_langfuse_handler(self):
         """Create a Langfuse CallbackHandler if Langfuse is enabled and installed."""
         if not config.enable_langfuse:
@@ -2114,7 +2118,7 @@ REQUIREMENTS:
 - evidence: Brief source location (< 200 chars) - e.g., "Methods section" not full quote
 - confidence: Float 0.0-1.0 (1.0 = explicit, 0.7-0.9 = strong inference, 0.4-0.6 = reasonable inference, 0.0-0.3 = not available)
 
-**IMPORTANT:** 
+**IMPORTANT:**
 - You MUST return a JSON array with exactly the same number of fields as provided in the input list
 - Do NOT skip any fields, even if information is limited
 - For investigation/study fields: If not explicitly stated, derive from document title/abstract

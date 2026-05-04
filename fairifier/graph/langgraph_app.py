@@ -3607,6 +3607,13 @@ Field semantics for ``plan_tasks``:
                 "processing_end": None,
                 "errors": [],
                 "agent_guidance": {},
+                "plan_tasks": [],
+                "document_text_path": None,
+                "selected_packages": [],
+                "metadata_gap_hints": [],
+                "inferred_metadata_extensions": [],
+                "api_capabilities": {},
+                "react_scratchpad": None,
                 "context": {
                     "parse_retry_count": 0,
                     "retrieve_retry_count": 0,
