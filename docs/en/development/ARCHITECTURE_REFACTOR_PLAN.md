@@ -190,6 +190,36 @@ These bugs were latent before the refactor and discovered during the first E2E r
 | ISAValueMapper LLM call failed | `_get_llm()` called `LLMHelper(provider=..., model=...)` but `LLMHelper.__init__()` takes no args | Changed to use `get_llm_helper()` factory |
 | `context_usage` events lost from `processing_log.jsonl` | `cli.py` opened log in `'w'` mode, overwriting events written inline during run | Changed to read existing `context_usage` events first, then write merged output |
 
+### Second-pass debug (2026-05-04, qwen3.6:27b run)
+
+After fixing the above, ISAValueMapper still ESCALATE (score 0.00) on the 27b run. Root cause: two more bugs:
+
+| Bug | Root cause | Fix |
+|-----|-----------|-----|
+| `_build_isa_mapper_context()` reports `total_rows: 0` | Row count used `len(v) if isinstance(v, list) else 0`; ISAValueMapper stores `{columns, rows}` dicts — not lists. LLM saw 0 rows → "Output is empty". | Fixed to iterate `sheet_data.get("rows", [])` for dict-format sheets; also flat-list fallback preserved. Added `sheet_summaries` with column names + sample row. |
+| Structured Critic output always falls back | `_judge_with_rubric` calls `self.llm_helper.get_llm()` but `LLMHelper` had no such method. Every Critic call fell back to standard LLM. | Added `LLMHelper.get_llm()` returning `self.llm`. |
+| 7 `FAIRifierState` fields missing from `initial_state` | `plan_tasks`, `document_text_path`, `selected_packages`, `metadata_gap_hints`, `inferred_metadata_extensions`, `api_capabilities`, `react_scratchpad` absent | Added all 7 with correct defaults. |
+
+### qwen3.6:27b E2E results (earthworm dataset)
+
+| Metric | Value |
+|--------|-------|
+| Overall confidence | 70.0% |
+| GT match (relaxed substring) | 22/81 = **27%** (vs 9b: 21%) |
+| JSONGenerator retries | 2/2 (RETRY → no-progress auto-accept at 0.65) |
+| ISAValueMapper retries | 1 (ESCALATE → no-progress — bug now fixed for future runs) |
+| Duration | 769 s |
+| Format errors | 0 / warnings 43 (source_grounding — pre-existing) |
+
+Context usage profile (27b, retrieval_cache dominates):
+
+| Agent | Tokens |
+|-------|--------|
+| DocumentParser | 91 |
+| KnowledgeRetriever | 3,953 |
+| JSONGenerator | ~265–276K |
+| ISAValueMapper | ~275–276K |
+
 ---
 
 ## 9. What stays the same (proven effective)
