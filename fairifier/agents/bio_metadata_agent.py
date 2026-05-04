@@ -231,6 +231,95 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
                             existing_info[key] = value
                 state["document_info"] = existing_info
                 self.logger.info("BioMetadataAgent: Merged %d new fields into document_info", len(extracted))
+
+                # Inject bio discoveries into the context engineering pipeline
+                # so downstream agents (JSONGenerator, ISAValueMapper) see them
+                # in evidence_context and field_evidence_context.
+
+                # -- 2. evidence_packets --
+                evidence_packets = state.get("evidence_packets", []) or []
+                base = len(evidence_packets)
+                bio_paths = state.get("bio_file_paths", []) or []
+                bio_src = Path(bio_paths[0]).name if bio_paths else "bio_raw_data"
+
+                for idx, (fname, fval) in enumerate(extracted.items()):
+                    if fname in {"confidence", "raw_text", "document_type"}:
+                        continue
+                    vs = str(fval)[:500] if fval else ""
+                    if not vs:
+                        continue
+                    pos = final_text.lower().find(vs[:40].lower())
+                    excerpt = (
+                        final_text[max(0,pos-40):pos+len(vs)+40].strip()
+                        if pos >= 0
+                        else f"Bioinformatics tool output: {bio_src}"
+                    )
+                    evidence_packets.append({
+                        "packet_id": f"bio-{base + idx + 1:03d}",
+                        "field_candidate": fname,
+                        "value": vs,
+                        "evidence_text": excerpt[:300],
+                        "section": f"bio_tool::{bio_src}",
+                        "source_type": "bioinformatics_tool_output",
+                        "confidence": 0.95,
+                        "provenance": {
+                            "agent": "BioMetadataAgent",
+                            "strategy": "active_bioinformatics_recovery",
+                            "source": bio_src,
+                        },
+                    })
+                state["evidence_packets"] = evidence_packets
+                self.logger.info(
+                    "BioMetadataAgent: Injected %d evidence packets from bio discoveries",
+                    len(evidence_packets) - base,
+                )
+
+                # -- 3. source_workspace --
+                source_ws = state.get("source_workspace", {}) or {}
+                bio_sid = f"bio_{bio_src.replace('.', '_')}"
+                if bio_sid not in source_ws.get("source_paths", {}):
+                    from ..services.source_workspace import SourceRecord, build_source_workspace
+
+                    # Materialize under the run output tree — not tempfile — so paths in
+                    # source_workspace stay valid for downstream file reads across the session.
+                    output_dir = state.get("output_dir")
+                    if output_dir:
+                        materialize_base = Path(output_dir) / "_bio_source_workspace"
+                    else:
+                        materialize_base = Path.cwd() / ".fairifier_bio_workspace"
+                        self.logger.warning(
+                            "BioMetadataAgent: output_dir unset; bio workspace files written under %s",
+                            materialize_base,
+                        )
+                    materialize_base.mkdir(parents=True, exist_ok=True)
+
+                    record = SourceRecord(
+                        source_id=bio_sid,
+                        path=f"bio:{bio_src}",
+                        method="bioinformatics_tool",
+                        content=final_text[:50000],
+                        content_type="text",
+                    )
+                    try:
+                        new_ws = build_source_workspace([record], materialize_base)
+                        source_ws.setdefault("source_paths", {}).update(new_ws.source_paths)
+                        source_ws.setdefault("table_paths", {}).update(new_ws.table_paths)
+                        if hasattr(new_ws, "manifest") and new_ws.manifest:
+                            em = source_ws.get("manifest", {})
+                            em["sources"] = em.get("sources", []) + new_ws.manifest.get("sources", [])
+                            em["source_count"] = len(em["sources"])
+                            source_ws["manifest"] = em
+                        source_ws.setdefault("root_dir", str(new_ws.root_dir))
+                        self.logger.info(
+                            "BioMetadataAgent: Registered '%s' in source_workspace",
+                            bio_sid,
+                        )
+                    except Exception as exc:
+                        self.logger.warning(
+                            "BioMetadataAgent: source_workspace merge failed: %s", exc
+                        )
+                    state["source_workspace"] = source_ws
+
         else:
             self.logger.warning("BioMetadataAgent: No text output from deep agent")
 

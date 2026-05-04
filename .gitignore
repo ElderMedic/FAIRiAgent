@@ -341,3 +341,7 @@ test-results/
 test_workspace/
 .claude/
 docs/superpowers/
+
+# Agent context files
+GEMINI.md
+CLAUDE.md
