@@ -307,12 +307,37 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
                     )
                     try:
                         new_ws = build_source_workspace([record], materialize_base)
-                        source_ws.setdefault("source_paths", {}).update(new_ws.source_paths)
-                        source_ws.setdefault("table_paths", {}).update(new_ws.table_paths)
+                        # Serialize paths like langgraph_app._attach_source_workspace (JSON-safe).
+                        source_ws.setdefault("source_paths", {}).update(
+                            {
+                                sid: str(pth)
+                                for sid, pth in new_ws.source_paths.items()
+                            }
+                        )
+                        source_ws.setdefault("table_paths", {}).update(
+                            {
+                                tid: str(pth)
+                                for tid, pth in new_ws.table_paths.items()
+                            }
+                        )
                         if hasattr(new_ws, "manifest") and new_ws.manifest:
-                            em = source_ws.get("manifest", {})
-                            em["sources"] = em.get("sources", []) + new_ws.manifest.get("sources", [])
-                            em["source_count"] = len(em["sources"])
+                            em = dict(source_ws.get("manifest") or {})
+                            prev_sources = list(em.get("sources") or [])
+                            seen_ids = {
+                                str(s.get("source_id"))
+                                for s in prev_sources
+                                if isinstance(s, dict) and s.get("source_id")
+                            }
+                            merged_sources = list(prev_sources)
+                            for src in new_ws.manifest.get("sources") or []:
+                                if not isinstance(src, dict):
+                                    continue
+                                sid = str(src.get("source_id") or "")
+                                if sid and sid not in seen_ids:
+                                    merged_sources.append(src)
+                                    seen_ids.add(sid)
+                            em["sources"] = merged_sources
+                            em["source_count"] = len(merged_sources)
                             source_ws["manifest"] = em
                         source_ws.setdefault("root_dir", str(new_ws.root_dir))
                         self.logger.info(
