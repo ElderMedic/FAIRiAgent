@@ -32,32 +32,24 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
             "what you found. You are NOT allowed to infer or guess metadata "
             "without running a tool first.\n\n"
             "## Available Tools (you MUST use these)\n"
-            "- search_biocontainer_tags(tool_name): query quay.io for available image "
-            "tags BEFORE pulling. Use this first for every tool!\n"
+            "- search_biocontainer_tags(tool_name): query quay.io for available image tags.\n"
             "- run_biocontainer_tool(image, command, host_path): run a tool in Docker.\n"
-            "  image={samtools|bcftools} or full quay.io path. "
-            "command=[\"tool\", \"subcmd\", \"/data/file\"]\n"
             "- decompress_gzip_tool(host_path): decompress .gz before analysis.\n"
             "- extract_archive_tool(host_path): extract archives before analysis.\n\n"
-            "## Workflow (follow exactly)\n"
-            "1. Identify file type by extension. If file is .gz → call "
-            "decompress_gzip_tool first.\n"
-            "2. **CRITICAL: Call search_biocontainer_tags(\"samtools\") or "
-            "search_biocontainer_tags(\"bcftools\") BEFORE any run_biocontainer_tool "
-            "call.** Verify the image tag exists on quay.io. If the default tag "
-            "fails to pull, try another tag from the search results.\n"
-            "3. If file is .bam → call run_biocontainer_tool with "
-            "image=\"samtools\" (or verified full path), "
-            "command=[\"samtools\",\"stats\",\"/data/FILENAME\"], host_path=<from task>.\n"
-            "4. If file is .vcf or .vcf.gz → call run_biocontainer_tool with "
-            "image=\"bcftools\" (or verified full path), "
-            "command=[\"bcftools\",\"view\",\"-h\",\"/data/FILENAME\"], "
-            "host_path=<from task>.\n"
-            "5. If file is .h5ad → call extract_archive_tool or decompress_gzip_tool "
-            "if compressed; otherwise note the shape/key metadata you can infer.\n"
-            "6. ONLY after receiving tool output, call respond with "
-            "DocumentInfoResponse using the actual values from the tool output.\n"
-            "7. Do NOT respond before calling at least one tool. Do NOT guess values."
+            "## Few-Shot Example\n"
+            "User: Here is a file: /data/sample.bam\n"
+            "Thought: I need to analyze this BAM file. I must check for the samtools image first.\n"
+            "Action: search_biocontainer_tags(tool_name=\"samtools\")\n"
+            "Observation: [quay.io/biocontainers/samtools:1.15--h1170115_1]\n"
+            "Thought: Now I will run samtools stats on the file.\n"
+            "Action: run_biocontainer_tool(image=\"samtools\", command=[\"samtools\", \"stats\", \"/data/sample.bam\"], host_path=\"/data/sample.bam\")\n"
+            "Observation: [stats output showing 10000 reads, paired-end]\n"
+            "Thought: I have the metadata. I will now respond.\n"
+            "Action: [Respond with DocumentInfoResponse containing the facts]\n\n"
+            "## Rules\n"
+            "1. Identify file type by extension.\n"
+            "2. Call search_biocontainer_tags BEFORE any run_biocontainer_tool call.\n"
+            "3. NEVER respond before calling at least one tool."
         )
 
         return self._build_react_agent(
@@ -120,21 +112,7 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
             self.logger.warning("BioMetadataAgent: Deep agents disabled, skipping active analysis.")
             return state
 
-        # Pre-populate Critic-style feedback to force tool use on first attempt.
-        # The model reliably calls tools when told to by an authority (Critic),
-        # but won't do it autonomously. This bridges the gap.
         context = state.setdefault("context", {})
-        if not context.get("critic_feedback"):
-            context["critic_feedback"] = {
-                "critique": "You MUST call search_biocontainer_tags first, then run_biocontainer_tool before producing any metadata. Without tool output, your response is invalid.",
-                "suggestions": [
-                    "Call search_biocontainer_tags(\"samtools\") or search_biocontainer_tags(\"bcftools\") FIRST to verify the image exists.",
-                    "Then call run_biocontainer_tool with image=\"samtools\" or image=\"bcftools\" on every file.",
-                    "If the default tag fails to pull, try alternative tags from the search results.",
-                    "Read the FULL tool output before summarizing.",
-                    "Extract every numeric and categorical fact from the tool output.",
-                ],
-            }
 
         bio_file_paths: List[str] = state.get("bio_file_paths", []) or []
         if not bio_file_paths:
@@ -215,7 +193,6 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
 
         if final_text:
             self.logger.info("BioMetadataAgent: got %d chars from agent loop, extracting metadata", len(final_text))
-            # Use LLM to extract structured document_info from the agent's findings
             extracted = await self.llm_helper.extract_document_info(
                 final_text,
                 critic_feedback=None,
@@ -231,6 +208,87 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
                             existing_info[key] = value
                 state["document_info"] = existing_info
                 self.logger.info("BioMetadataAgent: Merged %d new fields into document_info", len(extracted))
+
+                # ============================================================
+                # Inject bio discoveries into the context engineering pipeline
+                # so downstream agents (JSONGenerator, ISAValueMapper) see them
+                # in evidence_context and field_evidence_context.
+                # ============================================================
+
+                # -- 2. evidence_packets --
+                evidence_packets = state.get("evidence_packets", []) or []
+                base = len(evidence_packets)
+                bio_paths = state.get("bio_file_paths", []) or []
+                bio_src = Path(bio_paths[0]).name if bio_paths else "bio_raw_data"
+
+                for idx, (fname, fval) in enumerate(extracted.items()):
+                    if fname in {"confidence", "raw_text", "document_type"}:
+                        continue
+                    vs = str(fval)[:500] if fval else ""
+                    if not vs:
+                        continue
+                    pos = final_text.lower().find(vs[:40].lower())
+                    excerpt = (
+                        final_text[max(0,pos-40):pos+len(vs)+40].strip()
+                        if pos >= 0
+                        else f"Bioinformatics tool output: {bio_src}"
+                    )
+                    evidence_packets.append({
+                        "packet_id": f"bio-{base + idx + 1:03d}",
+                        "field_candidate": fname,
+                        "value": vs,
+                        "evidence_text": excerpt[:300],
+                        "section": f"bio_tool::{bio_src}",
+                        "source_type": "bioinformatics_tool_output",
+                        "confidence": 0.95,
+                        "provenance": {
+                            "agent": "BioMetadataAgent",
+                            "strategy": "active_bioinformatics_recovery",
+                            "source": bio_src,
+                        },
+                    })
+                state["evidence_packets"] = evidence_packets
+                self.logger.info(
+                    "BioMetadataAgent: Injected %d evidence packets from bio discoveries",
+                    len(evidence_packets) - base,
+                )
+
+                # -- 3. source_workspace --
+                source_ws = state.get("source_workspace", {}) or {}
+                bio_sid = f"bio_{bio_src.replace('.', '_')}"
+                if bio_sid not in source_ws.get("source_paths", {}):
+                    from ..services.source_workspace import SourceRecord, build_source_workspace
+                    import tempfile
+                    bio_tmp = Path(tempfile.mkdtemp(prefix="bio_ws_"))
+                    bio_out = bio_tmp / f"{bio_src}.bio.txt"
+                    bio_out.write_text(final_text[:50000], encoding="utf-8")
+                    record = SourceRecord(
+                        source_id=bio_sid,
+                        path=str(bio_out),
+                        method="bioinformatics_tool",
+                        content=final_text[:50000],
+                        content_type="text",
+                    )
+                    try:
+                        new_ws = build_source_workspace([record], bio_tmp)
+                        source_ws.setdefault("source_paths", {}).update(new_ws.source_paths)
+                        source_ws.setdefault("table_paths", {}).update(new_ws.table_paths)
+                        if hasattr(new_ws, "manifest") and new_ws.manifest:
+                            em = source_ws.get("manifest", {})
+                            em["sources"] = em.get("sources", []) + new_ws.manifest.get("sources", [])
+                            em["source_count"] = len(em["sources"])
+                            source_ws["manifest"] = em
+                        source_ws.setdefault("root_dir", str(bio_tmp))
+                        self.logger.info(
+                            "BioMetadataAgent: Registered '%s' in source_workspace",
+                            bio_sid,
+                        )
+                    except Exception as exc:
+                        self.logger.warning(
+                            "BioMetadataAgent: source_workspace merge failed: %s", exc
+                        )
+                    state["source_workspace"] = source_ws
+
         else:
             self.logger.warning("BioMetadataAgent: No text output from deep agent")
 

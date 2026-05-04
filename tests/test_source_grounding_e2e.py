@@ -143,7 +143,7 @@ def _make_metadata_json(fields: list[MetadataField]) -> dict:
         for f in fields
     ]
     return {
-        "fairifier_version": "V1.3.1",
+        "fairifier_version": "V1.5.0",
         "generated_at": "2026-05-01T12:00:00",
         "document_source": "test_e2e.pdf",
         "isa_structure": {

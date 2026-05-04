@@ -84,7 +84,7 @@ async def _gather_project_uploads(
                 uploaded.append(part)
     return uploaded
 
-API_VERSION = "1.4.0"
+API_VERSION = "1.5.0"
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_OLLAMA_PROVIDER = "ollama"
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"

@@ -484,7 +484,7 @@ FAIRiAgent generates structured, evidence-based metadata in FAIR-DS compatible f
 
 ```json
 {
-  "fairifier_version": "V1.3.1",
+  "fairifier_version": "V1.5.0",
   "generated_at": "2025-01-27T10:30:00",
   "document_source": "paper.pdf",
   "overall_confidence": 0.85,
@@ -802,7 +802,7 @@ MIT License - Free for academic and research use.
 
 <div align="center">
 
-**🎯 FAIRiAgent v1.3.1**  
+**🎯 FAIRiAgent v1.5.0**  
 *LangGraph-powered • Web UI-enabled • Standards-compliant*
 
 [⬆ Back to Top](#-fairiagent)
@@ -817,9 +817,10 @@ MIT License - Free for academic and research use.
 
 ---
 
-## 🔄 Recent Updates (v1.3.1)
+## 🔄 Recent Updates (v1.5.0)
 
-- ✅ **Langfuse Observability**: Added optional Langfuse tracing integration for richer run observability
-- ✅ **Post-output Metadata Validation**: Added validation checks after metadata JSON generation
-- ✅ **Release Readiness Refresh**: Updated release docs/changelog for merge to `main`
-- ✅ **Docker Compose**: FAIR Data Station service for a reproducible full stack (see [Docker guide](docs/en/guides/DOCKER_DEPLOYMENT.md))
+- ✅ **DeepSeek Provider**: Full support for DeepSeek API with thinking mode across all 6 LLM providers
+- ✅ **BioMetadataAgent Pipeline**: Tool-first Docker workflow with biocontainer registry search for robust bioinformatics analysis
+- ✅ **Dynamic JSON Schema Validation**: FAIR-DS ShEx-based validation with automatic field normalization
+- ✅ **Source Grounding Stabilization**: Upstream candidate reconciliation and cross-source consensus scoring
+- ✅ **Evaluation Hardening**: Configurable timeouts, fixed field counting, and improved Ollama robustness

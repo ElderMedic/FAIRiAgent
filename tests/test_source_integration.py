@@ -360,7 +360,7 @@ def test_compute_source_grounding_summary_counts_pre_downgrade_when_postcheck_ra
 
 def test_validate_source_grounding_on_metadata_json():
     data = {
-        "fairifier_version": "V1.3.1",
+        "fairifier_version": "V1.5.0",
         "generated_at": "2026-05-01T12:00:00",
         "document_source": "test.pdf",
         "isa_structure": {

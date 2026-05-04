@@ -319,7 +319,7 @@ class TestValidateMetadata:
             {"name": "investigation identifier",  "data_type": "string", "isa_sheet": "investigation"},
         ]
         metadata = {
-            "fairifier_version": "1.4.0",
+            "fairifier_version": "1.5.0",
             "generated_at": "2026-05-03T00:00:00",
             "document_source": "/tmp/test.bam",
             "overall_confidence": 0.75,
