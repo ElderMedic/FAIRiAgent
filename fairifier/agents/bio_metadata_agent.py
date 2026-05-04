@@ -248,12 +248,17 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
                     vs = str(fval)[:500] if fval else ""
                     if not vs:
                         continue
-                    pos = final_text.lower().find(vs[:40].lower())
-                    excerpt = (
-                        final_text[max(0,pos-40):pos+len(vs)+40].strip()
-                        if pos >= 0
-                        else f"Bioinformatics tool output: {bio_src}"
-                    )
+                    # Match window uses a short prefix; excerpt end must align with that
+                    # match length — not len(vs) (up to 500) — or the slice balloons past the hit.
+                    snippet = vs[:40]
+                    pos = final_text.lower().find(snippet.lower())
+                    if pos >= 0:
+                        match_len = len(snippet)
+                        excerpt = final_text[
+                            max(0, pos - 40) : pos + match_len + 40
+                        ].strip()
+                    else:
+                        excerpt = f"Bioinformatics tool output: {bio_src}"
                     evidence_packets.append({
                         "packet_id": f"bio-{base + idx + 1:03d}",
                         "field_candidate": fname,
