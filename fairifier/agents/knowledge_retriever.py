@@ -430,6 +430,30 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 part for part in [prior_memory_context or None, evidence_context or None] if part
             ) or None
 
+            # Structured Planner output (refactor §4): primary source for
+            # priority packages and search terms. The regex helpers below
+            # are now fallback signals only.
+            from ..utils.planner_tasks import extract_plan_task
+            planner_task = extract_plan_task(
+                state.get("plan_tasks"), self.name
+            )
+            structured_priority_packages: List[str] = []
+            structured_search_terms: List[str] = []
+            if planner_task is not None:
+                # Validate against actual available packages (case-insensitive).
+                pkg_lookup = {n.lower(): n for n in available_package_names}
+                for pkg in planner_task.priority_packages:
+                    canonical = pkg_lookup.get(str(pkg).lower())
+                    if canonical and canonical not in structured_priority_packages:
+                        structured_priority_packages.append(canonical)
+                structured_search_terms = list(planner_task.search_terms)
+                if structured_priority_packages or structured_search_terms:
+                    self.log_execution(
+                        state,
+                        f"🧭 Structured plan: packages={structured_priority_packages} "
+                        f"terms={structured_search_terms}"
+                    )
+
             priority_package_hints = self._infer_priority_packages(
                 doc_info,
                 planner_instruction,
@@ -437,12 +461,20 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 critic_feedback=critic_feedback,
                 evidence_packets=evidence_packets,
             )
+            # Merge structured plan output FIRST (highest priority), then heuristic.
+            for pkg in reversed(structured_priority_packages):
+                if pkg in priority_package_hints:
+                    priority_package_hints.remove(pkg)
+                priority_package_hints.insert(0, pkg)
             guided_package_hints = self._extract_guided_package_names(
                 available_package_names,
                 critic_feedback=critic_feedback,
                 planner_instruction=planner_instruction,
                 guidance_history=guidance_history,
             )
+            for pkg in structured_priority_packages:
+                if pkg not in guided_package_hints:
+                    guided_package_hints.insert(0, pkg)
             excluded_package_names = set()
             if len(available_package_names) > 5:
                 excluded_package_names = self._infer_excluded_packages(
@@ -767,6 +799,13 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 critic_feedback=critic_feedback,
                 evidence_packets=evidence_packets,
             )
+            # Merge structured plan search terms (refactor §4) at the front,
+            # so the LLM's machine-readable intent takes precedence over regex
+            # extraction from prose.
+            for term in reversed(structured_search_terms):
+                if term in required_search_terms:
+                    required_search_terms.remove(term)
+                required_search_terms.insert(0, term)
             priority_search_terms = self._infer_priority_search_terms(
                 doc_info,
                 planner_instruction,
@@ -1477,7 +1516,6 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 doc_info.get("title", ""),
                 doc_info.get("document_type", ""),
                 doc_info.get("research_domain", ""),
-                doc_info.get("scientific_domain", ""),
                 doc_info.get("methodology", ""),
                 " ".join(doc_info.get("keywords", []) or []),
                 planner_instruction or "",
@@ -1622,7 +1660,6 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 doc_info.get("title", ""),
                 doc_info.get("document_type", ""),
                 doc_info.get("research_domain", ""),
-                doc_info.get("scientific_domain", ""),
                 " ".join(doc_info.get("keywords", []) or []),
                 packet_values,
                 planner_instruction or "",
@@ -1698,7 +1735,6 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 doc_info.get("title", ""),
                 doc_info.get("document_type", ""),
                 doc_info.get("research_domain", ""),
-                doc_info.get("scientific_domain", ""),
                 doc_info.get("methodology", ""),
                 " ".join(doc_info.get("keywords", []) or []),
                 packet_values,

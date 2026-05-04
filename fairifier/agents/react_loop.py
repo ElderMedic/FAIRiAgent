@@ -228,29 +228,26 @@ class ReactLoopMixin:
         if memories:
             sections.append(memories)
 
+        # Critic feedback view is already echo-chamber-isolated in
+        # base.get_context_feedback (refactor §2): no `critique` prose, no
+        # `previous_attempt` snapshot. Only structured issues + suggestions.
         critic_feedback = feedback.get("critic_feedback")
         if critic_feedback:
             issues = critic_feedback.get("issues", [])
             suggestions = critic_feedback.get("suggestions", [])
-            critique = critic_feedback.get("critique")
             critic_lines = ["Critic feedback from previous attempt:"]
-            if critique:
-                critic_lines.append(f"- critique: {critique}")
             for issue in issues:
                 critic_lines.append(f"- issue: {issue}")
             for suggestion in suggestions:
                 critic_lines.append(f"- suggestion: {suggestion}")
-            sections.append("\n".join(critic_lines))
+            if len(critic_lines) > 1:  # at least one issue or suggestion
+                sections.append("\n".join(critic_lines))
 
         history = feedback.get("guidance_history") or []
         if history:
             sections.append(
                 "Guidance history:\n" + "\n".join(f"- {item}" for item in history)
             )
-
-        previous_attempt = feedback.get("previous_attempt")
-        if previous_attempt:
-            sections.append(f"Previous attempt snapshot:\n{previous_attempt}")
 
         skill_paths = list_skill_virtual_paths(*config.skill_roots)
         if skill_paths:

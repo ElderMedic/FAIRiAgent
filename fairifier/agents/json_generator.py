@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from langsmith import traceable
 
+from .. import __version__
+
 from .base import BaseAgent
 from ..models import FAIRifierState, MetadataField
 from ..config import config
@@ -20,6 +22,7 @@ from ..services.source_workspace import (
     source_role_priority,
 )
 from ..utils.llm_helper import get_llm_helper
+from ..utils.document_text import read_document_text
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.grounding import SOURCE_REF_PATTERN, SOURCE_TABLE_PATTERN
 
@@ -73,7 +76,8 @@ class JSONGeneratorAgent(BaseAgent):
         try:
             doc_info = state.get("document_info", {})
             knowledge_items = state.get("retrieved_knowledge", [])
-            document_text = state.get("document_content", "")
+            # Read document text by reference (refactor §5).
+            document_text = read_document_text(state)
             evidence_packets = state.get("evidence_packets", []) or []
             metadata_gap_hints = state.get("metadata_gap_hints", []) or []
             evidence_context = build_evidence_context(evidence_packets, max_packets=20, max_chars=3200)
@@ -811,6 +815,9 @@ class JSONGeneratorAgent(BaseAgent):
                     fairds_metadata.get("isa_sheet") or fairds_metadata.get("sheet")
                 )
             
+            # Capture entity_id from LLM output for multi-row grouping
+            entity_id = field_data.get('entity_id', None) or None
+
             field = MetadataField(
                 field_name=field_name,
                 value=field_data.get('value'),
@@ -819,6 +826,7 @@ class JSONGeneratorAgent(BaseAgent):
                 origin="llm_extraction",
                 package_source=package_source,  # From FAIR-DS API
                 isa_sheet=isa_sheet,  # From FAIR-DS API
+                entity_id=entity_id,
                 status="provisional" if field_data.get('confidence', 0) < 0.9 else "confirmed",
                 data_type=fairds_metadata.get('type', 'string'),
                 required=fairds_metadata.get('required', False),
@@ -903,6 +911,7 @@ class JSONGeneratorAgent(BaseAgent):
             "isa_level": normalized_sheet,
             "required": requirement == "MANDATORY",
             "requirement": requirement,
+            "entity_id": getattr(field, "entity_id", None) or None,
         }
 
     def _is_mandatory_metadata_item(self, metadata: Dict[str, Any]) -> bool:
@@ -986,9 +995,6 @@ class JSONGeneratorAgent(BaseAgent):
         # Calculate overall confidence
         overall_confidence = sum(f.confidence for f in fields) / len(fields) if fields else 0.0
         
-        # Group fields by ISA level based on their actual 'isa_sheet' attribute from FAIR-DS
-        fields_by_level = self._group_fields_by_isa_sheet(fields)
-        
         # Collect actual packages used (from KnowledgeRetriever, stored in field.package_source)
         packages_used = set()
         for field in fields:
@@ -997,40 +1003,85 @@ class JSONGeneratorAgent(BaseAgent):
                     packages_used.update(field.package_source)
                 else:
                     packages_used.add(field.package_source)
-        
-        # Build ISA-structured output - NO HARDCODED PACKAGE NAMES
+
+        # ── 1. Old-format isa_structure: flat fields list per sheet ──────
+        flat_by_level: Dict[str, List[Dict[str, Any]]] = {
+            "investigation": [],
+            "study": [],
+            "assay": [],
+            "sample": [],
+            "observationunit": [],
+        }
+        seen: Dict[str, Dict[str, float]] = {s: {} for s in flat_by_level}
+        for f in fields:
+            sheet = FAIRDSAPIParser.normalize_isa_sheet(
+                getattr(f, "isa_sheet", None)
+            )
+            if not sheet or sheet not in flat_by_level:
+                sheet = "study"
+            fd = self._field_to_dict(f)
+            key = fd.get("field_name", "").lower().strip()
+            conf = fd.get("confidence", 0.0)
+            if key not in seen[sheet] or conf > seen[sheet][key]:
+                seen[sheet][key] = conf
+                flat_by_level[sheet] = [
+                    x for x in flat_by_level[sheet]
+                    if x.get("field_name", "").lower().strip() != key
+                ]
+                flat_by_level[sheet].append(fd)
+
+        # ── 2. New-format isa_values: columns×rows matrix ────────────────
+        matrix_by_level = self._group_fields_by_isa_sheet(fields)
+        matrix_by_level = self._split_entities_heuristic(matrix_by_level)
+        matrix_by_level = self._normalize_row_columns(matrix_by_level)
+
+        isa_structure: Dict[str, Any] = {}
+        isa_descriptions = {
+            "investigation": "Investigation-level metadata (project info)",
+            "study": "Study-level metadata (experimental design)",
+            "assay": "Assay-level metadata (measurement details)",
+            "sample": "Sample-level metadata (biological material)",
+            "observationunit": "ObservationUnit-level metadata (individual observations)",
+        }
+        for sheet in ("investigation", "study", "assay", "sample", "observationunit"):
+            isa_structure[sheet] = {
+                "description": isa_descriptions[sheet],
+                "fields": flat_by_level.get(sheet, []),
+            }
+
+        # Statistics must reflect the same per-sheet deduplication as isa_structure
+        # (highest-confidence row per field_name within each ISA sheet).
+        _isa_stats_order = (
+            "investigation",
+            "study",
+            "assay",
+            "sample",
+            "observationunit",
+        )
+        _stats_flat = [
+            fd for sheet in _isa_stats_order for fd in flat_by_level.get(sheet, [])
+        ]
+
         output = {
-            "fairifier_version": "V1.3.1",
+            "fairifier_version": f"V{__version__}",
             "generated_at": datetime.now().isoformat(),
             "document_source": state.get("document_path", ""),
             "overall_confidence": round(overall_confidence, 3),
             "needs_review": state.get("needs_human_review", False),
-            
+
             # Packages used (from FAIR-DS API, selected by LLM)
             "packages_used": sorted(list(packages_used)) if packages_used else [],
-            
-            # ISA 5-sheet structure (based on actual field.isa_sheet from FAIR-DS)
-            "isa_structure": {
-                "investigation": {
-                    "description": "Investigation-level metadata (project info)",
-                    "fields": fields_by_level.get("investigation", [])
-                },
-                "study": {
-                    "description": "Study-level metadata (experimental design)",
-                    "fields": fields_by_level.get("study", [])
-                },
-                "assay": {
-                    "description": "Assay-level metadata (measurement details)",
-                    "fields": fields_by_level.get("assay", [])
-                },
-                "sample": {
-                    "description": "Sample-level metadata (biological material)",
-                    "fields": fields_by_level.get("sample", [])
-                },
-                "observationunit": {
-                    "description": "ObservationUnit-level metadata (individual observations)",
-                    "fields": fields_by_level.get("observationunit", [])
+
+            # ISA 5-sheet structure (legacy flat format with full provenance)
+            "isa_structure": isa_structure,
+
+            # ISA values matrix (columns × rows, for Excel prefill)
+            "isa_values": {
+                sheet: {
+                    "columns": matrix_by_level.get(sheet, {}).get("columns", []),
+                    "rows": matrix_by_level.get(sheet, {}).get("rows", []),
                 }
+                for sheet in ("investigation", "study", "assay", "sample", "observationunit")
             },
             
             # Document information summary (compact view; derived from flexible LLM extraction)
@@ -1061,14 +1112,18 @@ class JSONGeneratorAgent(BaseAgent):
             
             # Statistics
             "statistics": {
-                "total_fields": len(fields),
-                "investigation_fields": len(fields_by_level.get("investigation", [])),
-                "study_fields": len(fields_by_level.get("study", [])),
-                "assay_fields": len(fields_by_level.get("assay", [])),
-                "sample_fields": len(fields_by_level.get("sample", [])),
-                "observationunit_fields": len(fields_by_level.get("observationunit", [])),
-                "confirmed_fields": sum(1 for f in fields if f.status == "confirmed"),
-                "provisional_fields": sum(1 for f in fields if f.status == "provisional"),
+                "total_fields": len(_stats_flat),
+                "investigation_fields": len(flat_by_level.get("investigation", [])),
+                "study_fields": len(flat_by_level.get("study", [])),
+                "assay_fields": len(flat_by_level.get("assay", [])),
+                "sample_fields": len(flat_by_level.get("sample", [])),
+                "observationunit_fields": len(flat_by_level.get("observationunit", [])),
+                "confirmed_fields": sum(
+                    1 for fd in _stats_flat if fd.get("status") == "confirmed"
+                ),
+                "provisional_fields": sum(
+                    1 for fd in _stats_flat if fd.get("status") == "provisional"
+                ),
                 "inferred_extension_fields": len(state.get("inferred_metadata_extensions", [])),
                 "source_grounding_summary": self._compute_source_grounding_summary(
                     fields, source_ref_downgrades=source_ref_downgrades
@@ -1434,13 +1489,15 @@ class JSONGeneratorAgent(BaseAgent):
         return text[: max_chars - 3].rstrip(" ,;:.") + "..."
 
     def _build_document_info_compact(self, doc_info: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Build the compact document_info block (title, abstract, authors, keywords, research_domain)
-        from the flexible document_info returned by DocumentParser/LLM.
+        """Build the compact document_info block for the output JSON.
 
-        The LLM may return different keys (e.g. document_type, scientific_domain, key_information,
-        metadata_for_fair_principles) instead of title/abstract/authors. This method maps those
-        into the fixed compact schema so the output JSON always has a populated document_info.
+        Upstream (DocumentParser) canonicalizes field aliases via
+        ``fairifier.utils.doc_info_canonical.canonicalize_doc_info``, so
+        ``doc_info`` here uses canonical field names (title, abstract, authors,
+        keywords, research_domain). This method just selects the compact subset
+        and shape-checks the values defensively.
+
+        See ARCHITECTURE_REFACTOR_PLAN.md §1.
         """
         if not doc_info:
             return {
@@ -1448,202 +1505,250 @@ class JSONGeneratorAgent(BaseAgent):
                 "abstract": None,
                 "authors": [],
                 "keywords": [],
-                "research_domain": None
+                "research_domain": None,
             }
 
-        # Handle nested structure: if doc_info has "metadata" key, extract it
-        if "metadata" in doc_info and isinstance(doc_info["metadata"], dict):
-            doc_info = doc_info["metadata"]
-
-        # Title: direct or from common variants / first short key_information item
-        title = (
-            doc_info.get("title")
-            or doc_info.get("investigation_title")
-            or doc_info.get("project_title")
-            or doc_info.get("study_title")
-            or doc_info.get("document_title")
-        )
-        
-        # Check nested metadata_for_fair_principles
-        if not title:
-            fair_meta = doc_info.get("metadata_for_fair_principles")
-            if isinstance(fair_meta, dict):
-                title = fair_meta.get("title")
-        
-        # Extract title from summary if it looks like a title (short first sentence)
-        if not title and doc_info.get("summary"):
-            summary_text = doc_info["summary"]
-            if isinstance(summary_text, str):
-                # Try to extract first sentence as potential title
-                import re
-                first_sentence = re.split(r'[.!?]\s+', summary_text, maxsplit=1)[0]
-                if 10 <= len(first_sentence) <= 250:
-                    title = first_sentence.strip()
-        
-        if not title and isinstance(doc_info.get("key_information"), list):
-            for item in doc_info["key_information"]:
-                if isinstance(item, str) and 10 <= len(item) <= 200:
-                    title = item
-                    break
-
-        # Abstract: direct or from summary/description / first long key_information string
-        abstract = (
-            doc_info.get("abstract")
-            or doc_info.get("summary")
-            or doc_info.get("description")
-            or doc_info.get("investigation_description")
-            or doc_info.get("project_abstract")
-            or doc_info.get("study_abstract")
-        )
-        
-        # Check nested metadata_for_fair_principles
-        if not abstract:
-            fair_meta = doc_info.get("metadata_for_fair_principles")
-            if isinstance(fair_meta, dict):
-                abstract = fair_meta.get("abstract")
-        
-        if not abstract and isinstance(doc_info.get("key_information"), list):
-            for item in doc_info["key_information"]:
-                if isinstance(item, str) and len(item) > 200:
-                    abstract = item
-                    break
-
-        # Authors: direct list or personnel/consortium (normalize to list of dicts or strings)
-        authors = doc_info.get("authors") or doc_info.get("investigators") or doc_info.get("personnel")
-        
-        if not authors and doc_info.get("consortium"):
-            raw = doc_info["consortium"]
-            authors = raw if isinstance(raw, list) else [raw]
-            
-        if authors is None:
-            authors = []
+        authors = doc_info.get("authors") or []
         if not isinstance(authors, list):
             authors = [authors] if authors else []
-        
-        # Normalize authors: if they're dicts, keep as dicts; if strings, keep as strings
-        normalized_authors = []
-        for author in authors:
-            if author:  # Skip empty values
-                if isinstance(author, dict):
-                    # Keep dict structure, but ensure it has at least a 'name' field
-                    if 'name' in author or 'full_name' in author or any(k in author for k in ['first_name', 'last_name']):
-                        normalized_authors.append(author)
-                    else:
-                        # Dict without name fields, convert to string
-                        normalized_authors.append(str(author))
-                elif isinstance(author, str):
-                    normalized_authors.append(author)
-                else:
-                    normalized_authors.append(str(author))
-        authors = normalized_authors
 
-        # Keywords: direct or use key_information if list of short strings
-        keywords = doc_info.get("keywords") or doc_info.get("tags") or doc_info.get("topics")
-        
-        if not keywords and isinstance(doc_info.get("key_information"), list):
-            short_strings = [x for x in doc_info["key_information"] if isinstance(x, str) and 0 < len(x) <= 150]
-            if short_strings:
-                keywords = short_strings[:20]
-                
-        if keywords is None:
-            keywords = []
+        keywords = doc_info.get("keywords") or []
         if not isinstance(keywords, list):
             keywords = [keywords] if keywords else []
-        
-        # Clean keywords - convert any non-string items
         keywords = [str(k) if not isinstance(k, str) else k for k in keywords if k]
 
-        # Research domain: direct or from scientific_domain (dict with primary_field / subfields)
-        research_domain = (
-            doc_info.get("research_domain") 
-            or doc_info.get("domain") 
-            or doc_info.get("scientific_domain")
-            or doc_info.get("field_of_study")
-            or doc_info.get("research_area")
-        )
-        
-        # If research_domain is a dict, extract meaningful value
-        if isinstance(research_domain, dict):
-            sd = research_domain
-            primary = sd.get("primary_field") or sd.get("domain") or sd.get("field")
-            subfields = sd.get("subfields") or sd.get("subdomains") or []
-            if primary:
-                research_domain = primary if not subfields else f"{primary} ({', '.join(str(s) for s in subfields[:5])})"
-            else:
-                research_domain = None
-        if not research_domain and isinstance(doc_info.get("scientific_domain"), str):
-            research_domain = doc_info["scientific_domain"]
-
         return {
-            "title": title or None,
-            "abstract": abstract or None,
+            "title": doc_info.get("title") or None,
+            "abstract": doc_info.get("abstract") or None,
             "authors": authors,
             "keywords": keywords,
-            "research_domain": research_domain or None
+            "research_domain": doc_info.get("research_domain") or None,
         }
 
     def _group_fields_by_isa_sheet(
-        self, 
+        self,
         fields: List[MetadataField]
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    ) -> Dict[str, Dict[str, Any]]:
         """
-        Group metadata fields by ISA sheet based on REAL 'isa_sheet' attribute from FAIR-DS.
-        
-        NO hardcoded mappings - uses only what FAIR-DS API provides.
-        
-        Deduplicates fields: For each ISA sheet, keeps only one field per field_name.
-        If duplicates exist, keeps the one with highest confidence.
+        Group metadata fields by ISA sheet into column-oriented rows.
+
+        Returns a dict keyed by canonical ISA sheet name.  Each value is::
+
+            {
+                "columns": [field_name_str, …],
+                "rows": [
+                    {"field_name": value, …},
+                    …
+                ]
+            }
+
+        *Single-row* sheets (investigation, study) still produce one row.
+        *Multi-row* sheets (sample, assay, observationunit) produce one row per
+        distinct ``entity_id`` found on the incoming ``MetadataField`` objects.
+        When no ``entity_id`` is set the fields all land in a single default row
+        (preserving the pre-existing behaviour).
         """
-        
-        grouped = {
-            "investigation": [],
-            "study": [],
-            "assay": [],
-            "sample": [],
-            "observationunit": []
+        grouped: Dict[str, Dict[str, Any]] = {
+            sheet: {"columns": [], "rows": []}
+            for sheet in ("investigation", "study", "assay", "sample", "observationunit")
         }
-        
-        # Track seen fields per ISA sheet: {isa_sheet: {field_name: (field_dict, confidence)}}
-        seen_fields = {sheet: {} for sheet in grouped.keys()}
-        
+
+        # ── 1. Sort fields into (isa_sheet, entity_id) buckets ──────────
+        # entity_buckets[isa_sheet][entity_id] = [(field_name_lower, field_dict, confidence)]
+        from collections import defaultdict
+        entity_buckets: Dict[str, Dict[str, List[tuple]]] = {
+            sheet: defaultdict(list) for sheet in grouped
+        }
+
         for field in fields:
-            # Use the actual 'isa_sheet' attribute from FAIR-DS metadata
-            # This is set by KnowledgeRetriever when it retrieves fields from the API
-            isa_sheet = FAIRDSAPIParser.normalize_isa_sheet(getattr(field, 'isa_sheet', None))
-            
-            if not isa_sheet or isa_sheet == "study":
-                # Fallback: try to infer from field metadata if not set
-                # Check if field object has metadata dict
-                if hasattr(field, 'metadata') and isinstance(field.metadata, dict):
+            isa_sheet = FAIRDSAPIParser.normalize_isa_sheet(
+                getattr(field, "isa_sheet", None)
+            )
+            # Only fall back to FAIR-DS metadata when the field has no sheet yet.
+            # Do not re-resolve when sheet is already set (including study): that was
+            # asymmetric with other levels and duplicated parse-time inference.
+            if not isa_sheet:
+                if hasattr(field, "metadata") and isinstance(field.metadata, dict):
                     isa_sheet = FAIRDSAPIParser.normalize_isa_sheet(
-                        field.metadata.get('isa_sheet') or field.metadata.get("sheet")
+                        field.metadata.get("isa_sheet")
+                        or field.metadata.get("sheet")
                     )
-            
-            # If still no isa_sheet, assign to 'study' as default (most common)
             if not isa_sheet or isa_sheet not in grouped:
                 isa_sheet = "study"
-            
-            # Convert field to dict
+
+            entity_id = getattr(field, "entity_id", None) or "__default__"
             field_dict = self._field_to_dict(field)
-            field_name = field_dict.get("field_name", "").lower().strip()
+            key = field_dict.get("field_name", "").lower().strip()
             confidence = field_dict.get("confidence", 0.0)
-            
-            # Deduplicate: keep only the field with highest confidence for each field_name
-            if field_name in seen_fields[isa_sheet]:
-                existing_confidence = seen_fields[isa_sheet][field_name][1]
-                if confidence > existing_confidence:
-                    # Replace with higher confidence field
-                    seen_fields[isa_sheet][field_name] = (field_dict, confidence)
-            else:
-                # First occurrence of this field_name in this ISA sheet
-                seen_fields[isa_sheet][field_name] = (field_dict, confidence)
-        
-        # Build final grouped structure from deduplicated fields
-        for isa_sheet, field_dicts in seen_fields.items():
-            grouped[isa_sheet] = [fd[0] for fd in field_dicts.values()]
-        
+
+            entity_buckets[isa_sheet][entity_id].append((key, field_dict, confidence))
+
+        # ── 2. Deduplicate within each entity bucket (keep highest conf) ──
+        for isa_sheet, buckets in entity_buckets.items():
+            row_list: List[Dict[str, Any]] = []
+            all_column_names: set = set()
+
+            for _entity_id, triples in buckets.items():
+                row: Dict[str, Any] = {}
+                seen: Dict[str, float] = {}
+                for key, fd, conf in triples:
+                    if key not in seen or conf > seen[key]:
+                        seen[key] = conf
+                        row[key] = fd.get("value")
+                        all_column_names.add(key)
+                if row:
+                    row_list.append(row)
+
+            # ── 3. Build columns list preserving FAIR-DS ordering hint ──
+            # Sort alphabetically for stable output; the Excel header order
+            # is controlled by the FAIR-DS API column map anyway.
+            grouped[isa_sheet]["columns"] = sorted(all_column_names)
+            grouped[isa_sheet]["rows"] = row_list
+
         return grouped
-    
+
+    def _split_entities_heuristic(
+        self,
+        fields_by_level: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Split single-row sheets into multi-row when values contain entity separators.
+
+        LLMs typically merge multiple entities into one row with semicolons or
+        numbered lists.  This post-processor detects those patterns and splits
+        the merged row into per-entity rows, copying shared fields across.
+        """
+        import re
+
+        multi_row_levels = {"sample", "assay", "observationunit"}
+
+        for sheet_name in multi_row_levels:
+            sheet = fields_by_level.get(sheet_name)
+            if not sheet or not sheet.get("rows"):
+                continue
+
+            rows = sheet["rows"]
+            if len(rows) != 1:
+                continue  # already split or empty
+
+            row = rows[0]
+
+            # ── Detect entity count from the most-structured field ──────
+            best_field = None
+            best_count = 1
+            best_parts: list = []
+
+            for key, value in row.items():
+                if not value or "not specified" in str(value).lower():
+                    continue
+                text = str(value)
+
+                # Pattern: semicolons (LLM's favourite separator)
+                if ";" in text:
+                    parts = [p.strip() for p in text.split(";") if p.strip()]
+                    meaningful = [p for p in parts if len(p) > 10]
+                    if len(meaningful) >= 2:
+                        # Check roughly equal-length parts (not a list of unrelated items)
+                        avg_len = sum(len(p) for p in meaningful) / len(meaningful)
+                        similar = all(
+                            avg_len * 0.3 < len(p) < avg_len * 3.0
+                            for p in meaningful
+                        )
+                        if similar and len(meaningful) > best_count:
+                            best_count = len(meaningful)
+                            best_parts = meaningful
+                            best_field = key
+
+                # Pattern: "Experiment N" / "Group N" repeats
+                exp_split = re.split(r'(?=(?:Experiment|Group|Treatment)\s+\d+)', text)
+                if len(exp_split) >= 2:
+                    parts = [p.strip() for p in exp_split if len(p.strip()) > 10]
+                    if len(parts) > best_count:
+                        best_count = len(parts)
+                        best_parts = parts
+                        best_field = key
+
+            if best_count < 2:
+                continue
+
+            # ── Build per-entity rows ────────────────────────────────────
+            new_rows: list = []
+            for i in range(best_count):
+                entity_row: Dict[str, Any] = {}
+                for key, value in row.items():
+                    text = str(value) if value else ""
+                    # Try splitting this field by semicolons
+                    if ";" in text:
+                        parts = [p.strip() for p in text.split(";") if p.strip()]
+                        if parts:
+                            entity_row[key] = (
+                                parts[i] if i < len(parts) else parts[-1]
+                            )
+                        else:
+                            entity_row[key] = value
+                    elif key == best_field:
+                        entity_row[key] = (
+                            best_parts[i] if i < len(best_parts) else best_parts[-1]
+                        )
+                    else:
+                        entity_row[key] = value  # shared field
+                new_rows.append(entity_row)
+
+            if len(new_rows) >= 2:
+                sheet["rows"] = new_rows
+                self.logger.debug(
+                    "Entity split: '%s' 1→%d rows (field='%s')",
+                    sheet_name,
+                    len(new_rows),
+                    best_field,
+                )
+
+        return fields_by_level
+
+    def _normalize_row_columns(
+        self,
+        fields_by_level: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Ensure every row in a sheet has exactly the same set of columns.
+
+        This is the *matrix alignment* step: after entity grouping and
+        splitting, different rows may end up with different subsets of the
+        full column set.  This method collects the union of all column names
+        and back-fills missing cells with ``""`` so every row has identical
+        keys.  The ``columns`` list on each sheet is updated to the stable,
+        sorted union.
+        """
+        for sheet_name, sheet in fields_by_level.items():
+            rows = sheet.get("rows")
+            if not rows:
+                continue
+
+            # ── 1. Union of all column names across all rows ──────────
+            all_cols: set = set()
+            for row in rows:
+                all_cols.update(row.keys())
+
+            # Also include any columns already declared (e.g. from FAIR-DS)
+            existing = sheet.get("columns", [])
+            all_cols.update(str(c).strip().lower() for c in existing if c)
+
+            sorted_cols = sorted(all_cols)
+            sheet["columns"] = sorted_cols
+
+            # ── 2. Fill missing cells in every row ─────────────────────
+            for row in rows:
+                for col in sorted_cols:
+                    if col not in row:
+                        row[col] = ""
+
+            # ── 3. Rebuild backward-compat flat fields (first row) ─────
+            if rows and sorted_cols:
+                sheet["fields"] = [
+                    {"field_name": col, "value": rows[0].get(col, "")}
+                    for col in sorted_cols
+                ]
+
+        return fields_by_level
+
     def _group_fields_by_isa_level_OLD_DEPRECATED(
         self, 
         fields: List[MetadataField],

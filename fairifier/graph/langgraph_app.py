@@ -31,6 +31,7 @@ from ..agents.base import BaseAgent
 from ..agents.document_parser import DocumentParserAgent
 from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
 from ..agents.json_generator import JSONGeneratorAgent
+from ..agents.isa_value_mapper import ISAValueMapperAgent
 from ..agents.critic import CriticAgent
 from ..config import config
 from ..output_paths import resolve_metadata_output_read_path, METADATA_OUTPUT_FILENAME
@@ -41,6 +42,13 @@ from ..services.mineru_client import MinerUClient, MinerUConversionError
 from ..services import mineru_cache as mineru_cache_service
 from ..services.confidence_aggregator import aggregate_confidence
 from ..services.fairds_api_parser import FAIRDSAPIParser
+from ..utils.context_observability import log_context_usage
+from ..utils.document_text import read_document_text
+from ..utils.execution_history import compact_prior_attempts_for_agent
+from ..utils.planner_tasks import (
+    parse_plan_tasks_from_llm_output,
+    planner_task_to_dict,
+)
 from ..services.source_workspace import SourceRecord, build_source_workspace
 from ..tools.mineru_tools import create_mineru_convert_tool
 
@@ -73,6 +81,7 @@ class FAIRifierLangGraphApp:
         self.bio_metadata_agent = BioMetadataAgent()
         self.knowledge_retriever = KnowledgeRetrieverAgent()
         self.json_generator = JSONGeneratorAgent()
+        self.isa_value_mapper = ISAValueMapperAgent()
         self.critic = CriticAgent()
         self.llm_helper = get_llm_helper()
         self.mineru_client = self._initialize_mineru_client()
@@ -325,6 +334,11 @@ class FAIRifierLangGraphApp:
                     f"evaluating {domain or doc_type} metadata quality: "
                     f"common issues thresholds improvement patterns"
                 )
+            elif agent_name == "ISAValueMapper":
+                query = (
+                    f"metadata entity resolution for {domain or doc_type}: "
+                    f"sample grouping experimental design matrix structuring"
+                )
             elif agent_name == "Planner":
                 query = (
                     f"workflow strategy for {domain or doc_type}: "
@@ -468,7 +482,7 @@ class FAIRifierLangGraphApp:
                 return True
         
         # Rule 4: Workflow decisions (always valuable)
-        if decision == "ACCEPT" and agent_name in ["KnowledgeRetriever", "JSONGenerator"]:
+        if decision == "ACCEPT" and agent_name in ["KnowledgeRetriever", "JSONGenerator", "ISAValueMapper"]:
             logger.info(
                 f"✅ Write gate passed: workflow decision from {agent_name}"
             )
@@ -481,35 +495,26 @@ class FAIRifierLangGraphApp:
         return False
     
     def _safe_get_domain(self, doc_info: Dict[str, Any]) -> str:
-        """Safely extract domain from document info, handling various formats.
-        
-        Domain field can be:
-        - A list of strings: ['ecotoxicology', 'nanotoxicology']
-        - A single string: 'ecotoxicology'
-        - Missing/None
-        - In different field names: 'scientific_domain' or 'research_domain'
-        
-        Returns the first valid domain string, or empty string if none found.
+        """Extract canonical research_domain from doc_info.
+
+        doc_info is canonicalized at the DocumentParser boundary (refactor §1),
+        so research_domain is always a string when present (or absent). The
+        list-shape handling below is preserved as a defensive fallback for
+        legacy state dicts that may bypass canonicalization.
         """
         if not doc_info or not isinstance(doc_info, dict):
             return ""
-        
-        # Try multiple possible field names
-        for field_name in ["scientific_domain", "research_domain", "domain"]:
-            domain_raw = doc_info.get(field_name)
-            
-            if not domain_raw:
-                continue
-            
-            # Handle list
-            if isinstance(domain_raw, list):
-                for item in domain_raw:
-                    if isinstance(item, str) and item.strip():
-                        return item.strip()
-            # Handle string
-            elif isinstance(domain_raw, str) and domain_raw.strip():
-                return domain_raw.strip()
-        
+
+        domain_raw = doc_info.get("research_domain")
+        if not domain_raw:
+            return ""
+        if isinstance(domain_raw, list):
+            for item in domain_raw:
+                if isinstance(item, str) and item.strip():
+                    return item.strip()
+            return ""
+        if isinstance(domain_raw, str):
+            return domain_raw.strip()
         return ""
     
     def _safe_get_field(self, data: Any, *field_names: str, default: Any = None) -> Any:
@@ -1091,13 +1096,45 @@ class FAIRifierLangGraphApp:
                     state["errors"] = state.get("errors", []) + [f"{agent_name} failed: global retry limit reached"]
                     break
             
+            # Log context usage at the agent boundary (refactor §6 — passive
+            # observability, no trimming). Writes a JSONL line to the run's
+            # processing log so operators can see how state size evolves.
+            output_dir = state.get("output_dir")
+            log_path = (
+                str(Path(output_dir) / "processing_log.jsonl")
+                if output_dir
+                else None
+            )
+            log_context_usage(
+                agent_name=agent_name,
+                state=state,
+                log_path=log_path,
+                extra={"attempt": attempt},
+            )
+
             # Log attempt
             if attempt == 1:
                 logger.info(f"▶️  Executing {agent_name}")
             else:
                 logger.info(f"🔄 Retry {attempt-1}/{self.max_step_retries} for {agent_name}")
                 self.global_retry_count += 1
-            
+                # Strip verbose Critic prose / failed-output detail from earlier
+                # attempts of this agent so the in-state history stays lean and
+                # the LLM is not anchored to its own past mistakes.
+                # Full transcripts remain in processing_log.jsonl (audit trail).
+                # See ARCHITECTURE_REFACTOR_PLAN.md §2.5.
+                compacted = compact_prior_attempts_for_agent(
+                    state["execution_history"],
+                    agent_name,
+                    keep_latest=False,  # the previous attempt is no longer needed verbatim
+                )
+                if compacted:
+                    logger.debug(
+                        "Compacted %d prior attempt record(s) for %s",
+                        compacted,
+                        agent_name,
+                    )
+
             # Set retry context for agent
             state["context"]["retry_count"] = attempt - 1
             
@@ -1354,7 +1391,17 @@ class FAIRifierLangGraphApp:
                         agent_name,
                     )
                     return self._mark_interrupted_state(state)
-        
+
+        # Loop exited (ACCEPT / ESCALATE / retry-exhausted). The retry-routing
+        # decision has been consumed; downstream consumers only read score,
+        # decision, and timing. Compact the final record so each agent's
+        # contribution to long-lived state is bounded (refactor §2.5).
+        compact_prior_attempts_for_agent(
+            state["execution_history"],
+            agent_name,
+            keep_latest=False,
+        )
+
         return state
 
     def _mark_interrupted_state(
@@ -1542,7 +1589,20 @@ class FAIRifierLangGraphApp:
             if run_id and run_stop_requested(run_id):
                 return self._mark_interrupted_state(state)
         state["cross_layer_retries_used"] = cross_layer_retries_used
-        
+
+        # ── Step 4.5: ISAValueMapper ─────────────────────────────────
+        if state.get("metadata_fields"):
+            logger.info("\n" + "="*70)
+            logger.info("📊 Step 5: ISAValueMapper (columns×rows matrix)")
+            logger.info("="*70)
+            try:
+                state = await self._execute_agent_with_retry(
+                    state, self.isa_value_mapper, "ISAValueMapper",
+                    lambda s: s.get("artifacts", {}).get("isa_values_json") is not None
+                )
+            except Exception as exc:
+                logger.warning("ISAValueMapper failed (non-fatal): %s", exc)
+
         logger.info("\n" + "="*70)
         logger.info(f"✅ Orchestration complete (global retries used: {self.global_retry_count}/{self.max_global_retries})")
         logger.info("="*70)
@@ -1703,6 +1763,10 @@ class FAIRifierLangGraphApp:
         state["document_info_by_source"] = source_outputs
         state["evidence_packets"] = merged_packets
         state["document_path"] = base_document_path
+        # Transient per-source document_content (used during the parse loop) is
+        # no longer needed after synthesis — clear it so the merged state does
+        # not carry the last source's full text (refactor §5).
+        state["document_content"] = None
         context.pop("current_source_path", None)
         context.pop("current_source_index", None)
         context.pop("current_source_total", None)
@@ -1767,7 +1831,27 @@ class FAIRifierLangGraphApp:
             text, conversion_info = self._read_document_content(document_path, output_dir)
             logger.info(f"✅ Loaded {len(text)} characters from document")
             
-            state["document_content"] = text
+            # Save to file if not already persisted (e.g. by MinerU)
+            markdown_path = conversion_info.get("markdown_path")
+            if not markdown_path and output_dir:
+                try:
+                    out_path = Path(output_dir) / "extracted_document_content.txt"
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(text, encoding="utf-8")
+                    markdown_path = str(out_path)
+                except Exception as e:
+                    logger.warning(f"Failed to write extracted content to disk: {e}")
+                    
+            state["document_text_path"] = markdown_path
+            # Document text is persisted on disk via document_text_path. We no
+            # longer carry hundreds of KB in live state (refactor §5). The
+            # field remains in the schema as None for legacy consumers; the
+            # in-memory fallback only kicks in when no markdown_path is
+            # available (e.g. ephemeral tests).
+            if markdown_path:
+                state["document_content"] = None
+            else:
+                state["document_content"] = text  # transient fallback
             state["document_conversion"] = conversion_info
             state["source_workspace"] = conversion_info.get("source_workspace", {})
             # Collect bio file paths for BioMetadataAgent (single input or multi-file bundle)
@@ -2507,8 +2591,9 @@ class FAIRifierLangGraphApp:
         try:
             # Get parsed document info (if available)
             doc_info = state.get("document_info", {})
-            document_content = state.get("document_content", "")
-            
+            # Read 2KB preview from disk-backed text (refactor §5).
+            document_preview = read_document_text(state, max_chars=2000)
+
             # Use LLM to analyze document and plan strategy based on parsed content
             planning_prompt = f"""You are an intelligent workflow orchestrator for FAIR metadata generation.
 
@@ -2516,7 +2601,7 @@ class FAIRifierLangGraphApp:
 {json.dumps(doc_info, indent=2) if doc_info else "Document parsing in progress..."}
 
 **Document Content Preview:**
-{document_content[:2000]}...
+{document_preview}...
 
 **Your task:** Analyze the parsed document information and plan the optimal execution strategy.
 
@@ -2538,7 +2623,9 @@ class FAIRifierLangGraphApp:
 - Which FAIR-DS packages are likely needed?
 - Any special considerations?
 
-Return JSON in the following format:
+Return JSON in the following format. The ``plan_tasks`` array is the
+authoritative machine-readable plan — fill it carefully.
+
 {{
   "document_type": "research_paper|dataset|protocol|other",
   "research_domain": "genomics|metagenomics|ecology|chemistry|...",
@@ -2546,12 +2633,42 @@ Return JSON in the following format:
   "key_focus_areas": ["area1", "area2", ...],
   "potential_challenges": ["challenge1", ...],
   "reasoning": "your step-by-step analysis",
+  "plan_tasks": [
+    {{
+      "agent_name": "DocumentParser",
+      "search_terms": ["concept1", "concept2"],
+      "notes": "what to focus on extracting"
+    }},
+    {{
+      "agent_name": "KnowledgeRetriever",
+      "priority_packages": ["Genome", "Nanopore"],
+      "search_terms": ["assembly", "BGC"],
+      "focus_sheets": ["assay", "sample"],
+      "notes": "domain-specific guidance"
+    }},
+    {{
+      "agent_name": "JSONGenerator",
+      "focus_sheets": ["assay", "sample"],
+      "notes": "ensure ..."
+    }}
+  ],
   "special_instructions": {{
-    "DocumentParser": "focus on...",
-    "KnowledgeRetriever": "prioritize...",
-    "JSONGenerator": "ensure..."
+    "DocumentParser": "human-readable guidance (kept for backward-compat logs)",
+    "KnowledgeRetriever": "...",
+    "JSONGenerator": "..."
   }}
-}}"""
+}}
+
+Field semantics for ``plan_tasks``:
+- ``agent_name``: one of "DocumentParser", "BioMetadataAgent",
+  "KnowledgeRetriever", "JSONGenerator", "ISAValueMapper".
+- ``priority_packages``: FAIR-DS package names to prioritize for the
+  KnowledgeRetriever (e.g. "Genome", "Nanopore", "Soil").
+- ``search_terms``: domain-specific terms the agent should search for.
+- ``focus_sheets``: ISA sheets ("investigation", "study", "assay", "sample",
+  "observationunit") to prioritize.
+- ``notes``: short human-readable guidance.
+"""
 
             from langchain_core.messages import HumanMessage, SystemMessage
             
@@ -2573,6 +2690,19 @@ Return JSON in the following format:
             state["execution_plan"] = plan
             state["reasoning_chain"].append(f"Plan: {plan.get('reasoning', '')}")
             state["agent_guidance"] = plan.get("special_instructions", {})
+            # Structured plan tasks (refactor §4) — primary contract for
+            # downstream agents. Stored as plain dicts for serialization.
+            structured_tasks = parse_plan_tasks_from_llm_output(plan)
+            state["plan_tasks"] = [planner_task_to_dict(t) for t in structured_tasks]
+            if structured_tasks:
+                logger.info(
+                    "🧭 Structured plan: %s",
+                    [
+                        f"{t.agent_name}(packages={t.priority_packages},"
+                        f"terms={t.search_terms})"
+                        for t in structured_tasks
+                    ],
+                )
             if state.get("agent_guidance"):
                 logger.info(f"🧭 Planner guidance: {state['agent_guidance']}")
             

@@ -8,17 +8,27 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class DocumentInfoResponse(BaseModel):
-    """Structured extraction payload for DocumentParser inner loops."""
+    """Canonical schema for DocumentParser output.
 
-    model_config = ConfigDict(extra="allow")
+    Locked schema: unknown fields are silently dropped (``extra="ignore"``).
+    Field aliases (``investigation_title``, ``summary``, etc.) are normalized
+    by ``fairifier.utils.doc_info_canonical.canonicalize_doc_info`` before
+    Pydantic validation. Downstream consumers (KnowledgeRetriever,
+    JSONGenerator, ISAValueMapper) rely on this fixed contract — do NOT
+    re-introduce ``extra="allow"`` without updating the canonicalization
+    layer first.
+
+    See ARCHITECTURE_REFACTOR_PLAN.md §1.
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     document_type: Optional[str] = None
     title: Optional[str] = None
     abstract: Optional[str] = None
-    authors: List[str] = Field(default_factory=list)
+    authors: List[Any] = Field(default_factory=list)
     keywords: List[str] = Field(default_factory=list)
     research_domain: Optional[str] = None
-    scientific_domain: Optional[str] = None
     methodology: Optional[str] = None
     location: Optional[str] = None
     coordinates: Optional[str] = None

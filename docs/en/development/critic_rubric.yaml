@@ -101,6 +101,28 @@ nodes:
           - "For weak fields, recommend exact sections or terms to re-extract."
           - "Highlight structural gaps (e.g., missing secondment table, ethics statement)."
 
+  isa_value_mapper:
+    accept_threshold: 0.65
+    revise_min: 0.40
+    description: "Agent maps raw metadata field values to standardized ISA-Tab controlled vocabulary terms."
+    criteria:
+      accuracy:
+        checks:
+          - "Mapped terms match the field semantics (e.g., assay type maps to a valid OBI term)."
+          - "No arbitrary substitutions; unmapped fields retain original value or are flagged."
+      coverage:
+        checks:
+          - "All high-confidence fields have been attempted for ISA term mapping."
+          - "Sheets (investigation, study, assay, dataFile) are all represented in the output matrix."
+      faithfulness:
+        checks:
+          - "Mapped values are traceable to the retrieved_knowledge vocabulary, not invented."
+          - "Original values are preserved where no controlled term exists."
+      actionability:
+        checks:
+          - "Suggest specific ontology terms (OBI, EFO, NCIT) for fields that failed to map."
+          - "Identify sheets with zero mapped terms so the planner can re-focus retrieval."
+
   bio_metadata_agent:
     accept_threshold: 0.70
     revise_min: 0.40

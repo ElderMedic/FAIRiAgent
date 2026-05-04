@@ -65,7 +65,12 @@ class MetadataField:
     
     # ISA sheet from FAIR-DS API (one of: investigation, study, assay, sample, observationunit)
     isa_sheet: Optional[str] = None
-    
+
+    # Entity grouping for multi-row ISA sheets (sample, assay, observationunit).
+    # Fields sharing the same (isa_sheet, entity_id) belong to the same row.
+    # None or "" means "no specific entity" — field goes to the default/first row.
+    entity_id: Optional[str] = None
+
     # Additional metadata for internal use
     data_type: Optional[str] = None
     required: bool = False
@@ -91,11 +96,46 @@ class ProcessingArtifacts:
     processing_log: Optional[str] = None   # JSON lines log
 
 
+@dataclass
+class PlannerTask:
+    """Structured per-agent guidance produced by the Planner.
+
+    Replaces the free-text ``special_instructions`` dict that downstream agents
+    used to regex-parse for package names and search terms (refactor §4).
+
+    Fields:
+        agent_name: One of "DocumentParser", "BioMetadataAgent",
+            "KnowledgeRetriever", "JSONGenerator", "ISAValueMapper".
+        priority_packages: FAIR-DS package names this agent should prioritize
+            (e.g. ["Genome", "Nanopore"]).
+        search_terms: Domain terms the agent should search for or focus on.
+        focus_sheets: ISA sheets to prioritize ("investigation", "study",
+            "assay", "sample", "observationunit").
+        skip_if: Optional condition string. Reserved for future native LangGraph
+            conditional routing (see refactor §7); not consumed yet.
+        notes: Human-readable guidance (replaces the per-agent string in
+            the legacy ``special_instructions`` dict).
+    """
+
+    agent_name: str
+    priority_packages: List[str] = field(default_factory=list)
+    search_terms: List[str] = field(default_factory=list)
+    focus_sheets: List[str] = field(default_factory=list)
+    skip_if: Optional[str] = None
+    notes: str = ""
+
+
 class FAIRifierState(TypedDict):
     """State object for LangGraph workflow - FAIR-DS compatible."""
     # Input
     document_path: str
-    document_content: str
+    # Deprecated as a long-lived field (refactor §5). The pipeline reads
+    # document text by reference via ``document_text_path``. ``document_content``
+    # is only set as a transient fallback when no on-disk path is available
+    # (in-memory tests) or briefly during multi-file parsing iteration.
+    # Do NOT treat it as the source of truth — use ``read_document_text(state)``.
+    document_content: Optional[str]
+    document_text_path: Optional[str]  # On-disk pointer to the document text/markdown
     document_conversion: Dict[str, Any]
     output_dir: Optional[str]  # Output directory for artifacts (including MinerU)
     input_documents: List[Dict[str, Any]]  # Normalized input units for per-file parsing
@@ -128,6 +168,7 @@ class FAIRifierState(TypedDict):
     reasoning_chain: List[str]  # Workflow planner's reasoning steps
     execution_plan: Dict[str, Any]  # Current execution plan
     execution_summary: Dict[str, Any]  # Summary of execution (completed, failed, etc.)
+    plan_tasks: List[Dict[str, Any]]  # Structured per-agent tasks (refactor §4)
     
     # Context for retry and memory (contains critic_feedback, retrieved_memories, etc.)
     context: Dict[str, Any]

@@ -18,9 +18,16 @@ from .base import BaseAgent
 from ..models import FAIRifierState
 from ..config import config
 from ..utils.llm_helper import get_llm_helper, normalize_llm_response_content
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+class CriticEvaluation(BaseModel):
+    """Schema for the Critic LLM evaluation output."""
+    score: float = Field(description="Confidence score between 0.0 and 1.0")
+    critique: str = Field(description="A short narrative explanation of the decision (< 200 chars)")
+    issues: List[str] = Field(default_factory=list, description="List of identified issues (< 100 chars each)")
+    suggestions: List[str] = Field(default_factory=list, description="Actionable steps to fix issues (< 150 chars each)")
 
 def safe_json_parse(raw: Any) -> Optional[Dict[str, Any]]:
     """Parse JSON content with support for fenced code blocks and various formats."""
@@ -106,6 +113,7 @@ class CriticAgent(BaseAgent):
             "BioMetadataAgent": "bio_metadata_agent",
             "KnowledgeRetriever": "knowledge_retriever",
             "JSONGenerator": "json_generator",
+            "ISAValueMapper": "isa_value_mapper",
         }
         logger.info("✅ Critic Agent initialized with LLM-as-Judge rubric")
     
@@ -177,6 +185,8 @@ class CriticAgent(BaseAgent):
             context = self._build_retrieval_context(state)
         elif node_key == "json_generator":
             context = self._build_generation_context(state)
+        elif node_key == "isa_value_mapper":
+            context = self._build_isa_mapper_context(state)
         else:
             context = "No context available."
         
@@ -288,13 +298,12 @@ class CriticAgent(BaseAgent):
                 f"Trimmed historical guidance for {agent_name} to {MAX_GUIDANCE_PER_AGENT} items"
             )
         
-        # Store previous attempt for comparison
-        if agent_name == "DocumentParser":
-            state["context"]["previous_attempt"] = state.get("document_info", {}).copy()
-        elif agent_name == "KnowledgeRetriever":
-            state["context"]["previous_attempt"] = state.get("retrieved_knowledge", []).copy()
-        elif agent_name == "JSONGenerator":
-            state["context"]["previous_attempt"] = state.get("metadata_fields", []).copy()
+        # NOTE (refactor §2): we no longer snapshot the previous attempt's full
+        # output into state. Exposing the failed output to the retry prompt
+        # anchored the LLM to its own mistake (echo-chamber effect). The
+        # current values are still in state["document_info"] / state["retrieved_knowledge"]
+        # / state["metadata_fields"] — agents simply do not see them in the
+        # next-attempt prompt (see fairifier.utils.retry_context).
         
         self.log_execution(
             state,
@@ -402,8 +411,8 @@ class CriticAgent(BaseAgent):
                 if item.get("metadata", {}).get("package")
             }
         )
-        # Get domain from either research_domain or scientific_domain
-        domain = doc_info.get("research_domain") or doc_info.get("scientific_domain")
+        # doc_info is canonicalized upstream (refactor §1) — only research_domain.
+        domain = doc_info.get("research_domain")
         
         # Get API capabilities from state (set by KnowledgeRetriever)
         api_capabilities = state.get("api_capabilities", {})
@@ -521,15 +530,46 @@ class CriticAgent(BaseAgent):
         }
         return json.dumps(summary, indent=2, ensure_ascii=False)
 
+    def _build_isa_mapper_context(self, state: FAIRifierState) -> str:
+        """Build evaluation context for ISAValueMapper."""
+        isa_values = state.get("artifacts", {}).get("isa_values_json")
+        metadata_fields = state.get("metadata_fields", [])
+        sheets_populated: list = []
+        row_count = 0
+        if isa_values:
+            try:
+                isa_data = json.loads(isa_values) if isinstance(isa_values, str) else isa_values
+                sheets_populated = list(isa_data.keys())
+                row_count = sum(len(v) if isinstance(v, list) else 0 for v in isa_data.values())
+            except Exception:
+                pass
+        mapped_count = sum(
+            1 for f in metadata_fields
+            if f.get("status") == "confirmed" and f.get("value")
+        )
+        summary = {
+            "isa_mapper_contract": (
+                "Evaluate whether ISAValueMapper produced a complete, well-structured "
+                "columns×rows matrix for each ISA-Tab sheet using controlled vocabulary. "
+                "Every sheet (investigation, study, assay, dataFile) should have at least "
+                "the mandatory columns populated."
+            ),
+            "sheets_populated": sheets_populated,
+            "total_rows": row_count,
+            "confirmed_metadata_fields_available": mapped_count,
+            "retrieved_knowledge_terms": len(state.get("retrieved_knowledge", [])),
+        }
+        return json.dumps(summary, indent=2, ensure_ascii=False)
+
     def _compact_document_info(self, doc_info: Dict[str, Any]) -> Dict[str, Any]:
         """Keep only the highest-signal document parser outputs for critic prompts."""
         if not isinstance(doc_info, dict):
             return {}
+        # doc_info is canonicalized upstream (refactor §1) — no scientific_domain alias.
         keys = [
             "document_type",
             "title",
             "research_domain",
-            "scientific_domain",
             "methodology",
             "location",
             "keywords",
@@ -624,38 +664,41 @@ class CriticAgent(BaseAgent):
             f"Goal: {node_rules.get('description', '')}\n\n"
             f"## Evaluation Context\n{evaluation_content}\n\n"
             f"## Rubric\n{rubric_block}\n\n"
-            f"**OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**\n"
-            f"Wrap your JSON in markdown code blocks:\n\n"
-            f"```json\n"
-            f"{{\n"
-            f'  "score": 0.0-1.0,\n'
-            f'  "critique": "brief summary < 200 chars",\n'
-            f'  "issues": ["issue1 < 100 chars"],\n'
-            f'  "suggestions": ["suggestion1 < 150 chars"]\n'
-            f"}}\n"
-            f"```\n\n"
-            f"REQUIREMENTS:\n"
-            f"- Line 1: ```json (alone)\n"
-            f"- Lines 2-N: Valid JSON only\n"
-            f"- Line N+1: ``` (alone)\n"
-            f"- NO text before/after block\n"
-            f"- NO comments in JSON"
+            f"**OUTPUT FORMAT:**\n"
+            f"Please provide your evaluation according to the expected schema."
         )
         
         from langchain_core.messages import HumanMessage
-        response = await self.llm_helper._call_llm(
-            [HumanMessage(content=prompt)],
-            operation_name=f"Critic.{node_key}"
-        )
-        content = getattr(response, "content", "") if response else ""
         
-        # Debug: Log response for troubleshooting
-        logger.debug(f"Critic LLM response length: {len(content)} chars")
-        logger.debug(f"Critic LLM response preview: {content[:500]}")
+        try:
+            llm = self.llm_helper.get_llm()
+            structured_llm = llm.with_structured_output(CriticEvaluation)
+            result = await structured_llm.ainvoke([HumanMessage(content=prompt)])
+            parsed = result.model_dump()
+        except Exception as e:
+            logger.warning(f"Structured output parsing failed: {e}. Falling back to standard LLM call.")
+            # Prompt adjustment for standard fallback
+            fallback_prompt = prompt + (
+                "\n\n**CRITICAL (STANDARD v1.0):**\n"
+                "Wrap your JSON in markdown code blocks:\n"
+                "```json\n"
+                "{\n"
+                '  "score": 0.0-1.0,\n'
+                '  "critique": "brief summary < 200 chars",\n'
+                '  "issues": ["issue1 < 100 chars"],\n'
+                '  "suggestions": ["suggestion1 < 150 chars"]\n'
+                "}\n"
+                "```"
+            )
+            response = await self.llm_helper._call_llm(
+                [HumanMessage(content=fallback_prompt)],
+                operation_name=f"Critic.{node_key}"
+            )
+            content = getattr(response, "content", "") if response else ""
+            parsed = safe_json_parse(content)
         
-        parsed = safe_json_parse(content)
         if not parsed:
-            logger.error(f"Failed to parse Critic response. Content preview: {content[:1000]}")
+            logger.error(f"Failed to parse Critic response.")
             return self._fallback_evaluation("Unable to parse critic JSON response")
         
         score = float(parsed.get("score", 0.0) or 0.0)

@@ -50,8 +50,11 @@ def test_compose_task_message_includes_planner_critic_and_memory():
 
     assert "Base task" in message
     assert "prioritize identifiers" in message
-    assert "missing identifiers" in message
-    assert "extract identifiers explicitly" in message
+    # Echo-chamber isolation (refactor §2): the verbose `critique` prose must
+    # NOT reach the retry prompt — only structured issues/suggestions do.
+    assert "missing identifiers" not in message
+    assert "project id absent" in message  # structured issue is kept
+    assert "extract identifiers explicitly" in message  # structured suggestion is kept
     assert "grant ids" in message
     assert "previous retry asked for provenance" in message
     assert "Evidence packets:" in message
@@ -101,8 +104,14 @@ def test_get_context_feedback_prefers_agent_scoped_critic_feedback():
 
     feedback = agent.get_context_feedback(state)
 
-    assert feedback["critic_feedback"]["critique"] == "dummy-specific feedback"
+    # Echo-chamber isolation (refactor §2): get_context_feedback strips the
+    # verbose `critique` prose before exposing feedback to the retry prompt.
+    # The agent-scoped feedback is still selected over the cross-agent one;
+    # we verify that by checking the structured fields routed through.
+    assert "critique" not in feedback["critic_feedback"]
     assert feedback["critic_feedback"]["target_agent"] == "Dummy"
+    assert feedback["critic_feedback"]["issues"] == ["missing identifier"]
+    assert feedback["critic_feedback"]["suggestions"] == ["extract identifier"]
 
 
 def test_get_react_model_wraps_qwen_with_thinking_disabled(monkeypatch):

@@ -10,6 +10,8 @@ from langsmith import traceable
 from .base import BaseAgent
 from .react_loop import ReactLoopMixin
 from .response_models import DocumentInfoResponse
+from ..utils.doc_info_canonical import canonicalize_doc_info
+from ..utils.document_text import read_document_text
 from ..models import FAIRifierState
 from ..config import config
 from ..skills import load_skill_files, skills_catalog_seed_files
@@ -243,12 +245,14 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
         self.log_execution(state, "📄 Starting document parsing")
         
         try:
-            # Extract text from document
+            # Extract text from document. Prefer the on-disk reference
+            # (document_text_path) over in-memory document_content (refactor §5).
             document_path = state.get("document_path", "")
-            text = state.get("document_content", "")
+            text = read_document_text(state)
+
             if "document_conversion" not in state or not isinstance(state["document_conversion"], dict):
                 state["document_conversion"] = {}
-            
+
             if text:
                 self.log_execution(
                     state,
@@ -257,7 +261,18 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             else:
                 self.log_execution(state, f"📖 Reading document: {document_path}")
                 text, conversion_info, source = self._load_document_content(document_path, state)
-                state["document_content"] = text
+                # Persist text to disk so downstream agents read by reference,
+                # not by carrying hundreds of KB in live state (refactor §5).
+                output_dir = state.get("output_dir")
+                if output_dir:
+                    out_path = Path(output_dir) / "extracted_document_content.txt"
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(text, encoding="utf-8")
+                    state["document_text_path"] = str(out_path)
+                else:
+                    # No output_dir (in-memory tests / ephemeral runs) — keep
+                    # text in state as transient fallback.
+                    state["document_content"] = text
                 if conversion_info:
                     state["document_conversion"] = conversion_info
                 source_label = "MinerU Markdown" if source == "mineru" else "PDF text extraction" if source == "pdf_text" else "text file"
@@ -355,7 +370,11 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             # Remove raw_text if LLM included it (to avoid passing large text to subsequent agents)
             if "raw_text" in doc_info_dict:
                 del doc_info_dict["raw_text"]
-            
+
+            # Canonicalize field aliases ONCE at the parser boundary so downstream
+            # agents see a stable contract (see ARCHITECTURE_REFACTOR_PLAN.md §1).
+            doc_info_dict = canonicalize_doc_info(doc_info_dict)
+
             # Check if extraction actually returned meaningful content
             # Count non-empty fields (flexible - works for any document type)
             non_empty_fields = self._count_non_empty_fields(doc_info_dict)

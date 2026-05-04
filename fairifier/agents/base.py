@@ -7,6 +7,7 @@ from datetime import datetime
 
 from ..models import FAIRifierState
 from ..config import config
+from ..utils.retry_context import clean_critic_feedback_for_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +25,17 @@ class BaseAgent(ABC):
         pass
     
     def get_context_feedback(self, state: FAIRifierState) -> Dict[str, Any]:
-        """
-        Extract feedback from context (critic feedback, human feedback, previous attempts, memories)
-        This allows agents to adapt based on reflective feedback and retrieved memories.
+        """Extract retry/feedback context for LLM prompt construction.
+
+        Echo-chamber isolation (refactor §2): the verbose ``critique`` field
+        and the previous attempt's full output are stripped here so they never
+        reach the next-attempt prompt. The LLM sees only structured signals
+        (issues, suggestions, score) — anchoring on its own past mistake is the
+        most common cause of retry stagnation.
+
+        The full critic_feedback (including critique prose) remains in
+        ``state["context"]["critic_feedback"]`` for audit/log consumers.
+        Only the prompt-facing view is trimmed.
         """
         context = state.get("context", {})
         planner_guidance = state.get("agent_guidance", {})
@@ -40,22 +49,20 @@ class BaseAgent(ABC):
                 target_agent = fallback_feedback.get("target_agent")
                 if target_agent in (None, self.name):
                     critic_feedback = fallback_feedback
-        if critic_feedback:
-            critic_feedback = critic_feedback.copy()
-            history = context.get("critic_guidance_history", {}).get(self.name, [])
-            if history:
-                critic_feedback["history"] = history
+        critic_feedback = clean_critic_feedback_for_prompt(critic_feedback)
         feedback = {
             "critic_feedback": critic_feedback,
             "human_feedback": context.get("human_feedback", None),
-            "previous_attempt": context.get("previous_attempt", None),
+            # previous_attempt (the failed output) is intentionally not exposed —
+            # showing the LLM its own wrong output anchors it to the mistake.
+            "previous_attempt": None,
             "retry_count": context.get("retry_count", 0),
             "planner_instruction": planner_guidance.get(self.name),
             "guidance_history": context.get("critic_guidance_history", {}).get(self.name, []),
             # Include retrieved memories from mem0 (if available)
             "retrieved_memories": context.get("retrieved_memories", [])
         }
-        
+
         return feedback
     
     def format_retrieved_memories_for_prompt(

@@ -596,11 +596,25 @@ async def _run_workflow(
                 size_bytes=fairds_xlsx.stat().st_size,
             )
         
-        # Save processing log
+        # Save processing log — preserve context_usage events written inline
+        # during the run by log_context_usage (context observability §6).
         log_file = output_path / "processing_log.jsonl"
-        with open(log_file, 'w', encoding='utf-8') as f:
+        existing_context_events: list = []
+        if log_file.exists():
+            try:
+                for raw_line in log_file.read_text(encoding="utf-8").splitlines():
+                    raw_line = raw_line.strip()
+                    if raw_line:
+                        ev = json.loads(raw_line)
+                        if ev.get("event") == "context_usage":
+                            existing_context_events.append(ev)
+            except Exception:
+                pass
+        with open(log_file, "w", encoding="utf-8") as f:
             for log_entry in json_logger.get_logs():
-                f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            for ev in existing_context_events:
+                f.write(json.dumps(ev, ensure_ascii=False) + "\n")
         click.echo(f"  ✓ processing_log.jsonl")
 
         # Save LLM responses for inspection
