@@ -17,22 +17,27 @@ REQUIRED_FIELDS_BY_SHEET: Dict[str, List[str]] = {
     "investigation": [
         "investigation title",
         "investigation description",
+        "investigation identifier",
     ],
     "study": [
         "study title",
         "study description",
+        "study identifier",
     ],
     "assay": [
-        "assay identifier",
+        "assay name",
         "assay description",
+        "assay identifier",
     ],
     "sample": [
-        "sample identifier",
+        "sample name",
         "sample description",
+        "sample identifier",
     ],
     "observationunit": [
-        "observation unit identifier",
+        "observation unit name",
         "observation unit description",
+        "observation unit identifier",
     ],
 }
 
