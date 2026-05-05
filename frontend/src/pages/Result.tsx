@@ -431,6 +431,8 @@ export default function Result() {
               </article>
             )}
 
+            <MetadataPreview projectId={projectId} sessionId={session.id} />
+
             <article className="page-card">
               <div className="page-card__header">
                 <div>
