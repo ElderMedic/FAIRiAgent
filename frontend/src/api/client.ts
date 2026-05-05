@@ -2,6 +2,18 @@ import { getSessionHeaders, withSessionApiPath, type WebSession } from '../utils
 
 type JsonObject = Record<string, unknown>;
 
+export interface ISASheetData {
+  description?: string;
+  columns?: string[];
+  rows?: Record<string, string | number | null>[];
+  fields?: Array<{ field_name: string; value: any; confidence?: number; status?: string }>;
+}
+
+export interface MetadataJSON {
+  isa_structure: Record<string, ISASheetData>;
+  [key: string]: any;
+}
+
 const API_BASE = '/api/v1';
 
 export interface ProjectResponse {
@@ -262,23 +274,23 @@ export const api = {
   listProjects: () =>
     request<{ projects: ProjectResponse[] }>('/projects'),
 
-  getProject: (id: string) =>
-    request<ProjectResponse>(`/projects/${id}`),
+  getProject: (id: string, session?: WebSession) =>
+    request<ProjectResponse>(`/projects/${id}`, undefined, session),
 
   getProjectInSession: (id: string, session: WebSession) =>
     request<ProjectResponse>(`/projects/${id}`, undefined, session),
 
-  deleteProject: (id: string) =>
-    request<{ message: string }>(`/projects/${id}`, { method: 'DELETE' }),
+  deleteProject: (id: string, session?: WebSession) =>
+    request<{ message: string }>(`/projects/${id}`, { method: 'DELETE' }, session),
 
-  stopProject: (id: string) =>
-    request<ProjectResponse>(`/projects/${id}/stop`, { method: 'POST' }),
+  stopProject: (id: string, session?: WebSession) =>
+    request<ProjectResponse>(`/projects/${id}/stop`, { method: 'POST' }, session),
 
-  memoryCloud: (id: string) =>
-    request<MemoryCloud>(`/projects/${id}/memory-cloud`),
+  memoryCloud: (id: string, session?: WebSession) =>
+    request<MemoryCloud>(`/projects/${id}/memory-cloud`, undefined, session),
 
-  listArtifacts: (id: string) =>
-    request<{ project_id: string; artifacts: ArtifactInfo[] }>(`/projects/${id}/artifacts`),
+  listArtifacts: (id: string, session?: WebSession) =>
+    request<{ project_id: string; artifacts: ArtifactInfo[] }>(`/projects/${id}/artifacts`, undefined, session),
 
   getArtifactUrl: (id: string, name: string) =>
     `${API_BASE}${withSessionApiPath(`/projects/${id}/artifacts/${name
@@ -290,8 +302,12 @@ export const api = {
     id: string,
     onEvent: (event: WorkflowEvent) => void,
     onError?: (err: Event) => void,
+    session?: WebSession,
   ): EventSource => {
-    const source = new EventSource(`${API_BASE}${withSessionApiPath(`/projects/${id}/events`)}`);
+    const sessionPath = session
+      ? `/projects/${id}/events?session_id=${encodeURIComponent(session.id)}&session_started_at=${encodeURIComponent(session.startedAt)}`
+      : withSessionApiPath(`/projects/${id}/events`);
+    const source = new EventSource(`${API_BASE}${sessionPath}`);
     const handleEvent = (e: MessageEvent) => {
       try {
         onEvent(JSON.parse(e.data) as WorkflowEvent);

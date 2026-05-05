@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -13,9 +13,11 @@ import {
   XCircle,
 } from 'lucide-react';
 import { api, type ArtifactInfo, type MemoryCloud, type ProjectResponse } from '../api/client';
-import WordCloud, { CATEGORY_COLORS } from '../components/WordCloud';
+import WordCloud from '../components/WordCloud';
+import { CATEGORY_COLORS } from '../components/wordCloudColors';
 import { usePageTitle } from '../hooks/usePageTitle';
-import { buildAppRoute } from '../utils/session';
+import { buildAppRoute, getWebSession } from '../utils/session';
+import MetadataPreview from '../components/MetadataPreview';
 import './InteriorPages.css';
 
 function formatSize(size: number) {
@@ -72,22 +74,28 @@ function scoreLabel(label: string) {
 export default function Result() {
   usePageTitle('Results');
   const { projectId } = useParams<{ projectId: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
+  const session = useMemo(() => getWebSession(location.search), [location.search]);
 
   const [project, setProject] = useState<ProjectResponse | null>(null);
   const [artifacts, setArtifacts] = useState<ArtifactInfo[]>([]);
   const [error, setError] = useState('');
   const [resolvedProjectId, setResolvedProjectId] = useState<string | null>(null);
   const [showMinerU, setShowMinerU] = useState(false);
-  const [memCloud, setMemCloud] = useState<MemoryCloud | null>(null);
+  const [memCloudState, setMemCloudState] = useState<{
+    key: string;
+    data: MemoryCloud | null;
+  }>({ key: '', data: null });
   const [memCloudTab, setMemCloudTab] = useState<'session' | 'scope'>('session');
+  const memoryCloudKey = `${projectId || ''}:${session.id}:${session.startedAt}`;
 
   useEffect(() => {
     if (!projectId) return;
     let active = true;
     Promise.all([
-      api.getProject(projectId),
-      api.listArtifacts(projectId).catch(() => ({ project_id: projectId, artifacts: [] })),
+      api.getProject(projectId, session),
+      api.listArtifacts(projectId, session).catch(() => ({ project_id: projectId, artifacts: [] })),
     ])
       .then(([proj, arts]) => {
         if (!active) return;
@@ -102,16 +110,51 @@ export default function Result() {
         setResolvedProjectId(projectId);
       });
     return () => { active = false; };
-  }, [projectId]);
+  }, [projectId, session]);
 
   useEffect(() => {
     if (!projectId) return;
     let active = true;
-    api.memoryCloud(projectId)
-      .then((data) => { if (active) setMemCloud(data); })
-      .catch(() => { /* memory unavailable, skip silently */ });
+    api.memoryCloud(projectId, session)
+      .then((data) => {
+        if (active) {
+          setMemCloudState({
+            key: memoryCloudKey,
+            data,
+          });
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setMemCloudState({
+            key: memoryCloudKey,
+            data: null,
+          });
+        }
+      });
     return () => { active = false; };
-  }, [projectId]);
+  }, [memoryCloudKey, projectId, session]);
+
+  const memCloud = memCloudState.key === memoryCloudKey
+    ? memCloudState.data
+    : null;
+
+  const stableColorMap = useMemo(() => {
+    if (!memCloud) return {};
+    const map: Record<string, string> = {};
+
+    memCloud.session_words.forEach((w) => {
+      map[w.text] = CATEGORY_COLORS[w.category] ?? CATEGORY_COLORS.unknown;
+    });
+
+    memCloud.scope_words.forEach((w) => {
+      if (!map[w.text]) {
+        map[w.text] = CATEGORY_COLORS[w.category] ?? CATEGORY_COLORS.unknown;
+      }
+    });
+
+    return map;
+  }, [memCloud]);
 
   const loading = Boolean(projectId) && resolvedProjectId !== projectId;
   const visibleError = resolvedProjectId === projectId ? error : '';
@@ -186,25 +229,6 @@ export default function Result() {
   const mainArtifacts = artifacts.filter((a) => !a.name.startsWith('mineru_'));
   const mineruArtifacts = artifacts.filter((a) => a.name.startsWith('mineru_'));
   const visibleArtifacts = showMinerU ? artifacts : mainArtifacts;
-
-  const stableColorMap = useMemo(() => {
-    if (!memCloud) return {};
-    const map: Record<string, string> = {};
-
-    // 1. Assign colors from current session words
-    memCloud.session_words.forEach((w) => {
-      map[w.text] = CATEGORY_COLORS[w.category] ?? CATEGORY_COLORS.unknown;
-    });
-
-    // 2. Assign colors for words only in the global scope
-    memCloud.scope_words.forEach((w) => {
-      if (!map[w.text]) {
-        map[w.text] = CATEGORY_COLORS[w.category] ?? CATEGORY_COLORS.unknown;
-      }
-    });
-
-    return map;
-  }, [memCloud]);
 
   return (
     <div className="page-frame">
@@ -547,11 +571,11 @@ export default function Result() {
 
                 <div className="result-memory-legend">
                   {[
-                    ['DocumentParser',        '#3b82f6'],
-                    ['KnowledgeRetriever',    '#10b981'],
-                    ['Planner',               '#8b5cf6'],
-                    ['MetadataJSONGenerator', '#f59e0b'],
-                    ['ValidationAgent',       '#ef4444'],
+                    ['DocumentParser',        CATEGORY_COLORS.DocumentParser],
+                    ['KnowledgeRetriever',    CATEGORY_COLORS.KnowledgeRetriever],
+                    ['Planner',               CATEGORY_COLORS.Planner],
+                    ['MetadataJSONGenerator', CATEGORY_COLORS.MetadataJSONGenerator],
+                    ['ValidationAgent',       CATEGORY_COLORS.ValidationAgent],
                   ].map(([label, color]) => (
                     <span key={label} className="result-memory-legend__item">
                       <span className="result-memory-legend__dot" style={{ background: color }} />
@@ -573,5 +597,8 @@ export default function Result() {
         </div>
       </div>
     </div>
+  );
+}
+   </div>
   );
 }
