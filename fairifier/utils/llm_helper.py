@@ -12,6 +12,7 @@ import re
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+from fairifier.utils.isa_order import ISA_LEVEL_ORDER
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langsmith import traceable
@@ -1815,7 +1816,7 @@ Return JSON with value, evidence, and confidence."""
         doc_summary = document_info
         
         # Group fields by ISA sheet to ensure balanced selection across ISA levels
-        isa_sheets = ["investigation", "study", "assay", "sample", "observationunit"]
+        isa_sheets = list(ISA_LEVEL_ORDER)
         fields_by_isa = {sheet: [] for sheet in isa_sheets}
         
         for field in available_fields:
@@ -2172,7 +2173,7 @@ REQUIREMENTS:
             })
 
         # Group fields by ISA sheet for better context
-        isa_sheets = ["investigation", "study", "assay", "sample", "observationunit"]
+        isa_sheets = list(ISA_LEVEL_ORDER)
         fields_by_isa = {sheet: [] for sheet in isa_sheets}
         for field in selected_fields:
             isa_sheet = field.get("isa_sheet", "study")

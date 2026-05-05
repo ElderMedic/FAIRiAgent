@@ -17,6 +17,7 @@ from ..skills import load_skill_files, skills_catalog_seed_files
 from ..services.fair_data_station import FAIRDataStationClient
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.llm_helper import get_llm_helper
+from ..utils.isa_order import ISA_LEVEL_ORDER
 from . import knowledge_retriever_llm_methods as llm_methods
 from ..tools.fair_ds_tools import create_fair_ds_tools
 from ..tools.science_tools import create_science_tools
@@ -709,7 +710,7 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             )
             
             # Log statistics for each ISA sheet
-            isa_sheets = ["investigation", "study", "assay", "sample", "observationunit"]
+            isa_sheets = list(ISA_LEVEL_ORDER)
             for sheet in isa_sheets:
                 mandatory_count = len(fields_by_isa_sheet[sheet]["mandatory"])
                 optional_count = len(fields_by_isa_sheet[sheet]["optional"])

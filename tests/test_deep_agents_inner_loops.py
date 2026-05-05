@@ -908,12 +908,14 @@ def test_json_generator_normalizes_isa_sheet_and_extension_labels():
             isa_sheet="",
             package_source="default",
             required=True,
+            status_reason="missing_source_reference",
         )
     )
     assert field_dict["isa_sheet"] == "study"
     assert field_dict["isa_level"] == "study"
     assert field_dict["required"] is True
     assert field_dict["requirement"] == "MANDATORY"
+    assert field_dict["status_reason"] == "missing_source_reference"
 
     assert agent._normalize_extension_label(
         "No FAIR-DS package for functional gene metadata (nitrifier key genes)"
@@ -1225,6 +1227,27 @@ def test_json_generator_postcheck_downgrades_high_confidence_without_source_refe
     assert downgrades == 1
     assert reviewed[0].confidence == 0.6
     assert reviewed[0].status == "provisional"
+    assert reviewed[0].status_reason == "missing_source_reference"
     assert "missing source reference" in reviewed[0].evidence
     assert reviewed[1].confidence == 0.91
     assert reviewed[1].status == "confirmed"
+
+
+def test_json_generator_warning_separates_grounding_from_low_confidence():
+    agent = JSONGeneratorAgent()
+    fields = [
+        MetadataField(
+            field_name="sampling site",
+            value="Wadden Sea",
+            evidence="Methods section; source grounding check: missing source reference",
+            confidence=0.6,
+            status="provisional",
+            status_reason="missing_source_reference",
+            isa_sheet="study",
+        )
+    ]
+
+    output = agent._generate_json_output(fields, {}, {"document_path": "paper.md", "confidence_scores": {}})
+
+    assert any("Source grounding issue for field 'sampling site'" in warning for warning in output["warnings"])
+    assert not any("Low confidence extraction for field 'sampling site'" in warning for warning in output["warnings"])

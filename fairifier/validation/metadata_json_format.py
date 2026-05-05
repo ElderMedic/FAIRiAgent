@@ -11,35 +11,27 @@ from urllib.parse import urlparse
 
 from fairifier.config import config
 from fairifier.utils.grounding import SOURCE_REF_PATTERN, SOURCE_TABLE_PATTERN
+from fairifier.validation.json_schema import SHEX_SHAPES
+
+def _derive_required_fields_from_shex() -> Dict[str, List[str]]:
+    """Build fallback required-field rules from the canonical ShEx shapes."""
+    required_by_sheet: Dict[str, List[str]] = {}
+    for shape in SHEX_SHAPES.values():
+        sheet = str(shape.get("isa_sheet") or "").strip().lower()
+        if sheet in {"", "person", "data"}:
+            continue
+        required_fields = [
+            str(field_name).strip().lower()
+            for field_name, props in (shape.get("properties") or {}).items()
+            if isinstance(props, dict) and props.get("required")
+        ]
+        if required_fields:
+            required_by_sheet[sheet] = required_fields
+    return required_by_sheet
+
 
 # Mandatory field names per ISA sheet (lowercase match against field_name)
-REQUIRED_FIELDS_BY_SHEET: Dict[str, List[str]] = {
-    "investigation": [
-        "investigation title",
-        "investigation description",
-        "investigation identifier",
-    ],
-    "study": [
-        "study title",
-        "study description",
-        "study identifier",
-    ],
-    "assay": [
-        "assay name",
-        "assay description",
-        "assay identifier",
-    ],
-    "sample": [
-        "sample name",
-        "sample description",
-        "sample identifier",
-    ],
-    "observationunit": [
-        "observation unit name",
-        "observation unit description",
-        "observation unit identifier",
-    ],
-}
+REQUIRED_FIELDS_BY_SHEET: Dict[str, List[str]] = _derive_required_fields_from_shex()
 
 
 def _validate_date(value: str) -> bool:

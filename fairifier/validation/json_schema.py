@@ -7,6 +7,7 @@ by KnowledgeRetriever — not the entire FAIRDS universe.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from fairifier.utils.isa_order import ISA_LEVEL_ORDER
 
 
 # -- Structural rules derived from FAIRDS.shex (ISA-level shape definitions) --
@@ -260,7 +261,7 @@ def validate_isa_structure(
     all_errors: List[str] = []
     all_warnings: List[str] = []
 
-    for sheet_name in ["investigation", "study", "assay", "sample", "observationunit"]:
+    for sheet_name in ISA_LEVEL_ORDER:
         sheet_data = isa_metadata.get(sheet_name, {})
         sheet_fields = fields_by_sheet.get(sheet_name, [])
 

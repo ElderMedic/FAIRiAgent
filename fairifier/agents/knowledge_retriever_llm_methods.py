@@ -278,7 +278,7 @@ async def llm_select_fields_from_package(
     Args:
         llm_helper: LLM helper instance
         doc_info: Document information
-        isa_sheet: ISA sheet level (investigation, study, assay, sample, observationunit)
+        isa_sheet: ISA sheet level (investigation, study, observationunit, sample, assay)
         package_name: Name of the package
         mandatory_fields: Mandatory fields (always included)
         optional_fields: Optional fields to choose from
@@ -307,9 +307,9 @@ async def llm_select_fields_from_package(
     isa_descriptions = {
         "investigation": "Project/investigation-level metadata (e.g., investigation title, description, personnel, organization, funding)",
         "study": "Study-level metadata (e.g., study title, description, experimental design, objectives)",
-        "assay": "Assay-level metadata (e.g., assay type, protocol, measurement technology, facility)",
+        "observationunit": "ObservationUnit-level metadata (e.g., sampling sites, environmental context, observation units)",
         "sample": "Sample-level metadata (e.g., sample description, collection method, biological material, geographic location)",
-        "observationunit": "ObservationUnit-level metadata (e.g., sampling sites, environmental context, observation units)"
+        "assay": "Assay-level metadata (e.g., assay type, protocol, measurement technology, facility)",
     }
     
     isa_description = isa_descriptions.get(isa_sheet.lower(), f"Metadata for {isa_sheet} level")

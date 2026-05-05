@@ -28,8 +28,15 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from fairifier.utils.entity_splitter import split_entities_in_isa_structure
+from fairifier.utils.isa_order import ISA_LEVEL_ORDER
 
 logger = logging.getLogger(__name__)
+
+_XML_ILLEGAL_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F\uFFFE\uFFFF]")
+
+
+def _excel_safe_value(value: Any) -> str:
+    return _XML_ILLEGAL_RE.sub("", str(value))
 
 # ── Row resolution ──────────────────────────────────────────────
 
@@ -118,13 +125,7 @@ def _generate_xlsx_local(
     default_sheet = wb.active
     wb.remove(default_sheet)
 
-    isa_level_order = [
-        "investigation",
-        "study",
-        "assay",
-        "sample",
-        "observationunit",
-    ]
+    isa_level_order = list(ISA_LEVEL_ORDER)
     isa_descriptions = {
         "investigation": "Investigation-level metadata (project info)",
         "study": "Study-level metadata (experimental design)",
@@ -162,7 +163,7 @@ def _generate_xlsx_local(
                 key = col_name.strip().lower()
                 value = row_data.get(key)
                 if value is not None:
-                    cell = ws.cell(row=row_idx, column=col_idx, value=str(value))
+                    cell = ws.cell(row=row_idx, column=col_idx, value=_excel_safe_value(value))
                     cell.alignment = cell_align
                     cell.border = thin_border
 
@@ -193,15 +194,15 @@ def _generate_xlsx_local(
         [""],
         [
             "This workbook contains metadata organised by ISA-TAB levels: "
-            "Investigation, Study, Assay, Sample, ObservationUnit."
+            "Investigation, Study, ObservationUnit, Sample, Assay."
         ],
         [""],
         ["Sheets:"],
         ["  Investigation"] + ["Project-level metadata (title, authors, contacts)"],
         ["  Study"] + ["Study-level metadata (experimental design, description)"],
-        ["  Assay"] + ["Assay-level metadata (measurements, protocols, files)"],
-        ["  Sample"] + ["Sample-level metadata (biological material, environment)"],
         ["  ObservationUnit"] + ["Individual observation metadata"],
+        ["  Sample"] + ["Sample-level metadata (biological material, environment)"],
+        ["  Assay"] + ["Assay-level metadata (measurements, protocols, files)"],
         [""],
         [
             "Each sheet has one header row followed by one data row per entity. "
@@ -254,13 +255,7 @@ def _fill_missing_data_rows(
     except Exception:
         return xlsx_bytes
 
-    isa_level_names = {
-        "investigation",
-        "study",
-        "assay",
-        "sample",
-        "observationunit",
-    }
+    isa_level_names = set(ISA_LEVEL_ORDER)
 
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
@@ -282,13 +277,22 @@ def _fill_missing_data_rows(
         if not header_col:
             continue
 
+        for row_data in rows:
+            for key in row_data.keys():
+                normalized = str(key).strip().lower()
+                if not normalized or normalized in header_col:
+                    continue
+                col_idx = ws.max_column + 1
+                ws.cell(row=1, column=col_idx, value=normalized)
+                header_col[normalized] = col_idx
+
         total_filled = 0
         for row_idx, row_data in enumerate(rows, start=2):
             filled_in_row = 0
             for key, value in row_data.items():
                 col = header_col.get(key.lower())
                 if col is not None and value is not None:
-                    ws.cell(row=row_idx, column=col, value=str(value))
+                    ws.cell(row=row_idx, column=col, value=_excel_safe_value(value))
                     filled_in_row += 1
             total_filled += filled_in_row
 
@@ -420,7 +424,7 @@ def try_export_fairds_metadata_excel(
         if client.is_available():
             try:
                 xlsx_bytes = client.generate_excel_from_isa_structure(
-                    isa_structure
+                    fill_structure
                 )
                 api_used = True
             except Exception as exc:

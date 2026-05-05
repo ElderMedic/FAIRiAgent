@@ -11,6 +11,7 @@ Package field rows may use ``sheetName`` (legacy) or ``level`` (current FAIRDS) 
 
 import logging
 from typing import Dict, List, Any, Optional
+from fairifier.utils.isa_order import ISA_LEVEL_ORDER
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class FAIRDSAPIParser:
     """
     
     # ISA Sheets in hierarchy order
-    ISA_SHEETS = ["investigation", "study", "observationunit", "sample", "assay"]
+    ISA_SHEETS = list(ISA_LEVEL_ORDER)
 
     @staticmethod
     def normalize_isa_sheet(raw: Optional[Any]) -> str:

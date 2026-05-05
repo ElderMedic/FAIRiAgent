@@ -25,6 +25,7 @@ from ..utils.llm_helper import get_llm_helper
 from ..utils.document_text import read_document_text
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.grounding import SOURCE_REF_PATTERN, SOURCE_TABLE_PATTERN
+from ..utils.isa_order import ISA_LEVEL_ORDER
 
 
 @dataclass
@@ -67,6 +68,86 @@ class JSONGeneratorAgent(BaseAgent):
     def __init__(self):
         super().__init__("JSONGenerator")
         self.llm_helper = get_llm_helper()
+
+    @staticmethod
+    def _normalize_lookup_key(value: str) -> str:
+        return str(value or "").strip().lower()
+
+    @classmethod
+    def _compact_lookup_key(cls, value: str) -> str:
+        return re.sub(r"[\s_-]+", "", cls._normalize_lookup_key(value))
+
+    @classmethod
+    def _tokenize_lookup_key(cls, value: str) -> List[str]:
+        return [token for token in re.split(r"[\s_\-/]+", cls._normalize_lookup_key(value)) if token]
+
+    def _score_field_name_match(self, field_name: str, candidate_name: str) -> float:
+        """Score fuzzy label alignment while rejecting generic substring collisions."""
+        normalized_field = self._normalize_lookup_key(field_name)
+        normalized_candidate = self._normalize_lookup_key(candidate_name)
+        if not normalized_field or not normalized_candidate:
+            return 0.0
+        if normalized_field == normalized_candidate:
+            return 1.0
+        if self._compact_lookup_key(normalized_field) == self._compact_lookup_key(normalized_candidate):
+            return 0.98
+
+        field_tokens = self._tokenize_lookup_key(normalized_field)
+        candidate_tokens = self._tokenize_lookup_key(normalized_candidate)
+        if not field_tokens or not candidate_tokens:
+            return 0.0
+
+        field_token_set = set(field_tokens)
+        candidate_token_set = set(candidate_tokens)
+        overlap = field_token_set & candidate_token_set
+        if not overlap:
+            return 0.0
+
+        overlap_ratio = len(overlap) / max(len(field_token_set), len(candidate_token_set))
+        smaller_size = min(len(field_token_set), len(candidate_token_set))
+        subset_coverage = len(overlap) / smaller_size if smaller_size else 0.0
+
+        if overlap_ratio >= 0.8:
+            return 0.9
+
+        if smaller_size >= 2 and subset_coverage == 1.0 and overlap_ratio >= 0.66:
+            return 0.78
+
+        return 0.0
+
+    def _select_best_field_definition(
+        self,
+        field_name: str,
+        candidates: List[Dict[str, Any]],
+        *,
+        label_keys: Tuple[str, ...] = ("name", "term", "label"),
+        min_score: float = 0.66,
+    ) -> Optional[Dict[str, Any]]:
+        """Return a unique fuzzy match or None when the label is too generic/ambiguous."""
+        scored: List[Tuple[float, Dict[str, Any]]] = []
+        for item in candidates:
+            label = ""
+            for key in label_keys:
+                raw = item.get(key)
+                if isinstance(raw, str) and raw.strip():
+                    label = raw
+                    break
+            score = self._score_field_name_match(field_name, label)
+            if score > 0:
+                scored.append((score, item))
+
+        if not scored:
+            return None
+
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        best_score, best_item = scored[0]
+        if best_score < min_score:
+            return None
+
+        if len(scored) > 1 and abs(best_score - scored[1][0]) < 0.05:
+            return None
+
+        return best_item
         
     @traceable(name="JSONGenerator", tags=["agent", "generation"])
     async def execute(self, state: FAIRifierState) -> FAIRifierState:
@@ -763,13 +844,18 @@ class JSONGeneratorAgent(BaseAgent):
                 knowledge_lookup[normalized] = item
         
         # Build lookup from selected_fields to preserve original field names
-        selected_fields_lookup = {f.get('name', '').lower().strip(): f for f in selected_fields}
+        selected_fields_lookup = {
+            self._normalize_lookup_key(f.get('name', '')): f
+            for f in selected_fields
+            if self._normalize_lookup_key(f.get('name', ''))
+        }
         
         # Convert to MetadataField objects with REAL FAIR-DS metadata
         fields = []
         for field_data in mapped_fields:
             field_name = field_data.get('field_name', '')
-            field_name_lower = field_name.lower().strip()
+            field_name_lower = self._normalize_lookup_key(field_name)
+            original_field = selected_fields_lookup.get(field_name_lower, None)
             
             # Try multiple matching strategies:
             # 1. Direct match with knowledge_items term
@@ -777,43 +863,31 @@ class JSONGeneratorAgent(BaseAgent):
             
             # 2. Try normalized match (remove spaces/underscores)
             if not knowledge_item:
-                normalized = field_name_lower.replace(' ', '').replace('_', '').replace('-', '')
+                normalized = self._compact_lookup_key(field_name_lower)
                 knowledge_item = knowledge_lookup.get(normalized, None)
             
             # 3. Try matching with selected_fields original name
+            if not original_field:
+                original_field = self._select_best_field_definition(
+                    field_name,
+                    selected_fields,
+                    label_keys=("name", "label"),
+                )
+
+            if not knowledge_item and original_field:
+                original_name = self._normalize_lookup_key(original_field.get('name', ''))
+                knowledge_item = knowledge_lookup.get(original_name, None)
+                if not knowledge_item:
+                    normalized_original = self._compact_lookup_key(original_name)
+                    knowledge_item = knowledge_lookup.get(normalized_original, None)
+
+            # 4. Fuzzy match: only accept unique, sufficiently specific fallback matches.
             if not knowledge_item:
-                original_field = selected_fields_lookup.get(field_name_lower, None)
-                if original_field:
-                    original_name = original_field.get('name', '').lower().strip()
-                    knowledge_item = knowledge_lookup.get(original_name, None)
-                    if not knowledge_item:
-                        normalized_original = original_name.replace(' ', '').replace('_', '').replace('-', '')
-                        knowledge_item = knowledge_lookup.get(normalized_original, None)
-            
-            # 4. Fuzzy match: find best match (prefer packages earlier in selected_packages)
-            if not knowledge_item:
-                best_match = None
-                best_score = 0
-                for item in knowledge_items_ordered:
-                    term = item.get('term', '').lower().strip()
-                    # Improved similarity check: prefer exact matches over substring matches
-                    if field_name_lower == term:
-                        best_match = item
-                        best_score = 1.0
-                        break
-                    
-                    if len(term) > 3:
-                        if field_name_lower.startswith(term + " ") or field_name_lower.endswith(" " + term):
-                            if best_score < 0.8:
-                                best_match = item
-                                best_score = 0.8
-                        elif term in field_name_lower:
-                            if best_score < 0.5:
-                                best_match = item
-                                best_score = 0.5
-                
-                if best_match:
-                    knowledge_item = best_match
+                knowledge_item = self._select_best_field_definition(
+                    field_name,
+                    knowledge_items_ordered,
+                    label_keys=("term", "label"),
+                )
 
             # Extract metadata
             if knowledge_item:
@@ -844,6 +918,7 @@ class JSONGeneratorAgent(BaseAgent):
                 isa_sheet=isa_sheet,  # From FAIR-DS API
                 entity_id=entity_id,
                 status="provisional" if field_data.get('confidence', 0) < 0.9 else "confirmed",
+                status_reason="low_extraction_confidence" if field_data.get('confidence', 0) < 0.9 else None,
                 data_type=fairds_metadata.get('type', 'string'),
                 required=fairds_metadata.get('required', False),
                 description=fairds_metadata.get('definition', field_data.get('evidence', '')),
@@ -903,7 +978,8 @@ class JSONGeneratorAgent(BaseAgent):
                 continue
             source_ref_downgrades += 1
             field.confidence = min(field.confidence, downgrade_confidence)
-            field.status = "provisional_ungrounded"
+            field.status = "provisional"
+            field.status_reason = "missing_source_reference"
             suffix = "source grounding check: missing source reference"
             field.evidence = f"{evidence}; {suffix}" if evidence else suffix
         return fields, source_ref_downgrades
@@ -923,6 +999,7 @@ class JSONGeneratorAgent(BaseAgent):
             "origin": field.origin,
             "package_source": field.package_source,
             "status": field.status,
+            "status_reason": getattr(field, "status_reason", None),
             "isa_sheet": normalized_sheet,
             "isa_level": normalized_sheet,
             "required": requirement == "MANDATORY",
@@ -1022,11 +1099,7 @@ class JSONGeneratorAgent(BaseAgent):
 
         # ── 1. Old-format isa_structure: flat fields list per sheet ──────
         flat_by_level: Dict[str, List[Dict[str, Any]]] = {
-            "investigation": [],
-            "study": [],
-            "assay": [],
-            "sample": [],
-            "observationunit": [],
+            sheet: [] for sheet in ISA_LEVEL_ORDER
         }
         seen: Dict[str, Dict[str, float]] = {s: {} for s in flat_by_level}
         for f in fields:
@@ -1055,11 +1128,11 @@ class JSONGeneratorAgent(BaseAgent):
         isa_descriptions = {
             "investigation": "Investigation-level metadata (project info)",
             "study": "Study-level metadata (experimental design)",
-            "assay": "Assay-level metadata (measurement details)",
-            "sample": "Sample-level metadata (biological material)",
             "observationunit": "ObservationUnit-level metadata (individual observations)",
+            "sample": "Sample-level metadata (biological material)",
+            "assay": "Assay-level metadata (measurement details)",
         }
-        for sheet in ("investigation", "study", "assay", "sample", "observationunit"):
+        for sheet in ISA_LEVEL_ORDER:
             isa_structure[sheet] = {
                 "description": isa_descriptions[sheet],
                 "fields": flat_by_level.get(sheet, []),
@@ -1067,13 +1140,7 @@ class JSONGeneratorAgent(BaseAgent):
 
         # Statistics must reflect the same per-sheet deduplication as isa_structure
         # (highest-confidence row per field_name within each ISA sheet).
-        _isa_stats_order = (
-            "investigation",
-            "study",
-            "assay",
-            "sample",
-            "observationunit",
-        )
+        _isa_stats_order = ISA_LEVEL_ORDER
         _stats_flat = [
             fd for sheet in _isa_stats_order for fd in flat_by_level.get(sheet, [])
         ]
@@ -1122,9 +1189,9 @@ class JSONGeneratorAgent(BaseAgent):
                 "total_fields": len(_stats_flat),
                 "investigation_fields": len(flat_by_level.get("investigation", [])),
                 "study_fields": len(flat_by_level.get("study", [])),
-                "assay_fields": len(flat_by_level.get("assay", [])),
-                "sample_fields": len(flat_by_level.get("sample", [])),
                 "observationunit_fields": len(flat_by_level.get("observationunit", [])),
+                "sample_fields": len(flat_by_level.get("sample", [])),
+                "assay_fields": len(flat_by_level.get("assay", [])),
                 "confirmed_fields": sum(
                     1 for fd in _stats_flat if fd.get("status") == "confirmed"
                 ),
@@ -1147,9 +1214,13 @@ class JSONGeneratorAgent(BaseAgent):
         
         # Add warnings for low confidence fields
         for field in fields:
-            if field.confidence < config.min_confidence_threshold:
+            if field.status_reason == "missing_source_reference":
                 output["warnings"].append(
-                    f"Low confidence for field '{field.field_name}': {field.confidence:.2f}"
+                    f"Source grounding issue for field '{field.field_name}': high-confidence value lacks a source reference"
+                )
+            elif field.confidence < config.min_confidence_threshold:
+                output["warnings"].append(
+                    f"Low confidence extraction for field '{field.field_name}': {field.confidence:.2f}"
                 )
 
         if state.get("inferred_metadata_extensions"):
@@ -1550,14 +1621,14 @@ class JSONGeneratorAgent(BaseAgent):
             }
 
         *Single-row* sheets (investigation, study) still produce one row.
-        *Multi-row* sheets (sample, assay, observationunit) produce one row per
+        *Multi-row* sheets (observationunit, sample, assay) produce one row per
         distinct ``entity_id`` found on the incoming ``MetadataField`` objects.
         When no ``entity_id`` is set the fields all land in a single default row
         (preserving the pre-existing behaviour).
         """
         grouped: Dict[str, Dict[str, Any]] = {
             sheet: {"columns": [], "rows": []}
-            for sheet in ("investigation", "study", "assay", "sample", "observationunit")
+            for sheet in ISA_LEVEL_ORDER
         }
 
         # ── 1. Sort fields into (isa_sheet, entity_id) buckets ──────────
@@ -1686,25 +1757,25 @@ class JSONGeneratorAgent(BaseAgent):
             "study": ["study_title", "study_description", "study_design", "research_domain",
                      "keywords", "methodology", "study_factor"],
             
-            # Assay level - measurements and technology
-            "assay": ["assay_title", "measurement_type", "technology_type", "technology_platform",
-                     "instrument", "protocol"],
-            
-            # Sample level - biological samples
-            "sample": ["sample_id", "sample_type", "organism", "tissue", "developmental_stage"],
-            
             # ObservationUnit level - environmental and spatial
             "observationunit": ["geographic_location", "latitude", "longitude", "elevation",
                                "collection_date", "environmental_medium", "temperature", "pH",
-                               "salinity", "depth", "environmental_parameters"]
+                               "salinity", "depth", "environmental_parameters"],
+
+            # Sample level - biological samples
+            "sample": ["sample_id", "sample_type", "organism", "tissue", "developmental_stage"],
+
+            # Assay level - measurements and technology
+            "assay": ["assay_title", "measurement_type", "technology_type", "technology_platform",
+                     "instrument", "protocol"],
         }
         
         grouped = {
             "investigation": [],
             "study": [],
-            "assay": [],
+            "observationunit": [],
             "sample": [],
-            "observationunit": []
+            "assay": [],
         }
         
         # Categorize each field

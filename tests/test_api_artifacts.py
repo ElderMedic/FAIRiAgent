@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,8 @@ from fairifier.apps.api.routers.v1 import (
     router,
 )
 from fairifier.apps.api.services.runner import (
+    _start_full_output_capture,
+    _stop_full_output_capture,
     _persist_run_outputs,
 )
 from fairifier.apps.api.storage.sqlite_store import (
@@ -154,6 +157,25 @@ def test_persist_run_outputs_writes_core_downloadable_files(
     assert "processing_started" in processing_log
     assert "processing_completed" in processing_log
     assert "artifact_saved" in processing_log
+    assert "workflow_result_summary" in processing_log
+
+
+def test_full_output_capture_writes_root_logger_messages(tmp_path):
+    log_path, handle, handler = _start_full_output_capture(
+        str(tmp_path),
+        project_id="proj-3",
+        file_path="document.pdf",
+    )
+    try:
+        logging.getLogger("fairifier.agents.test").warning("agent log line")
+    finally:
+        _stop_full_output_capture(handler, handle)
+
+    assert log_path is not None
+    text = log_path.read_text(encoding="utf-8")
+    assert "Project ID: proj-3" in text
+    assert "Input: document.pdf" in text
+    assert "agent log line" in text
 
 
 def test_default_demo_document_key_falls_back_to_available_sample():

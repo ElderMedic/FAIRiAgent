@@ -7,6 +7,7 @@ export interface MetadataFieldPreview {
   value: unknown;
   confidence?: number;
   status?: string;
+  status_reason?: string;
   evidence?: string;
   required?: boolean;
   requirement?: string;

@@ -25,7 +25,10 @@ logger = logging.getLogger(__name__)
 class CriticEvaluation(BaseModel):
     """Schema for the Critic LLM evaluation output."""
     score: float = Field(description="Confidence score between 0.0 and 1.0")
-    critique: str = Field(description="A short narrative explanation of the decision (< 200 chars)")
+    critique: str = Field(
+        default="",
+        description="A short narrative explanation of the decision (< 200 chars)",
+    )
     issues: List[str] = Field(default_factory=list, description="List of identified issues (< 100 chars each)")
     suggestions: List[str] = Field(default_factory=list, description="Actionable steps to fix issues (< 150 chars each)")
 
@@ -649,12 +652,14 @@ class CriticAgent(BaseAgent):
             "isa_mapper_contract": (
                 "Evaluate whether ISAValueMapper produced a complete, well-structured "
                 "columns×rows matrix for each ISA-Tab sheet using controlled vocabulary. "
-                "Every sheet (investigation, study, assay, dataFile) should have at least "
-                "the mandatory columns populated."
+                "Every sheet (investigation, study, observationunit, sample, assay) should "
+                "preserve entity rows, parent linkage fields, and tool-backed evidence gathered from source workspace inspection."
             ),
             "sheets_populated": sheets_populated,
             "total_rows": row_count,
             "sheet_summaries": sheet_summaries,
+            "isa_value_quality": state.get("isa_value_quality", {}),
+            "inner_loop_telemetry": (state.get("react_scratchpad") or {}).get("ISAValueMapper", {}),
             "confirmed_metadata_fields_available": mapped_count,
             "retrieved_knowledge_terms": len(state.get("retrieved_knowledge", [])),
         }

@@ -3664,6 +3664,7 @@ Field semantics for ``plan_tasks``:
                 "artifacts": {},
                 "human_interventions": {},
                 "execution_history": [],
+                "retry_trajectory": {},
                 "reasoning_chain": [],
                 "execution_plan": {},
                 "execution_summary": {},

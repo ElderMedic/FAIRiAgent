@@ -56,3 +56,25 @@ class KnowledgeResponse(BaseModel):
     knowledge_items: List[Dict[str, Any]] = Field(default_factory=list)
     notes: Optional[str] = None
     coverage_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class ISAWorksheetResponse(BaseModel):
+    """Structured worksheet payload for a single ISA level."""
+
+    columns: List[str] = Field(default_factory=list)
+    rows: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ISAValueMappingResponse(BaseModel):
+    """Structured response payload for ISAValueMapper inner loops."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    investigation: ISAWorksheetResponse = Field(default_factory=ISAWorksheetResponse)
+    study: ISAWorksheetResponse = Field(default_factory=ISAWorksheetResponse)
+    observationunit: ISAWorksheetResponse = Field(default_factory=ISAWorksheetResponse)
+    sample: ISAWorksheetResponse = Field(default_factory=ISAWorksheetResponse)
+    assay: ISAWorksheetResponse = Field(default_factory=ISAWorksheetResponse)
+    evidence_summary: List[str] = Field(default_factory=list)
+    quality_issues: List[str] = Field(default_factory=list)
+    mapping_confidence: float = Field(default=0.0, ge=0.0, le=1.0)

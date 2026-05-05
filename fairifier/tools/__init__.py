@@ -10,6 +10,7 @@ from .mineru_tools import (
     MinerUToolResult,
 )
 from .science_tools import create_science_tools
+from .isa_structure_tools import create_isa_structure_tools
 
 __all__ = [
     "create_bio_tools",
@@ -18,4 +19,5 @@ __all__ = [
     "create_mineru_convert_tool",
     "MinerUToolResult",
     "create_science_tools",
+    "create_isa_structure_tools",
 ]

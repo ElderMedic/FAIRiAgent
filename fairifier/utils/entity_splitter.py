@@ -2,10 +2,9 @@
 import logging
 import re
 from typing import Any, Dict, List, Tuple
+from fairifier.utils.isa_order import MULTI_ROW_ISA_LEVELS
 
 logger = logging.getLogger(__name__)
-
-MULTI_ROW_LEVELS = frozenset({"assay", "sample", "observationunit"})
 
 ENTITY_SEPARATOR_PATTERNS: List[Tuple[str, re.Pattern]] = [
     ("numbered_group", re.compile(r"(?=(?:Experiment|Group|Treatment)\s+\d+)", re.IGNORECASE)),
@@ -89,7 +88,7 @@ def build_split_row(
     return entity_row
 
 def split_entities_in_isa_structure(isa_structure: Dict[str, Any]) -> Dict[str, Any]:
-    for sheet_name in MULTI_ROW_LEVELS:
+    for sheet_name in MULTI_ROW_ISA_LEVELS:
         sheet = isa_structure.get(sheet_name)
         if not isinstance(sheet, dict):
             continue
@@ -112,7 +111,7 @@ def split_entities_in_isa_structure(isa_structure: Dict[str, Any]) -> Dict[str, 
             sheet_name, count, best_field,
         )
 
-    for sheet_name in MULTI_ROW_LEVELS:
+    for sheet_name in MULTI_ROW_ISA_LEVELS:
         sheet = isa_structure.get(sheet_name)
         if not isinstance(sheet, dict):
             continue

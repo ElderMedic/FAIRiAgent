@@ -62,8 +62,9 @@ class MetadataField:
     origin: str = "unknown"  # e.g., "document_parser", "knowledge_retriever"
     package_source: Optional[str] = None  # e.g., "miappe", "soil", "default" (from FAIR-DS API)
     status: str = "provisional"  # "provisional" or "confirmed"
+    status_reason: Optional[str] = None
     
-    # ISA sheet from FAIR-DS API (one of: investigation, study, assay, sample, observationunit)
+    # ISA sheet from FAIR-DS API (one of: investigation, study, observationunit, sample, assay)
     isa_sheet: Optional[str] = None
 
     # Entity grouping for multi-row ISA sheets (sample, assay, observationunit).

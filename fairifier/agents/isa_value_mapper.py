@@ -27,19 +27,25 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from .base import BaseAgent
 from .critic import safe_json_parse
-from ..models import FAIRifierState, MetadataField
+from .react_loop import ReactLoopMixin
+from .response_models import ISAValueMappingResponse
+from ..models import FAIRifierState
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..config import config
+from ..utils.isa_order import ISA_LEVEL_ORDER, MULTI_ROW_ISA_LEVELS
+from ..tools.isa_structure_tools import create_isa_structure_tools
+from ..skills import load_skill_files, skills_catalog_seed_files
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────
 
-ISA_LEVELS = ("investigation", "study", "assay", "sample", "observationunit")
+ISA_LEVELS = ISA_LEVEL_ORDER
 
 # Fields that are internal database keys (not extractable from documents).
 # The agent should NOT fabricate values for these.
@@ -59,7 +65,7 @@ def _is_synthetic_id(field_name: str) -> bool:
 # ── Agent ──────────────────────────────────────────────────────────────
 
 
-class ISAValueMapperAgent(BaseAgent):
+class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
     """Produces ``isa_values`` — the columns×rows matrix for Excel prefill.
 
     This agent receives all metadata fields already extracted by
@@ -70,6 +76,7 @@ class ISAValueMapperAgent(BaseAgent):
 
     def __init__(self) -> None:
         super().__init__("ISAValueMapper")
+        self.llm_helper = self._get_llm({})
 
     # ── Main execution ───────────────────────────────────────────────
 
@@ -130,25 +137,67 @@ class ISAValueMapperAgent(BaseAgent):
             if sheet in fields_by_level:
                 fields_by_level[sheet].append(fd)
 
-        # ── Invoke LLM with rich context (NOT raw document text) ──────
-        try:
-            matrix = await self._build_matrix_with_llm(
-                fields_by_level=fields_by_level,
-                knowledge_items=knowledge_items,
-                document_context=document_context,
+        matrix: Dict[str, Dict[str, Any]]
+        tool_metrics: Dict[str, Any] = {}
+        tool_issues: List[str] = []
+
+        use_deep_mapping = config.enable_deep_agents
+        if use_deep_mapping:
+            inner_agent = self._build_ivm_inner_agent(
+                source_workspace=source_ws,
                 critic_feedback=critic_feedback,
                 planner_instruction=planner_instruction,
-                prior_memory_context=prior_memory_context,
-                state=state,
+                prior_memory_context=prior_memory_context or None,
             )
-        except Exception as exc:
-            self.logger.error("ISA value mapping failed: %s", exc)
-            # Fall back to heuristic matrix from flat fields.
-            matrix = self._build_matrix_heuristic(fields_by_level)
+            task_desc = (
+                "Build the ISA matrix by actively inspecting the source workspace with tools. "
+                "Use grep, targeted reads, table search, and read-only shell commands when useful. "
+                "Do not rely on unstated assumptions or hardcoded extraction rules. "
+                "Respect ISA unfold order: investigation -> study -> observationunit -> sample -> assay. "
+                "If supplementary inputs exist in the workspace, inspect them as first-class sources and merge them."
+            )
+            structured = await self._invoke_react_agent(
+                inner_agent,
+                task_message=self._compose_task_message(state, task_desc),
+                seed_files=self._build_ivm_seed_files(
+                    fields_by_level=fields_by_level,
+                    knowledge_items=knowledge_items,
+                    source_workspace=source_ws,
+                    document_context=document_context,
+                ),
+                thread_id=f"{state.get('session_id', 'default')}-ivm-inner",
+                state=state,
+                scratchpad_name=self.name,
+            )
+            if structured:
+                matrix = self._structured_matrix_to_dict(structured)
+                tool_metrics = self._derive_tool_metrics(matrix, state)
+                tool_issues.extend(getattr(structured, "quality_issues", []) or [])
+            else:
+                matrix = {}
+        else:
+            matrix = {}
+
+        if not matrix:
+            try:
+                matrix = await self._build_matrix_with_llm(
+                    fields_by_level=fields_by_level,
+                    knowledge_items=knowledge_items,
+                    document_context=document_context,
+                    critic_feedback=critic_feedback,
+                    planner_instruction=planner_instruction,
+                    prior_memory_context=prior_memory_context,
+                    state=state,
+                )
+            except Exception as exc:
+                self.logger.error("ISA value mapping failed: %s", exc)
+                matrix = self._build_matrix_heuristic(fields_by_level)
 
         # ── Post-process: normalize, split entities, align columns ───
         matrix = self._split_entities_heuristic(matrix)
         matrix = self._normalize_row_columns(matrix)
+        quality = self._compute_matrix_quality(matrix, tool_metrics, tool_issues)
+        state["isa_value_quality"] = quality
 
         # ── Store in state ───────────────────────────────────────────
         if "artifacts" not in state:
@@ -168,6 +217,24 @@ class ISAValueMapperAgent(BaseAgent):
         )
         fill_ratio = total_cells / max(total_slots, 1)
         self.update_confidence(state, "isa_value_mapping", round(fill_ratio, 3))
+        if quality.get("issues"):
+            # Only signal review for actionable issues, not for
+            # "no structured source was available" diagnostics.
+            actionable = [
+                i for i in quality["issues"]
+                if "No structured ISA candidates" not in i
+            ]
+            if actionable:
+                state["needs_human_review"] = True
+                existing = set(
+                    e.split("ISAValueMapper: ", 1)[-1]
+                    if e.startswith("ISAValueMapper: ") else e
+                    for e in state.get("errors", [])
+                )
+                state.setdefault("errors", []).extend(
+                    f"ISAValueMapper: {i}" for i in actionable
+                    if i not in existing
+                )
         self.logger.info(
             "✅ ISAValueMapper: %d sheets, %d total rows, fill %.1f%%",
             len(matrix),
@@ -175,6 +242,207 @@ class ISAValueMapperAgent(BaseAgent):
             fill_ratio * 100,
         )
         return state
+
+    def _build_ivm_inner_agent(
+        self,
+        *,
+        source_workspace: Dict[str, Any],
+        critic_feedback: Optional[Dict[str, Any]],
+        planner_instruction: Optional[str],
+        prior_memory_context: Optional[str],
+    ):
+        """Create the deepagents-backed inner loop for ISA matrix construction."""
+        tools = create_isa_structure_tools(source_workspace)
+        system_prompt = (
+            "You are the internal ISAValueMapper loop for FAIRiAgent. "
+            "Your job is to build a structured ISA matrix by actively inspecting the source workspace with tools. "
+            "You MUST use tools before responding; do not invent rows from intuition. "
+            "Preserve exact identifiers, linkage columns, and ISA level order: investigation, study, observationunit, sample, assay. "
+            "When multiple input files exist, treat supplementary files, metadata tables, and manuscript text as complementary evidence. "
+            "Use read-only shell commands only to inspect text patterns, never to modify files."
+        )
+        return self._build_react_agent(
+            tools=tools,
+            subagents=[],
+            response_format=ISAValueMappingResponse,
+            system_prompt=system_prompt,
+            memory_files=self._get_memory_files(),
+        )
+
+    def _build_ivm_seed_files(
+        self,
+        *,
+        fields_by_level: Dict[str, List[Dict[str, Any]]],
+        knowledge_items: List[Dict[str, Any]],
+        source_workspace: Dict[str, Any],
+        document_context: str,
+    ) -> Dict[str, Any]:
+        """Build virtual files for the ISA value-mapping inner loop."""
+        seed_files: Dict[str, Any] = {}
+
+        field_file = self._maybe_create_file_data(
+            json.dumps(fields_by_level, indent=2, ensure_ascii=False)
+        )
+        if field_file is not None:
+            seed_files["/workspace/metadata_fields_by_isa.json"] = field_file
+
+        knowledge_file = self._maybe_create_file_data(
+            json.dumps(knowledge_items[:80], indent=2, ensure_ascii=False)
+        )
+        if knowledge_file is not None:
+            seed_files["/workspace/retrieved_knowledge.json"] = knowledge_file
+
+        if document_context:
+            context_file = self._maybe_create_file_data(document_context[:12000])
+            if context_file is not None:
+                seed_files["/workspace/ivm_context.md"] = context_file
+
+        summary_path = source_workspace.get("summary_path")
+        if summary_path:
+            try:
+                summary_text = Path(summary_path).read_text(encoding="utf-8")
+                summary_file = self._maybe_create_file_data(summary_text)
+                if summary_file is not None:
+                    seed_files["/workspace/source_workspace.md"] = summary_file
+            except OSError:
+                self.logger.warning("Failed to read source workspace summary: %s", summary_path)
+
+        manifest_path = source_workspace.get("manifest_path")
+        if manifest_path:
+            try:
+                manifest_text = Path(manifest_path).read_text(encoding="utf-8")
+                manifest_file = self._maybe_create_file_data(manifest_text)
+                if manifest_file is not None:
+                    seed_files["/workspace/source_manifest.json"] = manifest_file
+            except OSError:
+                self.logger.warning("Failed to read source workspace manifest: %s", manifest_path)
+
+        seed_files.update(load_skill_files(*config.skill_roots))
+        seed_files.update(
+            skills_catalog_seed_files(
+                *config.skill_roots,
+                create_file_data=self._maybe_create_file_data,
+            )
+        )
+        return seed_files
+
+    def _structured_matrix_to_dict(
+        self,
+        structured: ISAValueMappingResponse,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Convert a structured ISAValueMappingResponse into the matrix dict."""
+        result: Dict[str, Dict[str, Any]] = {}
+        payload = structured.model_dump()
+        for level in ISA_LEVELS:
+            level_data = payload.get(level) or {}
+            result[level] = {
+                "columns": list(level_data.get("columns") or []),
+                "rows": list(level_data.get("rows") or []),
+            }
+        return result
+
+    def _derive_tool_metrics(
+        self,
+        matrix: Dict[str, Dict[str, Any]],
+        state: FAIRifierState,
+    ) -> Dict[str, Any]:
+        """Summarize whether the inner loop used tools and produced multi-row structure."""
+        scratchpad = (state.get("react_scratchpad") or {}).get(self.name, {})
+        return {
+            "tools_called": list(scratchpad.get("tools_called") or []),
+            "tool_backed_rows": sum(len((sheet or {}).get("rows") or []) for sheet in matrix.values()),
+            "has_tool_evidence": bool(scratchpad.get("tools_called")),
+        }
+
+    def _merge_tool_candidates(
+        self,
+        matrix: Dict[str, Dict[str, Any]],
+        candidate_matrix: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Merge tool-backed rows into an ISA matrix without overwriting richer rows."""
+        result = {
+            level: {
+                "columns": list((matrix.get(level) or {}).get("columns") or []),
+                "rows": list((matrix.get(level) or {}).get("rows") or []),
+            }
+            for level in ISA_LEVELS
+        }
+        id_fields = {
+            "study": "study identifier",
+            "observationunit": "observation unit identifier",
+            "sample": "sample identifier",
+            "assay": "assay identifier",
+        }
+        for level in ISA_LEVELS:
+            candidate = candidate_matrix.get(level) or {}
+            rows = candidate.get("rows") or []
+            if not isinstance(rows, list):
+                continue
+            id_field = id_fields.get(level)
+            existing_ids = {
+                str(row.get(id_field)).strip().lower()
+                for row in result[level]["rows"]
+                if isinstance(row, dict) and id_field and row.get(id_field)
+            }
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                normalized = {
+                    str(key).strip().lower(): value
+                    for key, value in row.items()
+                    if str(key).strip()
+                }
+                row_id = str(normalized.get(id_field, "")).strip().lower() if id_field else ""
+                if row_id and row_id in existing_ids:
+                    continue
+                if row_id:
+                    existing_ids.add(row_id)
+                if normalized and normalized not in result[level]["rows"]:
+                    result[level]["rows"].append(normalized)
+            cols = set(result[level]["columns"])
+            for row in result[level]["rows"]:
+                if isinstance(row, dict):
+                    cols.update(row.keys())
+            result[level]["columns"] = sorted(cols)
+        return result
+
+    def _compute_matrix_quality(
+        self,
+        matrix: Dict[str, Dict[str, Any]],
+        tool_metrics: Dict[str, Any],
+        tool_issues: List[str],
+    ) -> Dict[str, Any]:
+        row_counts = {
+            level: len((matrix.get(level) or {}).get("rows") or [])
+            for level in ISA_LEVELS
+        }
+        link_fields = {
+            "study": "investigation identifier",
+            "observationunit": "study identifier",
+            "sample": "observation unit identifier",
+            "assay": "sample identifier",
+        }
+        missing_link_counts: Dict[str, int] = {}
+        for level, field_name in link_fields.items():
+            rows = (matrix.get(level) or {}).get("rows") or []
+            missing_link_counts[level] = sum(
+                1 for row in rows if isinstance(row, dict) and not row.get(field_name)
+            )
+        issues = list(dict.fromkeys(tool_issues))
+        if tool_metrics.get("has_tool_evidence") and row_counts.get("assay", 0) <= 1:
+            issues.append("Tool-backed structured evidence was present, but assay rows were not expanded.")
+        if tool_metrics.get("has_tool_evidence") and row_counts.get("observationunit", 0) <= 1:
+            issues.append("Tool-backed structured evidence was present, but observation-unit rows were not expanded.")
+        for level, count in missing_link_counts.items():
+            if row_counts.get(level, 0) > 0 and count == row_counts[level] and level != "study":
+                issues.append(f"All {level} rows are missing their parent linkage field.")
+        return {
+            "row_counts": row_counts,
+            "missing_link_counts": missing_link_counts,
+            "tool_metrics": tool_metrics,
+            "issues": issues,
+            "submission_ready": not issues,
+        }
 
     # ── LLM-based matrix construction ─────────────────────────────────
 
@@ -199,11 +467,11 @@ class ISAValueMapperAgent(BaseAgent):
             "You are a metadata structuring expert. Your task is to organise "
             "extracted metadata fields into a clean table (columns × rows) "
             "for each ISA level.\n\n"
-            "**ISA levels:** investigation, study, assay, sample, observationunit.\n\n"
+            "**ISA levels:** investigation, study, observationunit, sample, assay.\n\n"
             "**Rules:**\n"
             "1. Columns = all unique field names for that ISA level.\n"
             "2. Rows = one per distinct entity. Investigation and study have 1 row.\n"
-            "   Assay, sample, observationunit may have multiple rows if the document "
+            "   Observationunit, sample, assay may have multiple rows if the document "
             "   describes multiple experiments, sample groups, or sequencing runs.\n"
             "3. Every row MUST have exactly the same column keys. "
             "   Use empty string '' for missing values — NEVER omit a column.\n"
@@ -215,7 +483,7 @@ class ISAValueMapperAgent(BaseAgent):
             "- Look for distinct experiments, treatment groups, time points, "
             "  sample types, or sequencing runs described in the document.\n"
             "- If the document explicitly describes 3 experiments with different "
-            "  nanomaterials, produce 3+ rows for sample/assay levels.\n"
+            "  nanomaterials, produce 3+ rows for observationunit/sample/assay levels.\n"
             "- If the document only describes one study, use 1 row per level.\n\n"
             "**Output format (JSON):**\n"
             "Wrap in ```json ... ```. Return a dict with one key per ISA level:\n"
@@ -359,7 +627,7 @@ class ISAValueMapperAgent(BaseAgent):
         matrix: Dict[str, Dict[str, Any]],
     ) -> Dict[str, Dict[str, Any]]:
         """Split single-row sheets into multi-row when semicolons or patterns exist."""
-        multi = {"sample", "assay", "observationunit"}
+        multi = MULTI_ROW_ISA_LEVELS
 
         for lvl in multi:
             sheet = matrix.get(lvl)

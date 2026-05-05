@@ -13,16 +13,9 @@ import {
   type FAIRDSISAStatistics,
   type FAIRDSStatisticsResponse,
 } from '../api/client';
+import { ISA_LABELS } from '../constants/isaOrder';
 import { usePageTitle } from '../hooks/usePageTitle';
 import './InteriorPages.css';
-
-const ISA_LABELS: Record<string, string> = {
-  investigation: 'Investigation',
-  study: 'Study',
-  observationunit: 'ObservationUnit',
-  sample: 'Sample',
-  assay: 'Assay',
-};
 
 const REQUIREMENT_LABELS: Record<string, string> = {
   mandatory: 'Mandatory',

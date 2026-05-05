@@ -327,7 +327,11 @@ export default function Result() {
               </div>
             </article>
 
-            <MetadataPreview projectId={projectId} session={session} />
+            <MetadataPreview
+              key={`${projectId}:${session.id}:${session.startedAt}`}
+              projectId={projectId}
+              session={session}
+            />
 
             {scores.length > 0 && (
               <article className="page-card">
@@ -545,8 +549,6 @@ export default function Result() {
                 </div>
               </article>
             )}
-
-            <MetadataPreview projectId={projectId} sessionId={session.id} />
 
             <article className="page-card">
               <div className="page-card__header">

@@ -653,6 +653,7 @@ def _build_fairds_statistics(
     from fairifier.services.fairds_api_parser import (
         FAIRDSAPIParser,
     )
+    from fairifier.utils.isa_order import ordered_isa_levels
 
     api_url = fc.fair_ds_api_url
     if not api_url:
@@ -830,11 +831,7 @@ def _build_fairds_statistics(
                 )
             )
 
-        ordered_isa_levels = isa_levels + sorted(
-            level
-            for level in isa_stats.keys()
-            if level not in isa_levels
-        )
+        ordered_levels = ordered_isa_levels(isa_stats.keys())
         isa_rows = [
             FAIRDSISAStatistics(
                 isa_level=isa_level,
@@ -852,7 +849,7 @@ def _build_fairds_statistics(
                     isa_stats[isa_level]["packages"]
                 ),
             )
-            for isa_level in ordered_isa_levels
+            for isa_level in ordered_levels
             if isa_stats[isa_level]["fields"] > 0
         ]
 

@@ -8,8 +8,9 @@ import os
 import shutil
 import threading
 import traceback
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TextIO
 
 from ..storage.base import ProjectStore
 from .event_bus import WorkflowEvent, event_bus
@@ -41,6 +42,10 @@ _STAGE_PROGRESS_HINTS = (
     ("Step 3: KnowledgeRetriever", "knowledge_retriever", 50),
     ("Step 4: JSONGenerator", "json_generator", 75),
     ("Step 5", "validation", 90),
+)
+_FULL_LOG_FORMATTER = logging.Formatter(
+    "%(asctime)s | %(name)s | %(message)s",
+    datefmt="%H:%M:%S",
 )
 
 
@@ -103,6 +108,63 @@ class _WorkflowLogHandler(logging.Handler):
                 break
 
 
+class _FullOutputLogHandler(logging.Handler):
+    """Mirror root logger messages into ``full_output.log`` for Web/API runs."""
+
+    def __init__(self, file_handle: TextIO) -> None:
+        super().__init__(level=logging.INFO)
+        self.file_handle = file_handle
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            self.file_handle.write(msg + "\n")
+            self.file_handle.flush()
+        except Exception:
+            self.handleError(record)
+
+
+def _start_full_output_capture(
+    output_dir: Optional[str],
+    *,
+    project_id: str,
+    file_path: str,
+) -> tuple[Optional[Path], Optional[TextIO], Optional[_FullOutputLogHandler]]:
+    """Attach a tee handler so Web/API runs persist human-readable full logs."""
+    if not output_dir:
+        return None, None, None
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    log_path = output_path / "full_output.log"
+    handle = log_path.open("a", encoding="utf-8", buffering=1)
+    handle.write(f"\n{'=' * 70}\n")
+    handle.write(f"Run started at: {datetime.now().isoformat()}\n")
+    handle.write(f"Project ID: {project_id}\n")
+    handle.write(f"Input: {file_path}\n")
+    handle.write(f"{'=' * 70}\n")
+    handle.flush()
+
+    handler = _FullOutputLogHandler(handle)
+    handler.setFormatter(_FULL_LOG_FORMATTER)
+    logging.getLogger().addHandler(handler)
+    return log_path, handle, handler
+
+
+def _stop_full_output_capture(
+    handler: Optional[_FullOutputLogHandler],
+    handle: Optional[TextIO],
+) -> None:
+    """Detach and close the Web/API full-output tee handler."""
+    if handler is not None:
+        logging.getLogger().removeHandler(handler)
+    if handle is not None:
+        try:
+            handle.flush()
+        finally:
+            handle.close()
+
+
 def run_workflow_task(
     project_id: str,
     file_path: str,
@@ -118,6 +180,11 @@ def run_workflow_task(
     """
     json_logger = JSONLogger(
         component="fairifier.web_api", enable_stdout=False
+    )
+    full_log_path, full_log_handle, full_log_handler = _start_full_output_capture(
+        output_dir,
+        project_id=project_id,
+        file_path=file_path,
     )
     try:
         existing_project = store.get_project(project_id) or {}
@@ -223,6 +290,13 @@ def run_workflow_task(
             raw_fd = config_overrides.get("fair_ds_api_url")
             if isinstance(raw_fd, str) and raw_fd.strip():
                 fair_ds_for_export = raw_fd.strip()
+        if full_log_path is not None:
+            json_logger.info(
+                "full_output_log",
+                project_id=project_id,
+                filename=full_log_path.name,
+                path=str(full_log_path),
+            )
         persistence_errors = _persist_run_outputs(
             project_id=project_id,
             result=result,
@@ -335,6 +409,10 @@ def run_workflow_task(
         )
 
     finally:
+        _stop_full_output_capture(
+            full_log_handler,
+            full_log_handle,
+        )
         reset_run_stop_requested(project_id)
         temp_path = Path(file_path)
         if temp_path.is_dir():
@@ -460,6 +538,38 @@ def _persist_run_outputs(
                 )
                 logger.warning(msg)
                 errors.append(msg)
+
+    json_logger.info(
+        "workflow_result_summary",
+        project_id=project_id,
+        status=result.get("status", "unknown"),
+        needs_human_review=bool(
+            result.get("needs_human_review", False)
+        ),
+        error_count=len(result.get("errors", []) or []),
+        errors_preview=[
+            str(item) for item in (result.get("errors") or [])[:10]
+        ],
+        artifact_names=sorted(artifacts.keys())
+        if isinstance(artifacts, dict)
+        else [],
+        confidence_scores=result.get("confidence_scores", {}),
+        execution_summary=result.get("execution_summary", {}),
+        quality_metrics=result.get("quality_metrics", {}),
+        output_dir=str(output_path),
+    )
+
+    full_log_path = output_path / "full_output.log"
+    if full_log_path.exists():
+        try:
+            json_logger.info(
+                "artifact_saved",
+                project_id=project_id,
+                filename=full_log_path.name,
+                size_bytes=full_log_path.stat().st_size,
+            )
+        except OSError:
+            pass
 
     log_path = output_path / "processing_log.jsonl"
     try:

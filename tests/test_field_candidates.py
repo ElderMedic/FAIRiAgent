@@ -172,4 +172,28 @@ def test_postcheck_downgrades_when_no_candidates():
     from fairifier.config import config
     assert result[0].confidence == float(config.metadata_source_ref_downgrade_confidence)
     assert result[0].status == "provisional"
+    assert result[0].status_reason == "missing_source_reference"
     assert "missing source reference" in result[0].evidence
+
+
+def test_select_best_field_definition_rejects_ambiguous_generic_match():
+    agent = JSONGeneratorAgent()
+
+    selected_fields = [
+        {"name": "soil temperature"},
+        {"name": "air temperature"},
+    ]
+
+    assert agent._select_best_field_definition("temperature", selected_fields) is None
+
+
+def test_select_best_field_definition_accepts_specific_subset_match():
+    agent = JSONGeneratorAgent()
+
+    selected_fields = [
+        {"name": "study design"},
+        {"name": "geographic location"},
+    ]
+
+    match = agent._select_best_field_definition("study design type", selected_fields)
+    assert match == {"name": "study design"}
