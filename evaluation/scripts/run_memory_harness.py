@@ -22,12 +22,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from dotenv import dotenv_values
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 from fairifier.output_paths import run_has_metadata_output
+from fairifier.utils.dotenv_compat import dotenv_values
 
 
 def _slug(value: str) -> str:

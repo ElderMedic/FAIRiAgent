@@ -1,4 +1,4 @@
-from fastapi.testclient import TestClient
+import asyncio
 
 import fairifier.apps.api.main as api_main
 
@@ -27,16 +27,21 @@ def test_spa_fallback_blocks_path_traversal(
         api_main, "FRONTEND_DIST", dist_dir
     )
     app = api_main.create_app(serve_frontend=True)
+    spa_route = next(
+        route
+        for route in app.routes
+        if getattr(route, "path", None)
+        == "/{full_path:path}"
+    )
+    inside = asyncio.run(
+        spa_route.endpoint("app.txt")
+    )
+    assert inside.path == str(asset_path)
 
-    with TestClient(app) as client:
-        inside = client.get("/app.txt")
-        assert inside.status_code == 200
-        assert inside.text == "frontend asset"
-
-        traversal = client.get("/%2E%2E/secret.txt")
-        assert traversal.status_code == 200
-        assert traversal.text == "<html>index</html>"
-        assert "outside dist" not in traversal.text
+    traversal = asyncio.run(
+        spa_route.endpoint("../secret.txt")
+    )
+    assert traversal.path == str(index_path)
 
 
 def test_resolve_frontend_file_rejects_paths_outside_dist(

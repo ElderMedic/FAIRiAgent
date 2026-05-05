@@ -1,18 +1,6 @@
 import { useMemo } from 'react';
 import type { MemoryWord } from '../api/client';
-
-// Agent category → color mapping
-export const CATEGORY_COLORS: Record<string, string> = {
-  DocumentParser:        '#3b82f6', // blue
-  BioMetadataAgent:      '#059669', // emerald (darker)
-  KnowledgeRetriever:    '#10b981', // emerald
-  Planner:               '#8b5cf6', // violet
-  MetadataJSONGenerator: '#f59e0b', // amber
-  ValidationAgent:       '#ef4444', // red
-  Critic:                '#ec4899', // pink
-  JudgeAgent:            '#06b6d4', // cyan
-  unknown:               '#94a3b8', // slate
-};
+import { CATEGORY_COLORS } from './wordCloudColors';
 
 function categoryColor(cat: string): string {
   return CATEGORY_COLORS[cat] ?? CATEGORY_COLORS['unknown'];

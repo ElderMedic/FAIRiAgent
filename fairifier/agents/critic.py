@@ -183,6 +183,8 @@ class CriticAgent(BaseAgent):
             context = self._build_parsing_context(state)
         elif node_key == "knowledge_retriever":
             context = self._build_retrieval_context(state)
+        elif node_key == "bio_metadata_agent":
+            context = self._build_bio_metadata_context(state)
         elif node_key == "json_generator":
             context = self._build_generation_context(state)
         elif node_key == "isa_value_mapper":
@@ -388,6 +390,23 @@ class CriticAgent(BaseAgent):
                     "improvement_ops": [],
                 }
 
+        if node_key == "bio_metadata_agent":
+            bio_packets = self._bio_metadata_evidence_packets(state)
+            conf = float((state.get("confidence_scores") or {}).get("bio_metadata") or 0.0)
+            scratch = (state.get("react_scratchpad") or {}).get("BioMetadataAgent") or {}
+            tools = scratch.get("tools_called") or []
+            if bio_packets and conf >= 0.5 and tools:
+                return {
+                    "decision": "ACCEPT",
+                    "score": config.critic_accept_threshold_general,
+                    "critique": (
+                        "Critic returned invalid output, but BioMetadataAgent produced "
+                        "tool-grounded evidence packets and reported usable confidence."
+                    ),
+                    "issues": [],
+                    "improvement_ops": [],
+                }
+
         return evaluation
 
     def _build_parsing_context(self, state: FAIRifierState) -> str:
@@ -459,6 +478,70 @@ class CriticAgent(BaseAgent):
                     if isinstance(hint, dict)
                 ],
             },
+        }
+        return json.dumps(summary, indent=2, ensure_ascii=False)
+
+    def _bio_metadata_evidence_packets(self, state: FAIRifierState) -> List[Dict[str, Any]]:
+        """Evidence packets attributable to BioMetadataAgent (tool output path)."""
+        out: List[Dict[str, Any]] = []
+        for p in state.get("evidence_packets", []) or []:
+            if not isinstance(p, dict):
+                continue
+            agent = (p.get("provenance") or {}).get("agent")
+            if agent == "BioMetadataAgent":
+                out.append(p)
+        return out
+
+    def _build_bio_metadata_context(self, state: FAIRifierState) -> str:
+        """Structured signals for judging tool-first biological data analysis."""
+        retry_count = state.get("context", {}).get("retry_count", 0)
+        bio_paths = state.get("bio_file_paths", []) or []
+        planner_guidance = state.get("agent_guidance", {}).get("BioMetadataAgent")
+        scratch = (state.get("react_scratchpad") or {}).get("BioMetadataAgent") or {}
+        bio_conf = (state.get("confidence_scores") or {}).get("bio_metadata")
+        bio_packets = self._bio_metadata_evidence_packets(state)
+        samples: List[Dict[str, Any]] = []
+        for p in bio_packets[:10]:
+            samples.append(
+                {
+                    "field_candidate": p.get("field_candidate"),
+                    "value_preview": str(p.get("value", ""))[:160],
+                    "evidence_preview": str(p.get("evidence_text", ""))[:220],
+                    "section": p.get("section"),
+                    "source_type": p.get("source_type"),
+                }
+            )
+
+        sw = state.get("source_workspace") or {}
+        bio_workspace_ids: List[str] = []
+        if isinstance(sw, dict):
+            for sid in (sw.get("source_paths") or {}).keys():
+                if str(sid).startswith("bio_"):
+                    bio_workspace_ids.append(str(sid))
+
+        summary = {
+            "bio_metadata_contract": (
+                "Evaluate whether BioMetadataAgent ran appropriate bioinformatics tools "
+                "(e.g., samtools, bcftools) and recovered metadata that is grounded in "
+                "observable tool output, not filename guessing or hallucinated parameters."
+            ),
+            "attempt": f"{retry_count + 1}/{self.max_retries_per_step}",
+            "planner_guidance": planner_guidance,
+            "input_files": [Path(p).name for p in bio_paths],
+            "input_file_count": len(bio_paths),
+            "reported_bio_metadata_confidence": bio_conf,
+            "inner_loop_telemetry": {
+                "iterations": scratch.get("iterations"),
+                "tools_called": scratch.get("tools_called", [])[:24],
+            },
+            "bio_evidence_packets": {
+                "count": len(bio_packets),
+                "samples": samples,
+            },
+            "bio_source_workspace_entries": bio_workspace_ids[:12],
+            "document_context_after_merge": self._compact_document_info(
+                state.get("document_info", {}) or {}
+            ),
         }
         return json.dumps(summary, indent=2, ensure_ascii=False)
     

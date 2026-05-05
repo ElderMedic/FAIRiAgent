@@ -165,6 +165,7 @@ class FAIRifierState(TypedDict):
     # Human-in-the-loop and execution tracking
     human_interventions: Dict[str, Dict[str, Any]]  # {step_id: {feedback, context_updates}}
     execution_history: List[Dict[str, Any]]  # Full execution history with critic reviews
+    retry_trajectory: Dict[str, List[Dict[str, Any]]]  # {agent_name: [{attempt, decision, score, issues_count, timestamp}]}
     reasoning_chain: List[str]  # Workflow planner's reasoning steps
     execution_plan: Dict[str, Any]  # Current execution plan
     execution_summary: Dict[str, Any]  # Summary of execution (completed, failed, etc.)

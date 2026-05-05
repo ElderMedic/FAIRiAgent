@@ -24,8 +24,10 @@ from fastapi import (
     Form,
 )
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import ValidationError
 
 from ..models import (
+    ConfigOverrides,
     FAIRDSISAStatistics,
     FAIRDSPackageStatistics,
     FAIRDSRequirementCount,
@@ -110,6 +112,9 @@ def _get_store(request: Request) -> ProjectStore:
 
 
 def _project_to_response(data: dict) -> ProjectResponse:
+    raw_scores = data.get("confidence_scores")
+    if isinstance(raw_scores, dict):
+        raw_scores = {k: v for k, v in raw_scores.items() if isinstance(v, (int, float))}
     return ProjectResponse(
         project_id=data.get("project_id", ""),
         project_name=data.get("project_name"),
@@ -122,7 +127,7 @@ def _project_to_response(data: dict) -> ProjectResponse:
         updated_at=data.get("updated_at"),
         stop_requested=data.get("stop_requested"),
         stop_requested_at=data.get("stop_requested_at"),
-        confidence_scores=data.get("confidence_scores"),
+        confidence_scores=raw_scores,
         needs_review=data.get("needs_review"),
         errors=data.get("errors"),
         artifacts=data.get("artifacts"),
@@ -1197,12 +1202,23 @@ async def create_project(
     overrides_dict = None
     if config_overrides:
         try:
-            overrides_dict = json.loads(config_overrides)
+            raw_overrides = json.loads(config_overrides)
+            overrides_dict = ConfigOverrides.model_validate(
+                raw_overrides
+            ).model_dump(exclude_none=True)
         except json.JSONDecodeError:
             raise HTTPException(
                 status_code=400,
                 detail="config_overrides must be valid JSON",
             )
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "config_overrides must be a JSON object "
+                    "matching the allowed override fields"
+                ),
+            ) from exc
 
     project_data = {
         "project_id": project_id,
@@ -1475,20 +1491,37 @@ def _build_word_entries(pairs: list) -> list[MemoryWordEntry]:
     ]
 
 
+def _memory_dedupe_key(memory: dict) -> str:
+    memory_id = memory.get("id")
+    if memory_id:
+        return f"id:{memory_id}"
+
+    metadata = memory.get("metadata") or {}
+    return json.dumps(
+        {
+            "memory": memory.get("memory", ""),
+            "metadata": metadata,
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
 @router.get("/projects/{project_id}/memory-cloud", response_model=MemoryCloudResponse)
 async def memory_cloud(project_id: str, request: Request) -> MemoryCloudResponse:
     """Return word-frequency data extracted from this project's memories.
 
     Two views are returned:
-    - session_words: memories for this workflow run (Mem0 session_id = project_id, matching
-      LangGraph state session_id)
-    - scope_words:   memories for cross-run learning (memory_scope_id: WebUI session UUID,
-      FAIRIFIER_MEMORY_SCOPE_ID, or fairifier-global — aligned with LangGraph initial state)
+    - session_words: memories for this workflow run (Mem0 user_id = project_id)
+    - scope_words:   all memories across all runs in this browser session —
+      aggregates per-run memories from every project sharing the same
+      user_session_id plus cross-run scope memories, deduplicated.
 
     Only word frequencies and agent categories are exposed — no raw memory text,
     no file paths, no user identifiers.
     """
     from fairifier.services.mem0_service import get_mem0_service
+    from fairifier.config import config as fc
 
     mem0 = get_mem0_service()
     if mem0 is None or not mem0.is_available():
@@ -1500,26 +1533,54 @@ async def memory_cloud(project_id: str, request: Request) -> MemoryCloudResponse
             memory_enabled=False,
         )
 
+    project_data = _get_project_for_session(
+        request, project_id
+    )
     store = _get_store(request)
-    try:
-        project_data = store.get_project(project_id)
-    except Exception:
-        project_data = {}
 
-    # Run scope = this project/workflow execution. LangGraph sets state["session_id"] to
-    # project_id for Mem0 run-scope reads/writes.
-    run_scope_id = project_id
-    session_mems = mem0.list_memories(session_id=run_scope_id)
+    # --- This run: memories scoped to this specific workflow execution ---
+    session_mems = mem0.list_memories(session_id=project_id)
 
-    # Cross-run scope matches FAIRifierLangGraphApp initial_state memory_scope_id:
-    # user_session_id (WebUI) → config.memory_scope_id → "fairifier-global".
-    from fairifier.config import config as fc
+    # --- All runs: aggregate memories from every project under this web session ---
     user_scope_id = project_data.get("session_id")
-    scope_id = fc.memory_scope_id or user_scope_id or "fairifier-global"
-    if scope_id != run_scope_id:
-        scope_mems = mem0.list_memories(session_id=scope_id)
+    scope_mems_by_id: dict[str, dict] = {}
+
+    if user_scope_id:
+        # Collect per-run memories from all projects sharing this web session
+        all_projects = store.list_projects()
+        for proj in all_projects:
+            if proj.get("session_id") == user_scope_id:
+                proj_id = proj.get("project_id")
+                if proj_id:
+                    for mem in mem0.list_memories(session_id=proj_id):
+                        scope_mems_by_id[
+                            _memory_dedupe_key(mem)
+                        ] = mem
+
+        # Also include cross-run scope memories
+        cross_scope_id = (
+            user_scope_id
+            or fc.memory_scope_id
+            or "fairifier-global"
+        )
+        if cross_scope_id != project_id:
+            for mem in mem0.list_memories(session_id=cross_scope_id):
+                mid = _memory_dedupe_key(mem)
+                if mid not in scope_mems_by_id:
+                    scope_mems_by_id[mid] = mem
     else:
-        scope_mems = session_mems
+        # No web-session context: fall back to cross-run scope only
+        cross_scope_id = (
+            project_data.get("memory_scope_id")
+            or fc.memory_scope_id
+            or "fairifier-global"
+        )
+        for mem in mem0.list_memories(session_id=cross_scope_id):
+            scope_mems_by_id[
+                _memory_dedupe_key(mem)
+            ] = mem
+
+    scope_mems = list(scope_mems_by_id.values())
 
     session_pairs = _tokenize_memories(session_mems)
     scope_pairs = _tokenize_memories(scope_mems)

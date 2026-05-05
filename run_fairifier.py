@@ -99,10 +99,24 @@ def main():
                 pass
 
         elif mode == "dev":
+            port = 3000
+            args = sys.argv[2:]
+            if args:
+                if args[0] == "--port" and len(args) > 1:
+                    try:
+                        port = int(args[1])
+                    except ValueError:
+                        pass
+                else:
+                    try:
+                        port = int(args[0])
+                    except ValueError:
+                        pass
+
             print("🚀 Starting FAIRiAgent in development mode...")
-            print("   Backend:  http://localhost:8000 (with hot-reload)")
+            print(f"   Backend:  http://localhost:{port} (with hot-reload)")
             print("   Frontend: http://localhost:5173 (Vite dev server)")
-            processes.append(run_api(port=8000, reload=True))
+            processes.append(run_api(port=port, reload=True))
             processes.append(run_frontend_dev(port=5173))
 
         else:

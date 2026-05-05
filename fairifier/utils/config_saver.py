@@ -12,15 +12,19 @@ from ..config import config
 def collect_runtime_config(
     document_path: str,
     project_id: str,
-    output_path: Optional[Path] = None
+    output_path: Optional[Path] = None,
+    overridden_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Collect all runtime configuration information.
-    
+
     Args:
         document_path: Path to the input document
         project_id: Project ID for this run
         output_path: Output directory path (optional)
-        
+        overridden_config: Optional per-run overrides that were actually
+            in effect during the workflow (snapshot from
+            ``_CONFIG_OVERRIDE_FIELDS`` taken before restore).
+
     Returns:
         Dictionary containing all configuration information
     """
@@ -62,17 +66,20 @@ def collect_runtime_config(
         except Exception as e:
             env_file_content = f"Error reading .env file: {str(e)}"
     
-    # Collect config object (filter sensitive data)
+    # Collect config object (filter sensitive data).
+    # Prefer overridden_config when available so the snapshot reflects
+    # per-run overrides rather than the restored .env defaults.
+    oc = overridden_config or {}
     config_dict = {
-        "llm_provider": config.llm_provider,
-        "llm_model": config.llm_model,
-        "llm_base_url": config.llm_base_url,
+        "llm_provider": oc.get("llm_provider", config.llm_provider),
+        "llm_model": oc.get("llm_model", config.llm_model),
+        "llm_base_url": oc.get("llm_base_url", config.llm_base_url),
         "llm_temperature": config.llm_temperature,
         "llm_max_tokens": config.llm_max_tokens,
         "llm_enable_thinking": config.llm_enable_thinking,
         "llm_thinking_budget": getattr(config, "llm_thinking_budget", 0),
-        "llm_api_key": "***MASKED***" if config.llm_api_key else None,
-        "fair_ds_api_url": config.fair_ds_api_url,
+        "llm_api_key": "***MASKED***" if (oc.get("llm_api_key") or config.llm_api_key) else None,
+        "fair_ds_api_url": oc.get("fair_ds_api_url", config.fair_ds_api_url),
         "langsmith_api_key": "***MASKED***" if config.langsmith_api_key else None,
         "langsmith_project": config.langsmith_project,
         "langsmith_endpoint": config.langsmith_endpoint,
@@ -111,28 +118,35 @@ def collect_runtime_config(
 def save_runtime_config(
     document_path: str,
     project_id: str,
-    output_path: Path
+    output_path: Path,
+    overridden_config: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """Save runtime configuration to output directory.
-    
+
     Args:
         document_path: Path to the input document
         project_id: Project ID for this run
         output_path: Output directory path
-        
+        overridden_config: Optional dict of config values actually used
+            during the run (snapshot taken after overrides, before restore).
+            Keys are the ``_CONFIG_OVERRIDE_FIELDS`` attribute names.
+
     Returns:
         Path to the saved configuration file
     """
     # Ensure output directory exists
     output_path.mkdir(parents=True, exist_ok=True)
-    
+
     # Collect configuration
-    all_config = collect_runtime_config(document_path, project_id, output_path)
-    
+    all_config = collect_runtime_config(
+        document_path, project_id, output_path,
+        overridden_config=overridden_config,
+    )
+
     # Save to JSON file
     config_file = output_path / "runtime_config.json"
     with open(config_file, 'w', encoding='utf-8') as f:
         json.dump(all_config, f, indent=2, ensure_ascii=False)
-    
+
     return config_file
 

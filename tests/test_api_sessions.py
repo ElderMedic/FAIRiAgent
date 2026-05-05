@@ -1,7 +1,16 @@
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+import asyncio
+from types import SimpleNamespace
 
-from fairifier.apps.api.routers.v1 import router
+from fastapi import FastAPI
+from fastapi import HTTPException
+
+from fairifier.apps.api.routers.v1 import (
+    create_project,
+    get_project,
+    list_projects,
+    stop_project,
+    router,
+)
 from fairifier.apps.api.storage.sqlite_store import (
     SQLiteProjectStore,
 )
@@ -9,6 +18,17 @@ from fairifier.utils.run_control import (
     reset_run_stop_requested,
     run_stop_requested,
 )
+
+
+class _EmptyForm:
+    def getlist(self, key):
+        return []
+
+
+class _FakeRequest(SimpleNamespace):
+    async def form(self):
+        return _EmptyForm()
+
 
 SESSION_A_HEADERS = {
     "X-FAIRifier-Session-Id": "11111111-1111-4111-8111-111111111111",
@@ -64,41 +84,65 @@ def test_project_routes_are_isolated_by_session(tmp_path):
     )
 
     try:
-        with TestClient(app) as client:
-            list_response = client.get(
-                "/api/v1/projects",
-                headers=SESSION_A_HEADERS,
-            )
-            assert list_response.status_code == 200
-            projects = list_response.json()["projects"]
-            assert len(projects) == 1
-            assert projects[0]["project_id"] == "proj-a"
-            assert (
-                projects[0]["session_id"]
-                == SESSION_A_HEADERS[
-                    "X-FAIRifier-Session-Id"
-                ]
-            )
-            assert projects[0]["status"] == "completed"
-            assert projects[0]["created_at"]
-            assert projects[0]["updated_at"]
+        request = _FakeRequest(
+            headers=SESSION_A_HEADERS,
+            query_params={},
+            app=SimpleNamespace(
+                state=SimpleNamespace(store=store)
+            ),
+        )
+        projects_response = asyncio.run(
+            list_projects(request)
+        )
+        projects = projects_response.model_dump()[
+            "projects"
+        ]
+        assert len(projects) == 1
+        assert projects[0]["project_id"] == "proj-a"
+        assert (
+            projects[0]["session_id"]
+            == SESSION_A_HEADERS[
+                "X-FAIRifier-Session-Id"
+            ]
+        )
+        assert projects[0]["status"] == "completed"
+        assert projects[0]["created_at"]
+        assert projects[0]["updated_at"]
 
-            own_project = client.get(
-                "/api/v1/projects/proj-a",
-                headers=SESSION_A_HEADERS,
-            )
-            assert own_project.status_code == 200
+        own_project = asyncio.run(
+            get_project("proj-a", request)
+        )
+        assert (
+            own_project.project_id == "proj-a"
+        )
 
-            other_project = client.get(
-                "/api/v1/projects/proj-b",
-                headers=SESSION_A_HEADERS,
+        try:
+            asyncio.run(get_project("proj-b", request))
+            raise AssertionError(
+                "Expected HTTPException for foreign project"
             )
-            assert other_project.status_code == 404
+        except HTTPException as exc:
+            assert exc.status_code == 404
 
-            missing_session = client.get(
-                "/api/v1/projects"
+        try:
+            asyncio.run(
+                list_projects(
+                    _FakeRequest(
+                        headers={},
+                        query_params={},
+                        app=SimpleNamespace(
+                            state=SimpleNamespace(
+                                store=store
+                            )
+                        ),
+                    )
+                )
             )
-            assert missing_session.status_code == 400
+            raise AssertionError(
+                "Expected HTTPException for missing session"
+            )
+        except HTTPException as exc:
+            assert exc.status_code == 400
     finally:
         store.close()
 
@@ -124,23 +168,77 @@ def test_stop_endpoint_sets_project_scoped_stop_flag(
     )
 
     try:
-        with TestClient(app) as client:
-            response = client.post(
-                "/api/v1/projects/proj-run/stop",
-                headers=SESSION_A_HEADERS,
+        response = asyncio.run(
+            stop_project(
+                "proj-run",
+                _FakeRequest(
+                    headers=SESSION_A_HEADERS,
+                    query_params={},
+                    app=SimpleNamespace(
+                        state=SimpleNamespace(
+                            store=store
+                        )
+                    ),
+                ),
             )
-            assert response.status_code == 200
-            payload = response.json()
-            assert payload["stop_requested"] is True
-            assert payload["status"] == "running"
-            assert "safe checkpoint" in payload["message"]
-            assert run_stop_requested("proj-run") is True
+        )
+        payload = response.model_dump()
+        assert payload["stop_requested"] is True
+        assert payload["status"] == "running"
+        assert "safe checkpoint" in payload["message"]
+        assert run_stop_requested("proj-run") is True
 
-            rejected = client.post(
-                "/api/v1/projects/proj-run/stop",
-                headers=SESSION_B_HEADERS,
+        try:
+            asyncio.run(
+                stop_project(
+                    "proj-run",
+                    _FakeRequest(
+                        headers=SESSION_B_HEADERS,
+                        query_params={},
+                        app=SimpleNamespace(
+                            state=SimpleNamespace(
+                                store=store
+                            )
+                        ),
+                    ),
+                )
             )
-            assert rejected.status_code == 404
+            raise AssertionError(
+                "Expected HTTPException for foreign session"
+            )
+        except HTTPException as exc:
+            assert exc.status_code == 404
     finally:
         reset_run_stop_requested("proj-run")
+        store.close()
+
+
+def test_create_project_rejects_non_object_config_overrides(
+    tmp_path,
+):
+    app, store = _create_test_app(tmp_path)
+
+    try:
+        request = _FakeRequest(
+            headers=SESSION_A_HEADERS,
+            query_params={},
+            app=SimpleNamespace(
+                state=SimpleNamespace(store=store)
+            ),
+        )
+        try:
+            asyncio.run(
+                create_project(
+                    request,
+                    files=None,
+                    file=None,
+                    sample_document="earthworm_paper",
+                    config_overrides="[]",
+                )
+            )
+            raise AssertionError("Expected HTTPException for invalid config_overrides")
+        except HTTPException as exc:
+            assert exc.status_code == 400
+            assert "object" in exc.detail.lower()
+    finally:
         store.close()

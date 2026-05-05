@@ -11,10 +11,9 @@ Comprehensive evaluation system for assessing FAIRiAgent's metadata extraction q
 cp config/env.evaluation.template config/env.evaluation
 # Edit config/env.evaluation and add your API keys
 
-# Copy and configure model-specific envs
-cp config/model_configs/anthropic.env.template config/model_configs/anthropic.env
-cp config/model_configs/openai.env.template config/model_configs/openai.env
-# Edit each and add your API keys
+# Optional: create one or more per-model env files
+cp config/env.evaluation config/model_configs/my-model.env
+# Edit only the model-specific keys that should differ for that run
 ```
 
 ### 2. Prepare Ground Truth Dataset

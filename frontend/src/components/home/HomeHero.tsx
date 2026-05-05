@@ -76,8 +76,8 @@ export default function HomeHero({
     return () => window.clearInterval(timer);
   }, [consoleSlides.length, reduceMotion]);
 
-  const selectConsoleSlide = (index: number) => {
-    consolePauseUntilRef.current = Date.now() + CONSOLE_PAUSE_AFTER_MANUAL_MS;
+  const selectConsoleSlide = (index: number, timeStamp: number) => {
+    consolePauseUntilRef.current = timeStamp + CONSOLE_PAUSE_AFTER_MANUAL_MS;
     setActiveConsoleIndex(index);
   };
 
@@ -182,7 +182,7 @@ export default function HomeHero({
                     aria-selected={index === activeConsoleIndex ? 'true' : 'false'}
                     aria-label={`Show ${slide.label.toLowerCase()} view`}
                     className={`home-dots__button ${index === activeConsoleIndex ? 'is-active' : ''}`}
-                    onClick={() => selectConsoleSlide(index)}
+                    onClick={(event) => selectConsoleSlide(index, event.timeStamp)}
                   >
                     <span />
                   </button>

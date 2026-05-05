@@ -88,6 +88,22 @@ class TestSafeJsonParse:
         assert parsed["details"]["issues"] == ["minor"]
         assert parsed["details"]["confidence"] == 0.9
 
+    def test_safe_json_parse_handles_isa_style_matrix_fence(self):
+        """Nested ISA matrix JSON must not truncate at first inner brace (regex bug)."""
+        payload = """```json
+{
+  "investigation": {"columns": ["a"], "rows": [{"a": "1"}]},
+  "study": {"columns": ["b", "c"], "rows": [{"b": "x", "c": "y"}]},
+  "assay": {"columns": [], "rows": []},
+  "sample": {"columns": ["s"], "rows": [{"s": "z"}]},
+  "observationunit": {"columns": [], "rows": []}
+}
+```"""
+        parsed = safe_json_parse(payload)
+        assert parsed is not None
+        assert parsed["study"]["rows"][0]["c"] == "y"
+        assert len(parsed["investigation"]["columns"]) == 1
+
     def test_safe_json_parse_handles_anthropic_content_blocks(self):
         """Anthropic-style content lists should normalize before JSON parsing."""
         payload = [
@@ -181,3 +197,75 @@ class TestBuildIsaMapperContext:
         ctx = json.loads(agent._build_isa_mapper_context(state))
         assert ctx["total_rows"] == 0
         assert ctx["sheets_populated"] == []
+
+
+class TestBuildBioMetadataContext:
+    """Critic must receive structured BioMetadata signals (not 'No context available')."""
+
+    @staticmethod
+    def _bare_critic():
+        from fairifier.agents.critic import CriticAgent
+
+        agent = CriticAgent.__new__(CriticAgent)
+        agent.max_retries_per_step = 3
+        return agent
+
+    def test_context_includes_bio_packets_tools_and_contract(self):
+        import json
+
+        agent = self._bare_critic()
+        state = {
+            "context": {"retry_count": 0},
+            "bio_file_paths": ["/data/run1.bam"],
+            "agent_guidance": {"BioMetadataAgent": "Use samtools stats"},
+            "react_scratchpad": {
+                "BioMetadataAgent": {
+                    "iterations": 5,
+                    "tools_called": [
+                        "run_biocontainer_tool",
+                        "search_biocontainer_tags",
+                    ],
+                },
+            },
+            "confidence_scores": {"bio_metadata": 0.95},
+            "evidence_packets": [
+                {
+                    "field_candidate": "total_reads",
+                    "value": "1000",
+                    "evidence_text": "samtools stats output ...",
+                    "section": "bio_tool::run1.bam",
+                    "source_type": "bioinformatics_tool_output",
+                    "provenance": {"agent": "BioMetadataAgent"},
+                },
+                {
+                    "field_candidate": "title",
+                    "provenance": {"agent": "DocumentParser"},
+                },
+            ],
+            "source_workspace": {"source_paths": {"bio_run1_bam": "/tmp/out.txt"}},
+            "document_info": {"title": "T", "research_domain": "genomics"},
+        }
+        ctx = json.loads(agent._build_bio_metadata_context(state))
+        assert "samtools" in ctx["bio_metadata_contract"]
+        assert ctx["attempt"] == "1/3"
+        assert ctx["planner_guidance"] == "Use samtools stats"
+        assert ctx["input_files"][0].endswith("run1.bam")
+        assert ctx["reported_bio_metadata_confidence"] == 0.95
+        assert ctx["bio_evidence_packets"]["count"] == 1
+        assert ctx["bio_evidence_packets"]["samples"][0]["field_candidate"] == "total_reads"
+        assert "run_biocontainer_tool" in ctx["inner_loop_telemetry"]["tools_called"]
+        assert "bio_run1_bam" in ctx["bio_source_workspace_entries"]
+
+    def test_bio_metadata_evidence_packets_filtered_by_agent(self):
+        from fairifier.agents.critic import CriticAgent
+
+        agent = CriticAgent.__new__(CriticAgent)
+        state = {
+            "evidence_packets": [
+                {"provenance": {"agent": "BioMetadataAgent"}, "field_candidate": "a"},
+                {"provenance": {"agent": "DocumentParser"}, "field_candidate": "b"},
+            ]
+        }
+        bio = agent._bio_metadata_evidence_packets(state)
+        assert len(bio) == 1
+        assert bio[0]["field_candidate"] == "a"

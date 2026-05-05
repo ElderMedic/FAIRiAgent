@@ -30,6 +30,7 @@ const LLM_PROVIDERS = [
   { value: 'qwen', label: 'Qwen' },
   { value: 'gemini', label: 'Google Gemini' },
   { value: 'openai', label: 'OpenAI' },
+  { value: 'deepseek', label: 'DeepSeek' },
   { value: 'ollama', label: 'Ollama' },
   { value: 'anthropic', label: 'Anthropic' },
 ];
@@ -327,7 +328,7 @@ export default function Config() {
       llm_provider: value || undefined,
       llm_base_url: value === 'ollama'
         ? prev.llm_base_url || demoOptions?.default_ollama_base_url
-        : prev.llm_base_url,
+        : prev.llm_provider === 'ollama' ? undefined : prev.llm_base_url,
       llm_model: value === 'ollama'
         ? prev.llm_model || demoOptions?.default_ollama_model
         : prev.llm_provider === 'ollama' ? undefined : prev.llm_model,
@@ -578,7 +579,7 @@ export default function Config() {
                       type="text"
                       value={config.llm_model || ''}
                       onChange={(e) => update('llm_model', e.target.value)}
-                      placeholder="e.g. gpt-4.1, gemini-2.5-pro, qwen-plus-latest"
+                      placeholder="e.g. gpt-4.1, gemini-2.5-pro, deepseek-v4-pro, qwen-plus-latest"
                       className="config-input"
                     />
                   </div>

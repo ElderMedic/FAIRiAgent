@@ -30,6 +30,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BaseAgent
+from .critic import safe_json_parse
 from ..models import FAIRifierState, MetadataField
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..config import config
@@ -303,16 +304,10 @@ class ISAValueMapperAgent(BaseAgent):
             return self._build_matrix_heuristic(fields_by_level)
 
         # ── Parse response ──────────────────────────────────────────
-        try:
-            # Extract JSON from markdown
-            json_match = re.search(
-                r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL
-            )
-            if json_match:
-                parsed = json.loads(json_match.group(1))
-            else:
-                parsed = json.loads(content)
-        except (json.JSONDecodeError, AttributeError):
+        # Use brace-balanced extraction (via safe_json_parse); naive regex
+        # ``\{.*?\}`` stops at the first ``}`` and breaks nested ISA matrices.
+        parsed = safe_json_parse(content)
+        if not isinstance(parsed, dict):
             self.logger.warning("Failed to parse LLM JSON; falling back to heuristic")
             return self._build_matrix_heuristic(fields_by_level)
 

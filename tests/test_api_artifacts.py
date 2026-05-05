@@ -1,12 +1,16 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from fairifier.apps.api.routers.v1 import (
     _build_word_entries,
     _resolve_default_demo_document_key,
+    get_artifact,
+    list_artifacts,
     memory_cloud,
     router,
 )
@@ -71,37 +75,43 @@ def test_list_artifacts_includes_nested_files_and_downloads(
     )
 
     try:
-        with TestClient(app) as client:
-            response = client.get(
-                "/api/v1/projects/proj-1/artifacts",
-                headers=SESSION_HEADERS,
-            )
-            assert response.status_code == 200
-            payload = response.json()
-            assert payload["project_id"] == "proj-1"
-            assert payload["artifacts"] == [
-                {
-                    "name": "mineru_doc/report.md",
-                    "size": len("# converted"),
-                    "available": True,
-                },
-                {
-                    "name": "workflow_report.json",
-                    "size": len("{}"),
-                    "available": True,
-                },
-            ]
+        request = SimpleNamespace(
+            headers=SESSION_HEADERS,
+            query_params={},
+            app=SimpleNamespace(
+                state=SimpleNamespace(store=store)
+            ),
+        )
+        payload = asyncio.run(
+            list_artifacts("proj-1", request)
+        )
+        assert payload["project_id"] == "proj-1"
+        assert payload["artifacts"] == [
+            {
+                "name": "mineru_doc/report.md",
+                "size": len("# converted"),
+                "available": True,
+            },
+            {
+                "name": "workflow_report.json",
+                "size": len("{}"),
+                "available": True,
+            },
+        ]
 
-            download = client.get(
-                "/api/v1/projects/proj-1/artifacts/"
+        download = asyncio.run(
+            get_artifact(
+                "proj-1",
                 "mineru_doc/report.md",
-                headers=SESSION_HEADERS,
+                request,
             )
-            assert download.status_code == 200
-            assert (
-                download.content.decode("utf-8")
-                == "# converted"
-            )
+        )
+        assert download.path == str(nested_file)
+        assert download.filename == "mineru_doc/report.md"
+        assert (
+            Path(download.path).read_text(encoding="utf-8")
+            == "# converted"
+        )
     finally:
         store.close()
 
@@ -227,9 +237,11 @@ def test_memory_cloud_separates_run_and_user_memory(
 
     try:
         request = SimpleNamespace(
+            headers=SESSION_HEADERS,
+            query_params={},
             app=SimpleNamespace(
                 state=SimpleNamespace(store=store)
-            )
+            ),
         )
         response = asyncio.run(
             memory_cloud("proj-memory", request)
@@ -237,13 +249,94 @@ def test_memory_cloud_separates_run_and_user_memory(
         payload = response.model_dump()
         assert payload["memory_enabled"] is True
         assert payload["session_total"] == 1
-        assert payload["scope_total"] == 2
+        assert payload["scope_total"] == 3
         assert {
             entry["text"] for entry in payload["session_words"]
         } >= {"nanotoxicology", "soil", "package"}
         assert {
             entry["text"] for entry in payload["scope_words"]
-        } >= {"earthworm", "ontology", "prefer"}
+        } >= {
+            "nanotoxicology",
+            "earthworm",
+            "ontology",
+            "prefer",
+        }
+    finally:
+        store.close()
+
+
+def test_memory_cloud_requires_matching_session(
+    monkeypatch,
+    tmp_path,
+):
+    store = SQLiteProjectStore(str(tmp_path / "projects.db"))
+    app = FastAPI()
+    app.state.store = store
+    app.include_router(router)
+
+    store.create_project(
+        "proj-a",
+        {
+            "project_id": "proj-a",
+            "project_name": "Protected Project",
+            "session_id": SESSION_HEADERS[
+                "X-FAIRifier-Session-Id"
+            ],
+            "session_started_at": SESSION_HEADERS[
+                "X-FAIRifier-Session-Started-At"
+            ],
+            "status": "completed",
+        },
+    )
+
+    class FakeMem0:
+        def is_available(self):
+            return True
+
+        def list_memories(self, session_id, agent_id=None):
+            return []
+
+    monkeypatch.setattr(
+        "fairifier.services.mem0_service.get_mem0_service",
+        lambda: FakeMem0(),
+    )
+
+    foreign_headers = {
+        "X-FAIRifier-Session-Id": "22222222-2222-4222-8222-222222222222",
+        "X-FAIRifier-Session-Started-At": "2026-04-01T11:00:00+00:00",
+    }
+
+    try:
+        foreign_request = SimpleNamespace(
+            headers=foreign_headers,
+            query_params={},
+            app=SimpleNamespace(
+                state=SimpleNamespace(store=store)
+            ),
+        )
+        missing_request = SimpleNamespace(
+            headers=SESSION_HEADERS,
+            query_params={},
+            app=SimpleNamespace(
+                state=SimpleNamespace(store=store)
+            ),
+        )
+
+        try:
+            asyncio.run(
+                memory_cloud("proj-a", foreign_request)
+            )
+            raise AssertionError("Expected HTTPException for foreign session")
+        except HTTPException as exc:
+            assert exc.status_code == 404
+
+        try:
+            asyncio.run(
+                memory_cloud("missing-project", missing_request)
+            )
+            raise AssertionError("Expected HTTPException for missing project")
+        except HTTPException as exc:
+            assert exc.status_code == 404
     finally:
         store.close()
 

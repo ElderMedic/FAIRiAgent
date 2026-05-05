@@ -23,10 +23,9 @@ import argparse
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dotenv import load_dotenv
-
 # Import LLM helpers
 from fairifier.output_paths import metadata_output_write_path
+from fairifier.utils.dotenv_compat import load_dotenv
 from fairifier.utils.llm_helper import LLMHelper
 from langchain_core.messages import HumanMessage
 
@@ -372,4 +371,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -1,6 +1,7 @@
 """Background runner for the FAIRifier LangGraph workflow."""
 
 import asyncio
+from contextlib import nullcontext
 import json
 import logging
 import os
@@ -139,21 +140,36 @@ def run_workflow_task(
             )
         )
 
-        workflow_log_handler = _WorkflowLogHandler(project_id, json_logger=json_logger)
-        logging.getLogger().addHandler(workflow_log_handler)
-        try:
-            with _CONFIG_OVERRIDE_LOCK:
-                original_config = _snapshot_config_state()
+        # Snapshot effective config after overrides but before restore,
+        # so runtime_config.json reflects what the workflow actually used.
+        overridden_config: Optional[Dict[str, Any]] = None
+        lock_context = (
+            _CONFIG_OVERRIDE_LOCK
+            if config_overrides
+            else nullcontext()
+        )
+        with lock_context:
+            original_config = (
+                _snapshot_config_state()
+                if config_overrides
+                else None
+            )
+            try:
+                if config_overrides:
+                    _apply_config_overrides(config_overrides)
+
+                from fairifier.graph.langgraph_app import (
+                    FAIRifierLangGraphApp,
+                )
+
+                app = FAIRifierLangGraphApp()
+                workflow_log_handler = _WorkflowLogHandler(
+                    project_id, json_logger=json_logger
+                )
+                logging.getLogger().addHandler(
+                    workflow_log_handler
+                )
                 try:
-                    if config_overrides:
-                        _apply_config_overrides(config_overrides)
-
-                    from fairifier.graph.langgraph_app import (
-                        FAIRifierLangGraphApp,
-                    )
-
-                    app = FAIRifierLangGraphApp()
-
                     event_bus.publish_sync(
                         WorkflowEvent(
                             event_type="progress",
@@ -175,10 +191,17 @@ def run_workflow_task(
                             user_session_id=user_session_id,
                         )
                     )
+                    if config_overrides:
+                        overridden_config = (
+                            _snapshot_config_state()
+                        )
                 finally:
+                    logging.getLogger().removeHandler(
+                        workflow_log_handler
+                    )
+            finally:
+                if config_overrides and original_config is not None:
                     _restore_config_state(original_config)
-        finally:
-            logging.getLogger().removeHandler(workflow_log_handler)
 
         status = result.get("status", "completed")
         duration_seconds = result.get("duration_seconds")
@@ -220,6 +243,7 @@ def run_workflow_task(
                     document_path=str(source_label),
                     project_id=project_id,
                     output_path=output_path,
+                    overridden_config=overridden_config,
                 )
             except Exception as exc:
                 msg = f"Failed to save runtime_config.json: {exc}"
@@ -341,6 +365,23 @@ def _apply_config_overrides(
         val = overrides.get(attr)
         if val is not None:
             setattr(config, attr, val)
+
+    # When provider changes but model is not explicitly set, pick a
+    # reasonable default so the new provider doesn't inherit the old
+    # model name (e.g. DeepSeek receiving "qwen3.6:35b").
+    new_provider = overrides.get("llm_provider")
+    if new_provider and not overrides.get("llm_model"):
+        _PROVIDER_DEFAULT_MODELS = {
+            "deepseek": "deepseek-v4-pro",
+            "openai": "gpt-4.1",
+            "qwen": "qwen-flash",
+            "gemini": "gemini-3.1-pro-preview",
+            "anthropic": "claude-sonnet-4-6",
+        }
+        default_model = _PROVIDER_DEFAULT_MODELS.get(new_provider)
+        if default_model:
+            config.llm_model = default_model
+
     reset_llm_helper()
     reset_mem0_service()
 

@@ -7,6 +7,8 @@ Alternative to run_tests.sh for cross-platform compatibility
 import sys
 import subprocess
 import argparse
+import importlib.util
+import os
 from pathlib import Path
 
 
@@ -47,11 +49,33 @@ def run_command(cmd, description=None):
         print(f"\n{description}")
     
     try:
-        result = subprocess.run(cmd, shell=False, check=False)
+        result = subprocess.run(
+            cmd,
+            shell=False,
+            check=False,
+            env=build_test_env(),
+        )
         return result.returncode
     except Exception as e:
         print_error(f"Command failed: {e}")
         return 1
+
+
+def get_preferred_python() -> str:
+    conda_prefix = Path(os.environ.get('CONDA_PREFIX', ''))
+    conda_python = conda_prefix / 'bin' / 'python'
+    if conda_prefix and conda_python.exists():
+        return str(conda_python)
+    return sys.executable
+
+
+def build_test_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["LANGSMITH_TRACING"] = "false"
+    env["LANGCHAIN_TRACING_V2"] = "false"
+    env.pop("LANGSMITH_API_KEY", None)
+    env.pop("LANGCHAIN_API_KEY", None)
+    return env
 
 
 def main():
@@ -90,12 +114,18 @@ Examples:
     )
     
     args = parser.parse_args()
-    
-    # Check if pytest is available
+
+    python_executable = get_preferred_python()
+    pytest_cmd = [python_executable, '-m', 'pytest']
+
+    # Check if pytest is available in the current interpreter
     try:
-        subprocess.run(['pytest', '--version'], capture_output=True, check=True)
+        subprocess.run(pytest_cmd + ['--version'], capture_output=True, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        print_error("pytest not found. Please install: pip install pytest pytest-asyncio")
+        print_error(
+            "pytest not found in the active interpreter. "
+            "Install test dependencies from requirements.txt or your dev environment."
+        )
         return 1
     
     # Show environment info
@@ -103,29 +133,32 @@ Examples:
     
     try:
         python_version = subprocess.run(
-            ['python', '--version'],
+            [python_executable, '--version'],
             capture_output=True,
-            text=True
-        ).stdout.strip()
+            text=True,
+            check=False,
+        ).stdout.strip() or f"Python {sys.version.split()[0]}"
         print(f"Python version: {python_version}")
     except Exception:
         pass
     
     try:
         pytest_version = subprocess.run(
-            ['pytest', '--version'],
+            pytest_cmd + ['--version'],
             capture_output=True,
             text=True
         ).stdout.strip().split('\n')[0]
         print(f"Pytest version: {pytest_version}")
     except Exception:
         pass
+
+    print(f"Python executable: {python_executable}")
     
     print(f"Working directory: {Path.cwd()}")
     print()
     
     # Build pytest command
-    pytest_cmd = ['pytest', 'tests/']
+    pytest_run_cmd = pytest_cmd + ['tests/']
     pytest_opts = ['-v', '--tb=short']
     
     if args.verbose:
@@ -133,35 +166,36 @@ Examples:
     
     # Run tests based on mode
     if args.mode == 'all':
-        print_header("Running All Tests (112 tests)")
-        exit_code = run_command(pytest_cmd + pytest_opts)
+        print_header("Running All Tests")
+        exit_code = run_command(pytest_run_cmd + pytest_opts)
     
     elif args.mode == 'fast':
         print_header("Running Fast Tests (Unit Tests Only)")
         print_warning("Excluding: integration and slow tests")
         exit_code = run_command(
-            pytest_cmd + pytest_opts + ['-m', 'not integration and not slow']
+            pytest_run_cmd + pytest_opts + ['-m', 'not integration and not slow']
         )
     
     elif args.mode == 'integration':
         print_header("Running Integration Tests")
         print_warning("Requires: FAIR-DS API and MinerU server running")
         exit_code = run_command(
-            pytest_cmd + pytest_opts + ['-m', 'integration']
+            pytest_run_cmd + pytest_opts + ['-m', 'integration']
         )
     
     elif args.mode == 'coverage':
         print_header("Running All Tests with Coverage")
         
         # Check if pytest-cov is available
-        try:
-            import pytest_cov  # noqa: F401
-        except ImportError:
-            print_warning("pytest-cov not installed. Installing...")
-            subprocess.run(['pip', 'install', 'pytest-cov'], check=False)
+        if importlib.util.find_spec('pytest_cov') is None:
+            print_error(
+                "pytest-cov is not installed in the active interpreter. "
+                "Install it before running coverage mode."
+            )
+            return 1
         
         exit_code = run_command(
-            pytest_cmd + pytest_opts + [
+            pytest_run_cmd + pytest_opts + [
                 '--cov=fairifier',
                 '--cov-report=html',
                 '--cov-report=term-missing',
@@ -192,7 +226,7 @@ Examples:
             return 1
         
         print_header(f"Running Specific Test: {args.test_file}")
-        exit_code = run_command(['pytest', str(test_path)] + pytest_opts)
+        exit_code = run_command(pytest_cmd + [str(test_path)] + pytest_opts)
     
     else:
         print_error(f"Unknown test mode: {args.mode}")

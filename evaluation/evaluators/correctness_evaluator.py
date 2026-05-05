@@ -9,7 +9,6 @@ Evaluates field presence (not values):
 
 from typing import Dict, List, Any, Optional, Tuple
 import os
-from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
@@ -19,6 +18,8 @@ except ImportError:
     from langchain_community.chat_models import ChatOllama  # deprecated fallback
 import json
 import re
+
+from fairifier.utils.dotenv_compat import load_dotenv
 
 
 class CorrectnessEvaluator:

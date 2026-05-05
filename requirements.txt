@@ -43,10 +43,10 @@ python-dotenv>=1.0.0
 # Optional Dependencies (install only if needed)
 # ============================================================================
 
-# Testing / local validation (optional)
-# Install with: pip install pytest pytest-asyncio
-# pytest>=7.4.0
-# pytest-asyncio>=0.21.0
+# Testing / local validation
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
 
 # Persistent memory layer (optional, for mem0 integration)
 # Provides persistent semantic memory for context compression and retrieval

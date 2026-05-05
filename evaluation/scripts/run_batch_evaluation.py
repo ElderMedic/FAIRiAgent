@@ -14,13 +14,37 @@ from pathlib import Path
 from typing import Dict, List, Any
 from datetime import datetime
 import os
-import dotenv
-from dotenv import load_dotenv
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add parent directory to path to import FAIRiAgent
 sys.path.insert(0, str(Path(__file__).parents[2]))
+
+try:
+    import dotenv
+    from dotenv import load_dotenv
+except ImportError:
+    class _FallbackDotenv:
+        @staticmethod
+        def load_dotenv(path=None, override=False):
+            if path is None:
+                return False
+            env_path = Path(path)
+            if not env_path.exists():
+                return False
+            for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if override or key not in os.environ:
+                    os.environ[key] = value
+            return True
+
+    dotenv = _FallbackDotenv()
+    load_dotenv = dotenv.load_dotenv
 
 # Patch dotenv to prevent crashes from malformed .env files in root
 # This is necessary because fairifier/config.py loads .env on import
@@ -218,8 +242,8 @@ class BatchEvaluationRunner:
         """
         # Get model info for LangSmith project naming (before loading env)
         # Load env files to get model info
-        load_dotenv(config_path, override=True)
         load_dotenv(self.env_file, override=True)
+        load_dotenv(config_path, override=True)
         
         provider = os.getenv('LLM_PROVIDER', 'unknown')
         model = os.getenv('FAIRIFIER_LLM_MODEL', 'unknown')
@@ -579,4 +603,3 @@ async def main():
 
 if __name__ == '__main__':
     sys.exit(asyncio.run(main()))
-

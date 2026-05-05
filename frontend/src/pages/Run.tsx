@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useLocation, useParams, useNavigate } from 'react-router-dom';
 import { Activity, CheckCircle2, Square, XCircle, ArrowLeft, ArrowRight } from 'lucide-react';
 import { api, type ProjectResponse, type ResourceLoad, type WorkflowEvent } from '../api/client';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -10,6 +10,30 @@ interface LogEntry {
   timestamp: string;
   message: string;
   type: string;
+}
+
+interface RunState {
+  key: string;
+  project: ProjectResponse | null;
+  stage: string;
+  progress: number;
+  logs: LogEntry[];
+  status: 'running' | 'stopping' | 'stopped' | 'completed' | 'error';
+  errorMsg: string;
+  stopSubmitting: boolean;
+}
+
+function createInitialRunState(key: string): RunState {
+  return {
+    key,
+    project: null,
+    stage: 'Initializing',
+    progress: 0,
+    logs: [],
+    status: 'running',
+    errorMsg: '',
+    stopSubmitting: false,
+  };
 }
 
 function formatTimestamp(ts: number): string {
@@ -24,45 +48,79 @@ function readEventString(data: WorkflowEvent['data'], key: string) {
 export default function Run() {
   usePageTitle('Processing');
   const { projectId } = useParams<{ projectId: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
   const logContainerRef = useRef<HTMLDivElement>(null);
-  const session = getWebSession();
+  const session = useMemo(() => getWebSession(location.search), [location.search]);
+  const routeKey = `${projectId || ''}:${session.id}:${session.startedAt}`;
 
-  const [project, setProject] = useState<ProjectResponse | null>(null);
-  const [stage, setStage] = useState('Initializing');
-  const [progress, setProgress] = useState(0);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [status, setStatus] = useState<'running' | 'stopping' | 'stopped' | 'completed' | 'error'>('running');
-  const [errorMsg, setErrorMsg] = useState('');
-  const [stopSubmitting, setStopSubmitting] = useState(false);
+  const [runState, setRunState] = useState<RunState>(() => createInitialRunState(routeKey));
   const [resourceLoad, setResourceLoad] = useState<ResourceLoad | null>(null);
+  const {
+    project,
+    stage,
+    progress,
+    logs,
+    status,
+    errorMsg,
+    stopSubmitting,
+  } = runState.key === routeKey ? runState : createInitialRunState(routeKey);
 
-  const syncProjectState = (project: ProjectResponse) => {
-    setProject(project);
+  const syncProjectState = (project: ProjectResponse, key: string) => {
+    setRunState((prev) => ({
+      ...(prev.key === key ? prev : createInitialRunState(key)),
+      key,
+      project,
+    }));
     if (project.stop_requested && (project.status === 'pending' || project.status === 'running')) {
-      setStatus('stopping');
-      setStage('Stopping');
+      setRunState((prev) => ({
+        ...(prev.key === key ? prev : createInitialRunState(key)),
+        key,
+        project,
+        status: 'stopping',
+        stage: 'Stopping',
+      }));
       return false;
     }
     if (project.status === 'completed') {
-      setStatus('completed');
-      setProgress(100);
-      setStage('Completed');
+      setRunState((prev) => ({
+        ...(prev.key === key ? prev : createInitialRunState(key)),
+        key,
+        project,
+        status: 'completed',
+        progress: 100,
+        stage: 'Completed',
+      }));
       return true;
     }
     if (project.status === 'interrupted' || project.status === 'stopped') {
-      setStatus('stopped');
-      setStage('Stopped');
+      setRunState((prev) => ({
+        ...(prev.key === key ? prev : createInitialRunState(key)),
+        key,
+        project,
+        status: 'stopped',
+        stage: 'Stopped',
+      }));
       return true;
     }
     if (project.status === 'failed' || project.status === 'error') {
-      setStatus('error');
-      setStage('Failed');
-      setErrorMsg(project.errors?.[0] || 'Project failed');
+      setRunState((prev) => ({
+        ...(prev.key === key ? prev : createInitialRunState(key)),
+        key,
+        project,
+        status: 'error',
+        stage: 'Failed',
+        errorMsg: project.errors?.[0] || 'Project failed',
+      }));
       return true;
     }
     if (project.status) {
-      setStage(project.status);
+      setRunState((prev) => ({
+        ...(prev.key === key ? prev : createInitialRunState(key)),
+        key,
+        project,
+        stage: project.status,
+      }));
     }
     return false;
   };
@@ -85,8 +143,8 @@ export default function Run() {
       pollTimer = window.setInterval(async () => {
         if (!projectId || !active) return;
         try {
-          const project = await api.getProject(projectId);
-          if (syncProjectState(project)) {
+          const project = await api.getProject(projectId, session);
+          if (syncProjectState(project, routeKey)) {
             stopPolling();
             source?.close();
           }
@@ -96,10 +154,10 @@ export default function Run() {
       }, 1500);
     };
 
-    api.getProject(projectId)
+    api.getProject(projectId, session)
       .then((project) => {
         if (!active) return;
-        if (syncProjectState(project)) {
+        if (syncProjectState(project, routeKey)) {
           return;
         }
 
@@ -114,40 +172,73 @@ export default function Run() {
               message: message || stageName || JSON.stringify(event.data),
               type: event.event_type,
             };
-            setLogs((prev) => [...prev, entry]);
+            setRunState((prev) => ({
+              ...(prev.key === routeKey ? prev : createInitialRunState(routeKey)),
+              key: routeKey,
+              logs: [...(prev.key === routeKey ? prev.logs : []), entry],
+            }));
 
             switch (event.event_type) {
               case 'stage_change':
-                if (stageName) setStage(stageName);
+                if (stageName) {
+                  setRunState((prev) => ({
+                    ...(prev.key === routeKey ? prev : createInitialRunState(routeKey)),
+                    key: routeKey,
+                    stage: stageName,
+                  }));
+                }
                 break;
               case 'progress':
-                if (typeof event.data.progress === 'number') setProgress(event.data.progress);
+                if (typeof event.data.progress === 'number') {
+                  const nextProgress = event.data.progress;
+                  setRunState((prev) => ({
+                    ...(prev.key === routeKey ? prev : createInitialRunState(routeKey)),
+                    key: routeKey,
+                    progress: nextProgress,
+                  }));
+                }
                 break;
               case 'stop_requested':
-                setStatus('stopping');
-                setStage('Stopping');
-                setStopSubmitting(false);
+                setRunState((prev) => ({
+                  ...(prev.key === routeKey ? prev : createInitialRunState(routeKey)),
+                  key: routeKey,
+                  status: 'stopping',
+                  stage: 'Stopping',
+                  stopSubmitting: false,
+                }));
                 break;
               case 'stopped':
-                setStatus('stopped');
-                setStage('Stopped');
-                setStopSubmitting(false);
+                setRunState((prev) => ({
+                  ...(prev.key === routeKey ? prev : createInitialRunState(routeKey)),
+                  key: routeKey,
+                  status: 'stopped',
+                  stage: 'Stopped',
+                  stopSubmitting: false,
+                }));
                 stopPolling();
                 source?.close();
                 break;
               case 'completed':
-                setStatus('completed');
-                setProgress(100);
-                setStage('Completed');
-                setStopSubmitting(false);
+                setRunState((prev) => ({
+                  ...(prev.key === routeKey ? prev : createInitialRunState(routeKey)),
+                  key: routeKey,
+                  status: 'completed',
+                  progress: 100,
+                  stage: 'Completed',
+                  stopSubmitting: false,
+                }));
                 stopPolling();
                 source?.close();
                 break;
               case 'error':
-                setStatus('error');
-                setStage('Failed');
-                setErrorMsg(errorText || message || 'An error occurred');
-                setStopSubmitting(false);
+                setRunState((prev) => ({
+                  ...(prev.key === routeKey ? prev : createInitialRunState(routeKey)),
+                  key: routeKey,
+                  status: 'error',
+                  stage: 'Failed',
+                  errorMsg: errorText || message || 'An error occurred',
+                  stopSubmitting: false,
+                }));
                 source?.close();
                 startPolling();
                 break;
@@ -156,6 +247,7 @@ export default function Run() {
           () => {
             startPolling();
           },
+          session,
         );
         startPolling();
       })
@@ -165,11 +257,10 @@ export default function Run() {
 
     return () => {
       active = false;
-      setStopSubmitting(false);
       stopPolling();
       source?.close();
     };
-  }, [projectId]);
+  }, [projectId, routeKey, session]);
 
   // Resource load polling
   useEffect(() => {
@@ -213,24 +304,36 @@ export default function Run() {
 
   const handleStop = async () => {
     if (!projectId || stopSubmitting || status === 'stopping') return;
-    setStopSubmitting(true);
-    setErrorMsg('');
+    setRunState((prev) => ({
+      ...(prev.key === routeKey ? prev : createInitialRunState(routeKey)),
+      key: routeKey,
+      stopSubmitting: true,
+      errorMsg: '',
+    }));
     try {
-      const updated = await api.stopProject(projectId);
-      syncProjectState(updated);
-      setLogs((prev) => [
-        ...prev,
-        {
-          timestamp: formatTimestamp(Date.now() / 1000),
-          message: 'Stop requested. Waiting for the workflow to exit cleanly.',
-          type: 'stop_requested',
-        },
-      ]);
-      setStatus('stopping');
-      setStage('Stopping');
+      const updated = await api.stopProject(projectId, session);
+      syncProjectState(updated, routeKey);
+      setRunState((prev) => ({
+        ...(prev.key === routeKey ? prev : createInitialRunState(routeKey)),
+        key: routeKey,
+        logs: [
+          ...(prev.key === routeKey ? prev.logs : []),
+          {
+            timestamp: formatTimestamp(Date.now() / 1000),
+            message: 'Stop requested. Waiting for the workflow to exit cleanly.',
+            type: 'stop_requested',
+          },
+        ],
+        status: 'stopping',
+        stage: 'Stopping',
+      }));
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to stop the run');
-      setStopSubmitting(false);
+      setRunState((prev) => ({
+        ...(prev.key === routeKey ? prev : createInitialRunState(routeKey)),
+        key: routeKey,
+        errorMsg: err instanceof Error ? err.message : 'Failed to stop the run',
+        stopSubmitting: false,
+      }));
     }
   };
 
