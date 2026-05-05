@@ -43,8 +43,8 @@ export default function WordCloud({ words, width = 320, height = 260 }: Props) {
     const minVal = Math.min(...words.map((w) => w.value));
     const range = maxVal - minVal || 1;
 
-    // Font size: 11px – 36px
-    const fontSize = (v: number) => 11 + Math.round(((v - minVal) / range) * 25);
+    // Font size: 10px – 38px
+    const fontSize = (v: number) => 10 + Math.round(((v - minVal) / range) * 28);
 
     // Simple spiral placement with collision avoidance
     const placed: Array<{
@@ -64,10 +64,10 @@ export default function WordCloud({ words, width = 320, height = 260 }: Props) {
     for (let i = 0; i < words.length; i++) {
       const word = words[i];
       const fs = fontSize(word.value);
-      // Approximate text bounds
-      const tw = word.text.length * fs * 0.58;
-      const th = fs * 1.1;
-      const rot = seededRand(word.text, i) < 0.25 ? 90 : 0;
+      // Approximate text bounds - refined for better density
+      const tw = word.text.length * fs * 0.52;
+      const th = fs * 0.95;
+      const rot = seededRand(word.text, i) < 0.22 ? 90 : 0;
       const [bw, bh] = rot === 90 ? [th, tw] : [tw, th];
 
       // Archimedean spiral
@@ -76,7 +76,7 @@ export default function WordCloud({ words, width = 320, height = 260 }: Props) {
       let x = cx - bw / 2;
       let y = cy - bh / 2;
 
-      const maxIter = 500;
+      const maxIter = 600;
       for (let iter = 0; iter < maxIter; iter++) {
         x = cx + r * Math.cos(angle) - bw / 2;
         y = cy + r * Math.sin(angle) - bh / 2;
@@ -91,8 +91,9 @@ export default function WordCloud({ words, width = 320, height = 260 }: Props) {
         });
 
         if (!overlap) break;
-        angle += 0.4;
-        r += 1.2;
+        // Tighter spiral
+        angle += 0.35;
+        r += 0.85;
       }
 
       placed.push({
@@ -116,29 +117,47 @@ export default function WordCloud({ words, width = 320, height = 260 }: Props) {
     );
   }
 
+  const maxVal = Math.max(...words.map((w) => w.value)) || 1;
+
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      width="100%"
-      style={{ display: 'block', overflow: 'visible' }}
-      aria-label="Memory word cloud"
-    >
-      {positioned.map(({ word, x, y, fs, rot, color }) => (
-        <text
-          key={word.text}
-          x={x + (rot === 90 ? fs * 0.9 : 0)}
-          y={y + fs}
-          fontSize={fs}
-          fill={color}
-          fillOpacity={0.82 + (word.value / (Math.max(...words.map((w) => w.value)) || 1)) * 0.18}
-          fontWeight={word.value > 3 ? 600 : 400}
-          fontFamily="inherit"
-          transform={rot === 90 ? `rotate(90, ${x}, ${y + fs})` : undefined}
-          style={{ userSelect: 'none', cursor: 'default' }}
-        >
-          {word.text}
-        </text>
-      ))}
-    </svg>
+    <>
+      <style>{`
+        .wc-word {
+          transition: all 0.2s ease-in-out;
+          cursor: help;
+          user-select: none;
+        }
+        .wc-word-group:hover .wc-word {
+          fill-opacity: 1 !important;
+          filter: brightness(1.2);
+          transform-origin: center;
+        }
+      `}</style>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        width="100%"
+        style={{ display: 'block', overflow: 'visible' }}
+        aria-label="Memory word cloud"
+      >
+        {positioned.map(({ word, x, y, fs, rot, color }) => (
+          <g key={word.text} className="wc-word-group">
+            <title>{`Category: ${word.category}`}</title>
+            <text
+              className="wc-word"
+              x={x + (rot === 90 ? fs * 0.9 : 0)}
+              y={y + fs}
+              fontSize={fs}
+              fill={color}
+              fillOpacity={0.82 + (word.value / maxVal) * 0.18}
+              fontWeight={word.value > 3 ? 600 : 400}
+              fontFamily="'Inter', system-ui, -apple-system, sans-serif"
+              transform={rot === 90 ? `rotate(90, ${x}, ${y + fs})` : undefined}
+            >
+              {word.text}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </>
   );
 }
