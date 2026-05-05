@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { MemoryWord } from '../api/client';
 
 // Agent category → color mapping
-const CATEGORY_COLORS: Record<string, string> = {
+export const CATEGORY_COLORS: Record<string, string> = {
   DocumentParser:        '#3b82f6', // blue
   BioMetadataAgent:      '#059669', // emerald (darker)
   KnowledgeRetriever:    '#10b981', // emerald
@@ -33,9 +33,11 @@ interface Props {
   /** Container width in px (used to compute positions) */
   width?: number;
   height?: number;
+  /** Optional map of word text to hex color for stable coloring across views */
+  colorMap?: Record<string, string>;
 }
 
-export default function WordCloud({ words, width = 320, height = 260 }: Props) {
+export default function WordCloud({ words, width = 320, height = 260, colorMap }: Props) {
   const positioned = useMemo(() => {
     if (!words.length) return [];
 
@@ -102,14 +104,14 @@ export default function WordCloud({ words, width = 320, height = 260 }: Props) {
         y,
         fs,
         rot,
-        color: categoryColor(word.category),
+        color: colorMap?.[word.text] ?? categoryColor(word.category),
         w: bw,
         h: bh,
       });
     }
 
     return placed;
-  }, [words, width, height]);
+  }, [words, width, height, colorMap]);
 
   if (!words.length) {
     return (

@@ -13,7 +13,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { api, type ArtifactInfo, type MemoryCloud, type ProjectResponse } from '../api/client';
-import WordCloud from '../components/WordCloud';
+import WordCloud, { CATEGORY_COLORS } from '../components/WordCloud';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { buildAppRoute } from '../utils/session';
 import './InteriorPages.css';
@@ -41,8 +41,7 @@ function formatSummaryValueWithKey(key: string, value: unknown) {
 }
 
 function isRetriesByAgentKey(key: string) {
-  const k = key.toLowerCase();
-  return k.includes('retries') && k.includes('agent');
+  return key === 'retries_by_agent';
 }
 
 function coerceRetriesByAgent(value: unknown): Array<{ agent: string; retries: number }> | null {
@@ -187,6 +186,25 @@ export default function Result() {
   const mainArtifacts = artifacts.filter((a) => !a.name.startsWith('mineru_'));
   const mineruArtifacts = artifacts.filter((a) => a.name.startsWith('mineru_'));
   const visibleArtifacts = showMinerU ? artifacts : mainArtifacts;
+
+  const stableColorMap = useMemo(() => {
+    if (!memCloud) return {};
+    const map: Record<string, string> = {};
+
+    // 1. Assign colors from current session words
+    memCloud.session_words.forEach((w) => {
+      map[w.text] = CATEGORY_COLORS[w.category] ?? CATEGORY_COLORS.unknown;
+    });
+
+    // 2. Assign colors for words only in the global scope
+    memCloud.scope_words.forEach((w) => {
+      if (!map[w.text]) {
+        map[w.text] = CATEGORY_COLORS[w.category] ?? CATEGORY_COLORS.unknown;
+      }
+    });
+
+    return map;
+  }, [memCloud]);
 
   return (
     <div className="page-frame">
@@ -523,6 +541,7 @@ export default function Result() {
                     words={memCloudTab === 'session' ? memCloud.session_words : memCloud.scope_words}
                     width={300}
                     height={220}
+                    colorMap={stableColorMap}
                   />
                 </div>
 
