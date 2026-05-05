@@ -239,6 +239,7 @@ docs/PROJECT_MEMORY_*.md
 docs/*_INTEGRATION_SUMMARY.md
 docs/en/PAPER_OUTLINE.md
 docs/en/PAPER_WRITING_GUIDE.md
+docs/manuscript/
 
 # Local developer memory (private, machine-specific)
 development/

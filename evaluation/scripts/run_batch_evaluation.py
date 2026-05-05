@@ -240,8 +240,9 @@ class BatchEvaluationRunner:
         Returns:
             Dict mapping document_id -> list of results (one per repeat)
         """
-        # Get model info for LangSmith project naming (before loading env)
-        # Load env files to get model info
+        # Load env files for os.environ (printed below and inherited by subprocess).
+        # Both use override=True: the *last* file wins on duplicate keys — load shared
+        # base first, then model-specific config so LLM_* settings apply per config.
         load_dotenv(self.env_file, override=True)
         load_dotenv(config_path, override=True)
         

@@ -2,16 +2,26 @@ import { getSessionHeaders, withSessionApiPath, type WebSession } from '../utils
 
 type JsonObject = Record<string, unknown>;
 
+export interface MetadataFieldPreview {
+  field_name: string;
+  value: unknown;
+  confidence?: number;
+  status?: string;
+  evidence?: string;
+  required?: boolean;
+  requirement?: string;
+}
+
 export interface ISASheetData {
   description?: string;
   columns?: string[];
-  rows?: Record<string, string | number | null>[];
-  fields?: Array<{ field_name: string; value: any; confidence?: number; status?: string }>;
+  rows?: Record<string, unknown>[];
+  fields?: MetadataFieldPreview[];
 }
 
 export interface MetadataJSON {
   isa_structure: Record<string, ISASheetData>;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 const API_BASE = '/api/v1';
@@ -232,6 +242,12 @@ async function request<T>(path: string, options?: RequestInit, session?: WebSess
   return res.json();
 }
 
+function withResolvedSessionApiPath(path: string, session?: WebSession): string {
+  if (!session) return withSessionApiPath(path);
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}session_id=${encodeURIComponent(session.id)}&session_started_at=${encodeURIComponent(session.startedAt)}`;
+}
+
 export const api = {
   health: () =>
     request<{ status: string; timestamp: string; version: string }>('/health'),
@@ -292,11 +308,11 @@ export const api = {
   listArtifacts: (id: string, session?: WebSession) =>
     request<{ project_id: string; artifacts: ArtifactInfo[] }>(`/projects/${id}/artifacts`, undefined, session),
 
-  getArtifactUrl: (id: string, name: string) =>
-    `${API_BASE}${withSessionApiPath(`/projects/${id}/artifacts/${name
+  getArtifactUrl: (id: string, name: string, session?: WebSession) =>
+    `${API_BASE}${withResolvedSessionApiPath(`/projects/${id}/artifacts/${name
       .split('/')
       .map((segment) => encodeURIComponent(segment))
-      .join('/')}`)}`,
+      .join('/')}`, session)}`,
 
   subscribeEvents: (
     id: string,

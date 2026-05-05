@@ -67,6 +67,57 @@ function scoreToneClass(score: number) {
   return 'result-score-card--error';
 }
 
+interface TrajectoryAttempt {
+  attempt: number;
+  decision: string;
+  score: number;
+  issues_count: number;
+  timestamp: string;
+}
+
+interface AgentTrajectory {
+  agent: string;
+  attempts: TrajectoryAttempt[];
+}
+
+function coerceRetryTrajectory(value: unknown): AgentTrajectory[] | null {
+  if (!value || typeof value !== 'object') return null;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (!entries.length) return null;
+  const result: AgentTrajectory[] = [];
+  for (const [agent, raw] of entries) {
+    if (!Array.isArray(raw)) continue;
+    const attempts: TrajectoryAttempt[] = [];
+    for (const item of raw) {
+      if (typeof item !== 'object' || !item) continue;
+      const obj = item as Record<string, unknown>;
+      attempts.push({
+        attempt: typeof obj.attempt === 'number' ? obj.attempt : 0,
+        decision: typeof obj.decision === 'string' ? obj.decision : '?',
+        score: typeof obj.score === 'number' ? obj.score : 0,
+        issues_count: typeof obj.issues_count === 'number' ? obj.issues_count : 0,
+        timestamp: typeof obj.timestamp === 'string' ? obj.timestamp : '',
+      });
+    }
+    if (attempts.length) result.push({ agent, attempts });
+  }
+  result.sort((a, b) => {
+    const aMax = Math.max(...a.attempts.map((x) => x.attempt));
+    const bMax = Math.max(...b.attempts.map((x) => x.attempt));
+    return bMax - aMax || a.agent.localeCompare(b.agent);
+  });
+  return result.length ? result : null;
+}
+
+function decisionBadge(decision: string): string {
+  switch (decision) {
+    case 'ACCEPT': return 'result-trajectory-badge--accept';
+    case 'RETRY':  return 'result-trajectory-badge--retry';
+    case 'ESCALATE': return 'result-trajectory-badge--escalate';
+    default:       return 'result-trajectory-badge--unknown';
+  }
+}
+
 function scoreLabel(label: string) {
   return label.replace(/_/g, ' ');
 }
@@ -213,7 +264,13 @@ export default function Result() {
   );
 
   const scores = Object.entries(project.confidence_scores || {});
-  const summary = Object.entries(project.execution_summary || {});
+  const rawSummary = Object.entries(project.execution_summary || {});
+  const trajectory = coerceRetryTrajectory(
+    rawSummary.find(([k]) => k === 'retry_trajectory')?.[1],
+  );
+  const summary = rawSummary.filter(
+    ([k]) => k !== 'retry_trajectory' && k !== 'retries_by_agent',
+  );
   const sourceGrounding = (
     project.quality_metrics?.source_grounding as
       | { source_grounded_fields?: number; ungrounded_high_confidence_fields?: number; table_backed_fields?: number }
@@ -269,6 +326,8 @@ export default function Result() {
                 </div>
               </div>
             </article>
+
+            <MetadataPreview projectId={projectId} session={session} />
 
             {scores.length > 0 && (
               <article className="page-card">
@@ -348,6 +407,62 @@ export default function Result() {
                     source reference. Review the <strong>validation_report.txt</strong> for field names.
                   </p>
                 )}
+              </article>
+            )}
+
+            {trajectory && trajectory.length > 0 && (
+              <article className="page-card">
+                <div className="page-card__header">
+                  <div>
+                    <p className="page-card__eyebrow">Retry Timeline</p>
+                    <h2 className="page-card__title">Critic decisions per attempt</h2>
+                    <p className="page-card__body">
+                      Each badge shows the critic's verdict after an agent execution step.
+                      Hover for details.
+                    </p>
+                  </div>
+                  <div className="result-trajectory-legend">
+                    <span className="result-trajectory-legend__item">
+                      <span className="result-trajectory-badge result-trajectory-badge--accept" />
+                      Accept
+                    </span>
+                    <span className="result-trajectory-legend__item">
+                      <span className="result-trajectory-badge result-trajectory-badge--retry" />
+                      Retry
+                    </span>
+                    <span className="result-trajectory-legend__item">
+                      <span className="result-trajectory-badge result-trajectory-badge--escalate" />
+                      Escalate
+                    </span>
+                  </div>
+                </div>
+
+                <div className="result-trajectory-grid">
+                  {trajectory.map(({ agent, attempts }) => (
+                    <div key={agent} className="result-trajectory-row">
+                      <p className="result-trajectory-row__agent">{agent}</p>
+                      <div className="result-trajectory-row__steps">
+                        {attempts.map((a, i) => (
+                          <div
+                            key={i}
+                            className={`result-trajectory-step ${decisionBadge(a.decision)}`}
+                            title={`Attempt ${a.attempt} · ${a.decision} · score ${(a.score * 100).toFixed(0)}% · ${a.issues_count} issues · ${a.timestamp ? new Date(a.timestamp).toLocaleTimeString() : '?'}`}
+                          >
+                            <span className="result-trajectory-step__attempt">{a.attempt}</span>
+                            <span className="result-trajectory-step__score">
+                              {Math.round(a.score * 100)}%
+                            </span>
+                          </div>
+                        ))}
+                        {attempts.length > 1 && (
+                          <span className="result-trajectory-row__repeats">
+                            {attempts.length - 1} retr{attempts.length - 1 === 1 ? 'y' : 'ies'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </article>
             )}
 
@@ -464,7 +579,7 @@ export default function Result() {
                         </div>
                         {artifact.available ? (
                           <a
-                            href={api.getArtifactUrl(projectId, artifact.name)}
+                            href={api.getArtifactUrl(projectId, artifact.name, session)}
                             download
                             className="result-download-link"
                           >

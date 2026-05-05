@@ -2221,6 +2221,120 @@ code.page-inline-code {
   font-weight: 700;
 }
 
+/* ── Retry Trajectory Timeline ─────────────────────────────────── */
+
+.result-trajectory-legend {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.result-trajectory-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+}
+
+.result-trajectory-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.25rem;
+}
+
+.result-trajectory-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.8rem;
+  background: rgba(16, 27, 45, 0.02);
+  border: 1px solid rgba(16, 27, 45, 0.06);
+}
+
+.result-trajectory-row__agent {
+  min-width: 9rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.result-trajectory-row__steps {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.result-trajectory-row__repeats {
+  margin-left: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.result-trajectory-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.result-trajectory-step__attempt {
+  opacity: 0.65;
+  font-size: 0.72rem;
+}
+
+.result-trajectory-badge {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 999px;
+}
+
+.result-trajectory-badge--accept {
+  background: #22c55e;
+}
+
+.result-trajectory-step.result-trajectory-badge--accept {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+}
+
+.result-trajectory-badge--retry {
+  background: #f59e0b;
+}
+
+.result-trajectory-step.result-trajectory-badge--retry {
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+}
+
+.result-trajectory-badge--escalate {
+  background: #ef4444;
+}
+
+.result-trajectory-step.result-trajectory-badge--escalate {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+
+.result-trajectory-badge--unknown {
+  background: #9ca3af;
+}
+
+.result-trajectory-step.result-trajectory-badge--unknown {
+  background: rgba(156, 163, 175, 0.12);
+  color: #4b5563;
+}
+
 @media (min-width: 64rem) {
   .stats-layout {
     grid-template-columns: minmax(0, 1.16fr) minmax(18rem, 0.84fr);

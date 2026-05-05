@@ -792,13 +792,29 @@ class JSONGeneratorAgent(BaseAgent):
             
             # 4. Fuzzy match: find best match (prefer packages earlier in selected_packages)
             if not knowledge_item:
+                best_match = None
+                best_score = 0
                 for item in knowledge_items_ordered:
                     term = item.get('term', '').lower().strip()
-                    # Simple similarity check: if field_name contains term or vice versa
-                    if (field_name_lower in term or term in field_name_lower) and len(term) > 3:
-                        knowledge_item = item
+                    # Improved similarity check: prefer exact matches over substring matches
+                    if field_name_lower == term:
+                        best_match = item
+                        best_score = 1.0
                         break
-            
+                    
+                    if len(term) > 3:
+                        if field_name_lower.startswith(term + " ") or field_name_lower.endswith(" " + term):
+                            if best_score < 0.8:
+                                best_match = item
+                                best_score = 0.8
+                        elif term in field_name_lower:
+                            if best_score < 0.5:
+                                best_match = item
+                                best_score = 0.5
+                
+                if best_match:
+                    knowledge_item = best_match
+
             # Extract metadata
             if knowledge_item:
                 fairds_metadata = knowledge_item.get('metadata', {})
@@ -887,7 +903,7 @@ class JSONGeneratorAgent(BaseAgent):
                 continue
             source_ref_downgrades += 1
             field.confidence = min(field.confidence, downgrade_confidence)
-            field.status = "provisional"
+            field.status = "provisional_ungrounded"
             suffix = "source grounding check: missing source reference"
             field.evidence = f"{evidence}; {suffix}" if evidence else suffix
         return fields, source_ref_downgrades

@@ -115,6 +115,8 @@ def _project_to_response(data: dict) -> ProjectResponse:
     raw_scores = data.get("confidence_scores")
     if isinstance(raw_scores, dict):
         raw_scores = {k: v for k, v in raw_scores.items() if isinstance(v, (int, float))}
+    else:
+        raw_scores = None
     return ProjectResponse(
         project_id=data.get("project_id", ""),
         project_name=data.get("project_name"),

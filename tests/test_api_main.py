@@ -66,3 +66,17 @@ def test_resolve_frontend_file_rejects_paths_outside_dist(
         )
         is None
     )
+
+
+def test_project_to_response_confidence_scores_non_dict_becomes_none():
+    from fairifier.apps.api.routers import v1
+
+    r = v1._project_to_response(
+        {"project_id": "p1", "confidence_scores": "not-a-dict"}
+    )
+    assert r.confidence_scores is None
+
+    r2 = v1._project_to_response(
+        {"project_id": "p2", "confidence_scores": {"a": 1, "b": "x", "c": 0.5}}
+    )
+    assert r2.confidence_scores == {"a": 1.0, "c": 0.5}
