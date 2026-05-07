@@ -32,6 +32,60 @@ def test_json_generator_outputs_isa_structure_in_canonical_order():
     assert list(output["isa_structure"].keys()) == CANONICAL_ISA_ORDER
 
 
+def test_json_generator_embeds_row_aware_isa_structure_and_isa_values():
+    agent = JSONGeneratorAgent()
+    fields = [
+        MetadataField(
+            field_name="study identifier",
+            value="STUDY-1",
+            isa_sheet="study",
+            confidence=0.95,
+            status="confirmed",
+        ),
+        MetadataField(
+            field_name="sample name",
+            value="Sample A",
+            isa_sheet="sample",
+            entity_id="sample-a",
+            confidence=0.95,
+            status="confirmed",
+        ),
+        MetadataField(
+            field_name="sample name",
+            value="Sample B",
+            isa_sheet="sample",
+            entity_id="sample-b",
+            confidence=0.95,
+            status="confirmed",
+        ),
+        MetadataField(
+            field_name="observation unit identifier",
+            value="OU-1",
+            isa_sheet="sample",
+            entity_id="sample-a",
+            confidence=0.95,
+            status="confirmed",
+        ),
+        MetadataField(
+            field_name="observation unit identifier",
+            value="OU-2",
+            isa_sheet="sample",
+            entity_id="sample-b",
+            confidence=0.95,
+            status="confirmed",
+        ),
+    ]
+
+    output = agent._generate_json_output(fields, {}, {"document_path": "paper.md", "confidence_scores": {}})
+
+    sample_sheet = output["isa_structure"]["sample"]
+    assert sample_sheet["columns"] == ["observation unit identifier", "sample name"]
+    assert len(sample_sheet["rows"]) == 2
+    assert sample_sheet["rows"][0]["sample name"] == "Sample A"
+    assert sample_sheet["rows"][1]["sample name"] == "Sample B"
+    assert output["isa_values"]["sample"]["rows"] == sample_sheet["rows"]
+
+
 class _OrderedISAClient:
     def __init__(self, base_url: str, timeout: int = 12):
         self.base_url = base_url

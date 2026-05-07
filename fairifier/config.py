@@ -169,6 +169,10 @@ class FAIRifierConfig:
     react_loop_max_iterations: int = 6
     react_loop_max_tool_calls: int = 18
     cross_layer_max_restarts: int = 1  # Max rollback cycles from JSON -> retrieval
+    disable_critic: bool = False
+    disable_api_grounding: bool = False
+    disable_hard_gate: bool = False
+    disable_cross_layer_rollback: bool = False
     react_loop_document_parser_target_fields: int = 6
     react_loop_document_parser_target_packets: int = 8
     react_loop_knowledge_retriever_target_packages: int = 4
@@ -387,6 +391,18 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.cross_layer_max_restarts = int(
             os.getenv("FAIRIFIER_CROSS_LAYER_MAX_RESTARTS")
         )
+    if os.getenv("FAIRIFIER_DISABLE_CRITIC"):
+        v = os.getenv("FAIRIFIER_DISABLE_CRITIC", "").strip().lower()
+        config_instance.disable_critic = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_DISABLE_API_GROUNDING"):
+        v = os.getenv("FAIRIFIER_DISABLE_API_GROUNDING", "").strip().lower()
+        config_instance.disable_api_grounding = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_DISABLE_HARD_GATE"):
+        v = os.getenv("FAIRIFIER_DISABLE_HARD_GATE", "").strip().lower()
+        config_instance.disable_hard_gate = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_DISABLE_CROSS_LAYER_ROLLBACK"):
+        v = os.getenv("FAIRIFIER_DISABLE_CROSS_LAYER_ROLLBACK", "").strip().lower()
+        config_instance.disable_cross_layer_rollback = v in ("1", "true", "yes", "on")
 
     if os.getenv("QDRANT_URL"):
         config_instance.qdrant_url = os.getenv("QDRANT_URL")

@@ -1229,15 +1229,23 @@ class FAIRifierLangGraphApp:
                 )
                 return self._mark_interrupted_state(state)
             
-            # Call Critic
-            logger.info(f"🔍 Critic evaluating {agent_name}...")
-            state = await self.critic.execute(state)
-            
-            # Get Critic decision
             last_execution = state["execution_history"][-1]
-            critic_eval = last_execution.get("critic_evaluation", {})
-            decision = critic_eval.get("decision", "ACCEPT")
-            score = critic_eval.get("score", 0.0)
+            if self._critic_is_disabled():
+                critic_eval = {"decision": "ACCEPT", "score": 1.0, "issues": [], "suggestions": []}
+                last_execution["critic_evaluation"] = critic_eval
+                decision = "ACCEPT"
+                score = 1.0
+                logger.info("⏭ Critic disabled via FAIRIFIER_DISABLE_CRITIC; auto-accepting %s", agent_name)
+            else:
+                # Call Critic
+                logger.info(f"🔍 Critic evaluating {agent_name}...")
+                state = await self.critic.execute(state)
+
+                # Get Critic decision
+                last_execution = state["execution_history"][-1]
+                critic_eval = last_execution.get("critic_evaluation", {})
+                decision = critic_eval.get("decision", "ACCEPT")
+                score = critic_eval.get("score", 0.0)
             
             # Record retry trajectory
             state["retry_trajectory"][agent_name].append({
@@ -1263,7 +1271,7 @@ class FAIRifierLangGraphApp:
             feedback_prepared = False
 
             # Hard gate after JSON generation: force cross-layer recovery when schema coverage is still broken.
-            if agent_name == "JSONGenerator" and decision == "ACCEPT":
+            if agent_name == "JSONGenerator" and decision == "ACCEPT" and not self._hard_gate_is_disabled():
                 hard_gate = self._evaluate_json_hard_gate(state)
                 if not hard_gate.get("passed", True):
                     logger.warning("🚫 JSON hard gate failed: %s", hard_gate.get("summary"))
@@ -1283,7 +1291,12 @@ class FAIRifierLangGraphApp:
                     score = critic_eval["score"]
 
                     target_agent = hard_gate.get("anchor_agent", "KnowledgeRetriever")
-                    state = await self.critic.provide_feedback_to_agent(target_agent, critic_eval, state)
+                    feedback_target = (
+                        agent_name
+                        if target_agent != agent_name and self._cross_layer_rollback_is_disabled()
+                        else target_agent
+                    )
+                    state = await self.critic.provide_feedback_to_agent(feedback_target, critic_eval, state)
                     feedback_prepared = True
 
                     if self.mem0_service and session_id and hard_gate.get("issues"):
@@ -1296,7 +1309,7 @@ class FAIRifierLangGraphApp:
                         )
                         state["context"]["retrieved_memories"] = enriched_memories
 
-                    if target_agent != agent_name:
+                    if target_agent != agent_name and not self._cross_layer_rollback_is_disabled():
                         state["context"]["force_retry_from"] = target_agent
                         state["context"]["cross_layer_retry_reason"] = hard_gate.get("summary")
                         logger.info(
@@ -1305,6 +1318,12 @@ class FAIRifierLangGraphApp:
                             hard_gate.get("summary"),
                         )
                         return state
+                    if target_agent != agent_name and self._cross_layer_rollback_is_disabled():
+                        logger.info(
+                            "⏭ Cross-layer rollback disabled; retry stays at %s despite suggested anchor %s",
+                            agent_name,
+                            target_agent,
+                        )
 
             # Handle decision
             if decision == "ACCEPT":
@@ -1844,16 +1863,14 @@ class FAIRifierLangGraphApp:
             source_path,
             len(source_content),
         )
-        context = state.setdefault("context", {})
-        state["document_content"] = source_content
-        state["document_path"] = (
-            f"{base_document_path}::{source_path}" if base_document_path else source_path
+        self._prepare_single_input_source_state(
+            state=state,
+            source_path=source_path,
+            source_content=source_content,
+            source_index=source_index,
+            source_total=source_total,
+            base_document_path=base_document_path,
         )
-        state["document_info"] = {}
-        state["evidence_packets"] = []
-        context["current_source_path"] = source_path
-        context["current_source_index"] = source_index
-        context["current_source_total"] = source_total
 
         return await self._execute_agent_with_retry(
             state,
@@ -1861,6 +1878,40 @@ class FAIRifierLangGraphApp:
             "DocumentParser",
             lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3,
         )
+
+    def _prepare_single_input_source_state(
+        self,
+        *,
+        state: FAIRifierState,
+        source_path: str,
+        source_content: str,
+        source_index: int,
+        source_total: int,
+        base_document_path: str,
+    ) -> None:
+        """Prepare state so DocumentParser reads only the current multi-file source."""
+        context = state.setdefault("context", {})
+        state["document_content"] = source_content
+        # DocumentParser prefers document_text_path over in-memory content for
+        # normal single-document runs. In multi-file mode that path points to
+        # the merged bundle, so clear it before each per-source parse.
+        state.pop("document_text_path", None)
+        state["document_path"] = (
+            f"{base_document_path}::{source_path}" if base_document_path else source_path
+        )
+        state["document_info"] = {}
+        state["evidence_packets"] = []
+        state.get("context", {}).pop("critic_feedback", None)
+        feedback_by_agent = context.get("critic_feedback_by_agent")
+        if isinstance(feedback_by_agent, dict):
+            feedback_by_agent.pop("DocumentParser", None)
+        guidance_history = context.get("critic_guidance_history")
+        if isinstance(guidance_history, dict):
+            guidance_history.pop("DocumentParser", None)
+        context["retry_count"] = 0
+        context["current_source_path"] = source_path
+        context["current_source_index"] = source_index
+        context["current_source_total"] = source_total
     
     @traceable(name="ReadFile", tags=["workflow", "io"])
     async def _read_file_node(self, state: FAIRifierState) -> FAIRifierState:
@@ -2199,6 +2250,26 @@ class FAIRifierLangGraphApp:
             conversion_info["content_type"] = "json"
             return pretty, conversion_info
 
+        if suffix == ".jsonl":
+            lines = []
+            with open(fs_str, "r", encoding="utf-8") as file:
+                for line_number, line in enumerate(file, start=1):
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        parsed = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        lines.append(stripped)
+                        continue
+                    lines.append(json.dumps(parsed, ensure_ascii=False))
+                    if line_number >= 500:
+                        lines.append("[jsonl truncated after 500 lines]")
+                        break
+            conversion_info["method"] = "jsonl_records"
+            conversion_info["content_type"] = "jsonl"
+            return "\n".join(lines), conversion_info
+
         if suffix == ".pdf":
             doc_path = fs_path
             doc_name = doc_path.stem
@@ -2366,7 +2437,7 @@ class FAIRifierLangGraphApp:
         """Return True when a file extension is supported for bundle ingestion."""
         return path.suffix.lower() in {
             ".pdf", ".txt", ".md", ".markdown", ".rst",
-            ".csv", ".tsv", ".xlsx", ".xls", ".json",
+            ".csv", ".tsv", ".xlsx", ".xls", ".json", ".jsonl",
             ".bam", ".vcf", ".fastq", ".fq", ".h5ad", ".gz",
         }
 
@@ -3765,3 +3836,11 @@ Field semantics for ``plan_tasks``:
             fallback["status"] = ProcessingStatus.FAILED.value
             fallback.setdefault("errors", []).append(str(e))
             return fallback
+    def _critic_is_disabled(self) -> bool:
+        return bool(getattr(config, "disable_critic", False))
+
+    def _hard_gate_is_disabled(self) -> bool:
+        return bool(getattr(config, "disable_hard_gate", False))
+
+    def _cross_layer_rollback_is_disabled(self) -> bool:
+        return bool(getattr(config, "disable_cross_layer_rollback", False))

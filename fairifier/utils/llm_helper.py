@@ -2098,7 +2098,7 @@ REQUIREMENTS:
 **Your task:** For EACH AND EVERY metadata field in the list, extract or generate an appropriate value from the document.
 
 **CRITICAL REQUIREMENTS:**
-1. **MUST generate a value for ALL fields** - You must return a value for every single field in the provided list, no exceptions
+1. **MUST generate coverage for ALL fields** - every field in the provided list must appear at least once in the response
 2. **Investigation-level fields** - Project-level metadata. Extract from title/abstract or derive from context
 3. **Study-level fields** - Study description. Extract from title/abstract/methods/results
 4. **Assay-level fields** - Measurement methods. Extract from methods
@@ -2118,9 +2118,13 @@ REQUIREMENTS:
 - value: Concise metadata value (< 500 chars) - use summaries, not full text
 - evidence: Brief source location (< 200 chars) - e.g., "Methods section" not full quote
 - confidence: Float 0.0-1.0 (1.0 = explicit, 0.7-0.9 = strong inference, 0.4-0.6 = reasonable inference, 0.0-0.3 = not available)
+- entity_id: optional internal grouping label for multi-row ISA levels. Use the same entity_id across all fields that belong to the same observation unit, sample, or assay row.
 
 **IMPORTANT:**
-- You MUST return a JSON array with exactly the same number of fields as provided in the input list
+- You MUST return a JSON array that covers every field in the input list at least once
+- For multi-row ISA levels (`observationunit`, `sample`, `assay`), repeated `field_name` values are allowed and expected when the document describes multiple entities
+- Do NOT compress multiple entities into one comma-separated or semicolon-separated value when separate entities can be identified
+- Use short, stable entity_id labels such as `exp1_control`, `exp1_zno`, `exp3_mncl2` for multi-row entities
 - Do NOT skip any fields, even if information is limited
 - For investigation/study fields: If not explicitly stated, derive from document title/abstract
 - For fields with limited information, use "not specified" but still include the field
@@ -2137,7 +2141,8 @@ Wrap your JSON array in markdown code blocks EXACTLY like this:
     "field_name": "...",
     "value": "concise value",
     "evidence": "brief source",
-    "confidence": 0.X
+    "confidence": 0.X,
+    "entity_id": "optional_multirow_group"
   }}
 ]
 ```
@@ -2169,7 +2174,9 @@ REQUIREMENTS:
             field_descriptions.append({
                 "field_name": field.get("name", ""),  # Use exact field name from FAIR-DS
                 "description": field.get("description", ""),
-                "required": field.get("required", False)
+                "required": field.get("required", False),
+                "isa_sheet": field.get("isa_sheet", "study"),
+                "multi_row": field.get("isa_sheet", "study") in {"observationunit", "sample", "assay"},
             })
 
         # Group fields by ISA sheet for better context
@@ -2207,15 +2214,17 @@ Fields by ISA hierarchy:
 {batch_note}
 
 **CRITICAL REQUIREMENTS:**
-1. You MUST return a JSON array with EXACTLY {len(selected_fields)} fields - one for each field in the list above
+1. You MUST return a JSON array that covers ALL {len(selected_fields)} fields in the list above at least once
 2. Use the EXACT field_name from the list above. Do not modify or abbreviate field names
-3. **DO NOT DUPLICATE field_name values** - each field_name must appear exactly once in your response
+3. For `observationunit`, `sample`, and `assay` fields, you MAY and often SHOULD repeat the same field_name across multiple records when the document describes multiple entities
 4. **Investigation-level fields** ({field_counts.get('investigation', 0)} fields): Must generate values from document title, abstract, or research context
 5. **Study-level fields** ({field_counts.get('study', 0)} fields): Must generate values from document title, abstract, methods, or results
 6. **Assay-level fields** ({field_counts.get('assay', 0)} fields): Must generate values from methods section
 7. **Sample-level fields** ({field_counts.get('sample', 0)} fields): Must generate values from methods or results
 8. **ObservationUnit-level fields** ({field_counts.get('observationunit', 0)} fields): Must generate values from methods or environmental context
 9. If the document excerpt contains "Field-specific source evidence", use matching source_id/span/table row references in the evidence field.
+10. For multi-row ISA levels, add an `entity_id` field to each output object and reuse the same entity_id across related fields for the same row.
+11. Do NOT squeeze multiple entities into a single list-like value if separate rows can be inferred from experiments, treatments, or timepoints.
 
 **For fields where information is not explicitly stated:**
 - Investigation/Study fields: Derive from document title/abstract
@@ -2230,14 +2239,15 @@ Wrap your JSON array in markdown code blocks:
     "field_name": "exact_name",
     "value": "concise value < 500 chars",
     "evidence": "brief source < 200 chars",
-    "confidence": 0.X
+    "confidence": 0.X,
+    "entity_id": "optional_multirow_group"
   }}
 ]
 ```
 
 REQUIREMENTS:
 - Line 1: ```json (alone)
-- Lines 2-N: Valid JSON array with EXACTLY {len(selected_fields)} fields
+- Lines 2-N: Valid JSON array covering ALL {len(selected_fields)} input fields at least once
 - Line N+1: ``` (alone)
 - NO text before/after block
 - NO comments in JSON
@@ -2387,21 +2397,27 @@ REQUIREMENTS:
         selected_fields: List[Dict[str, Any]],
         metadata: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        """Ensure every expected field in a batch has exactly one generated output."""
-        by_name: Dict[str, Dict[str, Any]] = {}
+        """Ensure every expected field in a batch is covered at least once.
+
+        Multi-row ISA extraction is allowed to emit repeated ``field_name`` values
+        distinguished by ``entity_id``. Preserve those repeated records instead of
+        collapsing to the first occurrence.
+        """
+        by_name: Dict[str, List[Dict[str, Any]]] = {}
         for item in metadata or []:
             if not isinstance(item, dict):
                 continue
             field_name = str(item.get("field_name", "")).strip()
-            if field_name and field_name not in by_name:
-                by_name[field_name] = item
+            if field_name:
+                by_name.setdefault(field_name, []).append(item)
 
         reconciled: List[Dict[str, Any]] = []
         missing_fields: List[str] = []
         for field in selected_fields:
             expected_name = str(field.get("name", "")).strip()
-            if expected_name in by_name:
-                reconciled.append(by_name[expected_name])
+            matching_items = by_name.get(expected_name, [])
+            if matching_items:
+                reconciled.extend(matching_items)
             else:
                 missing_fields.append(expected_name)
                 reconciled.append(
@@ -2410,6 +2426,7 @@ REQUIREMENTS:
                         "value": "not specified",
                         "evidence": "LLM omitted field in batch response",
                         "confidence": 0.0,
+                        "entity_id": None,
                     }
                 )
 

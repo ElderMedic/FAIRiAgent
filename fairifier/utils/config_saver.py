@@ -80,6 +80,10 @@ def collect_runtime_config(
         "llm_thinking_budget": getattr(config, "llm_thinking_budget", 0),
         "llm_api_key": "***MASKED***" if (oc.get("llm_api_key") or config.llm_api_key) else None,
         "fair_ds_api_url": oc.get("fair_ds_api_url", config.fair_ds_api_url),
+        "disable_critic": config.disable_critic,
+        "disable_api_grounding": config.disable_api_grounding,
+        "disable_hard_gate": config.disable_hard_gate,
+        "disable_cross_layer_rollback": config.disable_cross_layer_rollback,
         "langsmith_api_key": "***MASKED***" if config.langsmith_api_key else None,
         "langsmith_project": config.langsmith_project,
         "langsmith_endpoint": config.langsmith_endpoint,
@@ -149,4 +153,3 @@ def save_runtime_config(
         json.dump(all_config, f, indent=2, ensure_ascii=False)
 
     return config_file
-

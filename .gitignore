@@ -276,6 +276,7 @@ grant/
 
 # Evaluation generated outputs
 evaluation/runs/
+evaluation/paper_experiments_v1/
 evaluation/harness/private/
 evaluation/harness/runs/
 evaluation/analysis/output/

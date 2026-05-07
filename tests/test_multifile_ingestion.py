@@ -295,6 +295,59 @@ def test_read_tabular_tables_preserves_numeric_types_in_jsonl(tmp_path: Path):
     assert row["collection_time"] == "2024-01-02T03:04:05"
 
 
+def test_directory_bundle_accepts_jsonl_table_artifacts(tmp_path: Path):
+    """Derived source-workspace JSONL tables should be reusable as bundle inputs."""
+    app = _make_app_without_init()
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    table_path = bundle / "source_001_01.jsonl"
+    table_path.write_text(
+        '{"sample_id": "S1", "Tool Name": "kraken2", "Count": 3}\n'
+        '{"sample_id": "S2", "Tool Name": "flye", "Count": 1}\n',
+        encoding="utf-8",
+    )
+
+    text, info = app._read_document_content(str(bundle), output_dir=str(tmp_path / "out"))
+
+    assert "source_001_01.jsonl" in text
+    assert '"Tool Name": "kraken2"' in text
+    assert info["files_discovered_supported"] == 1
+    assert info["sources"][0]["content_type"] == "jsonl"
+
+
+def test_parse_single_input_source_uses_source_content_not_bundle_path():
+    app = _make_app_without_init()
+    state = {
+        "document_path": "/tmp/bundle",
+        "document_content": "FULL BUNDLE",
+        "document_text_path": "/tmp/full_bundle.txt",
+        "context": {
+            "critic_feedback": {"target_agent": "DocumentParser"},
+            "critic_feedback_by_agent": {"DocumentParser": {"suggestions": ["old"]}},
+            "critic_guidance_history": {"DocumentParser": ["old"]},
+            "retry_count": 2,
+        },
+    }
+
+    app._prepare_single_input_source_state(
+        state=state,
+        source_path="sources/source_001.md",
+        source_content="ONLY THIS SOURCE",
+        source_index=1,
+        source_total=2,
+        base_document_path="/tmp/bundle",
+    )
+
+    assert state["document_content"] == "ONLY THIS SOURCE"
+    assert "document_text_path" not in state
+    assert state["document_path"] == "/tmp/bundle::sources/source_001.md"
+    assert state["context"]["current_source_path"] == "sources/source_001.md"
+    assert "critic_feedback" not in state["context"]
+    assert "DocumentParser" not in state["context"]["critic_feedback_by_agent"]
+    assert "DocumentParser" not in state["context"]["critic_guidance_history"]
+    assert state["context"]["retry_count"] == 0
+
+
 def test_directory_bundle_collects_bio_file_paths(tmp_path: Path):
     """Multi-file bundles must aggregate host_path for BioMetadataAgent."""
     app = _make_app_without_init()

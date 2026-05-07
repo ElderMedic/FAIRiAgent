@@ -242,3 +242,44 @@ async def test_generate_complete_metadata_recursively_splits_failed_batch():
     assert any(size == 3 for size in call_sizes)
     assert len(result) == 6
     assert [item["field_name"] for item in result] == [f"field_{idx}" for idx in range(6)]
+
+
+def test_reconcile_metadata_batch_preserves_multirow_duplicates():
+    helper = LLMHelper.__new__(LLMHelper)
+
+    selected_fields = [
+        {"name": "sample name", "isa_sheet": "sample"},
+        {"name": "observation unit identifier", "isa_sheet": "sample"},
+    ]
+    metadata = [
+        {
+            "field_name": "sample name",
+            "value": "Exp1_Control_Sample",
+            "entity_id": "exp1_control",
+            "confidence": 0.9,
+        },
+        {
+            "field_name": "sample name",
+            "value": "Exp1_ZnO_Sample",
+            "entity_id": "exp1_zno",
+            "confidence": 0.9,
+        },
+        {
+            "field_name": "observation unit identifier",
+            "value": "OU_1",
+            "entity_id": "exp1_control",
+            "confidence": 0.9,
+        },
+        {
+            "field_name": "observation unit identifier",
+            "value": "OU_2",
+            "entity_id": "exp1_zno",
+            "confidence": 0.9,
+        },
+    ]
+
+    reconciled = helper._reconcile_metadata_batch(selected_fields, metadata)
+
+    assert len(reconciled) == 4
+    assert [item["entity_id"] for item in reconciled[:2]] == ["exp1_control", "exp1_zno"]
+    assert [item["entity_id"] for item in reconciled[2:]] == ["exp1_control", "exp1_zno"]

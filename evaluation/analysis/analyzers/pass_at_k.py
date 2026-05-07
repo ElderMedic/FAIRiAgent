@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from collections import defaultdict
 import json
 
+from .significance_tests import bootstrap_pass_at_k_ci
+
 
 @dataclass
 class SuccessCriteria:
@@ -113,7 +115,11 @@ class PassAtKAnalyzer:
         self,
         runs_dir: Path,
         criteria: Optional[SuccessCriteria] = None,
-        k_values: List[int] = [1, 3, 5, 10]
+        k_values: List[int] = [1, 3, 5, 10],
+        bootstrap: bool = False,
+        n_boot: int = 1000,
+        ci_alpha: float = 0.05,
+        random_seed: Optional[int] = 0,
     ):
         """
         Initialize pass@k analyzer.
@@ -126,6 +132,10 @@ class PassAtKAnalyzer:
         self.runs_dir = Path(runs_dir)
         self.criteria = criteria or CRITERIA_PRESETS['moderate']
         self.k_values = k_values
+        self.bootstrap = bootstrap
+        self.n_boot = n_boot
+        self.ci_alpha = ci_alpha
+        self.random_seed = random_seed
         
         # Data storage
         self.eval_results: Dict[str, Dict[str, List[Dict]]] = {}  # {model: {doc: [results]}}
@@ -292,6 +302,7 @@ class PassAtKAnalyzer:
         
         all_n = []
         all_c = []
+        aggregate_success_arrays: Dict[int, List[np.ndarray]] = {k: [] for k in self.k_values}
         
         for doc_id, runs in model_results.items():
             n = len(runs)
@@ -309,7 +320,23 @@ class PassAtKAnalyzer:
             # Per-document pass@k
             doc_pass_at_k = {}
             for k in self.k_values:
-                doc_pass_at_k[f'pass@{k}'] = self.calculate_pass_at_k(n, c, k)
+                estimate = self.calculate_pass_at_k(n, c, k)
+                doc_pass_at_k[f'pass@{k}'] = estimate
+                if self.bootstrap:
+                    successes = np.array(
+                        [1 if self.is_successful(r, self.criteria)[0] else 0 for r in runs],
+                        dtype=int,
+                    )
+                    ci = bootstrap_pass_at_k_ci(
+                        successes,
+                        k,
+                        n_boot=self.n_boot,
+                        alpha=self.ci_alpha,
+                        random_seed=self.random_seed,
+                    )
+                    doc_pass_at_k[f'pass@{k}_ci_lo'] = ci.ci_lo
+                    doc_pass_at_k[f'pass@{k}_ci_hi'] = ci.ci_hi
+                    aggregate_success_arrays[k].append(successes)
             
             results['by_document'][doc_id] = {
                 'n': n,
@@ -323,6 +350,21 @@ class PassAtKAnalyzer:
             pass_k_values = [self.calculate_pass_at_k(n, c, k) for n, c in zip(all_n, all_c)]
             results['pass_at_k'][f'pass@{k}'] = np.mean(pass_k_values) if pass_k_values else 0.0
             results['pass_at_k'][f'pass@{k}_std'] = np.std(pass_k_values) if pass_k_values else 0.0
+            if self.bootstrap and aggregate_success_arrays[k]:
+                ci_los = []
+                ci_his = []
+                for successes in aggregate_success_arrays[k]:
+                    ci = bootstrap_pass_at_k_ci(
+                        successes,
+                        k,
+                        n_boot=self.n_boot,
+                        alpha=self.ci_alpha,
+                        random_seed=self.random_seed,
+                    )
+                    ci_los.append(ci.ci_lo)
+                    ci_his.append(ci.ci_hi)
+                results['pass_at_k'][f'pass@{k}_ci_lo'] = float(np.mean(ci_los))
+                results['pass_at_k'][f'pass@{k}_ci_hi'] = float(np.mean(ci_his))
         
         # Overall success rate
         total_n = results['aggregate']['total_runs']
@@ -361,6 +403,9 @@ class PassAtKAnalyzer:
             for k in self.k_values:
                 row[f'pass@{k}'] = results['pass_at_k'].get(f'pass@{k}', 0.0)
                 row[f'pass@{k}_std'] = results['pass_at_k'].get(f'pass@{k}_std', 0.0)
+                if self.bootstrap:
+                    row[f'pass@{k}_ci_lo'] = results['pass_at_k'].get(f'pass@{k}_ci_lo', 0.0)
+                    row[f'pass@{k}_ci_hi'] = results['pass_at_k'].get(f'pass@{k}_ci_hi', 0.0)
             
             rows.append(row)
         
@@ -390,6 +435,9 @@ class PassAtKAnalyzer:
                 
                 for k in self.k_values:
                     row[f'pass@{k}'] = doc_data.get(f'pass@{k}', 0.0)
+                    if self.bootstrap:
+                        row[f'pass@{k}_ci_lo'] = doc_data.get(f'pass@{k}_ci_lo', 0.0)
+                        row[f'pass@{k}_ci_hi'] = doc_data.get(f'pass@{k}_ci_hi', 0.0)
                 
                 rows.append(row)
         

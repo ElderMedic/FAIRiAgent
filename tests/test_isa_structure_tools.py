@@ -174,3 +174,234 @@ def test_isa_value_mapper_prefers_agentic_structure_result(monkeypatch):
     assert matrix["assay"]["rows"][0]["assay identifier"] == "ONT_LOG_ERR3152366"
     assert "run_source_shell_command" in result["react_scratchpad"]["ISAValueMapper"]["tools_called"]
     assert "All assay rows are missing their parent linkage field." in result["isa_value_quality"]["issues"]
+
+
+def test_isa_value_mapper_falls_back_when_agentic_result_is_empty(monkeypatch):
+    agent = ISAValueMapperAgent()
+
+    async def fake_invoke(*args, **kwargs):
+        state = kwargs["state"]
+        state["react_scratchpad"] = {
+            "ISAValueMapper": {
+                "iterations": 2,
+                "tools_called": ["list_workspace_sources"],
+                "budget": {"max_iterations": 6, "max_tool_calls": 18},
+            }
+        }
+        return ISAValueMappingResponse()
+
+    async def fail_llm_matrix(**_kwargs):
+        raise AssertionError("empty agentic matrix should use deterministic fallback")
+
+    monkeypatch.setattr(agent, "_build_ivm_inner_agent", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(agent, "_invoke_react_agent", fake_invoke)
+    monkeypatch.setattr(agent, "_build_matrix_with_llm", fail_llm_matrix)
+    state = {
+        "metadata_fields": [
+            {
+                "field_name": "observation unit identifier",
+                "value": "ZYMO_EVEN",
+                "isa_sheet": "observationunit",
+                "entity_id": "obs_zymo_even",
+            },
+            {
+                "field_name": "observation unit identifier",
+                "value": "ZYMO_LOG",
+                "isa_sheet": "observationunit",
+                "entity_id": "obs_zymo_log",
+            },
+            {
+                "field_name": "sample identifier",
+                "value": "ZYMO_EVEN",
+                "isa_sheet": "sample",
+                "entity_id": "sample_zymo_even",
+            },
+            {
+                "field_name": "sample identifier",
+                "value": "ZYMO_LOG",
+                "isa_sheet": "sample",
+                "entity_id": "sample_zymo_log",
+            },
+        ],
+        "retrieved_knowledge": [],
+        "source_workspace": {},
+        "artifacts": {},
+        "confidence_scores": {},
+        "context": {},
+        "agent_guidance": {},
+        "errors": [],
+    }
+
+    result = asyncio.run(agent.execute(state))
+
+    matrix = json.loads(result["artifacts"]["isa_values_json"])
+    assert [row["observation unit identifier"] for row in matrix["observationunit"]["rows"]] == [
+        "ZYMO_EVEN",
+        "ZYMO_LOG",
+    ]
+    assert [row["sample identifier"] for row in matrix["sample"]["rows"]] == [
+        "ZYMO_EVEN",
+        "ZYMO_LOG",
+    ]
+
+
+def test_isa_value_mapper_seeds_rows_from_source_workspace_sheet_headers(monkeypatch, tmp_path):
+    agent = ISAValueMapperAgent()
+
+    source = tmp_path / "source_001.md"
+    source.write_text(
+        "[Sheet: ZYMO_EVEN]\nrows...\n[Sheet: ZYMO_LOG]\nrows...\n[Sheet: BMOCK12]\nrows...\n",
+        encoding="utf-8",
+    )
+
+    async def fake_invoke(*args, **kwargs):
+        return ISAValueMappingResponse()
+
+    async def fail_llm_matrix(**_kwargs):
+        raise AssertionError("empty agentic matrix should use deterministic fallback")
+
+    monkeypatch.setattr(agent, "_build_ivm_inner_agent", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(agent, "_invoke_react_agent", fake_invoke)
+    monkeypatch.setattr(agent, "_build_matrix_with_llm", fail_llm_matrix)
+    state = {
+        "metadata_fields": [
+            {
+                "field_name": "study identifier",
+                "value": "study_mock_metagenomics",
+                "isa_sheet": "study",
+                "entity_id": "study_001",
+            }
+        ],
+        "retrieved_knowledge": [],
+        "source_workspace": {"source_paths": {"source_001": str(source)}},
+        "artifacts": {},
+        "confidence_scores": {},
+        "context": {},
+        "agent_guidance": {},
+        "errors": [],
+    }
+
+    result = asyncio.run(agent.execute(state))
+
+    matrix = json.loads(result["artifacts"]["isa_values_json"])
+    assert [row["observation unit identifier"] for row in matrix["observationunit"]["rows"]] == [
+        "ZYMO_EVEN",
+        "ZYMO_LOG",
+        "BMOCK12",
+    ]
+    assert [row["sample identifier"] for row in matrix["sample"]["rows"]] == [
+        "ZYMO_EVEN",
+        "ZYMO_LOG",
+        "BMOCK12",
+    ]
+    assert [row["assay identifier"] for row in matrix["assay"]["rows"]] == [
+        "ZYMO_EVEN",
+        "ZYMO_LOG",
+        "BMOCK12",
+    ]
+
+
+def test_isa_value_mapper_merges_identifierless_rows_into_seeded_entities(monkeypatch, tmp_path):
+    agent = ISAValueMapperAgent()
+
+    source = tmp_path / "source_001.md"
+    source.write_text("[Sheet: ZYMO_EVEN]\nrows...\n[Sheet: ZYMO_LOG]\nrows...\n", encoding="utf-8")
+
+    async def fake_invoke(*args, **kwargs):
+        return ISAValueMappingResponse()
+
+    async def fail_llm_matrix(**_kwargs):
+        raise AssertionError("empty agentic matrix should use deterministic fallback")
+
+    monkeypatch.setattr(agent, "_build_ivm_inner_agent", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(agent, "_invoke_react_agent", fake_invoke)
+    monkeypatch.setattr(agent, "_build_matrix_with_llm", fail_llm_matrix)
+    state = {
+        "metadata_fields": [
+            {
+                "field_name": "study identifier",
+                "value": "study_mock_metagenomics",
+                "isa_sheet": "study",
+                "entity_id": "study_001",
+            },
+            {
+                "field_name": "sample identifier",
+                "value": "ZYMO_EVEN",
+                "isa_sheet": "sample",
+                "entity_id": "sample_zymo_even",
+            },
+            {
+                "field_name": "assembly software",
+                "value": "Flye; Medaka",
+                "isa_sheet": "sample",
+                "entity_id": "exp1_assembly",
+            },
+        ],
+        "retrieved_knowledge": [],
+        "source_workspace": {"source_paths": {"source_001": str(source)}},
+        "artifacts": {},
+        "confidence_scores": {},
+        "context": {},
+        "agent_guidance": {},
+        "errors": [],
+    }
+
+    result = asyncio.run(agent.execute(state))
+
+    matrix = json.loads(result["artifacts"]["isa_values_json"])
+    sample_rows = matrix["sample"]["rows"]
+    assert [row["sample identifier"] for row in sample_rows] == ["ZYMO_EVEN", "ZYMO_LOG"]
+    assert all(row["assembly software"] == "Flye; Medaka" for row in sample_rows)
+
+
+def test_isa_value_mapper_collapses_single_row_levels_and_unlinked_assays(monkeypatch, tmp_path):
+    agent = ISAValueMapperAgent()
+
+    source = tmp_path / "source_001.md"
+    source.write_text("[Sheet: ZYMO_EVEN]\nrows...\n[Sheet: ZYMO_LOG]\nrows...\n", encoding="utf-8")
+
+    async def fake_invoke(*args, **kwargs):
+        return ISAValueMappingResponse()
+
+    async def fail_llm_matrix(**_kwargs):
+        raise AssertionError("empty agentic matrix should use deterministic fallback")
+
+    monkeypatch.setattr(agent, "_build_ivm_inner_agent", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(agent, "_invoke_react_agent", fake_invoke)
+    monkeypatch.setattr(agent, "_build_matrix_with_llm", fail_llm_matrix)
+    state = {
+        "metadata_fields": [
+            {
+                "field_name": "investigation title",
+                "value": "FAIR workflow",
+                "isa_sheet": "investigation",
+                "entity_id": "inv_001",
+            },
+            {
+                "field_name": "associated publication",
+                "value": "10.5281/zenodo.17990145",
+                "isa_sheet": "investigation",
+                "entity_id": "investigation_main",
+            },
+            {
+                "field_name": "assay identifier",
+                "value": "ERR3152366",
+                "isa_sheet": "assay",
+                "entity_id": "assay_ERR3152366",
+            },
+        ],
+        "retrieved_knowledge": [],
+        "source_workspace": {"source_paths": {"source_001": str(source)}},
+        "artifacts": {},
+        "confidence_scores": {},
+        "context": {},
+        "agent_guidance": {},
+        "errors": [],
+    }
+
+    result = asyncio.run(agent.execute(state))
+
+    matrix = json.loads(result["artifacts"]["isa_values_json"])
+    assert len(matrix["investigation"]["rows"]) == 1
+    assert matrix["investigation"]["rows"][0]["associated publication"] == "10.5281/zenodo.17990145"
+    assert [row["assay identifier"] for row in matrix["assay"]["rows"]] == ["ZYMO_EVEN", "ZYMO_LOG"]

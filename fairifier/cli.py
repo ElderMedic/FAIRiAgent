@@ -249,6 +249,21 @@ def _post_write_metadata_json_checks(
             click.echo(f"   (warn) {w}", err=True)
 
 
+def _iter_display_confidence_scores(confidence_scores: dict) -> list[tuple[str, float]]:
+    """Flatten nested confidence-score payloads into displayable numeric rows."""
+    rows: list[tuple[str, float]] = []
+    for component, score in (confidence_scores or {}).items():
+        label = str(component).lstrip("_")
+        if isinstance(score, (int, float)):
+            rows.append((label, float(score)))
+            continue
+        if isinstance(score, dict):
+            for subkey, subscore in score.items():
+                if isinstance(subscore, (int, float)):
+                    rows.append((f"{label}.{subkey}", float(subscore)))
+    return rows
+
+
 def _is_process_running(pid: int) -> bool:
     """Check if a process with given PID is running (Linux/Mac compatible).
     
@@ -526,7 +541,7 @@ async def _run_workflow(
         
         # Display confidence scores
         click.echo("\n🎯 Confidence Scores:")
-        for component, score in confidence_scores.items():
+        for component, score in _iter_display_confidence_scores(confidence_scores):
             json_logger.log_confidence_score(component, score)
             emoji = "✅" if score >= 0.8 else "⚠️" if score >= 0.6 else "❌"
             click.echo(f"  {emoji} {component}: {score:.2%}")
@@ -1024,7 +1039,7 @@ async def _resume_workflow(
         
         # Display confidence scores
         click.echo("\n🎯 Confidence Scores:")
-        for component, score in confidence_scores.items():
+        for component, score in _iter_display_confidence_scores(confidence_scores):
             emoji = "✅" if score >= 0.8 else "⚠️" if score >= 0.6 else "❌"
             click.echo(f"  {emoji} {component}: {score:.2%}")
         

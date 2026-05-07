@@ -61,6 +61,10 @@ class TestCollectRuntimeConfig:
         assert config_dict["llm_model"] == config.llm_model
         assert config_dict["llm_base_url"] == config.llm_base_url
         assert config_dict["fair_ds_api_url"] == config.fair_ds_api_url
+        assert config_dict["disable_critic"] == config.disable_critic
+        assert config_dict["disable_api_grounding"] == config.disable_api_grounding
+        assert config_dict["disable_hard_gate"] == config.disable_hard_gate
+        assert config_dict["disable_cross_layer_rollback"] == config.disable_cross_layer_rollback
 
     def test_collect_runtime_config_masks_sensitive_data(self):
         """Test that sensitive data is masked."""

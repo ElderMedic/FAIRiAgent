@@ -1,6 +1,8 @@
 # FAIRiAgent Evaluation Datasets
 
-> Last updated: 2026-05-04
+> Last updated: 2026-05-07
+>
+> **Important — manuscript benchmark composition.** This file lists 10 annotated documents plus the CompBioBench bundle. For the manuscript, these are partitioned into three roles (see §"Credibility Tiers and Manuscript Roles" below). The current main benchmark is **8 documents**; `biorem` and `pomato` are kept as supplementary case studies, and `compbiobench` is a separate research direction.
 
 ## Directory Structure
 
@@ -122,6 +124,71 @@ Numbers in parentheses = number of expected rows (for multi-row sheets).
 | human_gut_microbiome_temporal | `paper.pdf` (627 KB) | PDF | Europe PMC render (PMC11467544) |
 | aetherobacter_fasciculatus_genome | `paper.pdf` (630 KB) | PDF | Europe PMC render (PMC11876861) |
 | pseudomonas_recombinase_screen | `paper.pdf` (1.5 MB) | PDF | Europe PMC render (PMC10711431) |
+
+## Credibility Tiers and Manuscript Roles
+
+The 10 annotated documents differ in (a) source provenance — peer-reviewed paper vs. template/proposal — and (b) annotation traceability — whether each ground-truth row carries an `_evidence` string back to a specific span of the source. For the manuscript, this matters because the headline claims (Hierarchical-F1, Pass@k, ablation McNemar) must rest on ground truth that an external reviewer would accept.
+
+The audit results (2026-05-07) are below.
+
+### Tier A — High-credibility research papers (6 docs, **always in main benchmark**)
+
+| Dataset | `generated_by` | DOI | _evidence rows | Notes |
+|---|---|---|---|---|
+| `arabidopsis_vacuolar_srna` | `manual_curation_from_paper_bioRxiv` | ✓ | 13/13 (100%) | bioRxiv 793950, ENA PRJEB41301 |
+| `pea_cold_stress` | `manual_curation_from_paper_Mazurier` | ✓ | 11/11 (100%) | MDPI Genes 13:1119 |
+| `sea_cucumber_gut_metagenome` | `manual_curation_from_paper_PMC1105…` | ✓ | 7/7 (100%) | Data in Brief 54:110421 |
+| `human_gut_microbiome_temporal` | `manual_curation_from_paper_PMC1146…` | ✓ | 11/11 (100%) | Data in Brief 57:110961 |
+| `aetherobacter_fasciculatus_genome` | `manual_curation_from_paper_PMC1187…` | ✓ | 9/9 (100%) | Microb Biotechnol 18:e70104 |
+| `pseudomonas_recombinase_screen` | `manual_curation_from_paper_PMC1071…` | ✓ | 10/10 (100%) | Nucleic Acids Res 51:12522 |
+
+All Tier-A datasets have peer-reviewed publications, ENA/NCBI accessions, and per-row `_evidence` strings. They are the credibility backbone of the manuscript.
+
+### Tier B — Research-paper sources with lighter curator metadata (2 docs, **in main benchmark**)
+
+| Dataset | `generated_by` | DOI | _evidence rows | Source | Notes |
+|---|---|---|---|---|---|
+| `biosensor` | `manual review of source document` | — | 18/18 (100%) | Research paper PDF (mineru) | No top-level DOI field, but `_evidence` rows are populated |
+| `earthworm` | `manual review of source document` | — | 20/20 (100%) | bioRxiv preprint PDF (mineru) | Used as the primary smoke/diagnostic dataset; confirmed real research paper |
+
+Tier-B datasets keep the same per-row evidence discipline as Tier A but lack a top-level `paper_doi` field. Add the DOI fields before submission.
+
+### Tier C — Supplementary case studies (2 docs, **excluded from main benchmark for v1 manuscript**)
+
+| Dataset | `generated_by` | _evidence rows | Reason for exclusion | Manuscript role |
+|---|---|---|---|---|
+| `biorem` | `manual review of source document` | 35/35 (100%) | Source is a **BIOREM metadata template (Excel)**, not a research paper. Domain language differs from FAIR-DS terms; B1 zero-shot scored 0.838 because GT field names are template-aligned (artifact, not generalisable). | Supplementary §S — "structured-template" stress test |
+| `pomato` | `manual review of source document` | **0/18 (0%)** | Source is an **EU project proposal**, not a research paper; ground truth has 789 fields, no Assay sheet (only inv/study/sample/observationunit), and **none of the rows carry `_evidence` strings**. B1 scored 0.040 on it because the field-name conventions in the GT do not appear in the source. | Supplementary §S — "proposal/grant document" case study |
+
+These two datasets remain valuable as illustrations of edge cases (template-aligned vs. proposal-style sources) but cannot be averaged into the main hierarchical-F1 number without distorting it.
+
+### Tier D — Bioinformatics agentic benchmark (separate research direction)
+
+| Dataset | `generated_by` | Role |
+|---|---|---|
+| `compbiobench_metadata` | bioinformatics file-extraction tasks (BAM, FASTQ, VCF, H5AD…) | **Different evaluation target.** Tests the BioMetadataAgent's Docker-tool execution path, not document-based ISA reconstruction. Reported as a separate stress test in the manuscript Discussion / Supplementary, not aggregated with Tier A+B numbers. |
+
+CompBioBench's evaluation flow is `data file → biocontainer tool → metadata extraction`, whereas Tiers A/B evaluate `paper text → ISA-Tab reconstruction`. Keeping them separate avoids comparing apples to oranges.
+
+### Manuscript benchmark composition (v1)
+
+| Tier | Count | Datasets | Role |
+|---|---|---|---|
+| A — peer-reviewed papers | 6 | arabidopsis_vacuolar_srna, pea_cold_stress, sea_cucumber_gut_metagenome, human_gut_microbiome_temporal, aetherobacter_fasciculatus_genome, pseudomonas_recombinase_screen | Main benchmark |
+| B — research paper, lighter metadata | 2 | biosensor, earthworm | Main benchmark |
+| C — non-paper sources | 2 | biorem, pomato | Supplementary case studies |
+| D — bioinformatics agentic | 1 bundle | compbiobench_metadata | Separate stress test |
+
+**Main benchmark size:** **8 documents**. Domains covered: plant transcriptomics, marine metagenomics, microbial genomics, microbial genetics / synthetic biology, environmental microbiology, human microbiome, ecotoxicology, biosensors → **7 distinct domains**.
+
+### Open credibility items (to address before final submission)
+
+1. **Add `paper_doi` to Tier-B JSONs** (biosensor, earthworm) so every main-benchmark row has a citeable source.
+2. **Re-run a 5%-sample re-annotation by a second curator** on Tier-A + Tier-B (≥ 1 row per sheet per dataset) and report Cohen's κ. This is the cheapest evidence that the ground truth is not single-curator artefact.
+3. **Tag any LLM-assisted annotations explicitly** (e.g. add `_annotation_method: "llm_drafted_then_human_reviewed"` per row where applicable). The current `generated_by` field reads "manual" everywhere, but if any draft pass used an LLM the manuscript should disclose it for transparency.
+4. **`pomato` re-curation:** add `_evidence` strings to all 18 rows (currently 0/18) before re-introducing it into the main benchmark.
+
+---
 
 ## How to Add a New Dataset
 

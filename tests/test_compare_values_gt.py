@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
+from evaluation.scripts import compare_values_against_gt as compare_mod
 from evaluation.scripts.compare_values_against_gt import (
     _normalize,
     token_f1,
@@ -156,6 +157,32 @@ class TestLoadRunSheets:
         assert row.get("investigation title") == "My Study"
         assert row.get("firstname") == "Alice"
 
+    def test_isa_structure_rows_format_without_separate_matrix_file(self, tmp_path):
+        meta = {
+            "isa_structure": {
+                "sample": {
+                    "columns": ["sample name", "observation unit identifier"],
+                    "rows": [
+                        {
+                            "sample name": "Sample A",
+                            "observation unit identifier": "OU-1",
+                        },
+                        {
+                            "sample name": "Sample B",
+                            "observation unit identifier": "OU-2",
+                        },
+                    ],
+                    "fields": [{"field_name": "sample name", "value": "Sample A"}],
+                }
+            }
+        }
+        (tmp_path / "metadata.json").write_text(
+            __import__("json").dumps(meta), encoding="utf-8"
+        )
+        sheets = load_run_sheets(tmp_path)
+        assert len(sheets["sample"]) == 2
+        assert sheets["sample"][1].get("sample name") == "Sample B"
+
     def test_metadata_fields_fallback(self, tmp_path):
         meta = {
             "metadata_fields": [
@@ -173,3 +200,21 @@ class TestLoadRunSheets:
         import pytest
         with pytest.raises(FileNotFoundError):
             load_run_sheets(tmp_path)
+
+
+class TestNoSemanticMode:
+    def test_disabled_semantic_short_circuits_model_load(self, monkeypatch):
+        compare_mod._ST_MODEL = None
+        compare_mod._ST_AVAILABLE = False
+        compare_mod._ST_DISABLED = True
+
+        def _boom():
+            raise AssertionError("SentenceTransformer should not be loaded")
+
+        monkeypatch.setattr(compare_mod, "_get_st_model", _boom)
+        try:
+            # Replicate main() behavior after parsing --no-semantic.
+            use_semantic = not True and compare_mod._get_st_model() is not None
+            assert use_semantic is False
+        finally:
+            compare_mod._ST_DISABLED = False

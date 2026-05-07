@@ -173,6 +173,12 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                 matrix = self._structured_matrix_to_dict(structured)
                 tool_metrics = self._derive_tool_metrics(matrix, state)
                 tool_issues.extend(getattr(structured, "quality_issues", []) or [])
+                if self._is_empty_matrix(matrix):
+                    self.logger.warning(
+                        "ISAValueMapper inner loop returned an empty matrix; using deterministic field fallback"
+                    )
+                    matrix = self._build_matrix_heuristic(fields_by_level)
+                    matrix = self._merge_source_workspace_entity_rows(matrix, source_ws)
             else:
                 matrix = {}
         else:
@@ -192,6 +198,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             except Exception as exc:
                 self.logger.error("ISA value mapping failed: %s", exc)
                 matrix = self._build_matrix_heuristic(fields_by_level)
+                matrix = self._merge_source_workspace_entity_rows(matrix, source_ws)
 
         # ── Post-process: normalize, split entities, align columns ───
         matrix = self._split_entities_heuristic(matrix)
@@ -354,6 +361,15 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             "has_tool_evidence": bool(scratchpad.get("tools_called")),
         }
 
+    def _is_empty_matrix(self, matrix: Dict[str, Dict[str, Any]]) -> bool:
+        """Return True when a matrix has no rows with values in any ISA sheet."""
+        for sheet in matrix.values():
+            rows = (sheet or {}).get("rows") or []
+            for row in rows:
+                if isinstance(row, dict) and any(str(v).strip() for v in row.values() if v is not None):
+                    return False
+        return True
+
     def _merge_tool_candidates(
         self,
         matrix: Dict[str, Dict[str, Any]],
@@ -405,6 +421,129 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     cols.update(row.keys())
             result[level]["columns"] = sorted(cols)
         return result
+
+    def _merge_source_workspace_entity_rows(
+        self,
+        matrix: Dict[str, Dict[str, Any]],
+        source_workspace: Dict[str, Any],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Seed multi-entity rows from explicit table sheet headers in sources.
+
+        This is a deterministic safety net for cases where the agentic mapper
+        fails to return rows, but MinerU/table conversion already exposed
+        source-level sheet names such as ``[Sheet: ZYMO_EVEN]``.
+        """
+        sheet_names = self._extract_workspace_sheet_names(source_workspace)
+        if not sheet_names:
+            return matrix
+
+        self._collapse_single_row_levels(matrix)
+        parent_study = self._first_value(matrix, "study", "study identifier")
+        specs = {
+            "observationunit": ("observation unit identifier", "observation unit name"),
+            "sample": ("sample identifier", "sample name"),
+            "assay": ("assay identifier", "assay name"),
+        }
+        for level, (id_col, name_col) in specs.items():
+            target = matrix.setdefault(level, {"columns": [], "rows": []})
+            rows = target.setdefault("rows", [])
+            sheet_name_set = {name.strip().lower() for name in sheet_names}
+            shared_rows = [
+                row for row in rows
+                if isinstance(row, dict)
+                and str(row.get(id_col) or "").strip().lower() not in sheet_name_set
+            ]
+            rows[:] = [
+                row for row in rows
+                if isinstance(row, dict)
+                and str(row.get(id_col) or "").strip().lower() in sheet_name_set
+            ]
+            existing = {
+                str(row.get(id_col)).strip().lower()
+                for row in rows
+                if isinstance(row, dict) and row.get(id_col)
+            }
+            for sheet_name in sheet_names:
+                key = sheet_name.strip()
+                if not key or key.lower() in existing:
+                    continue
+                row = {id_col: key, name_col: key}
+                if level == "observationunit" and parent_study:
+                    row["study identifier"] = parent_study
+                elif level == "sample":
+                    row["observation unit identifier"] = key
+                elif level == "assay":
+                    row["sample identifier"] = key
+                rows.append(row)
+                existing.add(key.lower())
+            if shared_rows and rows:
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    for shared in shared_rows:
+                        for col, value in shared.items():
+                            if col == id_col or not value:
+                                continue
+                            if not row.get(col):
+                                row[col] = value
+            cols = set(str(c).strip().lower() for c in target.get("columns", []) if str(c).strip())
+            for row in rows:
+                if isinstance(row, dict):
+                    cols.update(str(c).strip().lower() for c in row.keys() if str(c).strip())
+            target["columns"] = sorted(cols)
+        return matrix
+
+    def _collapse_single_row_levels(self, matrix: Dict[str, Dict[str, Any]]) -> None:
+        for level in ("investigation", "study"):
+            sheet = matrix.get(level) or {}
+            rows = sheet.get("rows") or []
+            if len(rows) <= 1:
+                continue
+            merged: Dict[str, Any] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                for col, value in row.items():
+                    if value and not merged.get(col):
+                        merged[col] = value
+            sheet["rows"] = [merged] if merged else []
+            cols = set(str(c).strip().lower() for c in sheet.get("columns", []) if str(c).strip())
+            cols.update(str(c).strip().lower() for c in merged.keys() if str(c).strip())
+            sheet["columns"] = sorted(cols)
+
+    def _extract_workspace_sheet_names(self, source_workspace: Dict[str, Any]) -> List[str]:
+        paths: List[str] = []
+        summary_path = source_workspace.get("summary_path")
+        if summary_path:
+            paths.append(str(summary_path))
+        for path in (source_workspace.get("source_paths") or {}).values():
+            if path:
+                paths.append(str(path))
+
+        seen: set[str] = set()
+        names: List[str] = []
+        for path in paths:
+            try:
+                text = Path(path).read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            for match in re.finditer(r"^\[Sheet:\s*([^\]\n]+)\]\s*$", text, flags=re.MULTILINE):
+                name = match.group(1).strip()
+                if name and name.lower() not in seen:
+                    names.append(name)
+                    seen.add(name.lower())
+        return names
+
+    def _first_value(
+        self,
+        matrix: Dict[str, Dict[str, Any]],
+        level: str,
+        column: str,
+    ) -> str:
+        for row in (matrix.get(level) or {}).get("rows", []) or []:
+            if isinstance(row, dict) and row.get(column):
+                return str(row[column])
+        return ""
 
     def _compute_matrix_quality(
         self,
@@ -596,7 +735,13 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         self,
         fields_by_level: Dict[str, List[Dict[str, Any]]],
     ) -> Dict[str, Dict[str, Any]]:
-        """Build a matrix from flat fields WITHOUT LLM (deterministic fallback)."""
+        """Build a matrix from flat fields WITHOUT LLM (deterministic fallback).
+
+        Fields emitted by JSONGenerator already carry ``entity_id`` when the
+        model identifies separate samples, observation units, or assays. Use
+        that as the authoritative row grouping before falling back to a single
+        row per sheet.
+        """
         result: Dict[str, Dict[str, Any]] = {}
         for lvl in ISA_LEVELS:
             fds = fields_by_level.get(lvl, [])
@@ -604,19 +749,25 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                 result[lvl] = {"columns": [], "rows": []}
                 continue
 
-            # Single row: one field per column
-            row: Dict[str, Any] = {}
             columns: List[str] = []
+            rows_by_entity: Dict[str, Dict[str, Any]] = {}
+            row_order: List[str] = []
             for f in fds:
                 name = (f.get("field_name") or "").strip().lower()
                 if not name:
                     continue
                 columns.append(name)
+                entity_id = str(f.get("entity_id") or lvl).strip() or lvl
+                if entity_id not in rows_by_entity:
+                    rows_by_entity[entity_id] = {}
+                    row_order.append(entity_id)
                 val = f.get("value")
-                row[name] = str(val) if val is not None else ""
+                rows_by_entity[entity_id][name] = str(val) if val is not None else ""
+
+            rows = [rows_by_entity[eid] for eid in row_order if rows_by_entity[eid]]
             result[lvl] = {
                 "columns": sorted(set(columns)),
-                "rows": [row] if row else [],
+                "rows": rows,
             }
         return result
 

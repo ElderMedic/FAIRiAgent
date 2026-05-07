@@ -1133,9 +1133,12 @@ class JSONGeneratorAgent(BaseAgent):
             "assay": "Assay-level metadata (measurement details)",
         }
         for sheet in ISA_LEVEL_ORDER:
+            matrix_sheet = matrix_by_level.get(sheet, {}) or {}
             isa_structure[sheet] = {
                 "description": isa_descriptions[sheet],
                 "fields": flat_by_level.get(sheet, []),
+                "columns": list(matrix_sheet.get("columns") or []),
+                "rows": list(matrix_sheet.get("rows") or []),
             }
 
         # Statistics must reflect the same per-sheet deduplication as isa_structure
@@ -1157,6 +1160,7 @@ class JSONGeneratorAgent(BaseAgent):
 
             # ISA 5-sheet structure (legacy flat format with full provenance)
             "isa_structure": isa_structure,
+            "isa_values": matrix_by_level,
 
             # Document information summary (compact view; derived from flexible LLM extraction)
             "document_info": self._build_document_info_compact(doc_info),

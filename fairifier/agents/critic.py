@@ -196,7 +196,8 @@ class CriticAgent(BaseAgent):
             context = "No context available."
         
         evaluation = await self._judge_with_rubric(node_key, context)
-        evaluation = self._postprocess_api_constrained_evaluation(node_key, evaluation, state)
+        if not config.disable_api_grounding:
+            evaluation = self._postprocess_api_constrained_evaluation(node_key, evaluation, state)
         return self._stabilize_invalid_critic_output(node_key, evaluation, state)
     
     @traceable(name="Critic.EvaluateValidation")

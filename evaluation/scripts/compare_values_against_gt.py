@@ -45,10 +45,14 @@ except ImportError:
 
 _ST_MODEL = None
 _ST_AVAILABLE = False
+_ST_DISABLED = False
 
 
 def _get_st_model():
     global _ST_MODEL, _ST_AVAILABLE
+    if _ST_DISABLED:
+        _ST_AVAILABLE = False
+        return None
     if _ST_MODEL is not None:
         return _ST_MODEL
     try:
@@ -433,8 +437,9 @@ def main():
     args = parser.parse_args()
 
     if args.no_semantic:
-        global _ST_AVAILABLE
+        global _ST_AVAILABLE, _ST_DISABLED
         _ST_AVAILABLE = False
+        _ST_DISABLED = True
 
     gt_path  = Path(args.gt_path)
     run_dir  = Path(args.run_dir)
