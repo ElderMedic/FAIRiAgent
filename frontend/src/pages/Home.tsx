@@ -1,6 +1,8 @@
 import { useNavigate } from 'react-router-dom';
 import HomeCtaSection from '../components/home/HomeCtaSection';
 import HomeHero from '../components/home/HomeHero';
+import HomePageBackdrop from '../components/home/HomePageBackdrop';
+import HomeScrollProgress from '../components/home/HomeScrollProgress';
 import HomeValueSection from '../components/home/HomeValueSection';
 import HomeWorkflowSection from '../components/home/HomeWorkflowSection';
 import {
@@ -18,18 +20,23 @@ export default function Home() {
 
   return (
     <div className="home-page">
-      <HomeHero
-        onStart={() => navigate('/upload')}
-        onSample={() => navigate('/upload', { state: { demoMode: true } })}
-        signals={heroSignals}
-        consoleSlides={consoleSlides}
-      />
-      <HomeValueSection cards={valueCards} />
-      <HomeWorkflowSection steps={workflowSteps} />
-      <HomeCtaSection
-        onStart={() => navigate('/upload')}
-        onAbout={() => navigate('/about')}
-      />
+      <HomePageBackdrop />
+      <HomeScrollProgress />
+
+      <div className="home-page__layers">
+        <HomeHero
+          onStart={() => navigate('/upload')}
+          onSample={() => navigate('/upload', { state: { demoMode: true } })}
+          signals={heroSignals}
+          consoleSlides={consoleSlides}
+        />
+        <HomeValueSection cards={valueCards} />
+        <HomeWorkflowSection steps={workflowSteps} />
+        <HomeCtaSection
+          onStart={() => navigate('/upload')}
+          onAbout={() => navigate('/about')}
+        />
+      </div>
     </div>
   );
 }

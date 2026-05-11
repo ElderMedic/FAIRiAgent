@@ -87,6 +87,92 @@ def _build_header_column_map(ws: "openpyxl.worksheet.worksheet.Worksheet") -> Di
 # ── Local Excel generation (no API needed) ───────────────────────
 
 
+def _build_column_requirement_map(
+    isa_structure: Dict[str, Any],
+) -> Dict[str, Dict[str, str]]:
+    """Return {sheet_name: {column_name: requirement}} from the ISA structure.
+
+    Sources (in order): ``_field_definitions``, ``fields`` blocks, and
+    ``column_metadata`` embedded in each sheet.
+
+    requirement is one of ``MANDATORY``, ``RECOMMENDED``, or ``OPTIONAL``.
+    """
+    by_sheet: Dict[str, Dict[str, str]] = {}
+
+    # 1. _field_definitions (from JSONGenerator)
+    field_defs = isa_structure.get("_field_definitions", []) or []
+    for fd in field_defs:
+        if not isinstance(fd, dict):
+            continue
+        name = str(fd.get("field_name", "")).strip().lower()
+        sheet = str(fd.get("isa_sheet", "")).strip().lower()
+        req = str(fd.get("requirement", "")).strip().upper()
+        if not name or not sheet or req not in ("MANDATORY", "RECOMMENDED", "OPTIONAL"):
+            continue
+        by_sheet.setdefault(sheet, {})[name] = req
+
+    # 2. isa_structure.<sheet>.fields blocks
+    for sheet_name, sheet_data in isa_structure.items():
+        if not isinstance(sheet_data, dict):
+            continue
+        fields = sheet_data.get("fields", []) or []
+        for f in fields:
+            if not isinstance(f, dict):
+                continue
+            name = str(f.get("field_name", "")).strip().lower()
+            req = str(f.get("requirement", "")).strip().upper()
+            if not name or req not in ("MANDATORY", "RECOMMENDED", "OPTIONAL"):
+                continue
+            by_sheet.setdefault(sheet_name.lower(), {})[name] = req
+
+    # 3. isa_structure.<sheet>.column_metadata (explicit annotation)
+    for sheet_name, sheet_data in isa_structure.items():
+        if not isinstance(sheet_data, dict):
+            continue
+        col_meta = sheet_data.get("column_metadata", {}) or {}
+        if not isinstance(col_meta, dict):
+            continue
+        for col_name, req in col_meta.items():
+            req = str(req).strip().upper()
+            if req in ("MANDATORY", "RECOMMENDED", "OPTIONAL"):
+                by_sheet.setdefault(sheet_name.lower(), {})[col_name.strip().lower()] = req
+
+    return by_sheet
+
+
+# ── requirement-label styling ───────────────────────────────────────
+_REQ_FILLS: Dict[str, PatternFill] = {}
+_REQ_FONTS: Dict[str, Font] = {}
+
+
+def _requirement_label(requirement: str) -> str:
+    return {"MANDATORY": "M", "RECOMMENDED": "R", "OPTIONAL": "O"}.get(requirement, "")
+
+
+def _requirement_fill(requirement: str):
+    if not _REQ_FILLS:
+        from openpyxl.styles import PatternFill
+
+        _REQ_FILLS.update({
+            "MANDATORY": PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid"),
+            "RECOMMENDED": PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid"),
+            "OPTIONAL": PatternFill(start_color="F4F4F4", end_color="F4F4F4", fill_type="solid"),
+        })
+    return _REQ_FILLS.get(requirement)
+
+
+def _requirement_font(requirement: str):
+    if not _REQ_FONTS:
+        from openpyxl.styles import Font
+
+        _REQ_FONTS.update({
+            "MANDATORY": Font(bold=True, color="BF8F00", size=9),
+            "RECOMMENDED": Font(bold=False, color="38761D", size=9),
+            "OPTIONAL": Font(bold=False, color="999999", size=9),
+        })
+    return _REQ_FONTS.get(requirement)
+
+
 def _generate_xlsx_local(
     isa_structure: Dict[str, Any],
 ) -> Optional[bytes]:
@@ -120,6 +206,9 @@ def _generate_xlsx_local(
     )
     # ── end style definitions ───────────────────────────────────
 
+    # ── Build requirement lookup ─────────────────────────────────
+    column_req = _build_column_requirement_map(isa_structure)
+
     wb = openpyxl.Workbook()
     # Remove the auto-created empty sheet
     default_sheet = wb.active
@@ -149,9 +238,14 @@ def _generate_xlsx_local(
         rows = _resolve_rows(level_data)
         ws = wb.create_sheet(title=level_name.capitalize())
 
-        # Row 1: column headers
+        # Row 1: column headers (with requirement badge)
+        req_map = column_req.get(level_name, {})
         for col_idx, col_name in enumerate(columns, start=1):
-            cell = ws.cell(row=1, column=col_idx, value=col_name)
+            key = col_name.strip().lower()
+            req = req_map.get(key, "")
+            label = _requirement_label(req)
+            display = f"{col_name}  ({label})" if label else col_name
+            cell = ws.cell(row=1, column=col_idx, value=display)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = header_align
@@ -163,7 +257,10 @@ def _generate_xlsx_local(
                 key = col_name.strip().lower()
                 value = row_data.get(key)
                 if value is not None:
-                    cell = ws.cell(row=row_idx, column=col_idx, value=_excel_safe_value(value))
+                    cell = ws.cell(
+                        row=row_idx, column=col_idx,
+                        value=_excel_safe_value(value),
+                    )
                     cell.alignment = cell_align
                     cell.border = thin_border
 

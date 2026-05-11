@@ -137,11 +137,41 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             if sheet in fields_by_level:
                 fields_by_level[sheet].append(fd)
 
+        # ── Cardinality gate for deep agent ───────────────────────────
+        # Deep agent tool loops scale poorly with entity count.
+        # For high-cardinality docs, skip the agentic path and use the
+        # deterministic heuristic directly — it handles N rows just as
+        # well (entity_id grouping), without the risk of a 1 h+ hang.
+        distinct_entity_ids: int = len({
+            fd.get("entity_id", "")
+            for fd in metadata_fields
+            if fd.get("entity_id")
+        })
+        # Count fields with values — docs with many populated rows are
+        # the ones that cause ISAValueMapper to generate huge grids.
+        populated_sample_fields: int = sum(
+            1 for fd in metadata_fields
+            if fd.get("isa_sheet") in ("sample", "observationunit")
+            and fd.get("value")
+        )
+        _CARDINALITY_CAP = 12   # entity groups; above this the deep agent rarely finishes
+
         matrix: Dict[str, Dict[str, Any]]
         tool_metrics: Dict[str, Any] = {}
         tool_issues: List[str] = []
 
-        use_deep_mapping = config.enable_deep_agents
+        use_deep_mapping = (
+            config.enable_deep_agents
+            and distinct_entity_ids <= _CARDINALITY_CAP
+            and populated_sample_fields < 60
+        )
+        if config.enable_deep_agents and not use_deep_mapping:
+            self.logger.info(
+                "⏭️  Skipping deep mapping agent (%d entity groups, %d populated sample/observationunit fields) — "
+                "using deterministic heuristic to avoid agent-loop hang",
+                distinct_entity_ids,
+                populated_sample_fields,
+            )
         if use_deep_mapping:
             inner_agent = self._build_ivm_inner_agent(
                 source_workspace=source_ws,

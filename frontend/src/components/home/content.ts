@@ -1,11 +1,14 @@
 import type { LucideIcon } from 'lucide-react';
 import {
-  Bot,
-  Database,
-  FileSearch,
-  Network,
-  ShieldCheck,
-  Workflow,
+  BrainCircuit,
+  ClipboardCheck,
+  Dna,
+  FileStack,
+  GitMerge,
+  LibraryBig,
+  PackageCheck,
+  ScanText,
+  Telescope,
 } from 'lucide-react';
 
 export interface HomeSignal {
@@ -40,63 +43,63 @@ export interface HomeConsoleSlide {
   highlights: string[];
 }
 
-/** Hero “signal” cards: short label; hover/focus reveals detail (see Home.css). */
+/** Hero "signal" cards: short label; hover/focus reveals detail (see Home.css). */
 export const heroSignals: HomeSignal[] = [
   {
-    label: 'Full-paper intake',
-    detail: 'PDFs, methods, tables, and supplements—not abstract-only snippets.',
+    label: 'Full-paper parsing',
+    detail: 'Methods, tables, and supplementary material—not abstract-only extraction.',
   },
   {
-    label: 'MIxS / FAIR-DS grounded',
-    detail: 'Checklist choice, field structure, and term grounding run in the pipeline.',
+    label: 'Standards-grounded',
+    detail: 'MIxS package selection and FAIR Data Station term lookup run inside the pipeline.',
   },
   {
-    label: 'Review-first output',
-    detail: 'Evidence, validation, and artifacts stay with the run for curator review.',
+    label: 'Auditable by design',
+    detail: 'Evidence, confidence scores, and artifacts stay attached for every run.',
   },
 ];
 
 export const valueCards: HomeCard[] = [
   {
-    icon: FileSearch,
-    title: 'Paper → metadata draft',
+    icon: ScanText,
+    title: 'Document → metadata draft',
     description:
-      'Starts from the document and moves toward structured, submission-oriented metadata.',
+      'Reads the full paper and converts unstructured content into a structured, submission-oriented metadata draft.',
   },
   {
-    icon: Bot,
-    title: 'Specialised agents',
+    icon: BrainCircuit,
+    title: 'Specialised agent roles',
     description:
-      'Planner, parser, retriever, generator, and critic—inspectable roles, not one giant prompt.',
+      'Planner, parser, retriever, generator, and critic each own a distinct step—making the pipeline inspectable, not opaque.',
   },
   {
-    icon: ShieldCheck,
-    title: 'A run you can audit',
+    icon: ClipboardCheck,
+    title: 'Runs you can audit',
     description:
-      'Logs, confidence signals, and downloads stay attached so outputs can be checked against the paper.',
+      'Logs, confidence signals, and downloadable artifacts remain attached so every draft can be traced back to the source paper.',
   },
 ];
 
 export const workflowSteps: HomeStep[] = [
   {
-    icon: FileSearch,
+    icon: ScanText,
     title: 'Parse',
-    body: 'Structured text from full PDFs (e.g. MinerU), including tables and supplements.',
+    body: 'Full-document structured text from PDF or Markdown via MinerU—methods, tables, and supplements included.',
   },
   {
-    icon: Network,
+    icon: LibraryBig,
     title: 'Ground',
-    body: 'Choose MIxS-style packages and FAIR Data Station context before drafting fields.',
+    body: 'Select MIxS-style checklist packages and retrieve FAIR Data Station schema context before any field is drafted.',
   },
   {
-    icon: Workflow,
+    icon: GitMerge,
     title: 'Draft & critique',
-    body: 'Plan → execute → critique → refine: retry when evidence or schema checks fail.',
+    body: 'Plan → execute → critique → refine: the critic retries on weak evidence or failed schema checks.',
   },
   {
-    icon: Database,
+    icon: PackageCheck,
     title: 'Export & review',
-    body: 'ISA-oriented JSON, validation, and reports—ready for correction and handoff.',
+    body: 'ISA-oriented JSON, validation report, and processing logs—packaged together, ready for curator handoff.',
   },
 ];
 
@@ -104,22 +107,22 @@ export const consoleSlides: HomeConsoleSlide[] = [
   {
     label: 'Plan',
     eyebrow: 'Architecture',
-    summary: 'From manuscript to checklist-aware metadata—not a generic summary.',
+    summary: 'Checklist-aware metadata from the full manuscript—not a generic document summary.',
     wideCard: {
-      icon: FileSearch,
-      title: 'Paper-scale input',
-      body: 'PDF, text, or Markdown share one backend path for consistent processing.',
+      icon: FileStack,
+      title: 'Full-document intake',
+      body: 'PDF, text, and Markdown all follow one backend path for consistent, reproducible processing.',
     },
     cards: [
       {
-        icon: Workflow,
-        title: 'Planner',
-        body: 'Selects the appropriate MIxS-style package before field drafting.',
+        icon: BrainCircuit,
+        title: 'Planner agent',
+        body: 'Selects the right MIxS-style checklist package before any field drafting begins.',
       },
       {
-        icon: Database,
+        icon: LibraryBig,
         title: 'FAIR Data Station',
-        body: 'Schema search and curated context shape the draft for downstream use.',
+        body: 'Schema search and curated vocabulary shape each field for downstream repository use.',
       },
     ],
     highlights: ['Full-document path', 'Distinct agent roles', 'Repository-oriented output'],
@@ -127,47 +130,47 @@ export const consoleSlides: HomeConsoleSlide[] = [
   {
     label: 'Run',
     eyebrow: 'Execution',
-    summary: 'Enough state visible to see what happened and why.',
+    summary: 'Enough state stays visible to understand what happened and why.',
     wideCard: {
-      icon: ShieldCheck,
-      title: 'Preflight',
-      body: 'Key services are checked before launch so environment issues surface early.',
+      icon: Telescope,
+      title: 'Preflight check',
+      body: 'Required services are verified before launch so environment problems surface before processing begins.',
     },
     cards: [
       {
-        icon: Workflow,
+        icon: GitMerge,
         title: 'Critique loop',
-        body: 'Retries target weak drafts instead of returning the first plausible answer.',
+        body: 'Retries are targeted at genuinely weak drafts—not the first plausible answer.',
       },
       {
-        icon: Bot,
-        title: 'One run object',
-        body: 'Retrieval, model output, and critic signals stay in one trace.',
+        icon: Dna,
+        title: 'One trace per run',
+        body: 'Retrieval, model outputs, and critic signals are captured together in a single run object.',
       },
     ],
-    highlights: ['Live progress', 'SSE-friendly runs', 'Suited to difficult papers'],
+    highlights: ['Live progress stream', 'SSE-friendly runs', 'Handles complex papers'],
   },
   {
     label: 'Review',
     eyebrow: 'Outputs',
-    summary: 'Concrete files to inspect, correct, and pass forward.',
+    summary: 'Concrete, downloadable files to inspect, correct, and pass forward.',
     wideCard: {
-      icon: Database,
-      title: 'Artifacts',
-      body: 'Metadata JSON, validation, and workflow reports listed together—not buried in logs.',
+      icon: PackageCheck,
+      title: 'Bundled artifacts',
+      body: 'Metadata JSON, validation results, and workflow reports appear together—not scattered through logs.',
     },
     cards: [
       {
-        icon: ShieldCheck,
-        title: 'Confidence',
-        body: 'Scores and summaries help judge how close a draft is to submission-ready.',
+        icon: ClipboardCheck,
+        title: 'Confidence signals',
+        body: 'Field-level scores and summaries help prioritise which parts of the draft need curator attention.',
       },
       {
-        icon: FileSearch,
-        title: 'Persistent files',
-        body: 'Written to your output area for revisit or downstream FAIR steps.',
+        icon: FileStack,
+        title: 'Persistent outputs',
+        body: 'Written to your output folder for re-inspection or direct handoff to FAIR-DS workflows.',
       },
     ],
-    highlights: ['Downloadable bundle', 'Nested outputs supported', 'Handoff to FAIR-DS workflows'],
+    highlights: ['Downloadable bundle', 'Nested output support', 'FAIR-DS handoff ready'],
   },
 ];

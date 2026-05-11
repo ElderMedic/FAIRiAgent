@@ -2024,7 +2024,14 @@ REQUIREMENTS:
         return all_metadata
 
     def _metadata_generation_batch_size(self) -> int:
-        """Return a conservative batch size for metadata generation."""
+        """Return a conservative batch size for metadata generation.
+
+        Sizes are calibrated per-provider so that the *output* JSON for one
+        batch (field_name + value + evidence + confidence) fits within the
+        provider's effective ``max_tokens`` window without truncation.
+        Truncation triggers recursive batch-splitting (16→8→4→2→1) which
+        wastes API calls and wall-clock time.
+        """
         provider = (self.provider or "").lower()
         model = (self.model or "").lower()
 
@@ -2032,14 +2039,23 @@ REQUIREMENTS:
             return 18
         if provider == "ollama":
             if "9b" in model or "8b" in model:
-                return 10
+                return 8
             if "35b" in model or "32b" in model or "30b" in model:
-                return 16
-            return 12
+                return 12
+            # default for 20b-27b: evidence strings are the bottleneck,
+            # not the model's reasoning capacity
+            return 10
         if provider == "qwen":
             return 20
         if provider == "openai":
             return 24
+        if provider == "deepseek":
+            # DeepSeek v4-pro has generous input context but the output
+            # window is ~8 k tokens.  Evidence strings are very verbose,
+            # so 8 fields per batch keeps most batches under the limit.
+            return 8
+        if provider == "gemini":
+            return 12
         return 16
 
     def _metadata_context_budget(self, field_count: int) -> int:

@@ -6,7 +6,7 @@ import {
   useTransform,
   type Variants,
 } from 'framer-motion';
-import { ArrowRight, BadgeCheck, Sparkles } from 'lucide-react';
+import { ArrowRight, BadgeCheck, Microscope } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import HomeHeroBackdrop from './HomeHeroBackdrop';
 import type { HomeConsoleSlide, HomeSignal } from './content';
@@ -31,27 +31,30 @@ export default function HomeHero({
   const reduceMotion = useReducedMotion();
   const [activeConsoleIndex, setActiveConsoleIndex] = useState(0);
   const consolePauseUntilRef = useRef(0);
+
   const heroStagger: Variants | undefined = reduceMotion
     ? undefined
     : {
         hidden: {},
         show: {
           transition: {
-            staggerChildren: 0.1,
-            delayChildren: 0.08,
+            staggerChildren: 0.11,
+            delayChildren: 0.06,
           },
         },
       };
+
   const heroItem: Variants | undefined = reduceMotion
     ? undefined
     : {
-        hidden: { opacity: 0, y: 20 },
+        hidden: { opacity: 0, y: 24 },
         show: {
           opacity: 1,
           y: 0,
-          transition: { duration: 0.65, ease: [0.22, 1, 0.36, 1] },
+          transition: { duration: 0.7, ease: [0.16, 1, 0.3, 1] },
         },
       };
+
   const { scrollYProgress } = useScroll({
     target: sectionRef,
     offset: ['start start', 'end start'],
@@ -105,33 +108,34 @@ export default function HomeHero({
           style={reduceMotion ? undefined : { y: contentY, opacity: contentOpacity }}
         >
           <motion.div className="home-chip" variants={heroItem}>
-            <Sparkles className="home-chip__icon" aria-hidden="true" />
-            Multi-agent LLM system · biological research
+            <Microscope className="home-chip__icon" aria-hidden="true" />
+            Multi-agent AI · Biological research
           </motion.div>
 
           <motion.div className="home-copy" variants={heroItem}>
-            <p className="home-eyebrow">Full papers in. FAIR metadata drafts out.</p>
+            <p className="home-eyebrow">From manuscript to FAIR metadata — in one run.</p>
             <h1 className="home-title">
-              Multi-agent FAIR metadata for biological research
+              FAIR metadata curation for biological research
             </h1>
             <p className="home-lede">
-              Turn unstructured manuscripts into structured, review-ready metadata drafts: parse the full
-              document, ground against FAIR Data Station, iterate with a critic, then export artifacts.
+              FAIRiAgent reads your entire paper—methods, tables, and supplements—and produces
+              structured, standards-grounded metadata drafts ready for curator review and
+              FAIR Data Station submission.
             </p>
             <p className="home-keywords" aria-label="Highlights">
               <span className="home-keyword">Plan → Execute → Critique → Refine</span>
               <span className="home-keyword">MIxS / ISA-Tab</span>
-              <span className="home-keyword">MinerU · FDS · skills</span>
+              <span className="home-keyword">LangGraph · multi-agent</span>
             </p>
           </motion.div>
 
           <motion.div className="home-actions" variants={heroItem}>
             <button type="button" onClick={onStart} className="home-button home-button--primary">
-              Start a run
+              Start processing
               <ArrowRight className="home-button__icon" aria-hidden="true" />
             </button>
             <button type="button" onClick={onSample} className="home-button home-button--ghost">
-              Run bundled sample
+              Try the demo paper
             </button>
           </motion.div>
 
@@ -158,12 +162,12 @@ export default function HomeHero({
         >
           <header className="home-console__header">
             <div>
-              <p className="home-console__eyebrow">Run overview</p>
-              <h2 className="home-console__title">Paper → FAIR metadata</h2>
+              <p className="home-console__eyebrow">Pipeline run</p>
+              <h2 className="home-console__title">Manuscript → FAIR metadata</h2>
             </div>
-            <div className="home-status-pill">
+            <div className="home-status-pill home-status-pill--pulse">
               <BadgeCheck className="home-status-pill__icon" aria-hidden="true" />
-              Ready for review
+              Review-ready
             </div>
           </header>
 
@@ -194,10 +198,10 @@ export default function HomeHero({
               <motion.div
                 key={activeConsoleSlide.label}
                 className="home-console__view"
-                initial={reduceMotion ? false : { opacity: 0, y: 10 }}
+                initial={reduceMotion ? false : { opacity: 0, y: 12 }}
                 animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
-                exit={reduceMotion ? undefined : { opacity: 0, y: -10 }}
-                transition={{ duration: 0.28, ease: 'easeOut' }}
+                exit={reduceMotion ? undefined : { opacity: 0, y: -12 }}
+                transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
               >
                 <article className="home-console-card home-console-card--wide">
                   <div>
@@ -233,7 +237,7 @@ export default function HomeHero({
                 className="home-highlight"
                 initial={reduceMotion ? false : { opacity: 0, y: 8 }}
                 animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
-                transition={{ duration: 0.26, ease: 'easeOut' }}
+                transition={{ duration: 0.28, ease: 'easeOut' }}
               >
                 {item}
               </motion.div>

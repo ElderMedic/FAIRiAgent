@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
@@ -145,23 +146,40 @@ class ReactLoopMixin:
         thread_id: str,
         state: FAIRifierState,
         scratchpad_name: Optional[str] = None,
+        *,
+        timeout_seconds: int = 900,
     ) -> Optional[BaseModel]:
-        """Invoke a deep agent and record lightweight telemetry."""
+        """Invoke a deep agent with a hard timeout (default 900s = 15 min).
+
+        A stuck deep-agent LLM call can block the entire pipeline for
+        the outer timeout duration (up to 2 h).  The inner timeout here
+        catches those stalls early so the deterministic fallback can
+        take over instead.
+        """
         if agent is None:
             return None
 
         try:
             contract = self._get_react_contract(scratchpad_name or getattr(self, "name", None))
-            result = await agent.ainvoke(
-                {
-                    "messages": [{"role": "user", "content": task_message}],
-                    "files": seed_files,
-                },
-                config={
-                    "configurable": {"thread_id": thread_id},
-                    "recursion_limit": max(50, contract["max_iterations"] * 20),
-                },
+            result = await asyncio.wait_for(
+                agent.ainvoke(
+                    {
+                        "messages": [{"role": "user", "content": task_message}],
+                        "files": seed_files,
+                    },
+                    config={
+                        "configurable": {"thread_id": thread_id},
+                        "recursion_limit": max(50, contract["max_iterations"] * 20),
+                    },
+                ),
+                timeout=timeout_seconds,
             )
+        except asyncio.TimeoutError:
+            self.logger.warning(
+                "Deep ReAct agent timed out after %ds — using deterministic fallback",
+                timeout_seconds,
+            )
+            return None
         except Exception as exc:  # pragma: no cover - network/model/runtime dependent
             self.logger.warning("Deep ReAct path failed, using fallback: %s", exc)
             return None

@@ -13,19 +13,21 @@ export default function HomeValueSection({ cards }: HomeValueSectionProps) {
         hidden: {},
         show: {
           transition: {
-            staggerChildren: 0.1,
-            delayChildren: 0.06,
+            staggerChildren: 0.14,
+            delayChildren: 0.08,
           },
         },
       };
   const item: Variants | undefined = reduceMotion
     ? undefined
     : {
-        hidden: { opacity: 0, y: 18 },
+        hidden: { opacity: 0, y: 36, scale: 0.96, rotateX: -6 },
         show: {
           opacity: 1,
           y: 0,
-          transition: { duration: 0.55, ease: [0.22, 1, 0.36, 1] },
+          scale: 1,
+          rotateX: 0,
+          transition: { duration: 0.7, ease: [0.16, 1, 0.3, 1] },
         },
       };
 
@@ -40,10 +42,11 @@ export default function HomeValueSection({ cards }: HomeValueSectionProps) {
           variants={item}
         >
           <p className="home-section__eyebrow">Why FAIRiAgent</p>
-          <h2 className="home-section__title">Curation that scales with full papers.</h2>
+          <h2 className="home-section__title">Standards-aware curation at scale.</h2>
           <p className="home-section__body">
-            Manual MIxS-style metadata from a manuscript can take hours. This system targets the same job with
-            inspectable, multi-agent runs—not a single opaque prompt.
+            Manual MIxS-style metadata from a single manuscript can take hours of expert time.
+            FAIRiAgent targets the same task with structured, multi-agent runs—every step
+            observable, every output traceable to the source document.
           </p>
         </motion.div>
 
@@ -53,9 +56,17 @@ export default function HomeValueSection({ cards }: HomeValueSectionProps) {
           whileInView={reduceMotion ? undefined : 'show'}
           viewport={{ once: true, amount: 0.18 }}
           variants={stagger}
+          style={reduceMotion ? undefined : { perspective: '1200px' }}
         >
           {cards.map((card) => (
-            <motion.article key={card.title} className="home-info-card" variants={item}>
+            <motion.article
+              key={card.title}
+              className="home-info-card"
+              variants={item}
+              whileHover={reduceMotion ? undefined : { y: -6, rotateX: 2, rotateY: -2 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+              style={reduceMotion ? undefined : { transformStyle: 'preserve-3d' }}
+            >
               <div className="home-info-card__icon-wrap">
                 <card.icon className="home-info-card__icon" aria-hidden="true" />
               </div>

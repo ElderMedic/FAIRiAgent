@@ -62,6 +62,28 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _flatten_field_definition(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract requirement-bearing keys from a retrieved_knowledge entry.
+
+    ``retrieved_knowledge`` items nest ``requirement`` / ``required`` /
+    ``isa_sheet`` inside a ``metadata`` sub-dict.  This helper promotes
+    those keys to the top level so that ``_field_definitions`` consumers
+    (Excel Help sheet, validators) can read them without understanding
+    the internal nesting.
+    """
+    meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    return {
+        "term": item.get("term", ""),
+        "source": item.get("source", ""),
+        "isa_sheet": meta.get("isa_sheet", ""),
+        "data_type": meta.get("data_type", ""),
+        "requirement": meta.get("requirement", ""),
+        "required": bool(meta.get("requirement", "").upper() == "MANDATORY"
+                         or meta.get("required")),
+        "package": meta.get("package", ""),
+    }
+
+
 def _filesystem_document_path(document_path: str):
     """On-disk path when ``document_path`` uses ``base::source`` multi-file markers."""
     from pathlib import Path
@@ -3565,10 +3587,7 @@ Field semantics for ``plan_tasks``:
                 if isinstance(parsed, dict):
                     if retrieved_knowledge:
                         parsed["_field_definitions"] = [
-                            {k: v for k, v in f.items()
-                             if k in ("name", "label", "isa_sheet", "sheet", "data_type",
-                                      "syntax", "regex", "required", "requirement", "package")}
-                            for f in retrieved_knowledge
+                            _flatten_field_definition(f) for f in retrieved_knowledge
                             if isinstance(f, dict)
                         ]
                     # Update with final complete confidence_scores

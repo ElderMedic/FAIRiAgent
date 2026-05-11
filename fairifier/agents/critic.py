@@ -760,23 +760,36 @@ class CriticAgent(BaseAgent):
         
         prompt = (
             f"{system_prompt}\n\n"
-            f"**CRITICAL CONSTRAINTS:**\n"
-            f"1. Maximum response size: 3,000 characters\n"
-            f"2. Critique: < 200 characters\n"
-            f"3. Each issue: < 100 characters\n"
-            f"4. Each suggestion: < 150 characters\n\n"
+            f"─── OUTPUT CONTRACT (HARD LIMITS — EXCEEDING ANY WILL CAUSE REJECTION) ───\n"
+            f"- Respond with a SINGLE JSON object matching the schema below.\n"
+            f"- The ENTIRE response MUST be under 1,500 characters.\n"
+            f"- critique: ≤ 180 characters — one sentence, no bullet points.\n"
+            f"- issues: ≤ 3 items, each ≤ 80 characters.  Omit if none.\n"
+            f"- suggestions: ≤ 3 items, each ≤ 120 characters.  Omit if none.\n"
+            f"- DO NOT re-state the evaluation context or rubric back.\n"
+            f"- DO NOT write paragraphs, explanations, or markdown outside the JSON.\n"
+            f"- If the output meets the rubric → score ≥ threshold, issues=[], suggestions=[].\n"
+            f"- If the output fails → score < threshold, list ONLY the top 2-3 concrete gaps.\n"
+            f"─── END CONTRACT ───\n\n"
             f"# Node: {node_key}\n"
             f"Goal: {node_rules.get('description', '')}\n\n"
             f"## Evaluation Context\n{evaluation_content}\n\n"
             f"## Rubric\n{rubric_block}\n\n"
-            f"**OUTPUT FORMAT:**\n"
-            f"Please provide your evaluation according to the expected schema."
+            f"Return the JSON evaluation now.  No preamble."
         )
         
         from langchain_core.messages import HumanMessage
         
         try:
             llm = self.llm_helper.get_llm()
+            # Cap Critic output at 1 024 tokens — a well-formed evaluation needs
+            # < 200 chars of critique + 3×80-char issues + 3×120-char suggestions.
+            # This hard cap prevents the 35B MoE model from drifting into
+            # thousand-word essays that can block the pipeline for 15+ minutes.
+            if hasattr(llm, "max_tokens"):
+                llm.max_tokens = min(getattr(llm, "max_tokens", 1024) or 1024, 1024)
+            if hasattr(llm, "num_predict"):
+                llm.num_predict = 1024
             structured_llm = llm.with_structured_output(CriticEvaluation)
             result = await structured_llm.ainvoke([HumanMessage(content=prompt)])
             parsed = result.model_dump()
@@ -784,16 +797,17 @@ class CriticAgent(BaseAgent):
             logger.warning(f"Structured output parsing failed: {e}. Falling back to standard LLM call.")
             # Prompt adjustment for standard fallback
             fallback_prompt = prompt + (
-                "\n\n**CRITICAL (STANDARD v1.0):**\n"
-                "Wrap your JSON in markdown code blocks:\n"
+                "\n\n**CRITICAL — JSON OUTPUT REQUIRED:**\n"
+                "Wrap your JSON in markdown code blocks.  Entire response < 1,500 chars.\n"
                 "```json\n"
                 "{\n"
                 '  "score": 0.0-1.0,\n'
-                '  "critique": "brief summary < 200 chars",\n'
-                '  "issues": ["issue1 < 100 chars"],\n'
-                '  "suggestions": ["suggestion1 < 150 chars"]\n'
+                '  "critique": "one sentence < 180 chars",\n'
+                '  "issues": ["≤3 items, each < 80 chars"],\n'
+                '  "suggestions": ["≤3 items, each < 120 chars"]\n'
                 "}\n"
-                "```"
+                "```\n"
+                "Do NOT write anything outside the code block."
             )
             response = await self.llm_helper._call_llm(
                 [HumanMessage(content=fallback_prompt)],

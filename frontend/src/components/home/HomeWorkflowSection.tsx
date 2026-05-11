@@ -1,5 +1,5 @@
 import { motion, useReducedMotion, type Variants } from 'framer-motion';
-import { BadgeCheck, FlaskConical } from 'lucide-react';
+import { ClipboardCheck, FlaskConical } from 'lucide-react';
 import type { HomeStep } from './content';
 
 interface HomeWorkflowSectionProps {
@@ -14,19 +14,20 @@ export default function HomeWorkflowSection({ steps }: HomeWorkflowSectionProps)
         hidden: {},
         show: {
           transition: {
-            staggerChildren: 0.12,
-            delayChildren: 0.08,
+            staggerChildren: 0.16,
+            delayChildren: 0.1,
           },
         },
       };
   const item: Variants | undefined = reduceMotion
     ? undefined
     : {
-        hidden: { opacity: 0, y: 24 },
+        hidden: { opacity: 0, x: -32, scale: 0.97 },
         show: {
           opacity: 1,
-          y: 0,
-          transition: { duration: 0.6, ease: [0.22, 1, 0.36, 1] },
+          x: 0,
+          scale: 1,
+          transition: { duration: 0.75, ease: [0.16, 1, 0.3, 1] },
         },
       };
 
@@ -44,12 +45,13 @@ export default function HomeWorkflowSection({ steps }: HomeWorkflowSectionProps)
             <div className="home-workflow__copy">
               <p className="home-section__eyebrow home-section__eyebrow--dark">System</p>
               <h2 className="home-section__title home-section__title--dark">
-                Parse, ground, draft—then critique before export.
+                Parse, ground, draft—then critique before you export.
               </h2>
             </div>
             <p className="home-workflow__lede">
-              LangGraph orchestrates specialised agents with a Plan → Execute → Critique → Refine loop:
-              structured intake, FAIR Data Station grounding, and validation-aware retries.
+              LangGraph orchestrates specialised agents through a Plan → Execute → Critique → Refine
+              loop: structured document intake, FAIR Data Station grounding, and validation-aware
+              retries that target genuinely weak fields.
             </p>
           </motion.div>
 
@@ -57,7 +59,7 @@ export default function HomeWorkflowSection({ steps }: HomeWorkflowSectionProps)
             <div className="home-ops-panel__copy">
               <p className="home-section__eyebrow home-section__eyebrow--dark">Operating model</p>
               <h3 className="home-ops-panel__title">
-                Drafts you can inspect—not a black-box answer.
+                Transparent drafts—not a black-box answer.
               </h3>
             </div>
 
@@ -65,20 +67,22 @@ export default function HomeWorkflowSection({ steps }: HomeWorkflowSectionProps)
               <article className="home-ops-card">
                 <div className="home-ops-card__heading">
                   <FlaskConical className="home-ops-card__icon" aria-hidden="true" />
-                  <span>Full documents</span>
+                  <span>Full documents only</span>
                 </div>
                 <p className="home-ops-card__body">
-                  Methods, tables, and supplements matter—metadata is rarely in one paragraph.
+                  Methods, tables, and supplements are critical—biological metadata is rarely
+                  contained in a single paragraph.
                 </p>
               </article>
 
               <article className="home-ops-card">
                 <div className="home-ops-card__heading">
-                  <BadgeCheck className="home-ops-card__icon" aria-hidden="true" />
-                  <span>Bundled sample = real path</span>
+                  <ClipboardCheck className="home-ops-card__icon" aria-hidden="true" />
+                  <span>Demo uses the real pipeline</span>
                 </div>
                 <p className="home-ops-card__body">
-                  The demo manuscript uses the same pipeline as your uploads—no toy shortcut.
+                  The bundled sample paper runs through the same agents as your own uploads—no
+                  simplified shortcut.
                 </p>
               </article>
             </div>
