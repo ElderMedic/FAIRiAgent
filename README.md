@@ -150,50 +150,62 @@ flowchart TD
         
         subgraph PARSE["Step 1: Document Parsing"]
             B[🔍 Document Parser<br/>LLM Extraction]
-            C1[🧑‍⚖️ Critic<br/>LLM-as-Judge]
+            C1[🧑‍⚖️ Critic]
             B --> C1
         end
         
-        subgraph PLAN["Step 2: Planning"]
-            D[📋 Planner<br/>Domain Analysis]
+        subgraph BIO["Step 2: Bioinformatics (conditional)"]
+            G[🧬 BioMetadataAgent<br/>Containerised tools]
         end
         
-        subgraph RETRIEVE["Step 3: Knowledge Retrieval"]
-            E[🧠 Knowledge Retriever<br/>FAIR-DS API + Terms]
-            C2[🧑‍⚖️ Critic<br/>API-Aware Evaluation]
+        subgraph PLAN["Step 3: Planning"]
+            D[📋 Planner<br/>Agent-specific guidance]
+        end
+        
+        subgraph RETRIEVE["Step 4: Knowledge Retrieval"]
+            E[🧠 Knowledge Retriever<br/>FAIR-DS API + Local KB]
+            C2[🧑‍⚖️ Critic]
             E --> C2
         end
         
-        subgraph GENERATE["Step 4: Metadata Generation"]
+        subgraph GENERATE["Step 5: JSON Generation"]
             F[📝 JSON Generator<br/>ISA-Tab Mapping]
-            C3[🧑‍⚖️ Critic<br/>Evidence Check]
+            C3[🧑‍⚖️ Critic]
             F --> C3
+        end
+        
+        subgraph MAP["Step 6: ISA Value Mapping"]
+            H[🔗 ISA Value Mapper<br/>Entity Grouping + Terms]
         end
     end
     
     subgraph EXTERNAL["🌐 External Services"]
-        API[🗄️ FAIR-DS API<br/>Packages & Terms]
+        API[🗄️ FAIR-DS API<br/>59 Packages, 892 Terms]
+        FAIR[📊 FAIR-DS Validator<br/>ShEx Schema]
     end
     
     subgraph OUTPUT["📤 Output Layer"]
-        H[📊 FAIR Metadata<br/>ISA-Tab JSON]
-        R[📋 Workflow Report<br/>Confidence & Trajectory]
+        J[📊 FAIR Metadata JSON]
+        R[📋 Workflow Report<br/>Confidence + Evidence]
     end
     
     M --> B
-    C1 -->|ACCEPT| D
-    C1 -->|RETRY/ESCALATE| B
+    C1 -->|ACCEPT| G
+    C1 -->|RETRY| B
+    G --> D
     D --> E
     API -.->|packages, terms| E
     E -.->|api_capabilities| C2
     C2 -->|ACCEPT| F
-    C2 -->|RETRY/ESCALATE| E
+    C2 -->|RETRY| E
     C3 -->|ACCEPT| H
-    C3 -->|RETRY/ESCALATE| F
-    H --> R
+    C3 -->|RETRY| F
+    H --> J
+    J --> R
+    FAIR -.->|validate| J
     
     style A fill:#e3f2fd,stroke:#1565c0
-    style H fill:#c8e6c9,stroke:#2e7d32
+    style J fill:#c8e6c9,stroke:#2e7d32
     style C1 fill:#fff9c4,stroke:#f9a825
     style C2 fill:#fff9c4,stroke:#f9a825
     style C3 fill:#fff9c4,stroke:#f9a825
@@ -201,7 +213,7 @@ flowchart TD
     style R fill:#f3e5f5,stroke:#8e24aa
 ```
 
-> **Figure Caption:** FAIRiAgent employs a LangGraph-orchestrated multi-agent pipeline for automated FAIR metadata extraction. The system processes scientific documents through four main stages: (1) **Document Parser** extracts structured information using LLM-based adaptive extraction; (2) **Planner** analyzes document domain and generates agent-specific guidance; (3) **Knowledge Retriever** queries FAIR-DS API for metadata packages and terms, with API capability awareness; (4) **JSON Generator** maps extracted information to ISA-Tab compliant metadata. Each agent is evaluated by an embedded **Critic Agent** using LLM-as-Judge rubrics, with retry mechanisms (up to 2 attempts). The Critic evaluates outputs considering API limitations, preventing infinite retry loops when external constraints exist. A no-progress detection mechanism terminates unproductive retry cycles early, optimizing token usage while maintaining output quality.
+> **Figure Caption:** FAIRiAgent employs a LangGraph-orchestrated 6-agent pipeline: (1) **Document Parser** extracts structured info; (2) **BioMetadataAgent** (conditional) recovers metadata from raw bioinformatics files via Dockerised biocontainers; (3) **Planner** generates per-agent guidance from document domain analysis; (4) **Knowledge Retriever** queries FAIR-DS API (59 packages, 892 terms) and local KB; (5) **JSON Generator** maps results to ISA-Tab with recursive batch splitting (16→8→4→2→1) when truncation is detected; (6) **ISA Value Mapper** assigns entity_id grouping and standardises field names. A **CriticAgent** is embedded after most nodes, evaluating outputs with a rubric-driven LLM-as-Judge and routing to ACCEPT / RETRY / ESCALATE. A cross-layer rollback mechanism (ρ) can redirect JSON hard-gate failures back to the Knowledge Retriever.
 
 ---
 
@@ -215,25 +227,28 @@ flowchart TD
 
 **Agents & Nodes:**
 1. **Document Parser**: Extracts structured information from documents using LLM
-   - → **Critic evaluates** → If not ACCEPT: Retry (with feedback) or Escalate
-2. **Planner Node**: Analyzes document type/domain and generates agent-specific instructions
-3. **Knowledge Retriever**: Queries FAIR-DS API for metadata packages and terms
-   - Reports **API capabilities** (available packages) to enable informed Critic evaluation
-   - → **Critic evaluates with API awareness** → If not ACCEPT: Retry or Escalate
-4. **JSON Generator**: Creates ISA-Tab compatible FAIR metadata with evidence mapping
-   - → **Critic evaluates** → If not ACCEPT: Retry or Escalate
-5. **Critic Agent**: Embedded after each agent, evaluates outputs using LLM-as-Judge rubric
-   - **API-Aware**: Considers external API limitations when evaluating Knowledge Retriever
-   - **Decisions**: ACCEPT (proceed), RETRY (with feedback), or ESCALATE (manual review)
+   - → **Critic evaluates** → ACCEPT / RETRY (up to 2×)
+2. **BioMetadataAgent** *(conditional)*: Recovers metadata from raw bioinformatics files (BAM, VCF, FASTQ) using Dockerised biocontainers (Samtools, Bcftools)
+3. **Planner**: Analyzes document domain and generates per-agent guidance
+4. **Knowledge Retriever**: Queries FAIR-DS API (59 packages, 892 terms) + local knowledge base
+   - Reports **API capabilities** for Critic awareness
+   - → **Critic evaluates** → ACCEPT / RETRY / ESCALATE
+5. **JSON Generator**: Maps extracted info to ISA-Tab metadata with recursive batch splitting
+   - Auto-detects truncation and splits batches (16→8→4→2→1 fields)
+   - → **Critic evaluates** → ACCEPT / RETRY
+   - **Cross-layer rollback** (ρ): JSON hard-gate failure triggers KnowledgeRetriever redo
+6. **ISA Value Mapper**: Assigns entity_id grouping, maps values to standardised ISA terms
+   - Cardinality gate: skips expensive deep-agent loop when >12 entity groups
+7. **Critic Agent**: Embedded after most agents; rubric-driven LLM-as-Judge with hard output-length limits
 
 **Workflow Features:**
-- 🧠 **API-Aware Evaluation**: Critic understands FAIR-DS API limitations and evaluates agents within realistic constraints
-- 🛑 **No-Progress Detection**: Automatically terminates retry loops when consecutive attempts produce identical scores
-- 📉 **Feedback Deduplication**: Limits historical guidance to 10 items per agent to prevent token waste
-- 🔄 **Retry Logic**: Up to 2 retry attempts per agent, with Critic feedback guiding improvements
-- 🎯 **Conditional Routing**: Dynamic workflow based on Critic decisions (ACCEPT/RETRY/ESCALATE)
-- 📊 **Execution Tracking**: Full trajectory of steps, retries, and scores
-- 💾 **State Persistence**: Configurable LangGraph checkpointer (none/memory/sqlite) for workflow state management and resume support
+- 🧠 **API-Aware Evaluation**: Critic understands FAIR-DS API limitations
+- 🛑 **No-Progress Detection**: Auto-terminates retry loops when scores stagnate
+- 🔄 **Cross-Layer Rollback (ρ)**: JSON gate failure → KnowledgeRetriever redo with Critic feedback
+- 📉 **Cardinality Gate**: Skips deep ReAct loop for high-cardinality docs (>12 entities)
+- 🔀 **Recursive Batch Splitting**: Auto-splits JSON batches to prevent truncation errors
+- 📊 **Execution Tracking**: Full trajectory with step timing, token usage, and scores
+- 💾 **Checkpointer**: SQLite-based state persistence for workflow resume support
 
 **Retry Mechanism Details:**
 - **Retry Attempts**: Up to 2 retries per agent (configurable via `max_step_retries`)
@@ -262,37 +277,66 @@ flowchart TD
 
 ## 🚀 Quick Start
 
-### Local setup
+### Prerequisites
+
+- Python 3.11+ (recommended: mamba/conda environment)
+- Node.js 18+ (for Web UI)
+- [Ollama](https://ollama.ai) (for local LLM) or API key for cloud provider
+
+### Local Setup
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/ElderMedic/FAIRiAgent.git
 cd FAIRiAgent
 
-# Python environment
+# Create and activate conda environment
+mamba create -n FAIRiAgent python=3.11 -y
 mamba activate FAIRiAgent
+
+# Install Python dependencies
 pip install -r requirements.txt
 
-# Frontend dependencies
+# Frontend (optional — Web UI)
 cd frontend && npm install && cd ..
 ```
 
-### Run the Web UI
+### Configuration
+
+Copy and edit `.env` with your LLM provider:
 
 ```bash
+# --- Ollama (local GPU) ---
+LLM_PROVIDER=ollama
+FAIRIFIER_LLM_MODEL=qwen3.6:27b
+FAIRIFIER_LLM_BASE_URL=http://localhost:11434
+
+# --- DeepSeek API (cloud) ---
+# LLM_PROVIDER=deepseek
+# FAIRIFIER_LLM_MODEL=deepseek-v4-pro
+# DEEPSEEK_API_KEY=sk-...
+
+# --- OpenAI / Qwen / Anthropic ---
+# Set LLM_PROVIDER, LLM_API_KEY, and optional base URL
+```
+
+Supported providers: `ollama | openai | qwen | deepseek | gemini | anthropic`
+
+### Run
+
+```bash
+# CLI: process a document
+python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf
+
+# Web UI:
 python run_fairifier.py webui
+# → http://localhost:8000
+
+# Check configuration
+python run_fairifier.py config-info
+
+# Validate environment (no document needed)
+python run_fairifier.py validate-document --env-only
 ```
-
-Open `http://localhost:8000`.
-
-### Run from the CLI
-
-```bash
-python run_fairifier.py process examples/inputs/your_document.pdf
-```
-
-### Docker (full stack: API + Qdrant + FAIR-DS)
-
-The [Docker Compose file](docker/compose.yaml) starts the API, optional Qdrant for mem0, and **FAIR Data Station** so `FAIR_DS_API_URL` works out of the box inside the stack. See [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md).
 
 ### 📦 Installation
 
@@ -301,15 +345,10 @@ The [Docker Compose file](docker/compose.yaml) starts the API, optional Qdrant f
 
 **Core Installation:**
 ```bash
-# Clone the repository
-git clone <repository-url>
+git clone https://github.com/ElderMedic/FAIRiAgent.git
 cd FAIRiAgent
-
-# Install core dependencies
 pip install -r requirements.txt
-
-# Install frontend dependencies
-cd frontend && npm install && cd ..
+cd frontend && npm install && cd ..   # optional Web UI
 ```
 
 **Optional Features:**
@@ -317,43 +356,25 @@ cd frontend && npm install && cd ..
 <details>
 <summary>🧠 Memory Layer (mem0 + Qdrant)</summary>
 
-Provides persistent semantic memory for context compression and retrieval across workflow sessions.
-FAIRiAgent now performs preflight checks on each run and can:
-- auto-start local Qdrant via Docker (when `MEM0_AUTO_START_QDRANT=true`)
-- auto-fallback from local Ollama embeddings to API embeddings when available
+Persistent semantic memory across workflow sessions. Preflight checks auto-start Qdrant via Docker when `MEM0_AUTO_START_QDRANT=true`.
 
 ```bash
-# Install mem0 dependencies
 pip install mem0ai qdrant-client
-
-# Optional: start Qdrant manually (auto-start is enabled by default)
 docker run -d --name fairiagent-qdrant -p 6333:6333 qdrant/qdrant
 
-# Enable in .env
-echo "MEM0_ENABLED=true" >> .env
-echo "MEM0_QDRANT_URL=http://localhost:6333" >> .env
-echo "MEM0_EMBEDDING_PROVIDER=openai" >> .env
-echo "MEM0_EMBEDDING_MODEL=text-embedding-v4" >> .env
-echo "MEM0_EMBEDDING_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1" >> .env
-echo "MEM0_EMBEDDING_DIMS=1024" >> .env
-
-# Verify installation
-python -c "from fairifier.services import get_mem0_service; print('✓ mem0 available' if get_mem0_service() else '✗ mem0 unavailable')"
+# .env configuration
+MEM0_ENABLED=true
+MEM0_QDRANT_HOST=localhost
+MEM0_QDRANT_PORT=6333
+MEM0_EMBEDDING_PROVIDER=ollama
+MEM0_EMBEDDING_MODEL=nomic-embed-text-v2-moe
+MEM0_EMBEDDING_DIMS=768
+MEM0_LLM_PROVIDER=ollama
+MEM0_LLM_MODEL=qwen3:30b-instruct
+MEM0_OLLAMA_BASE_URL=http://localhost:11434
 ```
 
-**Memory CLI Commands:**
-```bash
-# Check status
-python run_fairifier.py memory status
-
-# List memories for a session
-python run_fairifier.py memory list <session_id>
-
-# Clear memories for a session
-python run_fairifier.py memory clear <session_id>
-```
-
-See [Mem0 Quick Start](docs/MEM0_QUICKSTART.md) and [Memory Guide](docs/MEMORY_GUIDE.md) for details.
+See [Mem0 Quick Start](docs/MEM0_QUICKSTART.md) for details.
 
 </details>
 
@@ -802,8 +823,8 @@ MIT License - Free for academic and research use.
 
 <div align="center">
 
-**🎯 FAIRiAgent v1.5.0**  
-*LangGraph-powered • Web UI-enabled • Standards-compliant*
+**🎯 FAIRiAgent v2.0**  
+*6-Agent LangGraph • Critic-Gated • Cross-Layer Rollback*
 
 [⬆ Back to Top](#-fairiagent)
 
@@ -817,10 +838,11 @@ MIT License - Free for academic and research use.
 
 ---
 
-## 🔄 Recent Updates (v1.5.0)
+## 🔄 Recent Updates (v2.0 — Architecture Refactor)
 
-- ✅ **DeepSeek Provider**: Full support for DeepSeek API with thinking mode across all 6 LLM providers
-- ✅ **BioMetadataAgent Pipeline**: Tool-first Docker workflow with biocontainer registry search for robust bioinformatics analysis
-- ✅ **Dynamic JSON Schema Validation**: FAIR-DS ShEx-based validation with automatic field normalization
-- ✅ **Source Grounding Stabilization**: Upstream candidate reconciliation and cross-source consensus scoring
-- ✅ **Evaluation Hardening**: Configurable timeouts, fixed field counting, and improved Ollama robustness
+- ✅ **6-Agent LangGraph Pipeline**: DocumentParser → BioMetadataAgent → Planner → KnowledgeRetriever → JSONGenerator → ISAValueMapper with CriticAgent embedded after each node
+- ✅ **Cross-Layer Rollback (ρ mechanism)**: JSON hard-gate failure auto-triggers KnowledgeRetriever redo with Critic feedback
+- ✅ **Cardinality-Gated Deep Agents**: ISAValueMapper skips expensive ReAct loop for high-cardinality documents (>12 entity groups), using deterministic heuristic instead
+- ✅ **Recursive Batch Splitting**: JSON generation automatically splits 16→8→4→2→1 fields per batch when truncation is detected
+- ✅ **DeepSeek v4-pro Provider**: Full API support with thinking mode control and optimized batch sizing
+- ✅ **Phase-0 Evaluation Pipeline**: Systematic comparison of 5 LLMs × 4 conditions (B1/B2/B3/Full) on 10 expert-annotated documents

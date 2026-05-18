@@ -352,3 +352,7 @@ docs/superpowers/
 # Agent context files
 CLAUDE.md
 GEMINI.md
+node_modules/
+package-lock.json
+evaluation/ablation_quick_run/
+package.json

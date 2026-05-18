@@ -1,7 +1,7 @@
 # FAIRiAgent Documentation
 
-**Version**: 1.5.0  
-**Last Updated**: 2026-05-03
+**Version**: 2.0 (Architecture Refactor)  
+**Last Updated**: 2026-05-12
 
 ---
 
