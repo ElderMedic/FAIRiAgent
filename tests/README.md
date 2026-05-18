@@ -13,7 +13,7 @@ mamba run -n FAIRiAgent python run_tests.py fast
 If you run `pytest` directly, prefer the same interpreter:
 
 ```bash
-/home/WUR/ke003/mambaforge/envs/FAIRiAgent/bin/python -m pytest tests/ -v
+python -m pytest tests/ -v
 ```
 
 ## Common Commands

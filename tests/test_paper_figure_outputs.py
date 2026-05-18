@@ -46,3 +46,8 @@ def test_generate_figures_writes_main_text_assets():
     assert (fig_dir / "fig3_condition_comparison.pdf").exists()
     assert (fig_dir / "fig4_isa_structure_heatmap.png").exists()
     assert (fig_dir / "fig4_isa_structure_heatmap.pdf").exists()
+    assert (fig_dir / "supp_fig1_manifest_coverage.png").exists()
+    assert (fig_dir / "supp_fig1_manifest_coverage.pdf").exists()
+
+    notes_path = PROJECT_ROOT / "evaluation" / "paper_experiments_v1" / "manuscript" / "FIGURE_NOTES.md"
+    assert notes_path.exists()

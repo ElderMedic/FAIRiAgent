@@ -4,7 +4,7 @@ This folder contains the complete deployment ecosystem for FAIRiAgent. Below is 
 
 ## 1. Official FAIR-DS Integration
 We use the official FAIR Data Station Docker image provided by the M-Unlock team. 
-- **Image**: `docker-registry.wur.nl/m-unlock/docker/fairds:latest`
+- **Image**: `docker-registry.wur.nl/m-unlock/docker/fairds:latest` *(WUR-internal registry; for public use, replace with a publicly accessible FAIR-DS image or contact the M-Unlock team)*
 - **Storage**: The `compose.yaml` automatically mounts `./fairds_storage` to ensure your ontologies and cached packages persist across container restarts.
 
 Whenever the official FAIR-DS team pushes an update, a simple `docker compose pull fairds` will keep your knowledge base backend up-to-date.

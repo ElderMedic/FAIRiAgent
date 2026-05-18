@@ -815,6 +815,14 @@ This is a research tool designed for:
 - 🌐 Additional LLM provider support
 - 🎨 UI/UX improvements
 
+## 📧 Contact
+
+**Changlin Ke** — [Changlin.ke@wur.nl](mailto:Changlin.ke@wur.nl)
+
+Bioinformatics Group, Wageningen University & Research
+
+---
+
 ## 📄 License
 
 MIT License - Free for academic and research use.

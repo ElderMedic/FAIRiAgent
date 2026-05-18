@@ -11,7 +11,7 @@ import numpy as np
 
 from fairifier.output_paths import resolve_metadata_output_read_path
 
-from .config import (
+from evaluation.analysis.config import (
     EXCLUDED_MODELS, EXCLUDED_DOCUMENTS, EXCLUDED_DIRECTORIES,
     normalize_model_name, normalize_document_id, get_model_display_name,
     get_model_color, is_baseline_run

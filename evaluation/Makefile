@@ -1,6 +1,6 @@
 .PHONY: paper-results paper-smoke paper-analysis paper-figures paper-clean
 
-PYTHON ?= /home/WUR/ke003/mambaforge/envs/FAIRiAgent/bin/python
+PYTHON ?= python
 
 paper-results: paper-smoke paper-analysis paper-figures
 

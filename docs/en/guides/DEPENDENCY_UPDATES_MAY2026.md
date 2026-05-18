@@ -43,7 +43,7 @@ The project's core dependencies have been brought up to date with their latest s
 ### 2.5 Conda / C++ ABI Links
 **Concern:** The `mambaforge` environment exhibited `libstdc++.so.6` (CXXABI_1.3.15) symbol mismatches during runtime, breaking `sqlite3` and `mem0` initializations when spawned in background shells.
 **Resolution:**
-- Enforced running execution scripts with the explicit `LD_LIBRARY_PATH=/home/WUR/ke003/mambaforge/envs/FAIRiAgent/lib` to bind the correct environment libraries dynamically.
+- Enforced running execution scripts with the explicit `LD_LIBRARY_PATH=<conda-env-path>/lib` to bind the correct environment libraries dynamically.
 
 ## 3. Impact on Scripts and Resources
 - **Scripts:** `evaluation/scripts/run_ollama_evaluation.py` and `run_batch_evaluation.py` were audited. Nesting bugs in the output directories were squashed (no more `outputs/outputs/` nesting). 
