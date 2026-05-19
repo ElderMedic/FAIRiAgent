@@ -397,9 +397,16 @@ python run_fairifier.py config-info
 **Web UI Mode:**
 
 ```bash
+# Production (SPA + API)
 python run_fairifier.py webui
-# Access: http://localhost:8000
+# → http://localhost:8000
+
+# Development (Vite + hot-reload API)
+python run_fairifier.py dev
+# → Frontend http://localhost:5173 · Backend http://localhost:3000
 ```
+
+API reference: [docs/en/development/FAIRIFIER_API_MANUAL.md](docs/en/development/FAIRIFIER_API_MANUAL.md)
 
 **LangGraph Studio (Development):**
 ```bash
@@ -687,10 +694,16 @@ python run_fairifier.py memory status
 The default interface is the React Web UI served by the FastAPI backend.
 
 ```bash
+# Production: built SPA + API on one port
 python run_fairifier.py webui
+# → http://localhost:8000  (API docs: /docs)
+
+# Development: hot-reload backend + Vite dev server
+python run_fairifier.py dev
+# → Backend: http://localhost:3000  ·  Frontend: http://localhost:5173
 ```
 
-Open `http://localhost:8000`.
+See [Web UI Guide](fairifier/apps/README.md) and [REST API Manual](docs/en/development/FAIRIFIER_API_MANUAL.md) for endpoints, session headers, and SSE streaming.
 
 ## 🧪 Examples & checks
 
@@ -766,7 +779,7 @@ Detailed documentation is available in the [docs/](docs/README.md) directory.
 
 - **Core**
   - [Architecture & Flow](docs/en/ARCHITECTURE_AND_FLOW.md) – High-level system architecture
-  - [Evaluation Methodology](docs/en/EVALUATION_METHODOLOGY.md) – Evaluation metrics and baseline
+  - [Evaluation Methodology](docs/en/EVALUATION_METHODOLOGY.md) – Evaluation metrics and baseline comparison
   - [LLM Integration Guide](docs/en/LLM_INTEGRATION_GUIDE.md) – Provider configuration
   - [LangSmith Testing Guide](docs/en/LANGSMITH_TESTING_GUIDE.md) – Testing and debugging
 - **Deployment**
@@ -778,10 +791,11 @@ Detailed documentation is available in the [docs/](docs/README.md) directory.
   - [Mem0 快速开始 (中文)](docs/zh/guides/MEM0_QUICKSTART.md) – Memory layer quick start in Chinese
   - [Test Guide (中文)](docs/zh/guides/TEST_GUIDE.md) – Test guide in Chinese
 - **Development**
-  - [FAIR-DS API Manual](docs/en/development/FAIRDS_API_MANUAL.md) – API analysis
+  - [FAIRiAgent REST API Manual](docs/en/development/FAIRIFIER_API_MANUAL.md) – Web UI backend (`/api/v1`)
+  - [FAIR-DS API Manual](docs/en/development/FAIRDS_API_MANUAL.md) – FAIR Data Station integration
   - [Critic Rubric](docs/en/development/critic_rubric.yaml) – Evaluation criteria
 - **Web UI**
-  - [Web UI Guide](fairifier/apps/README.md) – React Web UI and API entry points
+  - [Web UI Guide](fairifier/apps/README.md) – React Web UI, dev mode, and API entry points
 
 For a complete index by language, see [docs/README.md](docs/README.md).
 
@@ -819,7 +833,7 @@ This is a research tool designed for:
 
 **Changlin Ke** — [Changlin.ke@wur.nl](mailto:Changlin.ke@wur.nl)
 
-Bioinformatics Group, Wageningen University & Research
+Systems and Synthetic Biology Lab, Wageningen University & Research
 
 ---
 

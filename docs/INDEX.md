@@ -1,7 +1,7 @@
 # FAIRiAgent Documentation
 
 **Version**: 2.0 (Architecture Refactor)  
-**Last Updated**: 2026-05-12
+**Last Updated**: 2026-05-20
 
 ---
 
@@ -40,7 +40,8 @@
 ### API & Configuration
 | Document | Description |
 |----------|-------------|
-| [FAIR-DS API Manual](en/development/FAIRDS_API_MANUAL.md) | REST API usage reference |
+| [FAIRiAgent REST API Manual](en/development/FAIRIFIER_API_MANUAL.md) | Web UI backend — `/api/v1` routes, sessions, SSE |
+| [FAIR-DS API Manual](en/development/FAIRDS_API_MANUAL.md) | External FAIR Data Station REST API |
 | [Prompt Engineering Guide](en/development/PROMPT_ENGINEERING_GUIDE.md) | Prompt and context design |
 | [Source Grounding Architecture](en/development/SOURCE_GROUNDING_ARCHITECTURE.md) | Source-grounded metadata implementation notes and next steps |
 | [Architecture & Flow](en/ARCHITECTURE_AND_FLOW.md) | System architecture |

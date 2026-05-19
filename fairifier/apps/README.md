@@ -1,44 +1,102 @@
 # FAIRiAgent Apps
 
-This directory contains the current web interfaces and API components.
+Web UI and REST API for FAIRiAgent. Implementation lives in `frontend/` (React + TypeScript + Vite) and `fairifier/apps/api/` (FastAPI, versioned under `/api/v1`).
 
-## React Web UI
+Full API reference: [FAIRiAgent REST API Manual](../../docs/en/development/FAIRIFIER_API_MANUAL.md).
 
-Default entry point:
+---
+
+## Quick start
+
+### Production Web UI
+
+Serves the built React app and API on one port (default **8000**):
 
 ```bash
 python run_fairifier.py webui
+# → http://localhost:8000
+# → API docs: http://localhost:8000/docs
 ```
 
-Open `http://localhost:8000`.
+Build the frontend first if `frontend/dist/` is missing:
 
-For local development:
+```bash
+cd frontend && npm install && npm run build && cd ..
+```
+
+Custom port:
+
+```bash
+python run_fairifier.py webui --port 8080
+```
+
+### Development mode
+
+Runs the API with hot-reload and the Vite dev server separately:
 
 ```bash
 python run_fairifier.py dev
 ```
 
-This runs:
-- backend on `8000`
-- Vite dev server on `5173`
+| Service | Default URL | Notes |
+|---------|-------------|--------|
+| Backend API | `http://localhost:3000` | Uvicorn with `--reload` |
+| Frontend (Vite) | `http://localhost:5173` | Proxies `/api` → backend |
 
-## API
+Use the **frontend URL** in the browser during development. Override the backend port with `python run_fairifier.py dev --port 3000`.
 
-```text
-frontend/           React + TypeScript + Vite
-fairifier/apps/api/ FastAPI backend under /api/v1
+For remote dev hosts, ensure `frontend/vite.config.ts` lists the hostname under `server.allowedHosts` (e.g. `bioind4.wur.nl`).
+
+### API only
+
+```bash
+python run_fairifier.py api
+# → http://localhost:8000/docs
 ```
 
-Project state is stored in SQLite. Progress updates are streamed with SSE. Result files are served from each run's output directory.
+No static UI is served unless `frontend/dist/index.html` exists.
 
-Common routes:
+---
 
-| Method | Path |
-| --- | --- |
-| `GET` | `/api/v1/health` |
-| `POST` | `/api/v1/projects` |
-| `GET` | `/api/v1/projects/{id}` |
-| `GET` | `/api/v1/projects/{id}/artifacts` |
-| `GET` | `/api/v1/projects/{id}/events` |
+## Architecture
 
-OpenAPI docs are available at `/docs`.
+```text
+frontend/              React SPA (Vite)
+fairifier/apps/api/    FastAPI application
+  main.py              App factory, CORS, optional SPA mount
+  routers/v1.py        /api/v1 routes
+  models.py            Pydantic request/response schemas
+  storage/             SQLite project store (projects.db)
+  services/            Workflow runner, SSE event bus
+```
+
+- **Project state**: SQLite at `fairifier/apps/api/data/projects.db`
+- **Progress updates**: SSE at `GET /api/v1/projects/{id}/events`
+- **Artifacts**: Written to `output/<project_id>/` and exposed via the artifacts API
+- **Sessions**: Browser clients send `X-FAIRifier-Session-Id` (UUID) to isolate project lists
+
+---
+
+## API endpoints (summary)
+
+| Method | Path | Session required |
+|--------|------|------------------|
+| `GET` | `/api/v1/health` | No |
+| `GET` | `/api/v1/demo-options` | No |
+| `GET` | `/api/v1/system/status` | No |
+| `GET` | `/api/v1/system/resource-load` | Yes |
+| `GET` | `/api/v1/system/ollama-models` | No |
+| `GET` | `/api/v1/fairds/statistics` | No |
+| `POST` | `/api/v1/projects` | Yes |
+| `GET` | `/api/v1/projects` | Yes |
+| `GET` | `/api/v1/projects/{id}` | Yes |
+| `DELETE` | `/api/v1/projects/{id}` | Yes |
+| `POST` | `/api/v1/projects/{id}/stop` | Yes |
+| `GET` | `/api/v1/projects/{id}/artifacts` | Yes |
+| `GET` | `/api/v1/projects/{id}/artifacts/{name}` | Yes |
+| `GET` | `/api/v1/projects/{id}/memory-cloud` | Yes |
+| `GET` | `/api/v1/projects/{id}/events` | Yes (SSE) |
+
+OpenAPI: `/docs` on the API host.
+
+See the [API Manual](../../docs/en/development/FAIRIFIER_API_MANUAL.md) for request bodies, examples, and SSE event types.

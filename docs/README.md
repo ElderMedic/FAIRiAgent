@@ -1,7 +1,7 @@
 # 📚 Documentation / 文档
 
 **Version**: 1.5.0  
-**Last Updated**: 2026-05-03
+**Last Updated**: 2026-05-20
 
 Welcome to the FAIRiAgent documentation. Please select your preferred language:
 欢迎查阅 FAIRiAgent 文档。请选择您偏好的语言：
@@ -27,6 +27,7 @@ Welcome to the FAIRiAgent documentation. Please select your preferred language:
 - [**Docker Deployment**](en/guides/DOCKER_DEPLOYMENT.md): Complete guide for Docker and Docker Compose deployment.
 
 ### Development
+- [**FAIRiAgent REST API Manual**](en/development/FAIRIFIER_API_MANUAL.md): Web UI backend — projects, SSE, artifacts, system status.
 - [**FAIR-DS API Manual**](en/development/FAIRDS_API_MANUAL.md): Complete API reference for FAIR Data Station integration.
 - [**Prompt Engineering Guide**](en/development/PROMPT_ENGINEERING_GUIDE.md): Best practices for designing LLM prompts and context engineering.
 - [**Source Grounding Architecture**](en/development/SOURCE_GROUNDING_ARCHITECTURE.md): Implementation status, tests, and next steps for source-grounded metadata generation.
@@ -47,4 +48,5 @@ Welcome to the FAIRiAgent documentation. Please select your preferred language:
 - [**LangGraph Studio 设置**](zh/guides/LANGGRAPH_STUDIO_SETUP.md): 设置 LangGraph Studio 进行开发。
 
 ### 开发文档 (Development)
+- [**FAIRiAgent REST API 手册**](en/development/FAIRIFIER_API_MANUAL.md): Web UI 后端 API（项目、SSE、产物下载）。
 - [**FAIR-DS API 手册**](zh/development/FAIRDS_API_MANUAL.md): FAIR Data Station API 完整参考文档。
