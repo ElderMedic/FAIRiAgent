@@ -256,6 +256,13 @@ evaluation/scripts/generate_poster_fig3_fig4_combined_v2.py
 evaluation/generate_presentation*.py
 evaluation/generate_exp1_final.py
 evaluation/generate_final_charts.py
+docs/figures/poster_*
+docs/figures/pass@k*
+evaluation/scripts/aggregate_presentation_results.py
+evaluation/scripts/build_biorem_study_narrative.py
+evaluation/scripts/generate_poster_*
+evaluation/scripts/generate_presentation_figures.py
+evaluation/scripts/generate_slides_figures_latest.py
 tests/test_paper_figure_manifest.py
 tests/test_paper_figure_outputs.py
 tests/test_paper_figure_selectors.py
