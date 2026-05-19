@@ -242,8 +242,20 @@ docs/en/PAPER_WRITING_GUIDE.md
 docs/manuscript/
 
 # Local developer memory (private, machine-specific)
-development/
+/development/
 AGENTS.md
+
+# Internal research / presentation materials (local only)
+docs/fairiagent-presentation/
+docs/en/EVALUATION_METHODOLOGY_V2.md
+patch_baselines.py
+tests/test_evaluate_agent_quality.py
+evaluation/scripts/evaluate_agent_quality.py
+evaluation/scripts/generate_ablation_chart.py
+evaluation/scripts/generate_poster_fig3_fig4_combined_v2.py
+tests/test_paper_figure_manifest.py
+tests/test_paper_figure_outputs.py
+tests/test_paper_figure_selectors.py
 
 # Environment files with secrets
 env.anthropic
