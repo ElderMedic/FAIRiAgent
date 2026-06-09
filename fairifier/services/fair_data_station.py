@@ -302,7 +302,7 @@ class FAIRDataStationClient:
                 "syntax": term_info.get("syntax", ""),
                 "example": term_info.get("example", ""),
                 "preferred_unit": term_info.get("preferredUnit", ""),
-                "url": term_info.get("url", ""),
+                "url": term_info.get("URL") or term_info.get("url", ""),
                 "regex": term_info.get("regex", ""),
             })
         

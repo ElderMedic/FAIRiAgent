@@ -460,6 +460,31 @@ def _apply_config_overrides(
         if default_model:
             config.llm_model = default_model
 
+    # When provider changes but api_key is not explicitly provided,
+    # resolve the key from the provider-specific env var so the web
+    # server doesn't inherit a key that belongs to a different provider
+    # (e.g. LLM_API_KEY set for Ollama/OpenAI being sent to DeepSeek).
+    if new_provider and not overrides.get("llm_api_key"):
+        _PROVIDER_KEY_ENVVARS: Dict[str, Any] = {
+            "deepseek": ["DEEPSEEK_API_KEY"],
+            "qwen": ["DASHSCOPE_API_KEY"],
+            "anthropic": ["ANTHROPIC_API_KEY"],
+            "openai": ["OPENAI_API_KEY"],
+            "gemini": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+        }
+        candidate_vars = _PROVIDER_KEY_ENVVARS.get(new_provider, [])
+        provider_key = next(
+            (os.environ.get(v) for v in candidate_vars if os.environ.get(v)),
+            None,
+        )
+        if provider_key:
+            config.llm_api_key = provider_key
+        elif new_provider not in ("ollama",):
+            # No provider-specific key found and no key was explicitly
+            # provided — clear the inherited key to surface a clearer
+            # auth error rather than sending a mismatched key silently.
+            config.llm_api_key = None
+
     reset_llm_helper()
     reset_mem0_service()
 

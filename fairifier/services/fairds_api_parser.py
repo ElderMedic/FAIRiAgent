@@ -320,7 +320,7 @@ class FAIRDSAPIParser:
             "syntax": term.get("syntax", ""),
             "example": term.get("example", ""),
             "regex": term.get("regex", ""),
-            "ontology_uri": term.get("url", ""),
+            "ontology_uri": term.get("URL") or term.get("url", ""),
             "data_type": FAIRDSAPIParser._infer_data_type(term),
             "preferred_unit": term.get("preferredUnit", ""),
         }
@@ -351,7 +351,7 @@ class FAIRDSAPIParser:
             "example": term.get("example", ""),
             "preferred_unit": term.get("preferredUnit", ""),
             "regex": term.get("regex", ""),
-            "ontology_uri": term.get("url", ""),
+            "ontology_uri": term.get("URL") or term.get("url", ""),
             "data_type": FAIRDSAPIParser._infer_data_type(term),
             "is_file": term.get("file", False),
             "is_date": term.get("date", False),
