@@ -244,8 +244,6 @@ def align_rows(
     """Hungarian-algorithm alignment of GT rows to prediction rows."""
     if not pred_rows:
         return [(r, None) for r in gt_rows]
-    if len(gt_rows) == 1:
-        return [(gt_rows[0], pred_rows[0])]
     n, m = len(gt_rows), len(pred_rows)
     cost = np.zeros((n, m))
     for i, gr in enumerate(gt_rows):

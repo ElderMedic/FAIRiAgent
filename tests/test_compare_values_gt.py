@@ -86,6 +86,16 @@ class TestAlignRows:
         assert matched[0] == "Eisenia fetida"
         assert matched[1] == "Arabidopsis thaliana"
 
+    def test_single_gt_multiple_pred_picks_best_match(self):
+        gt = [{"species": "Eisenia fetida"}]
+        pred = [
+            {"species": "Arabidopsis thaliana"},
+            {"species": "Eisenia fetida"},
+        ]
+        pairs = align_rows(gt, pred)
+        assert len(pairs) == 1
+        assert pairs[0][1]["species"] == "Eisenia fetida"
+
     def test_fewer_pred_than_gt(self):
         gt = [{"a": "1"}, {"a": "2"}, {"a": "3"}]
         pred = [{"a": "2"}]
