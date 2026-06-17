@@ -231,8 +231,50 @@ examples/
 # Output directories
 output/
 /output/
+output/logs/
 docker-output/
 docker-test-output/
+
+# Local AI / agent tooling (machine-specific; not for GitHub)
+.gemini/
+.superpowers/
+.agents/
+
+# Accidental root-level Node install (frontend uses frontend/package.json)
+/node_modules/
+/package.json
+/package-lock.json
+
+# Private manuscript drafts (local only)
+docs/manuscript/
+
+# Presentation web app build/sync artifacts (keep presentation-v2/src)
+docs/fairiagent-presentation/presentation-v2/node_modules/
+docs/fairiagent-presentation/presentation-v2/dist/
+docs/fairiagent-presentation/presentation-v2/public/figs/
+
+# Local FAIR-DS stats HTML snapshot
+fairds_stats.html
+
+# Ablation harness outputs (local runs)
+evaluation/ablation_quick_run/
+
+# Paper experiment v1 — scripts at repo root stay committable; artifacts stay local
+evaluation/paper_experiments_v1/runs/
+evaluation/paper_experiments_v1/results/
+evaluation/paper_experiments_v1/logs/
+evaluation/paper_experiments_v1/figures/
+evaluation/paper_experiments_v1/tables/
+evaluation/paper_experiments_v1/analysis/
+evaluation/paper_experiments_v1/records/
+evaluation/paper_experiments_v1/inputs/
+evaluation/paper_experiments_v1/manuscript/
+evaluation/paper_experiments_v1/__pycache__/
+evaluation/paper_experiments_v1/.matplotlib/
+evaluation/paper_experiments_v1/*.log
+
+# Ad-hoc analysis slides (regenerate locally)
+evaluation/analysis/meeting_progress_slides.html
 
 # Local/internal documentation notes
 docs/PROJECT_MEMORY_*.md
