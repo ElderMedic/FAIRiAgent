@@ -6,17 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 
-class ProcessingStatus(Enum):
-    """Status of the FAIRifier processing pipeline."""
-    PENDING = "pending"
-    PARSING = "parsing"
-    RETRIEVING = "retrieving"
-    GENERATING = "generating"
-    VALIDATING = "validating"
-    REVIEWING = "reviewing"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    INTERRUPTED = "interrupted"
+from .graph.state import ProcessingStatus
 
 
 class ConfidenceLevel(Enum):
@@ -126,68 +116,60 @@ class PlannerTask:
     notes: str = ""
 
 
-class FAIRifierState(TypedDict):
-    """State object for LangGraph workflow - FAIR-DS compatible."""
-    # Input
-    document_path: str
-    # Deprecated as a long-lived field (refactor §5). The pipeline reads
-    # document text by reference via ``document_text_path``. ``document_content``
-    # is only set as a transient fallback when no on-disk path is available
-    # (in-memory tests) or briefly during multi-file parsing iteration.
-    # Do NOT treat it as the source of truth — use ``read_document_text(state)``.
-    document_content: Optional[str]
-    document_text_path: Optional[str]  # On-disk pointer to the document text/markdown
-    document_conversion: Dict[str, Any]
-    output_dir: Optional[str]  # Output directory for artifacts (including MinerU)
-    input_documents: List[Dict[str, Any]]  # Normalized input units for per-file parsing
-    source_workspace: Dict[str, Any]  # Paths for source manifest, source files, and table indexes
-    bio_file_paths: List[str]  # Absolute host paths for BIO_BINARY files (BAM, VCF, FASTQ, h5ad)
-    
-    # Processing stages
-    document_info: Dict[str, Any]
-    document_info_by_source: List[Dict[str, Any]]
-    evidence_packets: List[Dict[str, Any]]
-    retrieved_knowledge: List[Dict[str, Any]]
-    metadata_fields: List[Dict[str, Any]]  # FAIR-DS format fields
-    selected_packages: List[str]
-    metadata_gap_hints: List[Dict[str, Any]]
-    inferred_metadata_extensions: List[Dict[str, Any]]
-    api_capabilities: Dict[str, Any]
-    retrieval_cache: Dict[str, Any]
-    
-    # Validation and quality
-    validation_results: Dict[str, Any]
-    confidence_scores: Dict[str, float]
-    needs_human_review: bool
-    
-    # Output (JSON only)
-    artifacts: Dict[str, str]  # Only contains metadata_json and validation_report
-    
-    # Human-in-the-loop and execution tracking
-    human_interventions: Dict[str, Dict[str, Any]]  # {step_id: {feedback, context_updates}}
-    execution_history: List[Dict[str, Any]]  # Full execution history with critic reviews
-    retry_trajectory: Dict[str, List[Dict[str, Any]]]  # {agent_name: [{attempt, decision, score, issues_count, timestamp}]}
-    reasoning_chain: List[str]  # Workflow planner's reasoning steps
-    execution_plan: Dict[str, Any]  # Current execution plan
-    execution_summary: Dict[str, Any]  # Summary of execution (completed, failed, etc.)
-    plan_tasks: List[Dict[str, Any]]  # Structured per-agent tasks (refactor §4)
-    
-    # Context for retry and memory (contains critic_feedback, retrieved_memories, etc.)
-    context: Dict[str, Any]
-    
-    # Agent guidance from planner
-    agent_guidance: Dict[str, str]
-    
-    # Memory integration (optional, for mem0)
-    session_id: Optional[str]  # For mem0 session scoping, bound to thread_id
-    memory_scope_id: Optional[str]  # Mem0 scope; defaults to session_id but can be shared across runs
-    react_scratchpad: Optional[Dict[str, Any]]  # Inner-loop telemetry for deepagents-backed agents
-    
-    # Metadata
-    status: str
-    processing_start: str
-    processing_end: Optional[str]
-    errors: List[str]
+class AgentMessageType(Enum):
+    """Types of structured inter-agent messages."""
+    EVIDENCE_BUNDLE = "evidence_bundle"
+    FIELD_GAP_REPORT = "field_gap_report"
+    MAPPING_QUESTION = "mapping_question"
+    ACK = "ack"
+
+
+@dataclass
+class AgentMessage:
+    """Typed envelope for structured agent-to-agent communication.
+
+    All messages are appended to ``FAIRifierState["agent_messages"]`` (append-only
+    log). Agents read via ``AgentMailbox.inbox()`` and optionally acknowledge.
+    """
+    id: str
+    from_agent: str
+    to_agent: str  # target agent name, or "*" for broadcast
+    message_type: str  # one of AgentMessageType values
+    payload: Dict[str, Any] = field(default_factory=dict)
+    refs: Dict[str, str] = field(default_factory=dict)
+    priority: int = 0  # higher = more important
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    acked_by: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "from_agent": self.from_agent,
+            "to_agent": self.to_agent,
+            "message_type": self.message_type,
+            "payload": self.payload,
+            "refs": self.refs,
+            "priority": self.priority,
+            "created_at": self.created_at,
+            "acked_by": self.acked_by,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AgentMessage":
+        return cls(
+            id=data["id"],
+            from_agent=data["from_agent"],
+            to_agent=data["to_agent"],
+            message_type=data["message_type"],
+            payload=data.get("payload", {}),
+            refs=data.get("refs", {}),
+            priority=data.get("priority", 0),
+            created_at=data.get("created_at", ""),
+            acked_by=data.get("acked_by", []),
+        )
+
+
+from .graph.state import FAIRifierState
 
 
 @dataclass 

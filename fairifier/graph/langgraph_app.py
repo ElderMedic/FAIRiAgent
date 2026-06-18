@@ -26,7 +26,7 @@ from langsmith import traceable
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
-from ..models import FAIRifierState, ProcessingStatus
+from .state import FAIRifierState, ProcessingStatus
 from ..agents.base import BaseAgent
 from ..agents.document_parser import DocumentParserAgent
 from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
@@ -3573,6 +3573,10 @@ Field semantics for ``plan_tasks``:
             state["needs_human_review"] = True
             summary["needs_human_review"] = True
         
+        # ── A2A handoff summary ──────────────────────────────────────
+        from fairifier.services.agent_mailbox import AgentMailbox
+        summary["agent_handoff"] = AgentMailbox.handoff_summary(state)
+
         state["execution_summary"] = summary
         
         # Set final status based on whether we have the critical output
@@ -3622,6 +3626,31 @@ Field semantics for ``plan_tasks``:
         # Store global retry info in state for report
         state["global_retries_used"] = self.global_retry_count
         state["max_global_retries"] = self.max_global_retries
+
+        # ── Log A2A messages to processing_log.jsonl ──
+        output_dir = state.get("output_dir")
+        if output_dir and (state.get("agent_messages") or []):
+            a2a_log_path = str(Path(output_dir) / "processing_log.jsonl")
+            try:
+                with open(a2a_log_path, "a", encoding="utf-8") as fp:
+                    for msg in state["agent_messages"]:
+                        record = {
+                            "event": "agent_message",
+                            "timestamp": msg.get("created_at", datetime.now().isoformat()),
+                            "from_agent": msg.get("from_agent"),
+                            "to_agent": msg.get("to_agent"),
+                            "message_type": msg.get("message_type"),
+                            "message_id": msg.get("id"),
+                            "priority": msg.get("priority", 0),
+                            "acked_by": msg.get("acked_by", []),
+                            "payload_summary": {
+                                k: (v if not isinstance(v, list) else f"[{len(v)} items]")
+                                for k, v in (msg.get("payload") or {}).items()
+                            },
+                        }
+                        fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+            except OSError:
+                logger.debug("Failed to write A2A messages to processing log")
         
         # Generate comprehensive report
         try:
@@ -3631,7 +3660,6 @@ Field semantics for ``plan_tasks``:
             # Find metadata.json path on disk if available (CLI may write after this node)
             metadata_json_path = None
             if output_dir:
-                from pathlib import Path
                 output_path = Path(output_dir)
                 metadata_json_file = resolve_metadata_output_read_path(output_path)
                 if metadata_json_file:
@@ -3770,6 +3798,7 @@ Field semantics for ``plan_tasks``:
                 "inferred_metadata_extensions": [],
                 "api_capabilities": {},
                 "react_scratchpad": None,
+                "agent_messages": [],
                 "context": {
                     "parse_retry_count": 0,
                     "retrieve_retry_count": 0,
