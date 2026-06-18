@@ -1,0 +1,3624 @@
+"""
+Node runner classes for LangGraph workflow.
+"""
+
+"""
+LangGraph App for FAIRifier - Explicit node-based workflow.
+
+This implements a proper LangGraph application where:
+- Each agent is an explicit node
+- Critic evaluates outputs and routes via conditional edges
+- Retry logic is handled through state management
+- Planning is a separate node that uses LLM for workflow strategy
+"""
+
+import logging
+import json
+import os
+import re
+import csv
+import gzip
+import shutil
+import tarfile
+import zipfile
+import tempfile
+from pathlib import Path
+from typing import Dict, Any, Literal, Optional, Tuple, List, Callable
+from datetime import datetime
+from langsmith import traceable
+
+from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
+
+from .state import FAIRifierState, ProcessingStatus
+from ..agents.base import BaseAgent
+from ..agents.document_parser import DocumentParserAgent
+from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
+from ..agents.json_generator import JSONGeneratorAgent
+from ..agents.isa_value_mapper import ISAValueMapperAgent
+from ..agents.critic import CriticAgent
+from ..config import config
+from ..output_paths import resolve_metadata_output_read_path, METADATA_OUTPUT_FILENAME
+from ..utils.llm_helper import get_llm_helper, normalize_llm_response_content
+from ..utils.report_generator import WorkflowReportGenerator
+from ..utils.run_control import run_stop_requested, reset_run_stop_requested
+from ..services.mineru_client import MinerUClient, MinerUConversionError
+from ..services import mineru_cache as mineru_cache_service
+from ..services.confidence_aggregator import aggregate_confidence
+from ..services.fairds_api_parser import FAIRDSAPIParser
+from ..utils.context_observability import log_context_usage
+from ..utils.document_text import read_document_text
+from ..utils.execution_history import compact_prior_attempts_for_agent
+from ..utils.planner_tasks import (
+    parse_plan_tasks_from_llm_output,
+    planner_task_to_dict,
+)
+from ..services.source_workspace import SourceRecord, build_source_workspace
+from ..tools.mineru_tools import create_mineru_convert_tool
+
+# Mem0 service (optional)
+try:
+    from ..services.mem0_service import Mem0Service, get_mem0_service
+except ImportError:
+    Mem0Service = None
+    get_mem0_service = None
+
+logger = logging.getLogger(__name__)
+
+
+def _flatten_field_definition(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract requirement-bearing keys from a retrieved_knowledge entry.
+
+    ``retrieved_knowledge`` items nest ``requirement`` / ``required`` /
+    ``isa_sheet`` inside a ``metadata`` sub-dict.  This helper promotes
+    those keys to the top level so that ``_field_definitions`` consumers
+    (Excel Help sheet, validators) can read them without understanding
+    the internal nesting.
+    """
+    meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    return {
+        "term": item.get("term", ""),
+        "source": item.get("source", ""),
+        "isa_sheet": meta.get("isa_sheet", ""),
+        "data_type": meta.get("data_type", ""),
+        "requirement": meta.get("requirement", ""),
+        "required": bool(meta.get("requirement", "").upper() == "MANDATORY"
+                         or meta.get("required")),
+        "package": meta.get("package", ""),
+    }
+
+
+def _filesystem_document_path(document_path: str):
+    """On-disk path when ``document_path`` uses ``base::source`` multi-file markers."""
+    from pathlib import Path
+
+    head = document_path.split("::", 1)[0] if "::" in document_path else document_path
+    return Path(head)
+
+
+
+
+class ReadFileNode:
+    """Node class to read document file content from disk."""
+    
+    def __init__(self, app=None, mineru_client=None, mineru_tool=None):
+        self.app = app
+        self._mineru_client = mineru_client
+        self._mineru_tool = mineru_tool
+        if app is not None:
+            for attr in dir(app):
+                if attr.startswith("_") and not attr.startswith("__"):
+                    app_member = getattr(app, attr)
+                    if callable(app_member):
+                        orig_cls_member = getattr(app.__class__, attr, None)
+                        if orig_cls_member is not None:
+                            if getattr(app_member, "__func__", None) is not orig_cls_member:
+                                setattr(self, attr, app_member)
+
+    @property
+    def mineru_client(self):
+        if self._mineru_client is not None:
+            return self._mineru_client
+        return self.app.mineru_client if self.app else None
+
+    @property
+    def mineru_tool(self):
+        if self._mineru_tool is not None:
+            return self._mineru_tool
+        return self.app.mineru_tool if self.app else None
+
+    @traceable(name="ReadFile", tags=["workflow", "io"])
+    async def __call__(self, state: FAIRifierState) -> FAIRifierState:
+        """Read file content from disk."""
+        logger.info("📄 Reading file content")
+        state["status"] = ProcessingStatus.PARSING.value
+        
+        try:
+            document_path = state.get("document_path", "")
+            output_dir = state.get("output_dir")  # Get output dir from state
+            
+            text, conversion_info = self._read_document_content(document_path, output_dir)
+            logger.info(f"✅ Loaded {len(text)} characters from document")
+            
+            # Save to file if not already persisted (e.g. by MinerU)
+            markdown_path = conversion_info.get("markdown_path")
+            if not markdown_path and output_dir:
+                try:
+                    out_path = Path(output_dir) / "extracted_document_content.txt"
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(text, encoding="utf-8")
+                    markdown_path = str(out_path)
+                except Exception as e:
+                    logger.warning(f"Failed to write extracted content to disk: {e}")
+                    
+            state["document_text_path"] = markdown_path
+            # Document text is persisted on disk via document_text_path. We no
+            # longer carry hundreds of KB in live state (refactor §5). The
+            # field remains in the schema as None for legacy consumers; the
+            # in-memory fallback only kicks in when no markdown_path is
+            # available (e.g. ephemeral tests).
+            if markdown_path:
+                state["document_content"] = None
+            else:
+                state["document_content"] = text  # transient fallback
+            state["document_conversion"] = conversion_info
+            state["source_workspace"] = conversion_info.get("source_workspace", {})
+            # Collect bio file paths for BioMetadataAgent (single input or multi-file bundle)
+            bio_paths: List[str] = []
+            for p in conversion_info.get("bio_file_paths") or []:
+                if isinstance(p, str) and p and p not in bio_paths:
+                    bio_paths.append(p)
+            host_path = conversion_info.get("host_path")
+            if host_path and conversion_info.get("content_type") == "bio_binary":
+                if host_path not in bio_paths:
+                    bio_paths.append(host_path)
+            state["bio_file_paths"] = bio_paths
+            input_documents = conversion_info.get("input_documents")
+            if not isinstance(input_documents, list) or not input_documents:
+                input_documents = [
+                    {
+                        "path": os.path.basename(document_path) or document_path or "input",
+                        "content": text,
+                        "method": conversion_info.get("method", "direct_read"),
+                        "content_type": conversion_info.get("content_type", "text"),
+                        "tables": conversion_info.get("tables", []),
+                    }
+                ]
+            state["input_documents"] = input_documents
+            failed_sources = conversion_info.get("failed_sources") or []
+            context = state.setdefault("context", {})
+            discovered_supported = int(conversion_info.get("files_discovered_supported") or 0)
+            files_processed = int(conversion_info.get("files_processed") or len(input_documents))
+            truncated_by_limit = bool(conversion_info.get("truncated_by_limit"))
+            context["bundle_files_discovered_supported"] = discovered_supported
+            context["bundle_files_processed"] = files_processed
+            context["bundle_truncated_by_limit"] = truncated_by_limit
+            context["bundle_failed_sources"] = failed_sources
+            context["bundle_ingestion_incomplete"] = (
+                discovered_supported > 0
+                and files_processed < discovered_supported
+                and not truncated_by_limit
+            )
+            if failed_sources:
+                errors = state.setdefault("errors", [])
+                for failed in failed_sources[:20]:
+                    msg = (
+                        f"Input source read failed: {failed.get('path', 'unknown')} "
+                        f"({failed.get('error', 'unknown error')})"
+                    )
+                    errors.append(msg)
+                logger.warning(
+                    "⚠️ %s input source(s) failed during bundle read: %s",
+                    len(failed_sources),
+                    [item.get("path") for item in failed_sources[:10]],
+                )
+            if context.get("bundle_ingestion_incomplete"):
+                logger.warning(
+                    "⚠️ Multi-file ingestion incomplete: processed=%s discovered=%s (limit_truncation=%s).",
+                    files_processed,
+                    discovered_supported,
+                    truncated_by_limit,
+                )
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to read file: {e}")
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(f"File reading error: {str(e)}")
+            state["document_content"] = ""
+            state["input_documents"] = []
+            state["bio_file_paths"] = []
+        
+        return state
+
+    def _find_existing_mineru_result(
+        self,
+        document_path: str,
+        output_dir: Optional[str] = None,
+    ) -> Optional[Tuple[str, str]]:
+        """
+        Check if pre-converted MinerU results exist for this document.
+
+        Searches, in order:
+        1. ``{output_dir}/mineru_{doc_name}/`` (normal web run / cache materialization)
+        2. ``{document_parent}/mineru_{doc_name}/`` (legacy CLI layout beside the file)
+
+        Inside that tree:
+        - ``mineru_{doc_name}/{doc_name}/vlm/{doc_name}.md`` (standard layout), or
+        - any ``*.md`` under the mineru directory (reused cache may use a different inner stem).
+        """
+        from pathlib import Path
+
+        doc_path = _filesystem_document_path(document_path)
+        doc_name = doc_path.stem
+        doc_dir = doc_path.parent
+
+        search_roots: list[Path] = []
+        if output_dir:
+            search_roots.append(Path(output_dir) / f"mineru_{doc_name}")
+        search_roots.append(doc_dir / f"mineru_{doc_name}")
+
+        for mineru_dir in search_roots:
+            if not mineru_dir.exists():
+                continue
+
+            logger.info("🔍 Found pre-converted MinerU directory: %s", mineru_dir)
+
+            standard_md_path = mineru_dir / doc_name / "vlm" / f"{doc_name}.md"
+            if standard_md_path.exists():
+                images_dir = mineru_dir / doc_name / "vlm" / "images"
+                logger.info("✅ Found pre-converted markdown: %s", standard_md_path)
+                return str(standard_md_path), str(images_dir) if images_dir.exists() else None
+
+            md_files = list(mineru_dir.rglob("*.md"))
+            if md_files:
+                for md_file in md_files:
+                    if doc_name in md_file.stem:
+                        images_dir = md_file.parent / "images"
+                        logger.info("✅ Found pre-converted markdown: %s", md_file)
+                        return str(md_file), str(images_dir) if images_dir.exists() else None
+
+                md_file = md_files[0]
+                images_dir = md_file.parent / "images"
+                logger.info("✅ Found pre-converted markdown: %s", md_file)
+                return str(md_file), str(images_dir) if images_dir.exists() else None
+
+            logger.warning("⚠️ MinerU directory exists but no markdown found: %s", mineru_dir)
+
+        return None
+
+    def _read_document_content(
+        self, 
+        document_path: str,
+        output_dir: Optional[str] = None
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Read document content from single file, directory, or zip bundle."""
+        from pathlib import Path
+
+        path = _filesystem_document_path(document_path)
+        if path.is_dir():
+            return self._read_multi_file_bundle(
+                root_dir=path,
+                output_dir=output_dir,
+                source_method="directory_bundle",
+            )
+
+        if path.suffix.lower() == ".zip":
+            with tempfile.TemporaryDirectory(prefix="fairifier_bundle_") as tmp_dir:
+                extract_dir = Path(tmp_dir)
+                with zipfile.ZipFile(path, "r") as zf:
+                    zf.extractall(extract_dir)
+                return self._read_multi_file_bundle(
+                    root_dir=extract_dir,
+                    output_dir=output_dir,
+                    source_method="zip_bundle",
+                )
+
+        text, conversion_info = self._read_single_document_content(document_path, output_dir)
+        self._attach_source_workspace(
+            conversion_info,
+            output_dir=output_dir,
+            records=[
+                SourceRecord(
+                    source_id="source_001",
+                    path=str(document_path),
+                    method=conversion_info.get("method", "unknown"),
+                    content=text,
+                    content_type=conversion_info.get("content_type", "text"),
+                    tables=conversion_info.get("tables", []),
+                )
+            ],
+        )
+        return text, conversion_info
+
+    def _attach_source_workspace(
+        self,
+        conversion_info: Dict[str, Any],
+        *,
+        output_dir: Optional[str],
+        records: List[SourceRecord],
+    ) -> None:
+        """Materialize a source workspace and attach paths to conversion metadata."""
+        if not (config.source_workspace_enabled and output_dir and records):
+            return
+        workspace = build_source_workspace(records, Path(output_dir))
+        conversion_info["source_workspace"] = {
+            "root_dir": str(workspace.root_dir),
+            "manifest_path": str(workspace.manifest_path),
+            "summary_path": str(workspace.summary_path),
+            "source_paths": {
+                source_id: str(path)
+                for source_id, path in workspace.source_paths.items()
+            },
+            "table_paths": {
+                table_id: str(path)
+                for table_id, path in workspace.table_paths.items()
+            },
+            "manifest": workspace.manifest,
+        }
+
+    def _read_single_document_content(
+        self,
+        document_path: str,
+        output_dir: Optional[str] = None,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Read a single document file with format-aware extraction."""
+        from pathlib import Path
+
+        fs_path = _filesystem_document_path(document_path)
+        fs_str = str(fs_path)
+        fname_lower = fs_path.name.lower()
+
+        conversion_info: Dict[str, Any] = {}
+        suffix = fs_path.suffix.lower()
+
+        # --- BIO_BINARY: truly binary biological formats ---
+        _BIO_BINARY_SUFFIXES = {".bam", ".vcf", ".fq", ".fastq", ".h5ad"}
+        _BIO_GZ_PATTERNS = (".vcf.gz", ".fq.gz", ".fastq.gz")
+
+        if suffix in _BIO_BINARY_SUFFIXES or fname_lower.endswith(_BIO_GZ_PATTERNS):
+            conversion_info["method"] = "bio_binary"
+            conversion_info["content_type"] = "bio_binary"
+            conversion_info["host_path"] = fs_str
+            return (
+                f"[Biological data file: {fs_path.name}]\n"
+                f"Host path: {fs_str}\n"
+                f"(This file will be analyzed by BioMetadataAgent with bioinformatics tools.)"
+            ), conversion_info
+
+        # --- GZIPPED_TEXT: compressed text files that need decompression ---
+        _GZ_TEXT_PATTERNS = (".tsv.gz", ".bed.gz", ".tagalign.gz", ".csv.gz",
+                             ".txt.gz", ".gff.gz", ".gtf.gz", ".tab.gz")
+        if fname_lower.endswith(_GZ_TEXT_PATTERNS):
+            try:
+                dest = fs_path.with_suffix("")  # remove .gz
+                with gzip.open(fs_str, "rb") as f_in:
+                    with open(dest, "wb") as f_out:
+                        shutil.copyfileobj(f_in, f_out)
+                logger.info("Decompressed %s → %s", fs_path.name, dest.name)
+                conversion_info["method"] = "decompressed_gzip"
+                conversion_info["original_path"] = fs_str
+                # Re-read the decompressed file
+                text = dest.read_text(encoding="utf-8", errors="replace")
+                conversion_info["content_type"] = "text"
+                conversion_info["chars"] = len(text)
+                return text, conversion_info
+            except Exception as exc:
+                logger.warning("Failed to decompress %s: %s", fs_str, exc)
+                conversion_info["method"] = "gzip_decompress_failed"
+                return f"[Failed to decompress: {fs_path.name}]", conversion_info
+
+        # --- Other .gz files: try decompress, fall through to text if it works ---
+        if suffix == ".gz":
+            try:
+                dest = fs_path.with_suffix("")
+                with gzip.open(fs_str, "rb") as f_in:
+                    with open(dest, "wb") as f_out:
+                        shutil.copyfileobj(f_in, f_out)
+                logger.info("Decompressed %s → %s", fs_path.name, dest.name)
+                conversion_info["method"] = "decompressed_gzip"
+                conversion_info["original_path"] = fs_str
+                text = dest.read_text(encoding="utf-8", errors="replace")
+                conversion_info["content_type"] = "text"
+                conversion_info["chars"] = len(text)
+                return text, conversion_info
+            except Exception as exc:
+                logger.warning("Failed to decompress %s: %s", fs_str, exc)
+                conversion_info["method"] = "gzip_decompress_failed"
+                return f"[Failed to decompress: {fs_path.name}]", conversion_info
+
+        # --- ARCHIVE: tar archives ---
+        if suffix == ".tar" or fname_lower.endswith(".tar.gz"):
+            try:
+                dest_dir = Path(tempfile.mkdtemp(prefix="fairifier_archive_"))
+                mode = "r:gz" if fname_lower.endswith(".tar.gz") else "r"
+                with tarfile.open(fs_str, mode) as tf:
+                    tf.extractall(path=dest_dir)
+                files = sorted(str(p) for p in dest_dir.rglob("*") if p.is_file())
+                listing = f"[Archive: {fs_path.name}]\nExtracted {len(files)} files to {dest_dir}:\n"
+                listing += "\n".join(f"  {f}" for f in files[:100])
+                conversion_info["method"] = "archive_extracted"
+                conversion_info["content_type"] = "archive_listing"
+                conversion_info["extract_dir"] = str(dest_dir)
+                conversion_info["extracted_files"] = [str(p) for p in dest_dir.rglob("*") if p.is_file()]
+                conversion_info["chars"] = len(listing)
+                return listing, conversion_info
+            except Exception as exc:
+                logger.warning("Failed to extract archive %s: %s", fs_str, exc)
+                conversion_info["method"] = "archive_extract_failed"
+                return f"[Failed to extract archive: {fs_path.name}]", conversion_info
+
+        # --- Tabular formats ---
+        if suffix in {".csv", ".tsv", ".xlsx", ".xls"}:
+            table_text = self._read_tabular_content(fs_str)
+            conversion_info["method"] = f"tabular_{suffix.lstrip('.')}"
+            conversion_info["content_type"] = "table"
+            conversion_info["tables"] = self._read_tabular_tables(fs_str)
+            return table_text, conversion_info
+
+        if suffix == ".json":
+            with open(fs_str, "r", encoding="utf-8") as file:
+                parsed = json.load(file)
+            pretty = json.dumps(parsed, indent=2, ensure_ascii=False)
+            conversion_info["method"] = "json_pretty"
+            conversion_info["content_type"] = "json"
+            return pretty, conversion_info
+
+        if suffix == ".jsonl":
+            lines = []
+            with open(fs_str, "r", encoding="utf-8") as file:
+                for line_number, line in enumerate(file, start=1):
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        parsed = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        lines.append(stripped)
+                        continue
+                    lines.append(json.dumps(parsed, ensure_ascii=False))
+                    if line_number >= 500:
+                        lines.append("[jsonl truncated after 500 lines]")
+                        break
+            conversion_info["method"] = "jsonl_records"
+            conversion_info["content_type"] = "jsonl"
+            return "\n".join(lines), conversion_info
+
+        if suffix == ".pdf":
+            doc_path = fs_path
+            doc_name = doc_path.stem
+
+            existing_result = self._find_existing_mineru_result(
+                fs_str, output_dir
+            )
+            cache_hit = False
+            file_digest: Optional[str] = None
+
+            if (
+                not existing_result
+                and config.mineru_cache_enabled
+                and config.mineru_enabled
+                and output_dir
+                and self.mineru_tool
+            ):
+                try:
+                    cache_root = Path(config.mineru_cache_dir).resolve()
+                    file_digest = mineru_cache_service.sha256_file(doc_path)
+                    if (
+                        mineru_cache_service.try_get_cached_mineru_tree(
+                            cache_root,
+                            file_digest,
+                            Path(output_dir),
+                            doc_name,
+                        )
+                        is not None
+                    ):
+                        existing_result = self._find_existing_mineru_result(
+                            fs_str, output_dir
+                        )
+                        if existing_result:
+                            cache_hit = True
+                except OSError as exc:
+                    logger.warning("MinerU shared-cache materialize failed: %s", exc)
+
+            if existing_result:
+                markdown_path, images_dir = existing_result
+                src_label = (
+                    "shared checksum cache" if cache_hit else "pre-converted on disk"
+                )
+                logger.info("📄 Using MinerU result (%s, skipping GPU run)", src_label)
+                try:
+                    with open(markdown_path, "r", encoding="utf-8") as f:
+                        markdown_text = f.read()
+
+                    conversion_info = {
+                        "source": "mineru_cache" if cache_hit else "pre-converted",
+                        "markdown_path": markdown_path,
+                        "images_dir": images_dir,
+                        "output_dir": str(Path(markdown_path).parent.parent),
+                        "method": "mineru_cache"
+                        if cache_hit
+                        else "mineru_preconverted",
+                        "content_type": "markdown",
+                    }
+                    if file_digest:
+                        conversion_info["source_sha256"] = file_digest
+                    logger.info(
+                        "✅ Loaded MinerU markdown (%s chars, %s)",
+                        len(markdown_text),
+                        src_label,
+                    )
+                    return markdown_text, conversion_info
+                except Exception as e:
+                    logger.warning("⚠️ Failed to read MinerU reuse result: %s", e)
+
+            # No pre-converted / cache results: run MinerU tool if available
+            if self.mineru_tool:
+                mineru_output = None
+                if output_dir:
+                    mineru_output = str(Path(output_dir) / f"mineru_{doc_name}")
+                    logger.info("MinerU will save artifacts to: %s", mineru_output)
+
+                if file_digest is None and config.mineru_cache_enabled and output_dir:
+                    try:
+                        file_digest = mineru_cache_service.sha256_file(doc_path)
+                    except OSError as exc:
+                        logger.debug("SHA-256 for MinerU cache skipped: %s", exc)
+
+                result = self.mineru_tool.invoke({
+                    "input_path": fs_str,
+                    "output_dir": mineru_output
+                })
+
+                if result["success"]:
+                    conversion_info = {
+                        "markdown_path": result["markdown_path"],
+                        "output_dir": result["output_dir"],
+                        "images_dir": result["images_dir"],
+                        "method": result["method"],
+                        "content_type": "markdown",
+                    }
+                    if file_digest:
+                        conversion_info["source_sha256"] = file_digest
+                    logger.info("MinerU conversion successful: %s", result["markdown_path"])
+                    logger.info("MinerU artifacts: %s", result["output_dir"])
+                    if result["images_dir"]:
+                        logger.info("MinerU images: %s", result["images_dir"])
+                    if (
+                        file_digest
+                        and config.mineru_cache_enabled
+                        and result.get("output_dir")
+                    ):
+                        try:
+                            mineru_cache_service.store_mineru_output_after_success(
+                                Path(config.mineru_cache_dir).resolve(),
+                                file_digest,
+                                Path(result["output_dir"]),
+                            )
+                        except OSError as exc:
+                            logger.warning("MinerU cache store failed: %s", exc)
+                    return result["markdown_text"], conversion_info
+                logger.warning(
+                    "MinerU conversion failed (%s). Falling back to PyMuPDF.",
+                    result["error"],
+                )
+
+            # Fallback to local PDF extractors (PyMuPDF -> pypdf) for robustness.
+            try:
+                import fitz  # PyMuPDF
+
+                doc = fitz.open(fs_str)
+                text = ""
+                for page in doc:
+                    text += page.get_text()
+                doc.close()
+                conversion_info["method"] = "pymupdf"
+                conversion_info["content_type"] = "text"
+                if text.strip():
+                    return text, conversion_info
+                logger.warning(
+                    "PyMuPDF extracted empty text from %s; trying pypdf fallback.",
+                    fs_str,
+                )
+            except Exception as exc:
+                logger.warning("PyMuPDF fallback failed for %s: %s", fs_str, exc)
+
+            try:
+                from pypdf import PdfReader
+
+                reader = PdfReader(fs_str)
+                text_chunks: List[str] = []
+                for page in reader.pages:
+                    text_chunks.append(page.extract_text() or "")
+                text = "\n".join(text_chunks)
+                conversion_info["method"] = "pypdf"
+                conversion_info["content_type"] = "text"
+                if text.strip():
+                    return text, conversion_info
+            except Exception as exc:
+                logger.warning("pypdf fallback failed for %s: %s", fs_str, exc)
+
+            raise ValueError(f"Unable to extract PDF text from {fs_str} with available extractors")
+
+        # Non-PDF text-like files: read directly
+        with open(fs_str, "r", encoding="utf-8") as file:
+            text = file.read()
+        conversion_info["method"] = "direct_read"
+        conversion_info["content_type"] = "markdown" if suffix in {".md", ".markdown"} else "text"
+        return text, conversion_info
+
+    def _is_supported_bundle_file(self, path: "Path") -> bool:
+        """Return True when a file extension is supported for bundle ingestion."""
+        return path.suffix.lower() in {
+            ".pdf", ".txt", ".md", ".markdown", ".rst",
+            ".csv", ".tsv", ".xlsx", ".xls", ".json", ".jsonl",
+            ".bam", ".vcf", ".fastq", ".fq", ".h5ad", ".gz",
+        }
+
+    def _is_generated_bundle_artifact(self, root_dir: "Path", path: "Path") -> bool:
+        """Skip derived directories produced by FAIRifier or MinerU during recursive bundle scans."""
+        try:
+            rel_parts = path.relative_to(root_dir).parts
+        except ValueError:
+            rel_parts = path.parts
+        lowered_parts = [part.lower() for part in rel_parts[:-1]]
+        for part in lowered_parts:
+            if part.startswith("mineru_"):
+                return True
+            if part in {"source_workspace", "output", "__pycache__"}:
+                return True
+        return False
+
+    def _prioritize_bundle_files(self, files: List["Path"]) -> List["Path"]:
+        """Prefer likely research sources before applying the file-count cap."""
+        if not config.source_role_detection_enabled:
+            return files
+
+        def score(path: "Path") -> Tuple[int, str]:
+            name = str(path).lower()
+            suffix = path.suffix.lower()
+            points = 0
+            if any(token in name for token in ("main", "paper", "article", "manuscript")):
+                points += 80
+            if any(token in name for token in ("supp", "supplement", "appendix")):
+                points += 70
+            if any(token in name for token in ("metadata", "sample", "isa")):
+                points += 60
+            if suffix in {".csv", ".tsv", ".xlsx", ".xls", ".json"}:
+                points += 40
+            if any(token in name for token in ("protocol", "method")):
+                points += 30
+            if any(token in name for token in ("readme", "license", "admin", "random")):
+                points -= 20
+            return (-points, str(path))
+
+        return sorted(files, key=score)
+
+    def _read_multi_file_bundle(
+        self,
+        root_dir: "Path",
+        output_dir: Optional[str],
+        source_method: str,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Read and aggregate multiple supported files from a directory-like bundle."""
+        max_files = max(
+            1,
+            min(
+                int(config.multi_file_max_inputs),
+                int(config.source_max_selected_inputs),
+            ),
+        )
+        all_files = sorted(
+            p for p in root_dir.rglob("*")
+            if p.is_file()
+            and not any(part.startswith(".") for part in p.parts)
+            and not self._is_generated_bundle_artifact(root_dir, p)
+        )
+        supported_files = self._prioritize_bundle_files(
+            [p for p in all_files if self._is_supported_bundle_file(p)]
+        )
+        selected_files = supported_files[:max_files]
+        truncated_by_limit = len(supported_files) > max_files
+
+        if not selected_files:
+            raise ValueError(
+                f"No supported input files found under bundle: {root_dir}"
+            )
+
+        sections: List[str] = []
+        sources: List[Dict[str, Any]] = []
+        input_documents: List[Dict[str, Any]] = []
+        failed_sources: List[Dict[str, str]] = []
+        bio_file_paths: List[str] = []
+        for idx, file_path in enumerate(selected_files, start=1):
+            try:
+                text, info = self._read_single_document_content(str(file_path), output_dir)
+            except Exception as exc:
+                logger.warning("Skipping bundle file %s due to read error: %s", file_path, exc)
+                rel_name = str(file_path.relative_to(root_dir))
+                failed_sources.append(
+                    {
+                        "path": rel_name,
+                        "error": str(exc),
+                    }
+                )
+                continue
+            rel_name = str(file_path.relative_to(root_dir))
+            if info.get("content_type") == "bio_binary":
+                hp = info.get("host_path")
+                if isinstance(hp, str) and hp and hp not in bio_file_paths:
+                    bio_file_paths.append(hp)
+            sections.append(
+                f"\n\n=== Source {idx}: {rel_name} ===\n{text}"
+            )
+            sources.append(
+                {
+                    "path": rel_name,
+                    "method": info.get("method", "unknown"),
+                    "chars": len(text),
+                    "content_type": info.get("content_type", "text"),
+                }
+            )
+            doc_entry: Dict[str, Any] = {
+                "path": rel_name,
+                "content": text,
+                "method": info.get("method", "unknown"),
+                "content_type": info.get("content_type", "text"),
+                "tables": info.get("tables", []),
+            }
+            if info.get("host_path"):
+                doc_entry["host_path"] = info.get("host_path")
+            input_documents.append(doc_entry)
+
+        if not sections:
+            raise ValueError(f"Bundle contained supported files but none could be parsed: {root_dir}")
+
+        if truncated_by_limit:
+            sections.append(
+                f"\n\n[Bundle Notice] Processed first {max_files} files out of {len(supported_files)} supported files "
+                f"(configured by multi_file_max_inputs={max_files})."
+            )
+
+        conversion_info: Dict[str, Any] = {
+            "method": source_method,
+            "bundle_root": str(root_dir),
+            "files_processed": len(sources),
+            "files_discovered_supported": len(supported_files),
+            "truncated_by_limit": truncated_by_limit,
+            "sources": sources,
+            "input_documents": input_documents,
+            "failed_sources": failed_sources,
+            "bio_file_paths": bio_file_paths,
+        }
+        self._attach_source_workspace(
+            conversion_info,
+            output_dir=output_dir,
+            records=[
+                SourceRecord(
+                    source_id=f"source_{idx:03d}",
+                    path=str(input_doc.get("path") or f"input_{idx}"),
+                    method=str(input_doc.get("method") or "unknown"),
+                    content=str(input_doc.get("content") or ""),
+                    content_type=str(input_doc.get("content_type") or "text"),
+                    tables=input_doc.get("tables", []) or [],
+                )
+                for idx, input_doc in enumerate(input_documents, start=1)
+            ],
+        )
+        return "".join(sections).strip(), conversion_info
+
+    def _read_tabular_content(self, document_path: str) -> str:
+        """Render tabular files into a concise text view for LLM parsing."""
+        from pathlib import Path
+
+        path = Path(document_path)
+        suffix = path.suffix.lower()
+        max_rows = max(1, int(config.table_preview_max_rows))
+        max_cols = max(1, int(config.table_preview_max_cols))
+
+        def render_rows(headers: List[str], rows: List[List[Any]], total_rows: int) -> str:
+            clipped_headers = headers[:max_cols]
+            clipped_rows = [row[:max_cols] for row in rows[:max_rows]]
+            lines = [
+                f"Table file: {path.name}",
+                f"Columns ({len(headers)}): {', '.join(clipped_headers)}",
+                f"Preview rows: {min(len(rows), max_rows)} / {total_rows}",
+                "Rows (tab-separated):",
+                "\t".join(clipped_headers),
+            ]
+            for row in clipped_rows:
+                lines.append("\t".join(str(cell) for cell in row))
+            if len(rows) > max_rows:
+                lines.append(f"... ({len(rows) - max_rows} more rows omitted)")
+            if len(headers) > max_cols:
+                lines.append(f"... ({len(headers) - max_cols} more columns omitted)")
+            return "\n".join(lines)
+
+        if suffix in {".csv", ".tsv"}:
+            delimiter = "," if suffix == ".csv" else "\t"
+            with open(path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.reader(f, delimiter=delimiter)
+                all_rows = list(reader)
+            if not all_rows:
+                return f"Table file: {path.name}\n(empty)"
+            headers = [str(h) for h in all_rows[0]]
+            rows = all_rows[1:]
+            return render_rows(headers, rows, total_rows=len(rows))
+
+        # Excel parsing (xlsx/xls) uses pandas/openpyxl from requirements.
+        import pandas as pd
+        try:
+            workbook = pd.ExcelFile(path)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to parse Excel file '{path.name}'. "
+                "Ensure openpyxl (for .xlsx) / xlrd (for .xls) is installed."
+            ) from exc
+        sheet_text_blocks: List[str] = []
+        for sheet_name in workbook.sheet_names[:6]:
+            df = pd.read_excel(path, sheet_name=sheet_name)
+            headers = [str(col) for col in df.columns]
+            rows = df.fillna("").values.tolist()
+            block = render_rows(headers, rows, total_rows=len(rows))
+            sheet_text_blocks.append(f"[Sheet: {sheet_name}]\n{block}")
+        if len(workbook.sheet_names) > 6:
+            sheet_text_blocks.append(
+                f"... ({len(workbook.sheet_names) - 6} more sheets omitted)"
+            )
+        return "\n\n".join(sheet_text_blocks)
+
+    def _read_tabular_tables(self, document_path: str) -> List[Dict[str, Any]]:
+        """Read full tabular rows for source-workspace search tools."""
+        path = Path(document_path)
+        suffix = path.suffix.lower()
+
+        if suffix in {".csv", ".tsv"}:
+            delimiter = "," if suffix == ".csv" else "\t"
+            with open(path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f, delimiter=delimiter)
+                rows = [dict(row) for row in reader]
+            return [{"name": path.stem, "rows": rows}]
+
+        import pandas as pd
+
+        workbook = pd.ExcelFile(path)
+        tables: List[Dict[str, Any]] = []
+        for sheet_name in workbook.sheet_names:
+            df = pd.read_excel(path, sheet_name=sheet_name)
+            for col in df.select_dtypes(include=["datetime64", "datetime64[ns]", "datetimetz"]).columns:
+                ser = df[col]
+                df[col] = ser.dt.strftime("%Y-%m-%dT%H:%M:%S").where(ser.notna(), "")
+            # Table rows are written with source_workspace._json_safe_value (numpy/datetime-safe).
+            rows = df.fillna("").to_dict(orient="records")
+            tables.append({"name": str(sheet_name), "rows": rows})
+        return tables
+
+
+class OrchestrateNode:
+    """Node class to orchestrate the execution of all agents in the workflow."""
+    
+    def __init__(
+        self,
+        app=None,
+        document_parser=None,
+        bio_metadata_agent=None,
+        knowledge_retriever=None,
+        json_generator=None,
+        isa_value_mapper=None,
+        critic=None,
+        llm_helper=None,
+        mem0_service=None,
+        max_step_retries=None,
+        max_global_retries=None,
+    ):
+        self.app = app
+        self._document_parser = document_parser
+        self._bio_metadata_agent = bio_metadata_agent
+        self._knowledge_retriever = knowledge_retriever
+        self._json_generator = json_generator
+        self._isa_value_mapper = isa_value_mapper
+        self._critic = critic
+        self._llm_helper = llm_helper
+        self._mem0_service = mem0_service
+        self._max_step_retries = max_step_retries
+        self._max_global_retries = max_global_retries
+        
+        if app is None:
+            self._global_retry_count = 0
+            
+        if app is not None:
+            for attr in dir(app):
+                if attr.startswith("_") and not attr.startswith("__"):
+                    app_member = getattr(app, attr)
+                    if callable(app_member):
+                        orig_cls_member = getattr(app.__class__, attr, None)
+                        if orig_cls_member is not None:
+                            if getattr(app_member, "__func__", None) is not orig_cls_member:
+                                setattr(self, attr, app_member)
+
+    @property
+    def document_parser(self):
+        return self._document_parser if self._document_parser is not None else (self.app.document_parser if self.app else None)
+    
+    @property
+    def bio_metadata_agent(self):
+        return self._bio_metadata_agent if self._bio_metadata_agent is not None else (self.app.bio_metadata_agent if self.app else None)
+
+    @property
+    def knowledge_retriever(self):
+        return self._knowledge_retriever if self._knowledge_retriever is not None else (self.app.knowledge_retriever if self.app else None)
+
+    @property
+    def json_generator(self):
+        return self._json_generator if self._json_generator is not None else (self.app.json_generator if self.app else None)
+
+    @property
+    def isa_value_mapper(self):
+        return self._isa_value_mapper if self._isa_value_mapper is not None else (self.app.isa_value_mapper if self.app else None)
+
+    @property
+    def critic(self):
+        return self._critic if self._critic is not None else (self.app.critic if self.app else None)
+
+    @property
+    def llm_helper(self):
+        return self._llm_helper if self._llm_helper is not None else (self.app.llm_helper if self.app else None)
+
+    @property
+    def mem0_service(self):
+        return self._mem0_service if self._mem0_service is not None else (self.app.mem0_service if self.app else None)
+
+    @property
+    def max_step_retries(self):
+        if self._max_step_retries is not None:
+            return self._max_step_retries
+        return self.app.max_step_retries if self.app else config.max_step_retries
+
+    @property
+    def max_global_retries(self):
+        if self._max_global_retries is not None:
+            return self._max_global_retries
+        return self.app.max_global_retries if self.app else config.max_global_retries
+
+    @property
+    def global_retry_count(self):
+        if self.app is not None:
+            return self.app.global_retry_count
+        return self._global_retry_count
+
+    @global_retry_count.setter
+    def global_retry_count(self, value):
+        if self.app is not None:
+            self.app.global_retry_count = value
+        else:
+            self._global_retry_count = value
+
+    @traceable(name="Orchestrate", tags=["workflow", "orchestration"])
+    async def __call__(self, state: FAIRifierState) -> FAIRifierState:
+        """
+        Orchestrate all agents with Critic-in-the-loop (like old OrchestratorAgent).
+        
+        This node coordinates:
+        1. DocumentParser → Critic → (retry if needed)
+        2. Planner (based on parsed info)
+        3. KnowledgeRetriever → Critic → (retry if needed)
+        4. JSONGenerator → Critic → (retry if needed)
+        
+        Benefits:
+        - Global coordination and visibility
+        - Unified retry management
+        - Can adapt strategy based on intermediate results
+        """
+        logger.info("🎯 Orchestrator coordinating all agents")
+        run_id = state.get("session_id")
+
+        # Reset global retry counter for this run
+        self.global_retry_count = 0
+        
+        # Step 1: Parse Document
+        logger.info("\n" + "="*70)
+        logger.info("📋 Step 1: DocumentParser")
+        logger.info("="*70)
+        input_documents = state.get("input_documents", []) or []
+        if len(input_documents) > 1:
+            state = await self._parse_documents_individually(state, input_documents)
+        else:
+            state = await self._execute_agent_with_retry(
+                state, self.document_parser, "DocumentParser",
+                lambda s: s.get("document_info", {}) and len(s["document_info"]) >= 1
+            )
+        if run_id and run_stop_requested(run_id):
+            return self._mark_interrupted_state(state)
+        
+        # Step 1b: Active Bioinfo Analysis (if raw bio data present)
+        bio_file_paths = state.get("bio_file_paths", []) or []
+        has_bio_raw = bool(bio_file_paths)
+
+        if has_bio_raw:
+            logger.info("\n" + "="*70)
+            logger.info("🧬 Step 1b: BioMetadataAgent (Active Analysis)")
+            logger.info("="*70)
+            logger.info("   Bio files: %s", bio_file_paths)
+            state = await self._execute_agent_with_retry(
+                state, self.bio_metadata_agent, "BioMetadataAgent",
+                lambda s: s.get("document_info", {}) and len(s["document_info"]) > 0
+            )
+            if run_id and run_stop_requested(run_id):
+                return self._mark_interrupted_state(state)
+
+        # Step 2: Plan workflow based on parsed info
+        logger.info("\n" + "="*70)
+        logger.info("🧠 Step 2: Planning workflow strategy")
+        logger.info("="*70)
+        state = await self._plan_workflow_internal(state)
+        if run_id and run_stop_requested(run_id):
+            return self._mark_interrupted_state(state)
+        
+        # Step 3: Retrieve Knowledge
+        logger.info("\n" + "="*70)
+        logger.info("🔍 Step 3: KnowledgeRetriever")
+        logger.info("="*70)
+        state = await self._execute_agent_with_retry(
+            state, self.knowledge_retriever, "KnowledgeRetriever",
+            lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
+        )
+        if run_id and run_stop_requested(run_id):
+            return self._mark_interrupted_state(state)
+
+        # Step 4: Generate JSON (with optional cross-layer rollback to retrieval)
+        cross_layer_retries_used = 0
+        while True:
+            logger.info("\n" + "="*70)
+            logger.info("📝 Step 4: JSONGenerator")
+            logger.info("="*70)
+            state = await self._execute_agent_with_retry(
+                state, self.json_generator, "JSONGenerator",
+                lambda s: s.get("metadata_fields", []) and len(s["metadata_fields"]) > 0
+            )
+            if run_id and run_stop_requested(run_id):
+                return self._mark_interrupted_state(state)
+
+            context = state.get("context", {})
+            retry_anchor = context.pop("force_retry_from", None)
+            retry_reason = context.pop("cross_layer_retry_reason", None)
+            if not retry_anchor:
+                break
+
+            if cross_layer_retries_used >= config.cross_layer_max_restarts:
+                logger.warning(
+                    "Cross-layer retry budget exhausted (%s/%s). Finalizing current output with review flag.",
+                    cross_layer_retries_used,
+                    config.cross_layer_max_restarts,
+                )
+                state["needs_human_review"] = True
+                break
+
+            if retry_anchor not in ("KnowledgeRetriever", "DocumentParser"):
+                logger.warning(
+                    "Unsupported cross-layer retry anchor '%s'. Finalizing current output with review flag.",
+                    retry_anchor,
+                )
+                state["needs_human_review"] = True
+                break
+
+            cross_layer_retries_used += 1
+            if retry_anchor == "KnowledgeRetriever":
+                logger.info(
+                    "↩ Cross-layer rollback %s/%s: JSON -> KnowledgeRetriever (%s)",
+                    cross_layer_retries_used,
+                    config.cross_layer_max_restarts,
+                    retry_reason or "no reason provided",
+                )
+                state = await self._execute_agent_with_retry(
+                    state, self.knowledge_retriever, "KnowledgeRetriever",
+                    lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
+                )
+            else:
+                logger.info(
+                    "↩ Cross-layer rollback %s/%s: JSON -> DocumentParser (+plan+retrieval) (%s)",
+                    cross_layer_retries_used,
+                    config.cross_layer_max_restarts,
+                    retry_reason or "no reason provided",
+                )
+                input_documents = state.get("input_documents", []) or []
+                if len(input_documents) > 1:
+                    state = await self._parse_documents_individually(state, input_documents)
+                else:
+                    state = await self._execute_agent_with_retry(
+                        state, self.document_parser, "DocumentParser",
+                        lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3
+                    )
+                if run_id and run_stop_requested(run_id):
+                    return self._mark_interrupted_state(state)
+                state = await self._plan_workflow_internal(state)
+                if run_id and run_stop_requested(run_id):
+                    return self._mark_interrupted_state(state)
+                state = await self._execute_agent_with_retry(
+                    state, self.knowledge_retriever, "KnowledgeRetriever",
+                    lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
+                )
+            if run_id and run_stop_requested(run_id):
+                return self._mark_interrupted_state(state)
+        state["cross_layer_retries_used"] = cross_layer_retries_used
+
+        # ── Step 4.5: ISAValueMapper ─────────────────────────────────
+        if state.get("metadata_fields"):
+            logger.info("\n" + "="*70)
+            logger.info("📊 Step 5: ISAValueMapper (columns×rows matrix)")
+            logger.info("="*70)
+            try:
+                state = await self._execute_agent_with_retry(
+                    state, self.isa_value_mapper, "ISAValueMapper",
+                    lambda s: s.get("artifacts", {}).get("isa_values_json") is not None
+                )
+            except Exception as exc:
+                logger.warning("ISAValueMapper failed (non-fatal): %s", exc)
+
+        logger.info("\n" + "="*70)
+        logger.info(f"✅ Orchestration complete (global retries used: {self.global_retry_count}/{self.max_global_retries})")
+        logger.info("="*70)
+        
+        return state
+
+    async def _execute_agent_with_retry(
+        self,
+        state: FAIRifierState,
+        agent: BaseAgent,
+        agent_name: str,
+        check_output_fn
+    ) -> FAIRifierState:
+        """
+        Execute an agent with Critic evaluation and retry logic.
+        
+        Flow:
+        1. Retrieve memories (R)
+        2. Agent executes
+        3. Critic evaluates
+        4. If ACCEPT: write memory if gated (W)
+        5. If not ACCEPT and retries left: provide feedback, retry
+        6. If not ACCEPT and no retries: accept with review or fail
+        
+        Args:
+            state: Current workflow state
+            agent: Agent instance to execute
+            agent_name: Name for logging
+            check_output_fn: Function to check if agent produced usable output
+            
+        Returns:
+            Updated state after execution (with or without retries)
+        """
+        run_id = state.get("session_id")
+        if "execution_history" not in state:
+            state["execution_history"] = []
+        if "context" not in state:
+            state["context"] = {}
+        
+        # Initialize retry tracking
+        if "retry_trajectory" not in state:
+            state["retry_trajectory"] = {}
+        state["retry_trajectory"][agent_name] = []
+        
+        # Track previous scores for no-progress detection
+        previous_scores = []
+        NO_PROGRESS_THRESHOLD = 2  # Exit if score unchanged for this many consecutive attempts
+        
+        # [R] Retrieve relevant memories before execution
+        session_id = state.get("session_id")
+        if self.mem0_service and session_id:
+            relevant_memories = self._retrieve_relevant_memories(
+                agent_name=agent_name,
+                state=state,
+                session_id=session_id,
+                top_k=10,
+            )
+            state["context"]["retrieved_memories"] = relevant_memories
+        else:
+            state["context"]["retrieved_memories"] = []
+
+        # Track critic issues across attempts so retries can query memory more specifically
+        prior_issues: list = []
+
+        # Retry loop
+        for attempt in range(1, self.max_step_retries + 2):  # +2 = initial + max_retries
+            if run_id and run_stop_requested(run_id):
+                logger.warning(
+                    "⏹ Stop requested before %s attempt %s; exiting retry loop.",
+                    agent_name,
+                    attempt,
+                )
+                return self._mark_interrupted_state(state)
+
+            # Check global retry limit
+            if self.global_retry_count >= self.max_global_retries:
+                logger.warning(f"⚠️ Global retry limit ({self.max_global_retries}) reached")
+                if check_output_fn(state):
+                    logger.warning(f"   But {agent_name} has usable output - accepting")
+                    state["needs_human_review"] = True
+                    break
+                else:
+                    logger.error(f"   And {agent_name} has no usable output - failing")
+                    state["errors"] = state.get("errors", []) + [f"{agent_name} failed: global retry limit reached"]
+                    break
+            
+            # Log context usage at the agent boundary (refactor §6 — passive
+            # observability, no trimming). Writes a JSONL line to the run's
+            # processing log so operators can see how state size evolves.
+            output_dir = state.get("output_dir")
+            log_path = (
+                str(Path(output_dir) / "processing_log.jsonl")
+                if output_dir
+                else None
+            )
+            log_context_usage(
+                agent_name=agent_name,
+                state=state,
+                log_path=log_path,
+                extra={"attempt": attempt},
+            )
+
+            # Log attempt
+            if attempt == 1:
+                logger.info(f"▶️  Executing {agent_name}")
+            else:
+                logger.info(f"🔄 Retry {attempt-1}/{self.max_step_retries} for {agent_name}")
+                self.global_retry_count += 1
+                # Strip verbose Critic prose / failed-output detail from earlier
+                # attempts of this agent so the in-state history stays lean and
+                # the LLM is not anchored to its own past mistakes.
+                # Full transcripts remain in processing_log.jsonl (audit trail).
+                # See ARCHITECTURE_REFACTOR_PLAN.md §2.5.
+                compacted = compact_prior_attempts_for_agent(
+                    state["execution_history"],
+                    agent_name,
+                    keep_latest=False,  # the previous attempt is no longer needed verbatim
+                )
+                if compacted:
+                    logger.debug(
+                        "Compacted %d prior attempt record(s) for %s",
+                        compacted,
+                        agent_name,
+                    )
+
+            # Set retry context for agent
+            state["context"]["retry_count"] = attempt - 1
+            
+            # Create execution record
+            execution_record = {
+                "agent_name": agent_name,
+                "attempt": attempt,
+                "start_time": datetime.now().isoformat(),
+                "end_time": None,
+                "success": False,
+                "critic_evaluation": None
+            }
+            
+            try:
+                # Execute agent
+                state = await agent.execute(state)
+                execution_record["success"] = True
+                execution_record["end_time"] = datetime.now().isoformat()
+                if run_id and run_stop_requested(run_id):
+                    logger.warning(
+                        "⏹ Stop requested after %s attempt %s; skipping downstream evaluation.",
+                        agent_name,
+                        attempt,
+                    )
+                    state["execution_history"].append(execution_record)
+                    return self._mark_interrupted_state(state)
+                
+            except Exception as e:
+                logger.error(f"❌ {agent_name} error (attempt {attempt}): {str(e)}")
+                execution_record["success"] = False
+                execution_record["end_time"] = datetime.now().isoformat()
+                execution_record["error"] = str(e)
+                state["execution_history"].append(execution_record)
+                
+                # On error, try next attempt if available
+                if attempt <= self.max_step_retries:
+                    continue
+                else:
+                    break
+            
+            # Add execution record
+            state["execution_history"].append(execution_record)
+
+            if run_id and run_stop_requested(run_id):
+                logger.warning(
+                    "⏹ Stop requested before Critic evaluation for %s; stopping workflow.",
+                    agent_name,
+                )
+                return self._mark_interrupted_state(state)
+            
+            last_execution = state["execution_history"][-1]
+            if self._critic_is_disabled():
+                critic_eval = {"decision": "ACCEPT", "score": 1.0, "issues": [], "suggestions": []}
+                last_execution["critic_evaluation"] = critic_eval
+                decision = "ACCEPT"
+                score = 1.0
+                logger.info("⏭ Critic disabled via FAIRIFIER_DISABLE_CRITIC; auto-accepting %s", agent_name)
+            else:
+                # Call Critic
+                logger.info(f"🔍 Critic evaluating {agent_name}...")
+                state = await self.critic.execute(state)
+
+                # Get Critic decision
+                last_execution = state["execution_history"][-1]
+                critic_eval = last_execution.get("critic_evaluation", {})
+                decision = critic_eval.get("decision", "ACCEPT")
+                score = critic_eval.get("score", 0.0)
+            
+            # Record retry trajectory
+            state["retry_trajectory"][agent_name].append({
+                "attempt": attempt,
+                "decision": decision,
+                "score": score,
+                "issues_count": len(critic_eval.get("issues", [])),
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            logger.info(
+                f"   📊 Critic: {decision} (score: {score:.2f}, "
+                f"attempt: {attempt}/{self.max_step_retries + 1})"
+            )
+
+            if run_id and run_stop_requested(run_id):
+                logger.warning(
+                    "⏹ Stop requested after Critic evaluation for %s; stopping workflow.",
+                    agent_name,
+                )
+                return self._mark_interrupted_state(state)
+            
+            feedback_prepared = False
+
+            # Hard gate after JSON generation: force cross-layer recovery when schema coverage is still broken.
+            if agent_name == "JSONGenerator" and decision == "ACCEPT" and not self._hard_gate_is_disabled():
+                hard_gate = self._evaluate_json_hard_gate(state)
+                if not hard_gate.get("passed", True):
+                    logger.warning("🚫 JSON hard gate failed: %s", hard_gate.get("summary"))
+                    critic_eval.setdefault("issues", [])
+                    critic_eval.setdefault("improvement_ops", [])
+                    critic_eval["issues"].extend(hard_gate.get("issues", []))
+                    for op in hard_gate.get("improvement_ops", []):
+                        if op not in critic_eval["improvement_ops"]:
+                            critic_eval["improvement_ops"].append(op)
+                    critic_eval["hard_gate"] = hard_gate
+                    critic_eval["decision"] = "RETRY"
+                    critic_eval["score"] = min(
+                        float(critic_eval.get("score", 0.0) or 0.0),
+                        config.critic_retry_max_threshold,
+                    )
+                    decision = "RETRY"
+                    score = critic_eval["score"]
+
+                    target_agent = hard_gate.get("anchor_agent", "KnowledgeRetriever")
+                    feedback_target = (
+                        agent_name
+                        if target_agent != agent_name and self._cross_layer_rollback_is_disabled()
+                        else target_agent
+                    )
+                    state = await self.critic.provide_feedback_to_agent(feedback_target, critic_eval, state)
+                    feedback_prepared = True
+
+                    if self.mem0_service and session_id and hard_gate.get("issues"):
+                        enriched_memories = self._retrieve_relevant_memories(
+                            agent_name=target_agent,
+                            state=state,
+                            session_id=session_id,
+                            top_k=10,
+                            prior_issues=hard_gate["issues"],
+                        )
+                        state["context"]["retrieved_memories"] = enriched_memories
+
+                    if target_agent != agent_name and not self._cross_layer_rollback_is_disabled():
+                        state["context"]["force_retry_from"] = target_agent
+                        state["context"]["cross_layer_retry_reason"] = hard_gate.get("summary")
+                        logger.info(
+                            "↩ Requesting cross-layer retry anchor: %s (reason: %s)",
+                            target_agent,
+                            hard_gate.get("summary"),
+                        )
+                        return state
+                    if target_agent != agent_name and self._cross_layer_rollback_is_disabled():
+                        logger.info(
+                            "⏭ Cross-layer rollback disabled; retry stays at %s despite suggested anchor %s",
+                            agent_name,
+                            target_agent,
+                        )
+
+            # Handle decision
+            if decision == "ACCEPT":
+                logger.info(
+                    f"✅ {agent_name} completed successfully "
+                    f"(score {score:.2f} >= accept threshold)"
+                )
+                
+                # [W] Write memory with gating (only valuable insights)
+                if self.mem0_service and session_id:
+                    try:
+                        # Check if this output deserves memory storage
+                        should_write = self._should_write_memory(
+                            agent_name, state, critic_eval, attempt
+                        )
+                        
+                        if should_write:
+                            # Extract actionable insights (can be multiple)
+                            insights = self._extract_actionable_insight(
+                                agent_name, state, critic_eval, attempt
+                            )
+                            
+                            if insights:
+                                # Store each insight separately for better retrieval
+                                for insight in insights:
+                                    self._store_memory_insight(
+                                        state=state,
+                                        session_id=session_id,
+                                        agent_id=agent_name,
+                                        insight=insight,
+                                        metadata={
+                                            "workflow_step": agent_name,
+                                            "score": score,
+                                            "attempt": attempt,
+                                            "decision": decision,
+                                            "timestamp": datetime.now().isoformat(),
+                                        },
+                                    )
+                                logger.info(
+                                    f"💾 Stored {len(insights)} memories for {agent_name}"
+                                )
+                            else:
+                                logger.info(
+                                    f"⏭️  No actionable insights extracted from {agent_name}"
+                                )
+                        else:
+                            logger.info(
+                                f"⏭️  Skipped memory write for {agent_name} "
+                                f"(didn't pass gating)"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Memory storage failed for {agent_name}: {e}"
+                        )
+                
+                break
+            
+            # Track score for no-progress detection
+            previous_scores.append(round(score, 2))
+            
+            # Check for no-progress: if score unchanged for N consecutive attempts
+            if len(previous_scores) >= NO_PROGRESS_THRESHOLD:
+                recent_scores = previous_scores[-NO_PROGRESS_THRESHOLD:]
+                if len(set(recent_scores)) == 1:
+                    # All recent scores are identical - no progress being made
+                    logger.warning(
+                        f"⚠️ No progress detected for {agent_name}: "
+                        f"score unchanged at {score:.2f} for {NO_PROGRESS_THRESHOLD} consecutive attempts\n"
+                        f"  This may indicate API limitations or infeasible requirements.\n"
+                        f"  Accepting current output to avoid further token waste."
+                    )
+                    if check_output_fn(state):
+                        state["needs_human_review"] = True
+                        state["no_progress_detected"] = True
+                        break
+                    else:
+                        logger.error(f"❌ No progress and no usable output from {agent_name}")
+                        state["errors"] = state.get("errors", []) + [
+                            f"{agent_name}: No progress after {NO_PROGRESS_THRESHOLD} attempts (score stuck at {score:.2f})"
+                        ]
+                        break
+            
+            # Check if more retries available
+            if attempt > self.max_step_retries:
+                # Max retries reached - check if we have usable output
+                if check_output_fn(state):
+                    logger.warning(
+                        f"⚠️ Max retries reached ({attempt-1}/{self.max_step_retries}) "
+                        f"but {agent_name} has usable output - accepting with review flag\n"
+                        f"  Final Critic decision: {decision} (score: {score:.2f})\n"
+                        f"  Note: Workflow continues because output is usable, but needs human review"
+                    )
+                    state["needs_human_review"] = True
+                    break
+                else:
+                    logger.error(
+                        f"❌ Max retries reached ({attempt-1}/{self.max_step_retries}) "
+                        f"with no usable output from {agent_name}\n"
+                        f"  Final Critic decision: {decision} (score: {score:.2f})\n"
+                        f"  Workflow will continue but may fail at finalization"
+                    )
+                    break
+            else:
+                # More retries available - provide feedback and continue
+                logger.info(
+                    f"   🔄 {agent_name} needs improvement (score: {score:.2f}), "
+                    f"preparing retry {attempt}/{self.max_step_retries}..."
+                )
+                # Accumulate issues for targeted memory retrieval on next attempt
+                new_issues = critic_eval.get("issues", [])
+                if new_issues:
+                    prior_issues.extend(new_issues)
+                # Re-retrieve memories with rejection context so the agent gets targeted help
+                if self.mem0_service and session_id and prior_issues:
+                    enriched_memories = self._retrieve_relevant_memories(
+                        agent_name=agent_name,
+                        state=state,
+                        session_id=session_id,
+                        top_k=10,
+                        prior_issues=prior_issues,
+                    )
+                    state["context"]["retrieved_memories"] = enriched_memories
+                if not feedback_prepared:
+                    state = await self.critic.provide_feedback_to_agent(agent_name, critic_eval, state)
+                if run_id and run_stop_requested(run_id):
+                    logger.warning(
+                        "⏹ Stop requested after feedback prep for %s; stopping workflow.",
+                        agent_name,
+                    )
+                    return self._mark_interrupted_state(state)
+
+        # Loop exited (ACCEPT / ESCALATE / retry-exhausted). The retry-routing
+        # decision has been consumed; downstream consumers only read score,
+        # decision, and timing. Compact the final record so each agent's
+        # contribution to long-lived state is bounded (refactor §2.5).
+        compact_prior_attempts_for_agent(
+            state["execution_history"],
+            agent_name,
+            keep_latest=False,
+        )
+
+        return state
+
+    def _critic_is_disabled(self) -> bool:
+        return bool(getattr(config, "disable_critic", False))
+
+    def _hard_gate_is_disabled(self) -> bool:
+        return bool(getattr(config, "disable_hard_gate", False))
+
+    def _cross_layer_rollback_is_disabled(self) -> bool:
+        return bool(getattr(config, "disable_cross_layer_rollback", False))
+
+    def _should_write_memory(
+        self,
+        agent_name: str,
+        state: FAIRifierState,
+        critic_eval: Dict[str, Any],
+        attempt: int
+    ) -> bool:
+        """Determine if output should be written to memory (W gating).
+        
+        Only write: constraints/decisions/repair rules/preferences/failures
+        
+        Gating criteria:
+        - High critic score (>0.75) - lowered threshold
+        - First success after failures (repair rule learned)
+        - Novel failure patterns (for future avoidance)
+        - Workflow decisions (package selection, field mappings)
+        """
+        score = critic_eval.get("score", 0)
+        decision = critic_eval.get("decision", "")
+        
+        # Rule 1: High-quality outputs (lowered to 0.75 from 0.8)
+        if decision == "ACCEPT" and score > 0.75:
+            logger.info(
+                f"✅ Write gate passed: high-quality (score={score:.2f})"
+            )
+            return True
+        
+        # Rule 2: Successful repair (learned correction)
+        if decision == "ACCEPT" and attempt > 1:
+            logger.info(
+                f"✅ Write gate passed: learned repair (attempt={attempt})"
+            )
+            return True
+        
+        # Rule 3: Failure patterns (for avoidance) — any attempt with issues
+        if decision == "REJECT":
+            issues = critic_eval.get("issues", [])
+            if issues:
+                logger.info(
+                    f"✅ Write gate passed: failure pattern (attempt={attempt}, issues={len(issues)})"
+                )
+                return True
+        
+        # Rule 4: Workflow decisions (always valuable)
+        if decision == "ACCEPT" and agent_name in ["KnowledgeRetriever", "JSONGenerator", "ISAValueMapper"]:
+            logger.info(
+                f"✅ Write gate passed: workflow decision from {agent_name}"
+            )
+            return True
+        
+        logger.info(
+            f"❌ Write gate failed: score={score:.2f}, "
+            f"decision={decision}, attempt={attempt}"
+        )
+        return False
+
+    def _is_domain_general(self, insight: str) -> bool:
+        """Return True if an insight is domain-general enough for the global long-term scope.
+
+        Scope promotion rule (inspired by Claude Code memory discipline):
+        - Session scope (run): always write — current-run agent-to-agent context
+        - Global scope (long-term): only promote reusable cross-domain knowledge
+
+        Reject from global scope if the insight is clearly run-specific:
+        project IDs, file paths, retry counts, per-run timestamps.
+        """
+        lower = insight.lower()
+        # Run-specific signals — keep in session scope only
+        run_specific = [
+            "project_id", "session_id", "run_id",
+            "retry count", "attempt ", "restarted",
+            "/home/", "/tmp/", "output/",
+            "retry 1", "retry 2", "retry 3",
+        ]
+        return not any(sig in lower for sig in run_specific)
+
+    def _store_memory_insight(
+        self,
+        *,
+        state: FAIRifierState,
+        session_id: str,
+        agent_id: str,
+        insight: str,
+        metadata: Dict[str, Any],
+    ) -> None:
+        """Store one insight applying scope discipline.
+
+        Read/Write rules (inspired by Claude Code + ADK memory patterns):
+        - Session scope  : always write — enables within-run agent-to-agent handoff
+        - Global scope   : only promote domain-general facts (see _is_domain_general)
+        - Write gate     : caller is responsible for _should_write_memory() check
+        """
+        if not self.mem0_service:
+            return
+
+        for memory_scope_id in self._memory_scope_ids(state, session_id):
+            scope_type = "run" if memory_scope_id == session_id else "long_term"
+
+            # Scope promotion gate: skip global scope for run-specific content
+            if scope_type == "long_term" and not self._is_domain_general(insight):
+                logger.debug(
+                    "Skipping global scope promotion for run-specific insight (agent=%s)", agent_id
+                )
+                continue
+
+            self.mem0_service.add(
+                messages=[{
+                    "role": "assistant",
+                    "content": insight,
+                }],
+                session_id=memory_scope_id,
+                agent_id=agent_id,
+                metadata={
+                    **metadata,
+                    "memory_scope_id": memory_scope_id,
+                    "memory_scope_type": scope_type,
+                },
+            )
+
+    def _retrieve_relevant_memories(
+        self,
+        agent_name: str,
+        state: FAIRifierState,
+        session_id: str,
+        top_k: int = 5,
+        prior_issues: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve relevant memories before agent execution (R in R+W).
+        
+        Query construction: task + doc_type + schema + failure_signals
+        Filters: project_id/doc_hash/agent_name with cross-agent support
+        
+        Args:
+            agent_name: Name of the agent about to execute
+            state: Current workflow state (for context extraction)
+            session_id: Session ID for memory filtering
+            top_k: Number of memories to retrieve
+            
+        Returns:
+            List of relevant memories with content and metadata
+        """
+        if not self.mem0_service:
+            return []
+            
+        try:
+            # Extract context for query construction
+            doc_info = state.get("document_info", {})
+            doc_type = doc_info.get("document_type", "document")
+            domain = doc_info.get("research_domain", "")
+            
+            # Build task-specific query (not "Context for agent X")
+            if agent_name == "DocumentParser":
+                query = (
+                    f"parsing {doc_type} in {domain or 'scientific'} domain: "
+                    f"extraction rules validation failures common issues"
+                )
+            elif agent_name == "KnowledgeRetriever":
+                query = (
+                    f"FAIR-DS packages ontologies for {domain or doc_type}: "
+                    f"package combinations field mappings coverage issues"
+                )
+            elif agent_name == "JSONGenerator":
+                query = (
+                    f"FAIR metadata for {domain or doc_type}: "
+                    f"field-ontology mappings confidence schema validation"
+                )
+            elif agent_name == "Critic":
+                query = (
+                    f"evaluating {domain or doc_type} metadata quality: "
+                    f"common issues thresholds improvement patterns"
+                )
+            elif agent_name == "ISAValueMapper":
+                query = (
+                    f"metadata entity resolution for {domain or doc_type}: "
+                    f"sample grouping experimental design matrix structuring"
+                )
+            elif agent_name == "Planner":
+                query = (
+                    f"workflow strategy for {domain or doc_type}: "
+                    f"orchestration retry failure handling"
+                )
+            else:
+                query = f"workflow for {domain or doc_type}"
+
+            # On retry: append rejection issues to make the query more targeted
+            if prior_issues:
+                issue_summary = "; ".join(prior_issues[:3])
+                query = f"{query} — previous failures: {issue_summary}"
+
+            # Cold-start diagnostic: first agent on first run has no global memories
+            if agent_name == "DocumentParser":
+                try:
+                    if self.mem0_service.is_cold_start():
+                        logger.info("❄️  Cold start: no cross-session memories in global scope — building from scratch")
+                    else:
+                        logger.info("🌡️  Warm start: cross-session memories available for %s", agent_name)
+                except Exception:
+                    pass
+
+            # Search both scopes:
+            # - session_id/project_id: current run, enabling agent-to-agent handoff
+            # - memory_scope_id: cross-run user/global memory
+            memories = []
+            seen_memory_ids = set()
+            seen_memory_texts = set()
+            for memory_scope_id in self._memory_scope_ids(state, session_id):
+                scope_memories = self.mem0_service.search(
+                    query=query,
+                    session_id=memory_scope_id,
+                    limit=top_k,
+                )
+                for memory in scope_memories:
+                    memory_id = memory.get("id") if isinstance(memory, dict) else None
+                    memory_text = memory.get("memory") if isinstance(memory, dict) else str(memory)
+                    dedupe_key = memory_id or memory_text
+                    if not dedupe_key:
+                        continue
+                    if memory_id and memory_id in seen_memory_ids:
+                        continue
+                    if memory_text and memory_text in seen_memory_texts:
+                        continue
+                    if memory_id:
+                        seen_memory_ids.add(memory_id)
+                    if memory_text:
+                        seen_memory_texts.add(memory_text)
+                    memories.append(memory)
+                    if len(memories) >= top_k:
+                        break
+                if len(memories) >= top_k:
+                    break
+            
+            if memories:
+                logger.info(
+                    f"📚 Retrieved {len(memories)} memories for {agent_name}"
+                )
+            
+            return memories
+            
+        except Exception as e:
+            logger.warning(f"Memory retrieval failed for {agent_name}: {e}")
+            return []
+
+    def _memory_scope_ids(
+        self,
+        state: FAIRifierState,
+        session_id: str,
+    ) -> List[str]:
+        """Return unique memory scopes for current-run and cross-run memory."""
+        scope_ids: List[str] = []
+        for raw_scope in (session_id, state.get("memory_scope_id")):
+            if isinstance(raw_scope, str):
+                scope = raw_scope.strip()
+                if scope and scope not in scope_ids:
+                    scope_ids.append(scope)
+        return scope_ids
+
+    def _safe_get_domain(self, doc_info: Dict[str, Any]) -> str:
+        """Extract canonical research_domain from doc_info.
+
+        doc_info is canonicalized at the DocumentParser boundary (refactor §1),
+        so research_domain is always a string when present (or absent). The
+        list-shape handling below is preserved as a defensive fallback for
+        legacy state dicts that may bypass canonicalization.
+        """
+        if not doc_info or not isinstance(doc_info, dict):
+            return ""
+
+        domain_raw = doc_info.get("research_domain")
+        if not domain_raw:
+            return ""
+        if isinstance(domain_raw, list):
+            for item in domain_raw:
+                if isinstance(item, str) and item.strip():
+                    return item.strip()
+            return ""
+        if isinstance(domain_raw, str):
+            return domain_raw.strip()
+        return ""
+
+    def _safe_get_field(self, data: Any, *field_names: str, default: Any = None) -> Any:
+        """Safely get a field from nested data, trying multiple field names.
+        
+        Args:
+            data: Dictionary or other data structure to extract from
+            *field_names: Multiple field names to try in order
+            default: Default value if nothing found
+        
+        Returns:
+            First non-None value found, or default
+        """
+        if not isinstance(data, dict):
+            return default
+        
+        for field_name in field_names:
+            value = data.get(field_name)
+            if value is not None:
+                return value
+        
+        return default
+
+    def _extract_actionable_insight(
+        self,
+        agent_name: str,
+        state: FAIRifierState,
+        critic_eval: Dict[str, Any],
+        attempt: int
+    ) -> List[str]:
+        """Extract actionable insights including workflow decisions.
+        
+        Returns list of insights (not just one) to capture:
+        - Document patterns (for DocumentParser)
+        - Package selections (for KnowledgeRetriever)
+        - Field mappings (for JSONGenerator)
+        - Repair rules
+        - Failure causes
+        """
+        try:
+            decision = critic_eval.get("decision", "")
+            score = critic_eval.get("score", 0)
+            insights = []
+            
+            # === KnowledgeRetriever: Capture package selection decisions ===
+            if agent_name == "KnowledgeRetriever" and decision == "ACCEPT":
+                knowledge = state.get("retrieved_knowledge", [])
+                doc_info = state.get("document_info", {})
+                domain = self._safe_get_domain(doc_info)
+                
+                logger.info(f"🔍 KR insight extraction: knowledge count={len(knowledge)}, domain='{domain}'")
+                
+                if knowledge and isinstance(knowledge, list):
+                    # Extract selected packages (try multiple possible structures)
+                    packages = set()
+                    for k in knowledge[:30]:  # Check more items for robustness
+                        if not isinstance(k, dict):
+                            continue
+                        
+                        # Try multiple possible field names and structures
+                        pkg = (
+                            self._safe_get_field(k, "package_source", "package", "fair_ds_package") or
+                            self._safe_get_field(k.get("metadata", {}), "package", "package_name") or
+                            ""
+                        )
+                        
+                        # Clean and validate package name
+                        if isinstance(pkg, str):
+                            pkg = pkg.strip()
+                            if pkg and pkg.lower() not in ["default", "unknown", "none", ""]:
+                                packages.add(pkg)
+                    
+                    logger.info(f"   Extracted packages: {packages}")
+                    
+                    if packages:
+                        pkg_list = sorted(list(packages))[:5]  # Top 5 packages
+                        if domain:
+                            insights.append(
+                                f"{domain} research requires FAIR-DS packages: {', '.join(pkg_list)}"
+                            )
+                        else:
+                            insights.append(
+                                f"FAIR-DS packages selected: {', '.join(pkg_list)}"
+                            )
+                    
+                    # Extract ontology usage (more robust pattern matching)
+                    ontologies = set()
+                    for k in knowledge[:30]:
+                        if not isinstance(k, dict):
+                            continue
+                        
+                        # Try multiple fields for ontology info
+                        onto = (
+                            self._safe_get_field(k, "ontology_id", "ontology", "ontology_term") or
+                            self._safe_get_field(k, "value") or  # Sometimes ontology is in 'value' field
+                            ""
+                        )
+                        
+                        # Extract ontology prefix from various formats
+                        if isinstance(onto, str) and onto:
+                            # Handle formats like "ENVO:00001998" or "http://purl.obolibrary.org/obo/ENVO_00001998"
+                            if ":" in onto:
+                                prefix = onto.split(":")[0].split("/")[-1].upper()
+                            elif "/" in onto and "obo" in onto.lower():
+                                # Extract from URL format
+                                parts = onto.split("/")
+                                for part in parts:
+                                    if "_" in part:
+                                        prefix = part.split("_")[0].upper()
+                                        break
+                                else:
+                                    continue
+                            else:
+                                continue
+                            
+                            # Validate known ontology prefixes
+                            if prefix in ["ENVO", "OBI", "EDAM", "NPO", "GO", "ECO", "CHEBI", "UBERON", "PATO", "UO"]:
+                                ontologies.add(prefix)
+                    
+                    logger.info(f"   Extracted ontologies: {ontologies}")
+                    
+                    if ontologies:
+                        onto_str = ", ".join(sorted(ontologies))
+                        insights.append(
+                            f"FAIR-DS ontologies mapped: {onto_str}"
+                        )
+                    
+                    # Add count insight if significant
+                    if len(knowledge) >= 50:
+                        if domain:
+                            insights.append(
+                                f"{domain} studies commonly require 50+ FAIR-DS metadata terms"
+                            )
+                        else:
+                            insights.append(
+                                f"Complex experimental studies commonly require 50+ FAIR-DS metadata terms"
+                            )
+            
+            # === JSONGenerator: Capture field mapping patterns ===
+            elif agent_name == "JSONGenerator" and decision == "ACCEPT":
+                fields = state.get("metadata_fields", [])
+                doc_info = state.get("document_info", {})
+                domain = self._safe_get_domain(doc_info)
+                
+                logger.info(f"🔍 JG insight extraction: fields count={len(fields)}, domain='{domain}'")
+                
+                if fields and isinstance(fields, list):
+                    # Sample field-ontology mappings (more robust)
+                    mappings = []
+                    for f in fields[:25]:
+                        if not isinstance(f, dict):
+                            continue
+                        
+                        field_name = self._safe_get_field(f, "field_name", "name", "label") or ""
+                        onto_uri = self._safe_get_field(f, "ontology_uri", "ontology", "ontology_id") or ""
+                        
+                        if isinstance(field_name, str) and isinstance(onto_uri, str):
+                            field_name = field_name.strip()
+                            onto_uri = onto_uri.strip()
+                            
+                            if onto_uri and field_name:
+                                # Extract ontology prefix from various formats
+                                prefix = ""
+                                if ":" in onto_uri:
+                                    prefix = onto_uri.split(":")[0].split("/")[-1].upper()
+                                elif "/" in onto_uri:
+                                    parts = onto_uri.split("/")
+                                    for part in parts:
+                                        if part.isupper() or "_" in part:
+                                            prefix = part.split("_")[0].upper() if "_" in part else part
+                                            break
+                                
+                                if prefix and len(prefix) <= 10:  # Reasonable prefix length
+                                    mappings.append(f"{field_name}→{prefix}")
+                    
+                    logger.info(f"   Extracted mappings: {len(mappings)}")
+                    
+                    if mappings:
+                        sample = mappings[:5]
+                        insights.append(
+                            f"Metadata field mappings: {', '.join(sample)}"
+                        )
+                    
+                    # ISA level distribution
+                    isa_levels = {}
+                    for f in fields:
+                        if isinstance(f, dict):
+                            level = self._safe_get_field(f, "isa_level", "level", default="unknown")
+                            if isinstance(level, str):
+                                level = level.strip().lower()
+                                isa_levels[level] = isa_levels.get(level, 0) + 1
+                    
+                    logger.info(f"   ISA levels: {isa_levels}")
+                    
+                    # Only report ISA distribution if we have meaningful data
+                    if (
+                        (len(isa_levels) > 1 and "unknown" not in isa_levels)
+                        or isa_levels.get("unknown", 0) < len(fields) * 0.5
+                    ):
+                        level_str = ", ".join([f"{k}:{v}" for k, v in sorted(isa_levels.items())[:4] if k != "unknown"])
+                        if level_str:
+                            insights.append(f"Metadata spans ISA levels: {level_str}")
+                    
+                    # Total field count with context
+                    if len(fields) >= 30:
+                        if len(fields) >= 70:
+                            complexity = "high-complexity"
+                        elif len(fields) >= 50:
+                            complexity = "medium-complexity"
+                        else:
+                            complexity = "standard-complexity"
+                        
+                        if domain:
+                            insights.append(
+                                f"{len(fields)} FAIR-DS compliant metadata fields represents a robust baseline for {complexity} {domain} studies"
+                            )
+                        else:
+                            insights.append(
+                                f"{len(fields)} FAIR-DS compliant metadata fields represents a robust baseline for {complexity} omics studies"
+                            )
+            
+            # === DocumentParser: Capture document patterns ===
+            elif agent_name == "DocumentParser" and decision == "ACCEPT":
+                doc_info = state.get("document_info", {})
+                
+                logger.info(f"🔍 DP insight extraction: doc_info keys={list(doc_info.keys()) if doc_info else []}")
+                
+                if doc_info and isinstance(doc_info, dict):
+                    # Extract domain with robust field name handling
+                    domain = self._safe_get_domain(doc_info)
+                    
+                    # Extract document type
+                    doc_type = self._safe_get_field(doc_info, "document_type", "type", "doc_type") or ""
+                    if isinstance(doc_type, str):
+                        doc_type = doc_type.strip()
+                    
+                    logger.info(f"   DP extracted: domain='{domain}', doc_type='{doc_type}'")
+                    
+                    # Pattern 1: Document type by domain
+                    if domain and doc_type and len(doc_type) > 3:
+                        insights.append(f"{domain} research commonly uses {doc_type} documents")
+                    
+                    # Pattern 2: Experimental design (try multiple field names)
+                    exp_design = self._safe_get_field(
+                        doc_info, 
+                        "experimental_design", 
+                        "study_design", 
+                        "design"
+                    )
+                    
+                    if exp_design:
+                        # Handle both string and dict formats
+                        design_text = ""
+                        if isinstance(exp_design, dict):
+                            # Extract from nested structure
+                            design_type = self._safe_get_field(exp_design, "type", "design_type", "name")
+                            if design_type and isinstance(design_type, str):
+                                design_text = design_type.strip()
+                        elif isinstance(exp_design, str):
+                            design_text = exp_design.strip()
+                        
+                        logger.info(f"   DP design_text: '{design_text[:50]}'")
+                        
+                        # Look for common design patterns
+                        if design_text:
+                            design_lower = design_text.lower()
+                            if "time" in design_lower and ("series" in design_lower or "course" in design_lower or "resolved" in design_lower):
+                                if domain:
+                                    insights.append(f"{domain} studies commonly use time-resolved (time-series) experimental designs")
+                                else:
+                                    insights.append("Time-series experimental design is common for transcriptomics studies")
+                            elif "case" in design_lower and "control" in design_lower:
+                                insights.append(f"Case-control design pattern used in {domain if domain else 'research'}")
+                            elif "longitudinal" in design_lower:
+                                insights.append(f"Longitudinal study design pattern observed in {domain if domain else 'research'}")
+                            elif len(design_text) > 20:
+                                # Generic design insight if long enough description
+                                insights.append(f"Study design: {design_text[:80]}...")
+                    
+                    # Pattern 3: Model organisms (try multiple field names)
+                    organisms = self._safe_get_field(
+                        doc_info,
+                        "study_organism",
+                        "organisms",
+                        "organism",
+                        "model_organism"
+                    )
+                    
+                    if organisms:
+                        org_list = []
+                        
+                        # Handle various formats
+                        if isinstance(organisms, list):
+                            for org in organisms[:3]:  # Top 3 organisms
+                                if isinstance(org, str) and org.strip():
+                                    org_list.append(org.strip())
+                                elif isinstance(org, dict):
+                                    # Try to extract organism name from dict
+                                    org_name = self._safe_get_field(org, "name", "organism", "species")
+                                    if org_name and isinstance(org_name, str):
+                                        org_list.append(org_name.strip())
+                        elif isinstance(organisms, str) and organisms.strip():
+                            org_list.append(organisms.strip())
+                        elif isinstance(organisms, dict):
+                            org_name = self._safe_get_field(organisms, "name", "organism", "species")
+                            if org_name and isinstance(org_name, str):
+                                org_list.append(org_name.strip())
+                        
+                        logger.info(f"   DP organisms: {org_list}")
+                        
+                        if org_list:
+                            # Extract common names (earthworms, mice, etc.)
+                            for org in org_list:
+                                org_lower = org.lower()
+                                if domain:
+                                    insights.append(f"{org} is commonly used in {domain} research")
+                                else:
+                                    insights.append(f"{org} is a standard model organism")
+                                break  # Only add one organism insight to avoid clutter
+                    
+                    # Pattern 4: Research strategy/approach (if available)
+                    strategy = self._safe_get_field(doc_info, "research_strategy", "approach", "methodology")
+                    if strategy and isinstance(strategy, str) and len(strategy) > 20:
+                        insights.append(f"Research approach: {strategy[:80]}...")
+            
+            # === Repairs: what was fixed ===
+            if decision == "ACCEPT" and attempt > 1:
+                improvements = critic_eval.get("improvements", [])
+                if improvements:
+                    fix = improvements[0][:120]
+                    insights.append(f"Repair learned: {fix}")
+            
+            # === High-quality patterns ===
+            if decision == "ACCEPT" and score > 0.75:
+                strengths = critic_eval.get("strengths", [])
+                if strengths and not insights:  # Only if no workflow insights yet
+                    strength = strengths[0][:120]
+                    insights.append(f"Quality pattern: {strength}")
+            
+            # === Failures: root causes ===
+            if decision == "REJECT":
+                issues = critic_eval.get("issues", [])
+                if issues:
+                    issue = issues[0][:120]
+                    insights.append(f"Failure cause: {issue}")
+            
+            return insights if insights else []
+            
+        except Exception as e:
+            logger.warning(f"Failed to extract insights for {agent_name}: {e}")
+            return []
+
+    def _normalize_metadata_text(self, value: Any) -> str:
+        """Normalize metadata labels/concepts for fuzzy matching."""
+        return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip().split())
+
+    def _field_covers_concept(self, field_name: str, concept: str) -> bool:
+        """Best-effort concept coverage check between generated field names and required concepts."""
+        normalized_field = self._normalize_metadata_text(field_name)
+        normalized_concept = self._normalize_metadata_text(concept)
+        if not normalized_field or not normalized_concept:
+            return False
+        if normalized_concept in normalized_field or normalized_field in normalized_concept:
+            return True
+        concept_aliases = {
+            "license": ["license", "licence", "access rights", "usage rights"],
+            "data usage license": ["license", "usage rights", "access rights"],
+            "diversity": ["diversity", "richness", "shannon", "bray curtis"],
+            "alpha diversity": ["alpha diversity", "richness", "shannon"],
+            "beta diversity": ["beta diversity", "bray curtis", "distance matrix"],
+            "gamma diversity": ["gamma diversity", "regional diversity"],
+            "dataset type": ["dataset type", "library strategy", "target gene", "sequencing method"],
+            "shotgun metagenome": ["shotgun metagenome", "metagenome", "library strategy"],
+            "16s rrna": ["16s", "rrna", "target gene", "amplicon"],
+            "18s rrna": ["18s", "rrna", "target gene", "amplicon"],
+            "amplicon sequencing": ["amplicon", "target gene", "library strategy"],
+        }
+        aliases = concept_aliases.get(normalized_concept, [normalized_concept])
+        return any(alias in normalized_field for alias in aliases)
+
+    def _evaluate_json_hard_gate(self, state: FAIRifierState) -> Dict[str, Any]:
+        """Cross-layer hard gate: ensure JSON output covers required concepts/mandatory fields."""
+        metadata_fields = state.get("metadata_fields", []) or []
+        retrieved_knowledge = state.get("retrieved_knowledge", []) or []
+        api_capabilities = state.get("api_capabilities", {}) or {}
+        context = state.get("context", {}) or {}
+        bundle_ingestion_incomplete = bool(context.get("bundle_ingestion_incomplete"))
+
+        output_field_names = [str(field.get("field_name", "")) for field in metadata_fields if field.get("field_name")]
+        missing_required_terms: List[str] = []
+        for concept in api_capabilities.get("required_metadata_terms", []) or []:
+            if not any(self._field_covers_concept(field_name, concept) for field_name in output_field_names):
+                missing_required_terms.append(concept)
+
+        mandatory_terms = []
+        for item in retrieved_knowledge:
+            metadata = item.get("metadata", {}) if isinstance(item, dict) else {}
+            if metadata.get("required"):
+                mandatory_terms.append(str(item.get("term", "")))
+        missing_mandatory_terms = [
+            term for term in mandatory_terms
+            if term and not any(self._field_covers_concept(field_name, term) for field_name in output_field_names)
+        ]
+
+        uncovered_from_retrieval = api_capabilities.get("uncovered_required_metadata_terms", []) or []
+
+        retrieved_sheets = {
+            FAIRDSAPIParser.normalize_isa_sheet(
+                (item.get("metadata", {}) or {}).get("isa_sheet")
+                or (item.get("metadata", {}) or {}).get("sheet")
+            )
+            for item in retrieved_knowledge
+            if isinstance(item, dict)
+        }
+        output_sheets = {
+            FAIRDSAPIParser.normalize_isa_sheet(field.get("isa_sheet"))
+            for field in metadata_fields
+            if isinstance(field, dict)
+        }
+        isa_mapping_collapsed = len(retrieved_sheets - {"study"}) > 0 and output_sheets <= {"study"}
+
+        missing_required_values: List[str] = []
+        for field in metadata_fields:
+            if not isinstance(field, dict):
+                continue
+            req = str(field.get("requirement", "")).strip().upper()
+            if req != "MANDATORY":
+                continue
+            value = field.get("value")
+            if value in (None, ""):
+                missing_required_values.append(str(field.get("field_name", "unknown")))
+
+        issues: List[str] = []
+        improvement_ops: List[str] = []
+        anchor_agent = "KnowledgeRetriever"
+
+        if bundle_ingestion_incomplete:
+            issues.append(
+                "Input bundle ingestion incomplete before parsing (some uploaded files were discovered but not processed)."
+            )
+            improvement_ops.append(
+                "Re-run DocumentParser after recovering failed source reads so every uploaded source contributes to evidence."
+            )
+            anchor_agent = "DocumentParser"
+
+        if uncovered_from_retrieval:
+            issues.append(
+                "KnowledgeRetriever still reports uncovered planner-critical concepts: "
+                + ", ".join(uncovered_from_retrieval[:8])
+            )
+            improvement_ops.append(
+                "Expand FAIR-DS search scope for planner-critical terms and include matched fields before JSON generation."
+            )
+
+        if missing_required_terms:
+            issues.append(
+                "JSON output is missing planner-critical concepts: "
+                + ", ".join(missing_required_terms[:8])
+            )
+            improvement_ops.append(
+                "Re-run KnowledgeRetriever with planner/critic guidance and ensure required concepts are selected."
+            )
+
+        if missing_mandatory_terms:
+            issues.append(
+                "JSON output is missing mandatory FAIR-DS fields selected by KnowledgeRetriever: "
+                + ", ".join(missing_mandatory_terms[:8])
+            )
+            improvement_ops.append(
+                "Regenerate metadata ensuring every required retrieved_knowledge field appears exactly once."
+            )
+
+        if missing_required_values:
+            issues.append(
+                "JSON output includes mandatory fields with empty values: "
+                + ", ".join(missing_required_values[:8])
+            )
+            improvement_ops.append(
+                "Populate mandatory field values from document evidence; if unavailable, keep explicit placeholder and raise review flag."
+            )
+
+        if isa_mapping_collapsed:
+            issues.append(
+                "ISA mapping collapsed to study-level output despite multi-level retrieved knowledge."
+            )
+            improvement_ops.append(
+                "Normalize isa_sheet from FAIR-DS metadata and preserve ISA level on all generated fields."
+            )
+            if not uncovered_from_retrieval and not missing_required_terms:
+                anchor_agent = "JSONGenerator"
+
+        passed = not issues
+        summary = "JSON hard gate passed." if passed else f"JSON hard gate failed ({len(issues)} issue(s))."
+        return {
+            "passed": passed,
+            "anchor_agent": anchor_agent,
+            "issues": issues,
+            "improvement_ops": improvement_ops,
+            "summary": summary,
+        }
+
+    def _mark_interrupted_state(
+        self,
+        state: FAIRifierState,
+    ) -> FAIRifierState:
+        """Mark workflow state as interrupted and avoid duplicating the stop error."""
+        state["status"] = ProcessingStatus.INTERRUPTED.value
+        errors = state.setdefault("errors", [])
+        if "Run stopped by user" not in errors:
+            errors.append("Run stopped by user")
+        state["processing_end"] = datetime.now().isoformat()
+        return state
+
+    async def _plan_workflow_internal(self, state: FAIRifierState) -> FAIRifierState:
+        """Internal planning (part of orchestration)."""
+        # This is the same as the old _plan_workflow_node logic
+        return await self._plan_workflow_node(state)
+
+    def _is_empty_value(self, value: Any) -> bool:
+        """Return True for values that should not overwrite merged context."""
+        if value is None:
+            return True
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            return lowered in {"", "unknown", "n/a", "na", "none", "not specified"}
+        if isinstance(value, (list, dict)):
+            return len(value) == 0
+        return False
+
+    def _merge_document_info_entries(
+        self,
+        per_source_entries: List[Dict[str, Any]],
+    ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
+        """Merge parsed document-info dicts while preserving conflicts and unions."""
+        merged: Dict[str, Any] = {}
+        conflicts: Dict[str, List[str]] = {}
+
+        for entry in per_source_entries:
+            source_path = str(entry.get("source_path", "unknown"))
+            info = entry.get("document_info", {}) or {}
+            if not isinstance(info, dict):
+                continue
+            for key, value in info.items():
+                if self._is_empty_value(value):
+                    continue
+                if key not in merged or self._is_empty_value(merged.get(key)):
+                    merged[key] = value
+                    continue
+
+                existing = merged[key]
+                if isinstance(existing, list) and isinstance(value, list):
+                    dedup = []
+                    seen = set()
+                    for item in existing + value:
+                        marker = json.dumps(item, ensure_ascii=False, sort_keys=True) if isinstance(item, (dict, list)) else str(item)
+                        if marker in seen:
+                            continue
+                        seen.add(marker)
+                        dedup.append(item)
+                    merged[key] = dedup
+                    continue
+
+                if isinstance(existing, dict) and isinstance(value, dict):
+                    merged[key] = {**existing, **value}
+                    continue
+
+                existing_str = str(existing).strip()
+                value_str = str(value).strip()
+                if value_str == existing_str:
+                    continue
+                conflicts.setdefault(key, [])
+                if existing_str and existing_str not in conflicts[key]:
+                    conflicts[key].append(existing_str)
+                if value_str and value_str not in conflicts[key]:
+                    conflicts[key].append(value_str)
+                logger.info(
+                    "Multi-file conflict on '%s' from source '%s'; keeping primary value and recording variants.",
+                    key,
+                    source_path,
+                )
+
+        return merged, conflicts
+
+    async def _parse_documents_individually(
+        self,
+        state: FAIRifierState,
+        input_documents: List[Dict[str, Any]],
+    ) -> FAIRifierState:
+        """Parse each input document separately, then synthesize one merged context."""
+        logger.info(
+            "📚 Multi-file mode enabled: parsing %s input files individually before downstream agents.",
+            len(input_documents),
+        )
+        base_document_path = state.get("document_path", "")
+        source_outputs: List[Dict[str, Any]] = []
+        merged_packets: List[Dict[str, Any]] = []
+        context = state.setdefault("context", {})
+        context["multi_file_mode"] = True
+        for failed in context.get("bundle_failed_sources", []) or []:
+            if not isinstance(failed, dict):
+                continue
+            source_outputs.append(
+                {
+                    "source_path": failed.get("path", "unknown"),
+                    "method": "read_failed",
+                    "document_info": {},
+                    "field_count": 0,
+                    "status": "failed_before_parser",
+                    "error": failed.get("error"),
+                }
+            )
+
+        for index, input_doc in enumerate(input_documents, start=1):
+            source_path = str(input_doc.get("path") or f"input_{index}")
+            source_content = str(input_doc.get("content") or "")
+            if not source_content.strip():
+                logger.warning("Skipping empty input source in multi-file mode: %s", source_path)
+                source_outputs.append(
+                    {
+                        "source_path": source_path,
+                        "method": input_doc.get("method", "unknown"),
+                        "document_info": {},
+                        "field_count": 0,
+                        "status": "skipped_empty_content",
+                    }
+                )
+                continue
+
+            state = await self._parse_single_input_source(
+                state=state,
+                source_path=source_path,
+                source_content=source_content,
+                source_index=index,
+                source_total=len(input_documents),
+                base_document_path=base_document_path,
+            )
+
+            per_source_info = state.get("document_info", {}) or {}
+            per_source_packets = state.get("evidence_packets", []) or []
+            source_outputs.append(
+                {
+                    "source_path": source_path,
+                    "method": input_doc.get("method", "unknown"),
+                    "document_info": per_source_info,
+                    "field_count": len(per_source_info) if isinstance(per_source_info, dict) else 0,
+                    "status": "parsed",
+                }
+            )
+            for packet in per_source_packets:
+                if not isinstance(packet, dict):
+                    continue
+                enriched = dict(packet)
+                enriched.setdefault("source_document", source_path)
+                merged_packets.append(enriched)
+
+        if not source_outputs:
+            state["errors"] = state.get("errors", []) + ["Multi-file parsing failed: no source could be parsed"]
+            return state
+
+        merged_info, conflicts = self._merge_document_info_entries(source_outputs)
+        merged_info["multi_file_sources"] = [entry["source_path"] for entry in source_outputs]
+        merged_info["historical_records_included"] = len(source_outputs) > 1
+
+        state["document_info"] = merged_info
+        state["document_info_by_source"] = source_outputs
+        state["evidence_packets"] = merged_packets
+        state["document_path"] = base_document_path
+        # Transient per-source document_content (used during the parse loop) is
+        # no longer needed after synthesis — clear it so the merged state does
+        # not carry the last source's full text (refactor §5).
+        state["document_content"] = None
+        context.pop("current_source_path", None)
+        context.pop("current_source_index", None)
+        context.pop("current_source_total", None)
+        context["multi_file_conflicts"] = conflicts
+
+        logger.info(
+            "✅ Multi-file synthesis complete: %s source docs, %s merged fields, %s evidence packets, %s conflicting keys",
+            len(source_outputs),
+            len(merged_info),
+            len(merged_packets),
+            len(conflicts),
+        )
+        return state
+
+    @traceable(name="ParseDocumentSource", tags=["workflow", "multi-file", "parsing"])
+    async def _parse_single_input_source(
+        self,
+        *,
+        state: FAIRifierState,
+        source_path: str,
+        source_content: str,
+        source_index: int,
+        source_total: int,
+        base_document_path: str,
+    ) -> FAIRifierState:
+        """Parse one source document in multi-file mode with explicit trace visibility."""
+        logger.info(
+            "📄 Multi-file parse %s/%s: %s (%s chars)",
+            source_index,
+            source_total,
+            source_path,
+            len(source_content),
+        )
+        self._prepare_single_input_source_state(
+            state=state,
+            source_path=source_path,
+            source_content=source_content,
+            source_index=source_index,
+            source_total=source_total,
+            base_document_path=base_document_path,
+        )
+
+        return await self._execute_agent_with_retry(
+            state,
+            self.document_parser,
+            "DocumentParser",
+            lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3,
+        )
+
+    def _prepare_single_input_source_state(
+        self,
+        *,
+        state: FAIRifierState,
+        source_path: str,
+        source_content: str,
+        source_index: int,
+        source_total: int,
+        base_document_path: str,
+    ) -> None:
+        """Prepare state so DocumentParser reads only the current multi-file source."""
+        context = state.setdefault("context", {})
+        state["document_content"] = source_content
+        # DocumentParser prefers document_text_path over in-memory content for
+        # normal single-document runs. In multi-file mode that path points to
+        # the merged bundle, so clear it before each per-source parse.
+        state.pop("document_text_path", None)
+        state["document_path"] = (
+            f"{base_document_path}::{source_path}" if base_document_path else source_path
+        )
+        state["document_info"] = {}
+        state["evidence_packets"] = []
+        state.get("context", {}).pop("critic_feedback", None)
+        feedback_by_agent = context.get("critic_feedback_by_agent")
+        if isinstance(feedback_by_agent, dict):
+            feedback_by_agent.pop("DocumentParser", None)
+        guidance_history = context.get("critic_guidance_history")
+        if isinstance(guidance_history, dict):
+            guidance_history.pop("DocumentParser", None)
+        context["retry_count"] = 0
+        context["current_source_path"] = source_path
+        context["current_source_index"] = source_index
+        context["current_source_total"] = source_total
+
+    @traceable(name="PlanWorkflow", tags=["workflow", "planning"])
+    async def _plan_workflow_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Plan workflow strategy using LLM based on document content."""
+        logger.info("🧠 Planning workflow strategy")
+        
+        # Initialize state fields if needed
+        if "execution_history" not in state:
+            state["execution_history"] = []
+        if "reasoning_chain" not in state:
+            state["reasoning_chain"] = []
+        if "context" not in state:
+            state["context"] = {}
+        
+        # [R] Retrieve planning memories before execution
+        session_id = state.get("session_id")
+        if self.mem0_service and session_id:
+            relevant_memories = self._retrieve_relevant_memories(
+                agent_name="Planner",
+                state=state,
+                session_id=session_id,
+                top_k=5
+            )
+            state["context"]["retrieved_memories"] = relevant_memories
+        
+        try:
+            # Get parsed document info (if available)
+            doc_info = state.get("document_info", {})
+            # Read 2KB preview from disk-backed text (refactor §5).
+            document_preview = read_document_text(state, max_chars=2000)
+
+            # Use LLM to analyze document and plan strategy based on parsed content
+            planning_prompt = f"""You are an intelligent workflow orchestrator for FAIR metadata generation.
+
+**Parsed Document Information:**
+{json.dumps(doc_info, indent=2) if doc_info else "Document parsing in progress..."}
+
+**Document Content Preview:**
+{document_preview}...
+
+**Your task:** Analyze the parsed document information and plan the optimal execution strategy.
+
+**Think step by step:**
+1. What type of document is this? (research paper, dataset description, protocol, etc.)
+2. What research domain does it belong to? (genomics, ecology, chemistry, etc.)
+3. What kind of metadata extraction will be needed?
+4. What FAIR-DS packages are likely relevant?
+5. What potential challenges might arise?
+
+**Available workflow steps:**
+1. DocumentParser: Extract structured information
+2. KnowledgeRetriever: Get relevant FAIR-DS terms and packages
+3. JSONGenerator: Generate FAIR-DS compatible metadata
+
+**Plan the strategy:**
+- What should each step focus on?
+- What information is critical to extract?
+- Which FAIR-DS packages are likely needed?
+- Any special considerations?
+
+Return JSON in the following format. The ``plan_tasks`` array is the
+authoritative machine-readable plan — fill it carefully.
+
+{{
+  "document_type": "research_paper|dataset|protocol|other",
+  "research_domain": "genomics|metagenomics|ecology|chemistry|...",
+  "strategy": "standard|specialized|...",
+  "key_focus_areas": ["area1", "area2", ...],
+  "potential_challenges": ["challenge1", ...],
+  "reasoning": "your step-by-step analysis",
+  "plan_tasks": [
+    {{
+      "agent_name": "DocumentParser",
+      "search_terms": ["concept1", "concept2"],
+      "notes": "what to focus on extracting"
+    }},
+    {{
+      "agent_name": "KnowledgeRetriever",
+      "priority_packages": ["Genome", "Nanopore"],
+      "search_terms": ["assembly", "BGC"],
+      "focus_sheets": ["assay", "sample"],
+      "notes": "domain-specific guidance"
+    }},
+    {{
+      "agent_name": "JSONGenerator",
+      "focus_sheets": ["assay", "sample"],
+      "notes": "ensure ..."
+    }}
+  ],
+  "special_instructions": {{
+    "DocumentParser": "human-readable guidance (kept for backward-compat logs)",
+    "KnowledgeRetriever": "...",
+    "JSONGenerator": "..."
+  }}
+}}
+
+Field semantics for ``plan_tasks``:
+- ``agent_name``: one of "DocumentParser", "BioMetadataAgent",
+  "KnowledgeRetriever", "JSONGenerator", "ISAValueMapper".
+- ``priority_packages``: FAIR-DS package names to prioritize for the
+  KnowledgeRetriever (e.g. "Genome", "Nanopore", "Soil").
+- ``search_terms``: domain-specific terms the agent should search for.
+- ``focus_sheets``: ISA sheets ("investigation", "study", "assay", "sample",
+  "observationunit") to prioritize.
+- ``notes``: short human-readable guidance.
+"""
+
+            from langchain_core.messages import HumanMessage, SystemMessage
+            
+            messages = [
+                SystemMessage(content="You are an intelligent workflow planning agent. Analyze documents and create optimal execution plans."),
+                HumanMessage(content=planning_prompt)
+            ]
+            
+            response = await self.llm_helper._call_llm(messages, operation_name="Plan Workflow")
+            content = normalize_llm_response_content(getattr(response, "content", response))
+
+            # Parse JSON response
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            
+            plan = json.loads(content)
+            state["execution_plan"] = plan
+            state["reasoning_chain"].append(f"Plan: {plan.get('reasoning', '')}")
+            state["agent_guidance"] = plan.get("special_instructions", {})
+            # Structured plan tasks (refactor §4) — primary contract for
+            # downstream agents. Stored as plain dicts for serialization.
+            structured_tasks = parse_plan_tasks_from_llm_output(plan)
+            state["plan_tasks"] = [planner_task_to_dict(t) for t in structured_tasks]
+            if structured_tasks:
+                logger.info(
+                    "🧭 Structured plan: %s",
+                    [
+                        f"{t.agent_name}(packages={t.priority_packages},"
+                        f"terms={t.search_terms})"
+                        for t in structured_tasks
+                    ],
+                )
+            if state.get("agent_guidance"):
+                logger.info(f"🧭 Planner guidance: {state['agent_guidance']}")
+            
+            logger.info(f"✅ Workflow plan created: {plan.get('strategy', 'standard')}")
+            logger.info(f"   Document type: {plan.get('document_type')}")
+            logger.info(f"   Research domain: {plan.get('research_domain')}")
+            
+            # [W] Store planning insights (if valuable)
+            if self.mem0_service and session_id:
+                try:
+                    strategy = plan.get('strategy', '')
+                    doc_type = plan.get('document_type', '')
+                    domain = plan.get('research_domain', '')
+                    
+                    # Only store non-standard strategies or novel domain patterns
+                    if strategy not in ['standard', 'unknown'] or domain not in ['unknown', '']:
+                        insight = (
+                            f"[Planner] Strategy '{strategy}' for {doc_type} "
+                            f"in {domain}: "
+                            f"{plan.get('reasoning', '')[:100]}"
+                        )
+                        self._store_memory_insight(
+                            state=state,
+                            session_id=session_id,
+                            agent_id="Planner",
+                            insight=insight,
+                            metadata={
+                                "workflow_step": "Planner",
+                                "strategy": strategy,
+                                "document_type": doc_type,
+                                "research_domain": domain,
+                                "timestamp": datetime.now().isoformat(),
+                            },
+                        )
+                        logger.info("💾 Stored planning insight")
+                except Exception as e:
+                    logger.warning(f"Planning memory storage failed: {e}")
+            
+        except Exception as e:
+            logger.error(f"❌ Planning failed: {e}")
+            # Use default plan
+            state["execution_plan"] = {
+                "document_type": "unknown",
+                "research_domain": "unknown",
+                "strategy": "standard",
+                "reasoning": f"Planning failed: {str(e)}"
+            }
+            state["agent_guidance"] = {}
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(f"Planning error: {str(e)}")
+        
+        return state
+
+    @traceable(name="ParseDocument", tags=["agent", "parsing"])
+    async def _parse_document_with_retry_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Parse document with internal retry logic."""
+        logger.info("📋 Parsing document (with retry)")
+        
+        def check_output(s):
+            doc_info = s.get("document_info", {})
+            return doc_info and len(doc_info) > 3
+        
+        return await self._execute_agent_with_retry(
+            state, self.document_parser, "DocumentParser", check_output
+        )
+
+    @traceable(name="ParseDocument_OLD", tags=["agent", "parsing"])
+    async def _parse_document_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Parse document and extract structured information. [OLD - kept for reference]"""
+        logger.info("📋 Parsing document")
+        
+        # Initialize execution history if needed
+        if "execution_history" not in state:
+            state["execution_history"] = []
+        
+        # Record execution start
+        execution_record = {
+            "agent_name": "DocumentParser",
+            "attempt": state.get("context", {}).get("parse_retry_count", 0) + 1,
+            "start_time": datetime.now().isoformat(),
+            "end_time": None,
+            "success": False,
+            "critic_evaluation": None
+        }
+        
+        try:
+            # Initialize context and get current retry count
+            if "context" not in state:
+                state["context"] = {}
+            
+            # Don't increment here - let the evaluate node handle retry logic
+            # Just track the current attempt number
+            retry_count = state["context"].get("parse_retry_count", 0)
+            state["context"]["retry_count"] = retry_count  # Set for agent feedback
+            
+            # Execute document parser
+            state = await self.document_parser.execute(state)
+            
+            execution_record["success"] = True
+            execution_record["end_time"] = datetime.now().isoformat()
+            
+        except Exception as e:
+            logger.error(f"❌ Document parsing failed: {e}")
+            execution_record["end_time"] = datetime.now().isoformat()
+            execution_record["error"] = str(e)
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(f"Document parsing error: {str(e)}")
+        
+        # Add to execution history
+        state["execution_history"].append(execution_record)
+        
+        return state
+
+    @traceable(name="EvaluateParsing", tags=["critic", "evaluation"])
+    async def _evaluate_parsing_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Evaluate document parsing output using Critic."""
+        logger.info("🔍 Evaluating document parsing")
+        
+        # Execute critic evaluation
+        state = await self.critic.execute(state)
+        
+        # Prepare feedback if retry is needed
+        execution_history = state.get("execution_history", [])
+        if execution_history:
+            last_execution = execution_history[-1]
+            critic_eval = last_execution.get("critic_evaluation", {})
+            decision = critic_eval.get("decision", "ACCEPT")
+            
+            # Initialize context if needed
+            if "context" not in state:
+                state["context"] = {}
+            retry_count = state["context"].get("parse_retry_count", 0)
+            
+            # Handle retry logic: RETRY or ESCALATE both trigger retry if under limit
+            if decision in ["RETRY", "ESCALATE"] and retry_count < config.max_step_retries:
+                # Increment retry count for this step
+                state["context"]["parse_retry_count"] = retry_count + 1
+                state["context"]["retry_count"] = retry_count + 1
+                
+                logger.info(f"🔄 Preparing retry {retry_count + 1}/{config.max_step_retries} for DocumentParser")
+                
+                # Prepare feedback for retry
+                state = await self.critic.provide_feedback_to_agent(
+                    "DocumentParser",
+                    critic_eval,
+                    state
+                )
+            elif retry_count >= config.max_step_retries:
+                # Max retries reached, mark for review but continue
+                logger.warning(f"⚠️ Max retries ({config.max_step_retries}) reached for DocumentParser")
+                state["needs_human_review"] = True
+        
+        return state
+
+    def _route_after_parsing(self, state: FAIRifierState) -> Literal["accept", "retry", "escalate"]:
+        """Route after parsing evaluation based on Critic decision.
+        
+        Priority order:
+        1. User-configured max_step_retries (HIGHEST PRIORITY)
+        2. Critic decision (ACCEPT > RETRY > ESCALATE)
+        3. Output quality check (if max retries exhausted)
+        
+        Strategy:
+        - If retries available (retry_count < max_step_retries): Use retry for RETRY/ESCALATE
+        - If max retries reached: Respect Critic decision, but check for usable output
+        """
+        execution_history = state.get("execution_history", [])
+        if not execution_history:
+            return "accept"
+        
+        last_execution = execution_history[-1]
+        critic_eval = last_execution.get("critic_evaluation", {})
+        decision = critic_eval.get("decision", "ACCEPT")
+        score = critic_eval.get("score", 0.0)
+        
+        # Initialize context if needed
+        if "context" not in state:
+            state["context"] = {}
+        
+        # Get current retry count (this is the count AFTER the current attempt)
+        retry_count = state["context"].get("parse_retry_count", 0)
+        
+        logger.info(
+            f"📊 Routing decision: {decision} (score: {score:.2f}, "
+            f"retry_count: {retry_count}/{config.max_step_retries})"
+        )
+        
+        if decision == "ACCEPT":
+            logger.info(f"✅ Critic decision ACCEPT - proceeding to next step")
+            return "accept"
+        
+        # PRIORITY 1: Check if retries are still available (user-configured limit)
+        if retry_count < config.max_step_retries:
+            # We have retries left - use them regardless of RETRY/ESCALATE
+            if decision in ["RETRY", "ESCALATE"]:
+                logger.info(
+                    f"🔄 Retries available ({retry_count + 1}/{config.max_step_retries}) - "
+                    f"retrying despite Critic decision {decision} (score: {score:.2f}). "
+                    f"Note: User-configured max_step_retries takes priority."
+                )
+                return "retry"
+            else:
+                # Unknown decision but have retries - default to retry
+                logger.warning(
+                    f"⚠️ Unknown decision '{decision}' but retries available - retrying"
+                )
+                return "retry"
+        
+        # PRIORITY 2: Max retries reached - now respect Critic decision
+        if decision == "RETRY":
+            # Critic said RETRY but max retries reached
+            doc_info = state.get("document_info", {})
+            if doc_info and len(doc_info) > 3:
+                logger.warning(
+                    f"⚠️ Max retries reached ({config.max_step_retries}) but Critic decision was RETRY "
+                    f"(score: {score:.2f}). Have {len(doc_info)} fields - continuing with human review flag."
+                )
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(
+                    f"❌ Max retries reached, Critic decision RETRY (score: {score:.2f}), "
+                    f"but no usable document info - escalating"
+                )
+                return "escalate"
+        elif decision == "ESCALATE":
+            # Critic said ESCALATE and max retries reached
+            doc_info = state.get("document_info", {})
+            if doc_info and len(doc_info) > 3:
+                logger.warning(
+                    f"⚠️ Max retries reached ({config.max_step_retries}) and Critic decision ESCALATE "
+                    f"(score: {score:.2f}). Have {len(doc_info)} fields - continuing with human review flag. "
+                    f"Note: Overriding ESCALATE because we have usable output."
+                )
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(
+                    f"❌ Max retries reached and Critic decision ESCALATE (score: {score:.2f}) "
+                    f"with no usable document info - escalating"
+                )
+                return "escalate"
+        else:
+            # Unknown decision, default to accept if we have output
+            doc_info = state.get("document_info", {})
+            if doc_info and len(doc_info) > 3:
+                logger.warning(f"⚠️ Unknown decision '{decision}' but have {len(doc_info)} fields - continuing")
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(f"❌ Unknown decision '{decision}' and no usable document info - escalating")
+                return "escalate"
+
+    @traceable(name="RetrieveKnowledge", tags=["agent", "knowledge"])
+    async def _retrieve_knowledge_with_retry_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Retrieve knowledge with internal retry logic."""
+        logger.info("🔍 Retrieving knowledge (with retry)")
+        
+        def check_output(s):
+            knowledge = s.get("retrieved_knowledge", [])
+            return knowledge and len(knowledge) > 0
+        
+        return await self._execute_agent_with_retry(
+            state, self.knowledge_retriever, "KnowledgeRetriever", check_output
+        )
+
+    @traceable(name="RetrieveKnowledge_OLD", tags=["agent", "knowledge"])
+    async def _retrieve_knowledge_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Retrieve knowledge from FAIR-DS API. [OLD - kept for reference]"""
+        logger.info("🔍 Retrieving knowledge")
+        
+        if "execution_history" not in state:
+            state["execution_history"] = []
+        
+        execution_record = {
+            "agent_name": "KnowledgeRetriever",
+            "attempt": state.get("context", {}).get("retrieve_retry_count", 0) + 1,
+            "start_time": datetime.now().isoformat(),
+            "end_time": None,
+            "success": False,
+            "critic_evaluation": None
+        }
+        
+        try:
+            # Update retry count
+            if "context" not in state:
+                state["context"] = {}
+            retry_count = state["context"].get("retrieve_retry_count", 0)
+            state["context"]["retrieve_retry_count"] = retry_count + 1
+            # Also set generic retry_count for agents that expect it
+            state["context"]["retry_count"] = state["context"]["retrieve_retry_count"]
+            
+            # Execute knowledge retriever
+            state = await self.knowledge_retriever.execute(state)
+            
+            execution_record["success"] = True
+            execution_record["end_time"] = datetime.now().isoformat()
+            
+        except Exception as e:
+            logger.error(f"❌ Knowledge retrieval failed: {e}")
+            execution_record["end_time"] = datetime.now().isoformat()
+            execution_record["error"] = str(e)
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(f"Knowledge retrieval error: {str(e)}")
+        
+        state["execution_history"].append(execution_record)
+        
+        return state
+
+    @traceable(name="EvaluateRetrieval", tags=["critic", "evaluation"])
+    async def _evaluate_retrieval_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Evaluate knowledge retrieval output using Critic."""
+        logger.info("🔍 Evaluating knowledge retrieval")
+        
+        state = await self.critic.execute(state)
+        
+        # Prepare feedback if retry is needed
+        execution_history = state.get("execution_history", [])
+        if execution_history:
+            last_execution = execution_history[-1]
+            critic_eval = last_execution.get("critic_evaluation", {})
+            decision = critic_eval.get("decision", "ACCEPT")
+            
+            # Initialize context if needed
+            if "context" not in state:
+                state["context"] = {}
+            retry_count = state["context"].get("retrieve_retry_count", 0)
+            
+            # Handle retry logic: RETRY or ESCALATE both trigger retry if under limit
+            if decision in ["RETRY", "ESCALATE"] and retry_count < config.max_step_retries:
+                # Increment retry count for this step
+                state["context"]["retrieve_retry_count"] = retry_count + 1
+                state["context"]["retry_count"] = retry_count + 1
+                
+                logger.info(f"🔄 Preparing retry {retry_count + 1}/{config.max_step_retries} for KnowledgeRetriever")
+                
+                # Prepare feedback for retry
+                state = await self.critic.provide_feedback_to_agent(
+                    "KnowledgeRetriever",
+                    critic_eval,
+                    state
+                )
+            elif retry_count >= config.max_step_retries:
+                # Max retries reached, mark for review but continue
+                logger.warning(f"⚠️ Max retries ({config.max_step_retries}) reached for KnowledgeRetriever")
+                state["needs_human_review"] = True
+        
+        return state
+
+    def _route_after_retrieval(self, state: FAIRifierState) -> Literal["accept", "retry", "escalate"]:
+        """Route after retrieval evaluation based on Critic decision.
+        
+        Priority order:
+        1. User-configured max_step_retries (HIGHEST PRIORITY)
+        2. Critic decision (ACCEPT > RETRY > ESCALATE)
+        3. Output quality check (if max retries exhausted)
+        
+        Strategy:
+        - If retries available (retry_count < max_step_retries): Use retry for RETRY/ESCALATE
+        - If max retries reached: Respect Critic decision, but check for usable output
+        """
+        execution_history = state.get("execution_history", [])
+        if not execution_history:
+            return "accept"
+        
+        last_execution = execution_history[-1]
+        critic_eval = last_execution.get("critic_evaluation", {})
+        decision = critic_eval.get("decision", "ACCEPT")
+        score = critic_eval.get("score", 0.0)
+        
+        # Initialize context if needed
+        if "context" not in state:
+            state["context"] = {}
+        retry_count = state["context"].get("retrieve_retry_count", 0)
+        
+        logger.info(
+            f"📊 Routing decision: {decision} (score: {score:.2f}, "
+            f"retry_count: {retry_count}/{config.max_step_retries})"
+        )
+        
+        if decision == "ACCEPT":
+            logger.info(f"✅ Critic decision ACCEPT - proceeding to next step")
+            return "accept"
+        
+        # PRIORITY 1: Check if retries are still available (user-configured limit)
+        if retry_count < config.max_step_retries:
+            # We have retries left - use them regardless of RETRY/ESCALATE
+            if decision in ["RETRY", "ESCALATE"]:
+                logger.info(
+                    f"🔄 Retries available ({retry_count + 1}/{config.max_step_retries}) - "
+                    f"retrying despite Critic decision {decision} (score: {score:.2f}). "
+                    f"Note: User-configured max_step_retries takes priority."
+                )
+                return "retry"
+            else:
+                # Unknown decision but have retries - default to retry
+                logger.warning(
+                    f"⚠️ Unknown decision '{decision}' but retries available - retrying"
+                )
+                return "retry"
+        
+        # PRIORITY 2: Max retries reached - now respect Critic decision
+        if decision == "RETRY":
+            # Critic said RETRY but max retries reached
+            knowledge = state.get("retrieved_knowledge", [])
+            if knowledge and len(knowledge) > 0:
+                logger.warning(
+                    f"⚠️ Max retries reached ({config.max_step_retries}) but Critic decision was RETRY "
+                    f"(score: {score:.2f}). Have {len(knowledge)} knowledge items - continuing with human review flag."
+                )
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(
+                    f"❌ Max retries reached, Critic decision RETRY (score: {score:.2f}), "
+                    f"but no knowledge retrieved - escalating"
+                )
+                return "escalate"
+        elif decision == "ESCALATE":
+            # Critic said ESCALATE and max retries reached
+            knowledge = state.get("retrieved_knowledge", [])
+            if knowledge and len(knowledge) > 0:
+                logger.warning(
+                    f"⚠️ Max retries reached ({config.max_step_retries}) and Critic decision ESCALATE "
+                    f"(score: {score:.2f}). Have {len(knowledge)} knowledge items - continuing with human review flag. "
+                    f"Note: Overriding ESCALATE because we have usable output."
+                )
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(
+                    f"❌ Max retries reached and Critic decision ESCALATE (score: {score:.2f}) "
+                    f"with no knowledge retrieved - escalating"
+                )
+                return "escalate"
+        else:
+            # Unknown decision, default to accept if we have output
+            knowledge = state.get("retrieved_knowledge", [])
+            if knowledge and len(knowledge) > 0:
+                logger.warning(f"⚠️ Unknown decision '{decision}' but have {len(knowledge)} knowledge items - continuing")
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(f"❌ Unknown decision '{decision}' and no knowledge - escalating")
+                return "escalate"
+
+    @traceable(name="GenerateJSON", tags=["agent", "generation"])
+    async def _generate_json_with_retry_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Generate JSON with internal retry logic."""
+        logger.info("📝 Generating JSON metadata (with retry)")
+        
+        def check_output(s):
+            metadata_fields = s.get("metadata_fields", [])
+            return metadata_fields and len(metadata_fields) > 0
+        
+        return await self._execute_agent_with_retry(
+            state, self.json_generator, "JSONGenerator", check_output
+        )
+
+    @traceable(name="GenerateJSON_OLD", tags=["agent", "generation"])
+    async def _generate_json_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Generate FAIR-DS compatible JSON metadata. [OLD - kept for reference]"""
+        logger.info("📝 Generating JSON metadata")
+        
+        if "execution_history" not in state:
+            state["execution_history"] = []
+        
+        execution_record = {
+            "agent_name": "JSONGenerator",
+            "attempt": state.get("context", {}).get("generate_retry_count", 0) + 1,
+            "start_time": datetime.now().isoformat(),
+            "end_time": None,
+            "success": False,
+            "critic_evaluation": None
+        }
+        
+        try:
+            # Update retry count
+            if "context" not in state:
+                state["context"] = {}
+            retry_count = state["context"].get("generate_retry_count", 0)
+            state["context"]["generate_retry_count"] = retry_count + 1
+            # Also set generic retry_count for agents that expect it
+            state["context"]["retry_count"] = state["context"]["generate_retry_count"]
+            
+            # Execute JSON generator
+            state = await self.json_generator.execute(state)
+            
+            execution_record["success"] = True
+            execution_record["end_time"] = datetime.now().isoformat()
+            
+        except Exception as e:
+            logger.error(f"❌ JSON generation failed: {e}")
+            execution_record["end_time"] = datetime.now().isoformat()
+            execution_record["error"] = str(e)
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(f"JSON generation error: {str(e)}")
+        
+        state["execution_history"].append(execution_record)
+        
+        return state
+
+    @traceable(name="EvaluateGeneration", tags=["critic", "evaluation"])
+    async def _evaluate_generation_node(self, state: FAIRifierState) -> FAIRifierState:
+        """Evaluate JSON generation output using Critic."""
+        logger.info("🔍 Evaluating JSON generation")
+        
+        state = await self.critic.execute(state)
+        
+        # Prepare feedback if retry is needed
+        execution_history = state.get("execution_history", [])
+        if execution_history:
+            last_execution = execution_history[-1]
+            critic_eval = last_execution.get("critic_evaluation", {})
+            decision = critic_eval.get("decision", "ACCEPT")
+            
+            # Initialize context if needed
+            if "context" not in state:
+                state["context"] = {}
+            retry_count = state["context"].get("generate_retry_count", 0)
+            
+            # Handle retry logic: RETRY or ESCALATE both trigger retry if under limit
+            if decision in ["RETRY", "ESCALATE"] and retry_count < config.max_step_retries:
+                # Increment retry count for this step
+                state["context"]["generate_retry_count"] = retry_count + 1
+                state["context"]["retry_count"] = retry_count + 1
+                
+                logger.info(f"🔄 Preparing retry {retry_count + 1}/{config.max_step_retries} for JSONGenerator")
+                
+                # Prepare feedback for retry
+                state = await self.critic.provide_feedback_to_agent(
+                    "JSONGenerator",
+                    critic_eval,
+                    state
+                )
+            elif retry_count >= config.max_step_retries:
+                # Max retries reached, mark for review but continue
+                logger.warning(f"⚠️ Max retries ({config.max_step_retries}) reached for JSONGenerator")
+                state["needs_human_review"] = True
+        
+        return state
+
+    def _route_after_generation(self, state: FAIRifierState) -> Literal["accept", "retry", "escalate"]:
+        """Route after generation evaluation based on Critic decision.
+        
+        Priority order:
+        1. User-configured max_step_retries (HIGHEST PRIORITY)
+        2. Critic decision (ACCEPT > RETRY > ESCALATE)
+        3. Output quality check (if max retries exhausted)
+        
+        Strategy:
+        - If retries available (retry_count < max_step_retries): Use retry for RETRY/ESCALATE
+        - If max retries reached: Respect Critic decision, but check for usable output
+        """
+        execution_history = state.get("execution_history", [])
+        if not execution_history:
+            return "accept"
+        
+        last_execution = execution_history[-1]
+        critic_eval = last_execution.get("critic_evaluation", {})
+        decision = critic_eval.get("decision", "ACCEPT")
+        score = critic_eval.get("score", 0.0)
+        
+        # Initialize context if needed
+        if "context" not in state:
+            state["context"] = {}
+        retry_count = state["context"].get("generate_retry_count", 0)
+        
+        logger.info(
+            f"📊 Routing decision: {decision} (score: {score:.2f}, "
+            f"retry_count: {retry_count}/{config.max_step_retries})"
+        )
+        
+        if decision == "ACCEPT":
+            logger.info(f"✅ Critic decision ACCEPT - proceeding to finalize")
+            return "accept"
+        
+        # PRIORITY 1: Check if retries are still available (user-configured limit)
+        if retry_count < config.max_step_retries:
+            # We have retries left - use them regardless of RETRY/ESCALATE
+            if decision in ["RETRY", "ESCALATE"]:
+                logger.info(
+                    f"🔄 Retries available ({retry_count + 1}/{config.max_step_retries}) - "
+                    f"retrying despite Critic decision {decision} (score: {score:.2f}). "
+                    f"Note: User-configured max_step_retries takes priority."
+                )
+                return "retry"
+            else:
+                # Unknown decision but have retries - default to retry
+                logger.warning(
+                    f"⚠️ Unknown decision '{decision}' but retries available - retrying"
+                )
+                return "retry"
+        
+        # PRIORITY 2: Max retries reached - now respect Critic decision
+        if decision == "RETRY":
+            # Critic said RETRY but max retries reached
+            metadata_fields = state.get("metadata_fields", [])
+            if metadata_fields and len(metadata_fields) > 0:
+                logger.warning(
+                    f"⚠️ Max retries reached ({config.max_step_retries}) but Critic decision was RETRY "
+                    f"(score: {score:.2f}). Have {len(metadata_fields)} metadata fields - "
+                    f"finalizing with human review flag."
+                )
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(
+                    f"❌ Max retries reached, Critic decision RETRY (score: {score:.2f}), "
+                    f"but no metadata fields generated - escalating"
+                )
+                return "escalate"
+        elif decision == "ESCALATE":
+            # Critic said ESCALATE and max retries reached
+            metadata_fields = state.get("metadata_fields", [])
+            if metadata_fields and len(metadata_fields) > 0:
+                logger.warning(
+                    f"⚠️ Max retries reached ({config.max_step_retries}) and Critic decision ESCALATE "
+                    f"(score: {score:.2f}). Have {len(metadata_fields)} metadata fields - "
+                    f"finalizing with human review flag. "
+                    f"Note: Overriding ESCALATE because we have usable output."
+                )
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(
+                    f"❌ Max retries reached and Critic decision ESCALATE (score: {score:.2f}) "
+                    f"with no metadata fields generated - escalating"
+                )
+                return "escalate"
+        else:
+            # Unknown decision, default to accept if we have output
+            metadata_fields = state.get("metadata_fields", [])
+            if metadata_fields and len(metadata_fields) > 0:
+                logger.warning(f"⚠️ Unknown decision '{decision}' but have {len(metadata_fields)} metadata fields - finalizing")
+                state["needs_human_review"] = True
+                return "accept"
+            else:
+                logger.error(f"❌ Unknown decision '{decision}' and no metadata fields - escalating")
+                return "escalate"
+
+
+class FinalizeNode:
+    """Node class to finalize workflow execution and write summaries."""
+    
+    def __init__(self, app=None, max_global_retries=None):
+        self.app = app
+        self._max_global_retries = max_global_retries
+        if app is not None:
+            for attr in dir(app):
+                if attr.startswith("_") and not attr.startswith("__"):
+                    app_member = getattr(app, attr)
+                    if callable(app_member):
+                        orig_cls_member = getattr(app.__class__, attr, None)
+                        if orig_cls_member is not None:
+                            if getattr(app_member, "__func__", None) is not orig_cls_member:
+                                setattr(self, attr, app_member)
+
+    @property
+    def max_global_retries(self):
+        if self._max_global_retries is not None:
+            return self._max_global_retries
+        return self.app.max_global_retries if self.app else config.max_global_retries
+
+    @property
+    def global_retry_count(self):
+        return self.app.global_retry_count if self.app else 0
+
+    @traceable(name="Finalize", tags=["workflow", "finalization"])
+    async def __call__(self, state: FAIRifierState) -> FAIRifierState:
+        """Finalize workflow and generate summary."""
+        logger.info("✅ Finalizing workflow")
+        
+        # Generate execution summary
+        execution_history = state.get("execution_history", [])
+        
+        # Count retries from execution history (max attempt per agent minus initial attempt).
+        retry_trajectory = state.get("retry_trajectory", {})
+        attempts_by_agent: Dict[str, int] = {}
+        for entry in execution_history:
+            if not isinstance(entry, dict):
+                continue
+            agent_name = str(entry.get("agent_name") or "")
+            raw_attempt = entry.get("attempt", 1)
+            try:
+                attempt = int(raw_attempt)
+            except (TypeError, ValueError):
+                attempt = 1
+            if not agent_name:
+                continue
+            attempts_by_agent[agent_name] = max(attempts_by_agent.get(agent_name, 1), attempt)
+        retries_by_agent = {
+            agent: max(0, max_attempt - 1)
+            for agent, max_attempt in attempts_by_agent.items()
+            if max_attempt > 1
+        }
+        total_retries = sum(retries_by_agent.values())
+
+        def _history_attempt(entry: Dict[str, Any]) -> int:
+            raw = entry.get("attempt", 1)
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return 1
+
+        steps_requiring_retry = sum(
+            1
+            for e in execution_history
+            if isinstance(e, dict) and _history_attempt(e) > 1
+        )
+
+        summary = {
+            "total_steps": len(execution_history),
+            "successful_steps": sum(1 for e in execution_history if e.get("success")),
+            "failed_steps": sum(1 for e in execution_history if not e.get("success")),
+            "steps_requiring_retry": steps_requiring_retry,
+            "agents_with_retries": len(retries_by_agent),
+            "needs_human_review": state.get("needs_human_review", False),
+            # Retry stats
+            "total_retries": total_retries,
+            "retries_by_agent": retries_by_agent,
+            "retry_trajectory": retry_trajectory,
+        }
+        
+        confidence_snapshot = aggregate_confidence(state, config)
+
+        # ── Build complete confidence_scores ──────────────────────────
+        # Start with per-agent self-reported scores
+        agent_scores: Dict[str, Any] = dict(state.get("confidence_scores", {}))
+
+        # Add per-agent critic scores from execution history
+        critic_by_agent: Dict[str, List[float]] = {}
+        for execution in state.get("execution_history", []):
+            agent_name = execution.get("agent_name", "")
+            critic_eval = execution.get("critic_evaluation") or {}
+            critic_score = critic_eval.get("score")
+            if agent_name and critic_score is not None:
+                critic_by_agent.setdefault(agent_name, []).append(float(critic_score))
+        for agent_name, scores in critic_by_agent.items():
+            agent_scores[f"{agent_name}_critic"] = round(sum(scores) / len(scores), 3)
+
+        # Add aggregate scores
+        agent_scores["_aggregate"] = {
+            "critic": round(confidence_snapshot.critic, 3),
+            "structural": round(confidence_snapshot.structural, 3),
+            "validation": round(confidence_snapshot.validation, 3),
+            "overall": round(confidence_snapshot.overall, 3),
+        }
+        state["confidence_scores"] = agent_scores
+        state["quality_metrics"] = confidence_snapshot.details
+        summary["overall_confidence"] = confidence_snapshot.overall
+        summary["average_confidence"] = confidence_snapshot.overall
+        if confidence_snapshot.overall < config.min_confidence_threshold:
+            state["needs_human_review"] = True
+            summary["needs_human_review"] = True
+        
+        # ── A2A handoff summary ──────────────────────────────────────
+        from fairifier.services.agent_mailbox import AgentMailbox
+        summary["agent_handoff"] = AgentMailbox.handoff_summary(state)
+
+        state["execution_summary"] = summary
+        
+        # Set final status based on whether we have the critical output
+        metadata_json = state.get("artifacts", {}).get("metadata_json")
+        metadata_fields = state.get("metadata_fields", [])
+
+        # Inject selected field definitions and final confidence scores
+        retrieved_knowledge = state.get("retrieved_knowledge", []) or []
+        if metadata_json:
+            try:
+                parsed = json.loads(metadata_json) if isinstance(metadata_json, str) else metadata_json
+                if isinstance(parsed, dict):
+                    if retrieved_knowledge:
+                        parsed["_field_definitions"] = [
+                            _flatten_field_definition(f) for f in retrieved_knowledge
+                            if isinstance(f, dict)
+                        ]
+                    # Update with final complete confidence_scores
+                    parsed["confidence_scores"] = state.get("confidence_scores", {})
+                    metadata_json = json.dumps(parsed, indent=2, ensure_ascii=False)
+                    state["artifacts"]["metadata_json"] = metadata_json
+            except Exception:
+                pass  # best-effort; validation still works without this
+        
+        if not metadata_json or not metadata_fields:
+            # Critical output missing - this is a failure
+            state["status"] = ProcessingStatus.FAILED.value
+            logger.error(
+                "❌ Workflow FAILED: No metadata output generated (%s)",
+                METADATA_OUTPUT_FILENAME,
+            )
+            state["errors"] = state.get("errors", []) + [
+                f"Critical output missing: {METADATA_OUTPUT_FILENAME} not generated"
+            ]
+        elif summary["failed_steps"] > 0:
+            state["status"] = ProcessingStatus.REVIEWING.value
+            logger.warning("⚠️ Workflow completed with failures - needs review")
+        else:
+            state["status"] = ProcessingStatus.COMPLETED.value
+            logger.info("✅ Workflow completed successfully")
+        
+        state["processing_end"] = datetime.now().isoformat()
+        state["workflow_version"] = "langgraph"
+        
+        logger.info(f"📊 Final summary: {summary}")
+        
+        # Store global retry info in state for report
+        state["global_retries_used"] = self.global_retry_count
+        state["max_global_retries"] = self.max_global_retries
+
+        # ── Log A2A messages to processing_log.jsonl ──
+        output_dir = state.get("output_dir")
+        if output_dir and (state.get("agent_messages") or []):
+            a2a_log_path = str(Path(output_dir) / "processing_log.jsonl")
+            try:
+                with open(a2a_log_path, "a", encoding="utf-8") as fp:
+                    for msg in state["agent_messages"]:
+                        record = {
+                            "event": "agent_message",
+                            "timestamp": msg.get("created_at", datetime.now().isoformat()),
+                            "from_agent": msg.get("from_agent"),
+                            "to_agent": msg.get("to_agent"),
+                            "message_type": msg.get("message_type"),
+                            "message_id": msg.get("id"),
+                            "priority": msg.get("priority", 0),
+                            "acked_by": msg.get("acked_by", []),
+                            "payload_summary": {
+                                k: (v if not isinstance(v, list) else f"[{len(v)} items]")
+                                for k, v in (msg.get("payload") or {}).items()
+                            },
+                        }
+                        fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+            except OSError:
+                logger.debug("Failed to write A2A messages to processing log")
+        
+        # Generate comprehensive report
+        try:
+            output_dir = state.get("output_dir")
+            report_generator = WorkflowReportGenerator(output_dir=output_dir)
+            
+            # Find metadata.json path on disk if available (CLI may write after this node)
+            metadata_json_path = None
+            if output_dir:
+                output_path = Path(output_dir)
+                metadata_json_file = resolve_metadata_output_read_path(output_path)
+                if metadata_json_file:
+                    metadata_json_path = str(metadata_json_file)
+            
+            # Generate report
+            report = report_generator.generate_report(state, metadata_json_path)
+            
+            # Save reports
+            json_path = report_generator.save_report(report, "workflow_report.json")
+            txt_path = report_generator.save_text_report(report, "workflow_report.txt")
+            
+            if json_path:
+                logger.info(f"📄 Workflow report saved: {json_path}")
+            if txt_path:
+                logger.info(f"📄 Text report saved: {txt_path}")
+            
+            # Log report summary
+            text_report = report_generator.generate_text_report(report)
+            logger.info("\n" + text_report)
+            
+            # Store report in state
+            state["workflow_report"] = report
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to generate workflow report: {e}")
+            # Don't fail the workflow if report generation fails
+        
+        return state
