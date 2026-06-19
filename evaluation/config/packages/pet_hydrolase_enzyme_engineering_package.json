@@ -1,0 +1,937 @@
+{
+  "packageName": "pet_hydrolase_enzyme_engineering",
+  "itemCount": 49,
+  "metadata": [
+    {
+      "label": "sample type",
+      "sheetName": "Sample",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "sample type",
+        "syntax": "{text}",
+        "example": "enzyme_variant",
+        "preferredUnit": "",
+        "definition": "Type of sample: enzyme_variant for enzyme samples, pet_substrate for PET substrate samples. Determines which downstream fields apply to this row.",
+        "ontology": null,
+        "regex": "^(enzyme_variant|pet_substrate)$",
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "enzyme identifier",
+      "sheetName": "Sample",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "enzyme identifier",
+        "syntax": "{text}",
+        "example": "ENZ_LCC_ICCG",
+        "preferredUnit": "",
+        "definition": "Unique identifier for the enzyme variant sample. Used to link Sample rows to Assay rows. Populated when sample type is enzyme_variant.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "substrate identifier",
+      "sheetName": "Sample",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "substrate identifier",
+        "syntax": "{text}",
+        "example": "SUB_GF_PET_amorphous",
+        "preferredUnit": "",
+        "definition": "Unique identifier for the substrate sample. Used to link Sample rows to Assay rows. Populated when sample type is pet_substrate.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "enzyme type",
+      "sheetName": "Sample",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "enzyme type",
+        "syntax": "{text}",
+        "example": "LCC ICCG",
+        "preferredUnit": "",
+        "definition": "Name or identifier of the PET hydrolase enzyme variant used in the experiment. Includes wild-type enzymes (IsPETase, LCC, TfCut2, DuraPETase, etc.) and engineered variants with specific mutations. Populated when sample type is enzyme_variant.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": "http://purl.obolibrary.org/obo/PR_000000001"
+      }
+    },
+    {
+      "label": "enzyme mutation",
+      "sheetName": "Sample",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "enzyme mutation",
+        "syntax": "{text}",
+        "example": "F243I/D238C/S283C/Y127G",
+        "preferredUnit": "",
+        "definition": "Specific amino acid substitutions in the enzyme variant, using standard notation (e.g., F243I for Phe\u2192Ile at position 243). Multiple mutations separated by '/'. Populated when sample type is enzyme_variant.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "enzyme organism source",
+      "sheetName": "Sample",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "enzyme organism source",
+        "syntax": "{text}",
+        "example": "Ideonella sakaiensis (IsPETase) | metagenome (LCC) | Thermobifida fusca (TfCut2)",
+        "preferredUnit": "",
+        "definition": "Source organism or environmental library from which the enzyme was originally isolated. For metagenomic enzymes (e.g. LCC from leaf-branch compost metagenome), specify the library origin. Populated when sample type is enzyme_variant.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "enzyme melting temperature",
+      "sheetName": "Sample",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "enzyme melting temperature",
+        "syntax": "{number} \u00b0C",
+        "example": "91.7 \u00b0C",
+        "preferredUnit": "\u00b0C",
+        "definition": "Protein melting temperature (Tm) measured by differential scanning fluorimetry (DSF) or circular dichroism (CD). The temperature at which 50% of the protein is unfolded. Populated when sample type is enzyme_variant.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": "http://www.bioassayontology.org/bao#BAO_0000581"
+      }
+    },
+    {
+      "label": "PET substrate type",
+      "sheetName": "Sample",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "PET substrate type",
+        "syntax": "{text}",
+        "example": "Amorphous PET powder (Goodfellow GF-PET)",
+        "preferredUnit": "",
+        "definition": "Type and commercial origin of the PET substrate material used in the depolymerisation assay. Includes amorphous/crystalline state, form factor, and supplier information. Populated when sample type is pet_substrate.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "substrate form factor",
+      "sheetName": "Sample",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "substrate form factor",
+        "syntax": "{text}",
+        "example": "powder",
+        "preferredUnit": "",
+        "definition": "Physical form of the PET substrate. Controlled vocabulary: powder | film | flake | nanoparticle | microplastic | fibre | pellet | preform | textile | other. Populated when sample type is pet_substrate.",
+        "ontology": null,
+        "regex": "^(powder|film|flake|nanoparticle|microplastic|fibre|pellet|preform|textile|amorphous powder|crystalline powder|micronized powder|other)$",
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "PET crystallinity",
+      "sheetName": "Sample",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "PET crystallinity",
+        "syntax": "{number}%",
+        "example": "7.7%",
+        "preferredUnit": "%",
+        "definition": "Percentage crystallinity of the PET substrate as measured by differential scanning calorimetry (DSC). Lower crystallinity generally correlates with higher enzymatic degradation rates. Populated when sample type is pet_substrate.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "PET glass transition temperature",
+      "sheetName": "Sample",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "PET glass transition temperature",
+        "syntax": "{number} \u00b0C",
+        "example": "76.5 \u00b0C",
+        "preferredUnit": "\u00b0C",
+        "definition": "Glass transition temperature (Tg) of the PET substrate. PET enzymatic degradation rate increases significantly above Tg due to increased polymer chain mobility. Populated when sample type is pet_substrate.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": "http://purl.allotrope.org/ontologies/result#AFR_0001988"
+      }
+    },
+    {
+      "label": "PET molecular weight",
+      "sheetName": "Sample",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "PET molecular weight",
+        "syntax": "{text}",
+        "example": "Mn = 27,000 g/mol",
+        "preferredUnit": "g/mol",
+        "definition": "Number-average (Mn) or weight-average (Mw) molecular weight of the PET substrate. Populated when sample type is pet_substrate.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "assay identifier",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "assay identifier",
+        "syntax": "{text}",
+        "example": "ASSAY_GF-PET_LCC_65C_01",
+        "preferredUnit": "",
+        "definition": "Unique identifier for the enzymatic depolymerisation assay condition. Encodes substrate-enzyme-temperature combination.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "assay name",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "assay name",
+        "syntax": "{text}",
+        "example": "Gf-PET lab-scale depolymerisation assay",
+        "preferredUnit": "",
+        "definition": "Descriptive name of the assay, typically encoding the substrate, scale, and purpose.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "enzyme sample identifier",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "enzyme sample identifier",
+        "syntax": "{text}",
+        "example": "ENZ_LCC_ICCG",
+        "preferredUnit": "",
+        "definition": "Reference to the enzyme variant Sample row used in this assay. Must match an enzyme identifier in the Sample sheet.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "substrate sample identifier",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "substrate sample identifier",
+        "syntax": "{text}",
+        "example": "SUB_GF_PET_amorphous",
+        "preferredUnit": "",
+        "definition": "Reference to the PET substrate Sample row used in this assay. Must match a substrate identifier in the Sample sheet.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "buffer type",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "buffer type",
+        "syntax": "{text}",
+        "example": "potassium phosphate",
+        "preferredUnit": "",
+        "definition": "Buffer system used in the reaction. Controlled vocabulary: potassium phosphate | sodium phosphate | glycine-NaOH | Tris-HCl | HEPES | borate | water (pH-stat) | other.",
+        "ontology": null,
+        "regex": "^(potassium phosphate|sodium phosphate|glycine-NaOH|glycine-OH|Tris-HCl|HEPES|borate|water|phosphate|citrate|acetate|carbonate|other)$",
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "buffer concentration",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "buffer concentration",
+        "syntax": "{number} {unit}",
+        "example": "100 mM",
+        "preferredUnit": "mM",
+        "definition": "Molar concentration of the reaction buffer.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "reaction pH",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "reaction pH",
+        "syntax": "{number}",
+        "example": "8.0",
+        "preferredUnit": "",
+        "definition": "pH at which the enzymatic depolymerisation reaction was conducted. Most PET hydrolases have optimal activity at pH 7-9.",
+        "ontology": null,
+        "regex": "^\\d+(\\.\\d+)?$",
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": "http://purl.obolibrary.org/obo/PATO_0001842"
+      }
+    },
+    {
+      "label": "reaction temperature",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "reaction temperature",
+        "syntax": "{number} \u00b0C",
+        "example": "65 \u00b0C",
+        "preferredUnit": "\u00b0C",
+        "definition": "Temperature at which the enzymatic depolymerisation reaction was conducted. Optimal temperatures for thermostable PET hydrolases range from 50-72 \u00b0C.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": "http://purl.obolibrary.org/obo/PATO_0000146"
+      }
+    },
+    {
+      "label": "enzyme loading",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "enzyme loading",
+        "syntax": "{text}",
+        "example": "0.2 mg enzyme/g PET",
+        "preferredUnit": "mg/g PET",
+        "definition": "Amount of enzyme used relative to substrate mass. Common units: mg enzyme/g PET, \u00b5M, or mg/mL.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "substrate solid loading",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "substrate solid loading",
+        "syntax": "{text}",
+        "example": "2 g PET/L",
+        "preferredUnit": "g/L",
+        "definition": "Concentration of PET substrate in the reaction mixture. Reported as g/L or as weight percentage (w/w).",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "reactor volume",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "reactor volume",
+        "syntax": "{number} {unit}",
+        "example": "50 mL",
+        "preferredUnit": "mL",
+        "definition": "Total reaction volume of the depolymerisation assay.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "agitation rate",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "agitation rate",
+        "syntax": "{number} rpm",
+        "example": "250 rpm",
+        "preferredUnit": "rpm",
+        "definition": "Shaking or stirring speed during the reaction.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "reaction time",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "reaction time",
+        "syntax": "{text}",
+        "example": "24 h",
+        "preferredUnit": "h",
+        "definition": "Duration of the enzymatic depolymerisation reaction.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "actual PET vs proxy substrate",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "actual PET vs proxy substrate",
+        "syntax": "{text}",
+        "example": "yes",
+        "preferredUnit": "",
+        "definition": "Whether this assay used actual PET plastic as substrate (yes) or a proxy substrate such as BHET, MHET, or pNPB (no). Controlled: yes | no | both.",
+        "ontology": null,
+        "regex": "^(yes|no|both)$",
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "analytical separation method",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "analytical separation method",
+        "syntax": "{text}",
+        "example": "reversed-phase HPLC (C18 column)",
+        "preferredUnit": "",
+        "definition": "Chromatographic or other separation method used for product analysis. Include column type if applicable. Replaces the former binary 'HPLC used' field to properly distinguish separation from detection.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "detection method",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "detection method",
+        "syntax": "{text}",
+        "example": "absorbance",
+        "preferredUnit": "",
+        "definition": "Detector type used to quantify depolymerisation products. Controlled: absorbance | fluorescence | refractive_index | mass_spectrometry | NaOH_titration | pH_stat | other.",
+        "ontology": null,
+        "regex": "^(absorbance|fluorescence|refractive_index|mass_spectrometry|NaOH_titration|pH_stat|other)$",
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "UV detection wavelength",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "UV detection wavelength",
+        "syntax": "{number} nm",
+        "example": "240 nm",
+        "preferredUnit": "nm",
+        "definition": "UV wavelength used for absorbance-based detection of PET monomers. TPA is typically detected at 240-242 nm.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "observation unit identifier",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "observation unit identifier",
+        "syntax": "{text}",
+        "example": "OBS_spec_LCC_ICCG_65C_01",
+        "preferredUnit": "",
+        "definition": "Unique identifier for this observation/measurement row.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "assay identifier reference",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "assay identifier reference",
+        "syntax": "{text}",
+        "example": "ASSAY_GF-PET_LCC_65C_01",
+        "preferredUnit": "",
+        "definition": "Reference to the Assay row this observation was measured from. Must match an assay identifier in the Assay sheet.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "analyte identity",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "analyte identity",
+        "syntax": "{text}",
+        "example": "TPA | MHET | BHET | EG | total aromatic equivalents",
+        "preferredUnit": "",
+        "definition": "Identity of the analyte(s) quantified. Critical for interpreting depolymerisation percentage and product concentration values.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "specific activity",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "specific activity",
+        "syntax": "{number} {unit}",
+        "example": "93.2 mg_TAeq h\u207b\u00b9 mg_enzyme\u207b\u00b9",
+        "preferredUnit": "",
+        "definition": "Enzyme specific activity: rate of PET depolymerisation per unit enzyme mass. Value and unit reported together. When comparing across studies, unit normalisation is required.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": "http://purl.obolibrary.org/obo/REO_0001017"
+      }
+    },
+    {
+      "label": "PET depolymerisation percentage",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "PET depolymerisation percentage",
+        "syntax": "{number}%",
+        "example": "90%",
+        "preferredUnit": "%",
+        "definition": "Percentage of PET substrate converted to soluble monomers (TPA, MHET, BHET, EG) during the reaction.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "product concentration",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "product concentration",
+        "syntax": "{text}",
+        "example": "42.1 g TPAeq/L",
+        "preferredUnit": "",
+        "definition": "Concentration of depolymerisation products (typically TPA equivalents) achieved in the reaction.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "initial reaction rate",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "initial reaction rate",
+        "syntax": "{number} {unit}",
+        "example": "0.45 \u00b5mol min\u207b\u00b9 mg\u207b\u00b9",
+        "preferredUnit": "",
+        "definition": "Initial rate of product formation measured in the linear phase of the reaction, before significant substrate depletion or enzyme inactivation. Not the same as space-time yield or maximum rate. Must specify the time window and product used for calculation.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "space-time yield",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "space-time yield",
+        "syntax": "{number} {unit}",
+        "example": "70.1 g TA L\u207b\u00b9 h\u207b\u00b9",
+        "preferredUnit": "g L\u207b\u00b9 h\u207b\u00b9",
+        "definition": "Volumetric productivity of the reaction, expressed as mass of product per unit volume per unit time. Not the same as initial rate or specific activity.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "catalytic rate constant kcat",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "catalytic rate constant kcat",
+        "syntax": "{number} s\u207b\u00b9",
+        "example": null,
+        "preferredUnit": "s\u207b\u00b9",
+        "definition": "Catalytic rate constant (turnover number). Rarely reported for heterogeneous PET depolymerisation due to difficulty in defining effective enzyme concentration at the solid-liquid interface. Populated in 1/19 analysed papers. Must be interpreted alongside kinetic substrate basis and kinetic model.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": "http://purl.obolibrary.org/obo/REO_0001007"
+      }
+    },
+    {
+      "label": "Michaelis constant Km",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "Michaelis constant Km",
+        "syntax": "{number} {unit}",
+        "example": null,
+        "preferredUnit": "\u00b5M",
+        "definition": "Michaelis-Menten constant. Challenging to measure for heterogeneous PET substrates; reported for soluble proxy substrates (BHET, pNPB). Populated in 1/19 analysed papers. Must be interpreted alongside kinetic substrate basis and kinetic model.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": "http://purl.obolibrary.org/obo/REO_0001008"
+      }
+    },
+    {
+      "label": "kinetic substrate basis",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "kinetic substrate basis",
+        "syntax": "{text}",
+        "example": "pNPB (soluble proxy) | BHET (soluble proxy) | amorphous PET film",
+        "preferredUnit": "",
+        "definition": "Substrate used for kinetic parameter determination. Critical for comparability: Km/kcat measured on soluble proxy substrates (pNPB, BHET, MHET) are not directly comparable to values from heterogeneous PET degradation.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "kinetic model",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "kinetic model",
+        "syntax": "{text}",
+        "example": "Michaelis-Menten",
+        "preferredUnit": "",
+        "definition": "Kinetic model used to derive the reported parameters (e.g. Michaelis-Menten, substrate inhibition, interfacial kinetics).",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "half inactivation temperature",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "half inactivation temperature",
+        "syntax": "{number} \u00b0C",
+        "example": null,
+        "preferredUnit": "\u00b0C",
+        "definition": "Temperature at which the enzyme loses 50% of its initial activity after a defined incubation period. Populated in 0/19 analysed papers.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement type",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "MANDATORY",
+      "term": {
+        "label": "measurement type",
+        "syntax": "{text}",
+        "example": "time_resolved",
+        "preferredUnit": "",
+        "definition": "Whether depolymerisation was measured at a single endpoint or as a time-resolved series. Controlled: endpoint | time_resolved | both.",
+        "ontology": null,
+        "regex": "^(endpoint|time_resolved|both)$",
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "time point",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "time point",
+        "syntax": "{number} {unit}",
+        "example": "24 h",
+        "preferredUnit": "h",
+        "definition": "Time point at which the measurement was taken, relative to reaction start. Required for time-resolved measurements to enable temporal comparison.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "replicate count",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "replicate count",
+        "syntax": "{number}",
+        "example": "3",
+        "preferredUnit": "",
+        "definition": "Number of independent replicates for this measurement.",
+        "ontology": null,
+        "regex": "^\\d+$",
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement uncertainty",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "measurement uncertainty",
+        "syntax": "{text}",
+        "example": "\u00b1 2.3 (SD, n=3)",
+        "preferredUnit": "",
+        "definition": "Uncertainty or error of the measurement, with indication of type (SD, SEM, 95% CI) and sample size.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement notes",
+      "sheetName": "ObservationUnit",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "measurement notes",
+        "syntax": "{text}",
+        "example": "Activity calculated from NaOH consumption between 10-90% conversion",
+        "preferredUnit": "",
+        "definition": "Additional notes about the measurement methodology, calculation approach, or data quality.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "investigation contentUrl",
+      "sheetName": "Investigation",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "investigation contentUrl",
+        "syntax": "{url}",
+        "example": "https://doi.org/10.1038/s41586-020-2149-4",
+        "preferredUnit": "",
+        "definition": "URL or DOI link to the investigation source document (e.g. the published paper). Populated from the paper DOI as https://doi.org/{doi}.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "study identifier",
+      "sheetName": "Assay",
+      "packageName": "pet_hydrolase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "study identifier",
+        "syntax": "{text}",
+        "example": "10.1038/s41586-020-2149-4",
+        "preferredUnit": "",
+        "definition": "Identifier of the study this assay belongs to. Typically the DOI or internal study ID. Used to link Assay rows back to their parent Study row.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    }
+  ]
+}
