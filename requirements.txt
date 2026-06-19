@@ -50,10 +50,10 @@ pytest-cov>=4.1.0
 
 # Persistent memory layer (optional, for mem0 integration)
 # Provides persistent semantic memory for context compression and retrieval
-# Requires Qdrant server running at localhost:6333
+# Requires Qdrant server running at localhost:6333 (docker compose uses v1.13.0)
 # Enable with: MEM0_ENABLED=true in .env
-mem0ai>=2.0.1
-qdrant-client>=1.7.0
+mem0ai>=2.0.1,<3.0.0
+qdrant-client>=1.12.0,<1.14.0
 
 # Evaluation (optional, for evaluation/scripts/compare_values_against_gt.py)
 # Semantic similarity matching for GT comparison; falls back to token-F1 if absent.

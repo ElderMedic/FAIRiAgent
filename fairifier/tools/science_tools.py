@@ -12,6 +12,7 @@ from ..config import config
 from ..services.retrieval_cache import get_cached_value, make_cache_key, store_cached_value
 
 logger = logging.getLogger(__name__)
+_SCIENCE_FAILURE_SENTINEL = "__science_error__"
 
 
 def _safe_get_json(
@@ -27,6 +28,8 @@ def _safe_get_json(
         cache_key = make_cache_key("http_get_json", {"url": url, "params": params or {}})
         cached = get_cached_value(cache_store, cache_key)
         if cached is not None:
+            if isinstance(cached, dict) and _SCIENCE_FAILURE_SENTINEL in cached:
+                return False, None, str(cached.get(_SCIENCE_FAILURE_SENTINEL))
             return True, cached, None
 
     try:
@@ -38,6 +41,12 @@ def _safe_get_json(
         return True, payload, None
     except Exception as exc:  # pragma: no cover - network dependent
         logger.warning("Science API request failed: %s", exc)
+        if cache_store is not None and cache_key is not None:
+            store_cached_value(
+                cache_store,
+                cache_key,
+                {_SCIENCE_FAILURE_SENTINEL: str(exc)},
+            )
         return False, None, str(exc)
 
 

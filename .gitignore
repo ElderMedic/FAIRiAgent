@@ -236,6 +236,9 @@ docker-test-output/
 
 # Local FAIR Data Station runtime cache
 docker/fairds/*.jar
+docker/fairds/*.log
+docker/fairds/*.pid
+docker/fairds_storage/
 
 # Local/internal documentation notes
 docs/PROJECT_MEMORY_*.md

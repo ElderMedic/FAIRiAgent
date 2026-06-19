@@ -101,6 +101,8 @@ class ReactLoopMixin:
             temperature=config.llm_temperature,
             max_tokens=self._resolved_react_max_tokens(),
             extra_body=extra_body,
+            timeout=180,
+            max_retries=3,
         )
 
     def _build_react_agent(

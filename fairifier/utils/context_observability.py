@@ -42,6 +42,7 @@ _TRACKED_FIELDS = (
     "react_scratchpad",
     "human_interventions",
     "document_content",  # transient fallback only; should be small / None
+    "agent_messages",  # A2A structured handoff log
 )
 
 

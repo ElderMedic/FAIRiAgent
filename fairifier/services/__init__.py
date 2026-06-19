@@ -3,6 +3,7 @@
 from .confidence_aggregator import aggregate_confidence
 from .fair_data_station import FAIRDataStationClient
 from .mineru_client import MinerUClient, MinerUConversionError
+from .agent_mailbox import AgentMailbox
 
 # Mem0 service is optional - only import if available
 try:
@@ -15,6 +16,7 @@ except ImportError:
 
 __all__ = [
     "aggregate_confidence",
+    "AgentMailbox",
     "FAIRDataStationClient",
     "MinerUClient",
     "MinerUConversionError",

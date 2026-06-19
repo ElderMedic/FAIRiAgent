@@ -143,6 +143,7 @@ async def test_document_parser_skips_deep_react_for_long_raw_qwen(monkeypatch):
 @pytest.mark.anyio
 async def test_knowledge_retriever_uses_deep_selection_and_preserves_state_shape(monkeypatch):
     agent = KnowledgeRetrieverAgent()
+    monkeypatch.setattr(agent, "_load_local_package_registry", lambda: {})
 
     def get_available_packages(_payload):
         return {"success": True, "data": ["default", "miappe"], "error": None}
@@ -608,6 +609,7 @@ def test_kr_inner_agent_scopes_field_search_to_candidate_packages(monkeypatch):
 @pytest.mark.anyio
 async def test_knowledge_retriever_searches_required_terms_across_all_packages(monkeypatch):
     agent = KnowledgeRetrieverAgent()
+    monkeypatch.setattr(agent, "_load_local_package_registry", lambda: {})
 
     def get_available_packages(_payload):
         return {

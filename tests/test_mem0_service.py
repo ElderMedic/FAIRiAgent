@@ -22,6 +22,26 @@ class TestMem0ServiceImport:
         assert callable(build_mem0_config) or build_mem0_config is None
 
 
+class TestMem0LimitKwargs:
+    """Test mem0 API limit/top_k compatibility helper."""
+
+    def test_prefers_top_k_when_available(self):
+        from fairifier.services.mem0_service import _memory_limit_kwargs
+
+        def search(*, top_k: int = 20, filters=None):
+            return top_k
+
+        assert _memory_limit_kwargs(search, 5) == {"top_k": 5}
+
+    def test_falls_back_to_limit(self):
+        from fairifier.services.mem0_service import _memory_limit_kwargs
+
+        def get_all(*, limit: int = 100, filters=None):
+            return limit
+
+        assert _memory_limit_kwargs(get_all, 1000) == {"limit": 1000}
+
+
 class TestBuildMem0Config:
     """Test mem0 configuration builder."""
     
@@ -236,6 +256,7 @@ class TestMem0Service:
         assert call_kwargs["user_id"] == "session_123"
         assert call_kwargs["agent_id"] == "TestAgent"
         assert call_kwargs["messages"] == messages
+        assert call_kwargs["infer"] is False
         # add() injects lifecycle metadata (written_at, expires_at, schema_version)
         # in addition to the caller-supplied metadata; verify both are present
         assert call_kwargs["metadata"]["test"] == "meta"
@@ -290,6 +311,37 @@ class TestMem0Service:
             filters={"user_id": "session_123", "agent_id": "TestAgent"},
             top_k=1000
         )
+
+    @patch("mem0.Memory")
+    def test_list_memories_limit_only_api(self, mock_memory):
+        """Use limit= when mem0.get_all does not accept top_k."""
+        try:
+            from fairifier.services.mem0_service import Mem0Service
+        except ImportError:
+            pytest.skip("mem0 not installed")
+
+        class _LimitOnlyMemory:
+            def __init__(self):
+                self.get_all_kwargs = None
+
+            def search(self, query, *, filters=None, limit=100):
+                return {"results": []}
+
+            def get_all(self, *, filters=None, limit=100):
+                self.get_all_kwargs = {"filters": filters, "limit": limit}
+                return {"results": [{"memory": "Memory 1", "id": "1"}]}
+
+        backend = _LimitOnlyMemory()
+        mock_memory.from_config.return_value = backend
+
+        service = Mem0Service({"test": "config"})
+        results = service.list_memories("session_123", agent_id="TestAgent")
+
+        assert len(results) == 1
+        assert backend.get_all_kwargs == {
+            "filters": {"user_id": "session_123", "agent_id": "TestAgent"},
+            "limit": 1000,
+        }
     
     @patch('mem0.Memory')
     def test_delete_session_memories(self, mock_memory):

@@ -315,6 +315,29 @@ export const api = {
       .map((segment) => encodeURIComponent(segment))
       .join('/')}`, session)}`,
 
+  fetchArtifactText: async (id: string, name: string, session?: WebSession): Promise<string> => {
+    const artifactPath = `/projects/${id}/artifacts/${name
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')}`;
+    const url = `${API_BASE}${withResolvedSessionApiPath(artifactPath, session)}`;
+    const headers = new Headers({ Accept: 'text/plain, application/json, */*' });
+    const sessionHeaders = session
+      ? {
+          'X-FAIRifier-Session-Id': session.id,
+          'X-FAIRifier-Session-Started-At': session.startedAt,
+        }
+      : getSessionHeaders();
+    for (const [key, value] of Object.entries(sessionHeaders)) {
+      headers.set(key, value);
+    }
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      throw new Error(`Failed to load artifact ${name}: ${res.statusText}`);
+    }
+    return res.text();
+  },
+
   subscribeEvents: (
     id: string,
     onEvent: (event: WorkflowEvent) => void,

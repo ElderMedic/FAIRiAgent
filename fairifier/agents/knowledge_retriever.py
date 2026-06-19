@@ -3,6 +3,7 @@
 import logging
 import json
 import re
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from langchain_core.tools import tool
 from langsmith import traceable
@@ -34,6 +35,7 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         self._inner_kr_agent = None
         self._fairds_runtime_cache: Dict[str, Any] = {}
         self._science_runtime_cache: Dict[str, Any] = {}
+        self._local_package_registry: Dict[str, Dict[str, Any]] = {}
         
         # Initialize FAIR-DS client if configured
         self.fair_ds_client = None
@@ -411,6 +413,18 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             
             available_package_names = packages_result["data"]
             self.log_execution(state, f"   ✅ Found {len(available_package_names)} available packages: {available_package_names}")
+            api_available_package_names = list(available_package_names)
+            local_package_registry = self._load_local_package_registry()
+            local_package_names = list(local_package_registry.keys())
+            available_package_names = self._merge_available_package_names(
+                available_package_names,
+                local_package_names,
+            )
+            if local_package_names:
+                self.log_execution(
+                    state,
+                    f"   🧩 Loaded {len(local_package_names)} local package extension(s): {local_package_names}",
+                )
             
             if not available_package_names:
                 error_msg = "FAIR-DS API returned no packages. Ensure API is properly configured."
@@ -462,6 +476,16 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 critic_feedback=critic_feedback,
                 evidence_packets=evidence_packets,
             )
+            local_domain_package_hints = self._infer_local_domain_package_hints(
+                doc_info=doc_info,
+                planner_instruction=planner_instruction,
+                evidence_packets=evidence_packets,
+                local_package_names=local_package_names,
+            )
+            for pkg in reversed(local_domain_package_hints):
+                if pkg in priority_package_hints:
+                    priority_package_hints.remove(pkg)
+                priority_package_hints.insert(0, pkg)
             # Merge structured plan output FIRST (highest priority), then heuristic.
             for pkg in reversed(structured_priority_packages):
                 if pkg in priority_package_hints:
@@ -474,6 +498,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 guidance_history=guidance_history,
             )
             for pkg in structured_priority_packages:
+                if pkg not in guided_package_hints:
+                    guided_package_hints.insert(0, pkg)
+            for pkg in reversed(local_domain_package_hints):
                 if pkg not in guided_package_hints:
                     guided_package_hints.insert(0, pkg)
             excluded_package_names = set()
@@ -503,6 +530,11 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     state,
                     f"🎯 Critic/planner-guided packages: {guided_package_hints}"
                 )
+            if local_domain_package_hints:
+                self.log_execution(
+                    state,
+                    f"🧩 Local domain package hints: {local_domain_package_hints}"
+                )
             if excluded_package_names:
                 self.log_execution(
                     state,
@@ -515,6 +547,21 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             )
             all_packages_metadata = []
             for pkg_name in candidate_package_names:
+                if pkg_name in local_package_registry:
+                    fields = local_package_registry[pkg_name].get("metadata", []) or []
+                    if fields:
+                        all_packages_metadata.extend(fields)
+                        self.log_execution(
+                            state,
+                            f"      • {pkg_name}: {len(fields)} fields (local extension)"
+                        )
+                    else:
+                        self.log_execution(
+                            state,
+                            f"      ⚠️ {pkg_name}: local package has no metadata rows",
+                            "warning",
+                        )
+                    continue
                 pkg_result = self.tools["get_package"].invoke({"package_name": pkg_name})
                 if pkg_result["success"] and pkg_result["data"] and "metadata" in pkg_result["data"]:
                     fields = pkg_result["data"]["metadata"]
@@ -663,6 +710,10 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     if package_name not in merged_selected_packages:
                         merged_selected_packages.append(package_name)
                 selected_package_names = merged_selected_packages
+            for pkg in reversed(local_domain_package_hints):
+                if pkg in selected_package_names:
+                    selected_package_names.remove(pkg)
+                selected_package_names.insert(0, pkg)
             if not selected_package_names:
                 selected_package_names = priority_package_hints[:]
             if not selected_package_names:
@@ -684,6 +735,21 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     f"📦 Fetching metadata for {len(missing_selected_packages)} selected package(s) outside initial candidate set: {missing_selected_packages}"
                 )
                 for pkg_name in missing_selected_packages:
+                    if pkg_name in local_package_registry:
+                        fields = local_package_registry[pkg_name].get("metadata", []) or []
+                        if fields:
+                            all_packages_metadata.extend(fields)
+                            self.log_execution(
+                                state,
+                                f"   ✅ {pkg_name}: loaded {len(fields)} additional fields (local extension)"
+                            )
+                        else:
+                            self.log_execution(
+                                state,
+                                f"   ⚠️ {pkg_name}: local package metadata missing",
+                                "warning",
+                            )
+                        continue
                     pkg_result = self.tools["get_package"].invoke({"package_name": pkg_name})
                     if pkg_result["success"] and pkg_result["data"] and "metadata" in pkg_result["data"]:
                         fields = pkg_result["data"]["metadata"]
@@ -928,12 +994,12 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 # missed during initial package selection.  Label-level dedup at line 942
                 # prevents true duplicates; explicit critic/planner term requests should be
                 # discoverable regardless of source package.
-                search_scope_packages = available_package_names
+                search_scope_packages = api_available_package_names
                 package_names_str = ",".join(search_scope_packages) if search_scope_packages else None
 
                 selected_pkg_norm = {
                     str(p).strip().lower()
-                    for p in search_scope_packages
+                    for p in selected_package_names
                     if str(p).strip()
                 }
                 
@@ -972,14 +1038,20 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                             state,
                             f"   📦 Found {len(found_fields)} fields matching '{term}' across packages"
                         )
-                        # Add unique fields to final selection (label-level), only from
-                        # selected packages so package_source matches agent-chosen packages.
                         existing_labels = {f.get("label") for f in final_selected_fields}
                         for field in found_fields:
                             label = field.get("label")
-                            pkg_norm = str(field.get("packageName") or "").strip().lower()
-                            if not label or pkg_norm not in selected_pkg_norm:
+                            if not label:
                                 continue
+                            pkg_name = field.get("packageName")
+                            pkg_norm = str(pkg_name or "").strip().lower()
+                            if pkg_norm not in selected_pkg_norm and pkg_name:
+                                selected_package_names.append(pkg_name)
+                                selected_pkg_norm.add(pkg_norm)
+                                self.log_execution(
+                                    state,
+                                    f"➕ Dynamically adding package '{pkg_name}' to cover search hit '{label}'"
+                                )
                             if label not in existing_labels:
                                 final_selected_fields.append(field)
                                 existing_labels.add(label)
@@ -1070,6 +1142,8 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             # Store API capability info for Critic to understand limitations
             state["api_capabilities"] = {
                 "available_packages": available_package_names,
+                "available_packages_api": api_available_package_names,
+                "available_packages_local": local_package_names,
                 "total_packages_available": len(available_package_names),
                 "candidate_packages_considered": candidate_package_names,
                 "guided_packages_considered": guided_package_hints,
@@ -1084,9 +1158,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 "requested_metadata_gaps": [hint["label"] for hint in metadata_gap_hints],
                 "packages_actually_available": all_packages,
                 "limitation_note": (
-                    f"FAIR-DS API only has {len(available_package_names)} package(s) available: {available_package_names}. "
+                    f"FAIR-DS API only has {len(api_available_package_names)} package(s) available: {api_available_package_names}. "
                     "The agent can only select from packages that actually exist in the API."
-                ) if len(available_package_names) <= 1 else None
+                ) if len(api_available_package_names) <= 1 else None
             }
             
             self.log_execution(
@@ -1100,13 +1174,41 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             )
             self.update_confidence(state, "knowledge_retrieval", confidence)
             
-            self.log_execution(
-                state,
-                f"✅ Knowledge retrieval completed!\n"
-                f"   - Retrieved {len(knowledge_items)} metadata terms\n"
-                f"   - Source: {'FAIR-DS API' if self.fair_ds_client else 'Local KB'}\n"
-                f"   - Confidence: {confidence:.2%}"
-            )
+            gap_a2a_count = 0
+            if config.enable_a2a:
+                from ..services.agent_mailbox import AgentMailbox
+                mailbox = AgentMailbox(state)
+                gap_entries = [
+                    {
+                        "field": hint.get("label", ""),
+                        "isa_sheet": "",
+                        "reason": hint.get("reason", ""),
+                        "source": hint.get("source", ""),
+                        "confidence": hint.get("confidence", 0.0),
+                        "packet_id": hint.get("packet_id"),
+                        "supporting_value": hint.get("supporting_value"),
+                    }
+                    for hint in metadata_gap_hints
+                ]
+                if gap_entries:
+                    mailbox.publish_field_gap_report(
+                        from_agent="KnowledgeRetriever",
+                        gaps=gap_entries,
+                        selected_packages=selected_package_names,
+                    )
+                    gap_a2a_count = len(gap_entries)
+
+            completion_lines = [
+                "✅ Knowledge retrieval completed!",
+                f"   - Retrieved {len(knowledge_items)} metadata terms",
+                f"   - Source: {'FAIR-DS API' if self.fair_ds_client else 'Local KB'}",
+                f"   - Confidence: {confidence:.2%}",
+            ]
+            if config.enable_a2a and gap_a2a_count:
+                completion_lines.append(
+                    f"   - A2A: published {gap_a2a_count} gap hints to JSONGenerator"
+                )
+            self.log_execution(state, "\n".join(completion_lines))
             
         except Exception as e:
             self.log_execution(
@@ -1123,6 +1225,104 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 state["knowledge_items"] = []
         
         return state
+
+    def _merge_available_package_names(
+        self,
+        api_package_names: List[str],
+        local_package_names: List[str],
+    ) -> List[str]:
+        """Merge API and local package names preserving order and uniqueness."""
+        merged: List[str] = []
+        for name in list(api_package_names or []) + list(local_package_names or []):
+            normalized = str(name or "").strip()
+            if normalized and normalized not in merged:
+                merged.append(normalized)
+        return merged
+
+    def _load_local_package_registry(self) -> Dict[str, Dict[str, Any]]:
+        """Load local FAIR-DS extension packages from evaluation/config/packages."""
+        cached = getattr(self, "_local_package_registry", None)
+        if isinstance(cached, dict) and cached:
+            return cached
+
+        registry: Dict[str, Dict[str, Any]] = {}
+        try:
+            package_dir = Path(config.project_root) / "evaluation" / "config" / "packages"
+            if not package_dir.exists():
+                return {}
+            for package_file in sorted(package_dir.glob("*_package.json")):
+                try:
+                    payload = json.loads(package_file.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    logger.warning("Failed reading local package file %s: %s", package_file, exc)
+                    continue
+                package = FAIRDSAPIParser.parse_package_response(payload)
+                package_name = str(package.get("packageName") or "").strip()
+                if not package_name:
+                    continue
+                if not isinstance(package.get("metadata"), list):
+                    continue
+                registry[package_name] = package
+        except Exception as exc:
+            logger.warning("Failed loading local package registry: %s", exc)
+            registry = {}
+
+        self._local_package_registry = registry
+        return registry
+
+    def _infer_local_domain_package_hints(
+        self,
+        *,
+        doc_info: Dict[str, Any],
+        planner_instruction: Optional[str],
+        evidence_packets: Optional[List[Dict[str, Any]]],
+        local_package_names: List[str],
+    ) -> List[str]:
+        """Infer when local extension packages should be force-prioritized."""
+        if not local_package_names:
+            return []
+
+        packet_values = " ".join(
+            str(packet.get("value", ""))
+            for packet in (evidence_packets or [])[:16]
+            if packet.get("value")
+        )
+        text = " ".join(
+            str(part)
+            for part in [
+                doc_info.get("title", ""),
+                doc_info.get("document_type", ""),
+                doc_info.get("research_domain", ""),
+                " ".join(doc_info.get("keywords", []) or []),
+                packet_values,
+                planner_instruction or "",
+            ]
+            if part
+        ).lower()
+
+        petase_tokens = [
+            "petase",
+            "pet depolymerase",
+            "polyethylene terephthalate",
+            "depolymerisation",
+            "depolymerization",
+            "mhet",
+            "bhet",
+            "terephthalic acid",
+            "lcc",
+            "cutinase",
+            "enzyme engineering",
+            "biocatalysis",
+        ]
+        if not any(token in text for token in petase_tokens):
+            return []
+
+        hints: List[str] = []
+        for name in local_package_names:
+            lowered = str(name).lower()
+            if any(token in lowered for token in ("petase", "enzyme_engineering", "depolymer")):
+                hints.append(name)
+        return hints
     
     def _calculate_retrieval_confidence(
         self, 

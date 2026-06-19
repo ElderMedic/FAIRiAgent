@@ -148,6 +148,113 @@ class JSONGeneratorAgent(BaseAgent):
             return None
 
         return best_item
+
+    @staticmethod
+    def _gap_hint_to_context_line(
+        field: str,
+        reason: str,
+        supporting_value: Optional[Any] = None,
+    ) -> str:
+        line = f"- {field}: {reason}"
+        if supporting_value:
+            line += f" [evidence: {str(supporting_value)[:80]}]"
+        return line
+
+    def _build_a2a_handoff_context(
+        self,
+        state: FAIRifierState,
+        metadata_gap_hints: List[Dict[str, Any]],
+    ) -> Tuple[str, List[str]]:
+        """Build A2A handoff context; ack message ids only after success."""
+        if not config.enable_a2a:
+            return "", []
+
+        from ..services.agent_mailbox import AgentMailbox
+
+        mailbox = AgentMailbox(state)
+        retry_count = int((state.get("context") or {}).get("retry_count") or 0)
+        # After Critic retry, prior attempt may have acked messages — re-read all.
+        unacked_only = retry_count == 0
+
+        gap_reports = mailbox.inbox(
+            "JSONGenerator",
+            types=["field_gap_report"],
+            unacked_only=unacked_only,
+        )
+        evidence_bundles = mailbox.inbox(
+            "JSONGenerator",
+            types=["evidence_bundle"],
+            unacked_only=unacked_only,
+        )
+
+        lines: List[str] = []
+        ids_to_ack: List[str] = []
+        gap_lines: List[str] = []
+
+        for report in gap_reports:
+            for gap in report.get("payload", {}).get("gaps", [])[:30]:
+                gap_lines.append(
+                    self._gap_hint_to_context_line(
+                        gap.get("field", "?"),
+                        gap.get("reason", ""),
+                        gap.get("supporting_value"),
+                    )
+                )
+            ids_to_ack.append(report["id"])
+
+        if not gap_lines and metadata_gap_hints:
+            for hint in metadata_gap_hints[:30]:
+                label = str(hint.get("label") or hint.get("field") or "?")
+                gap_lines.append(
+                    self._gap_hint_to_context_line(
+                        label,
+                        str(hint.get("reason") or ""),
+                        hint.get("supporting_value"),
+                    )
+                )
+
+        if gap_lines:
+            lines.append(
+                "\n--- Structured Field-Gap Report "
+                "(from KnowledgeRetriever via A2A) ---"
+            )
+            lines.append(
+                "These metadata concepts were NOT mappable to FAIR-DS fields. "
+                "Use document context to fill them where possible:"
+            )
+            lines.extend(gap_lines)
+
+        if evidence_bundles:
+            lines.append(
+                "\n--- Evidence Bundles (from DocumentParser via A2A) ---"
+            )
+            for bundle in evidence_bundles:
+                source = bundle.get("refs", {}).get("source_path", "")
+                pcount = bundle.get("payload", {}).get("packet_count", 0)
+                lines.append(
+                    f"Source: {source} "
+                    f"({pcount} evidence packets available in state)"
+                )
+                ids_to_ack.append(bundle["id"])
+
+        context = "\n".join(lines) if lines else ""
+        if context:
+            self.log_execution(
+                state,
+                f"📨 A2A inbox: {len(gap_reports)} gap reports, "
+                f"{len(evidence_bundles)} evidence bundles"
+                + (" (retry: including acked messages)" if retry_count else "")
+            )
+        return context, ids_to_ack
+
+    def _ack_a2a_messages(self, state: FAIRifierState, message_ids: List[str]) -> None:
+        if not config.enable_a2a or not message_ids:
+            return
+        from ..services.agent_mailbox import AgentMailbox
+
+        mailbox = AgentMailbox(state)
+        for msg_id in message_ids:
+            mailbox.ack(msg_id, "JSONGenerator")
         
     @traceable(name="JSONGenerator", tags=["agent", "generation"])
     async def execute(self, state: FAIRifierState) -> FAIRifierState:
@@ -171,6 +278,10 @@ class JSONGeneratorAgent(BaseAgent):
             )
             # Store candidates in state so _generate_with_llm or postcheck can access them
             state["_field_candidates"] = all_candidates
+
+            a2a_handoff_context, a2a_ids_to_ack = self._build_a2a_handoff_context(
+                state, metadata_gap_hints
+            )
 
             # ── START UPSTREAM RECONCILIATION ──
             if all_candidates:
@@ -196,7 +307,7 @@ class JSONGeneratorAgent(BaseAgent):
 
             context_parts = [
                 part
-                for part in (evidence_context, workspace_context, field_evidence_context)
+                for part in (evidence_context, workspace_context, field_evidence_context, a2a_handoff_context)
                 if part
             ]
             document_context = "\n\n".join(context_parts)
@@ -298,6 +409,7 @@ class JSONGeneratorAgent(BaseAgent):
                 f"   - Required fields: {sum(1 for f in metadata_fields if f.required)}\n"
                 f"   - Confidence: {confidence:.2%}"
             )
+            self._ack_a2a_messages(state, a2a_ids_to_ack)
             
         except Exception as e:
             self.log_execution(
@@ -729,11 +841,56 @@ class JSONGeneratorAgent(BaseAgent):
 
     def _field_search_queries(self, field_name: str, description: str) -> List[str]:
         """Build conservative literal search queries from a FAIR-DS field."""
+        normalized_field = " ".join(
+            field_name.lower().replace("_", " ").replace("-", " ").split()
+        )
+        alias_map = {
+            "reaction temperature": [
+                "assay temperature",
+                "incubation temperature",
+            ],
+            "reaction time": [
+                "incubation time",
+                "assay duration",
+            ],
+            "reaction ph": [
+                "reaction pH",
+                "assay pH",
+            ],
+            "enzyme loading": [
+                "enzyme concentration",
+                "protein concentration",
+            ],
+            "enzyme mutation": [
+                "mutation",
+                "amino acid substitution",
+            ],
+            "substrate crystallinity": [
+                "pet crystallinity",
+                "crystallinity",
+            ],
+            "degradation rate": [
+                "degradation",
+                "conversion rate",
+                "weight loss",
+            ],
+            "mhet concentration": [
+                "mhet",
+            ],
+            "tpa concentration": [
+                "tpa",
+                "terephthalic acid",
+            ],
+            "bhet concentration": [
+                "bhet",
+            ],
+        }
         raw_candidates = [
             field_name,
             field_name.replace("_", " "),
             field_name.replace("-", " "),
         ]
+        raw_candidates.extend(alias_map.get(normalized_field, []))
         for phrase in re.split(r"[.;:,()\\[\\]\\n]+", description):
             phrase = phrase.strip()
             if 3 <= len(phrase) <= 80:
@@ -763,9 +920,9 @@ class JSONGeneratorAgent(BaseAgent):
                 if lowered_token not in seen:
                     seen.add(lowered_token)
                     queries.append(token)
-            if len(queries) >= 8:
+            if len(queries) >= 10:
                 break
-        return queries[:8]
+        return queries[:10]
     
     async def _generate_with_llm(
         self,

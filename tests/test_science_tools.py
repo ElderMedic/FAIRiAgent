@@ -80,11 +80,40 @@ def test_science_tools_use_cache(monkeypatch):
 
     monkeypatch.setattr(requests, "get", fake_get)
     cache_store = {}
-    tools = {tool.name: tool for tool in create_science_tools(cache_store=cache_store)}
+    tools = {
+        tool.name: tool
+        for tool in create_science_tools(cache_store=cache_store)
+    }
 
     result1 = tools["search_ontology_term"].invoke({"term": "earthworm"})
     result2 = tools["search_ontology_term"].invoke({"term": "earthworm"})
 
     assert result1["success"] is True
     assert result2["success"] is True
+    assert calls["count"] == 1
+
+
+def test_science_tools_cache_failed_requests(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_get(url, params=None, timeout=0):
+        calls["count"] += 1
+        raise requests.RequestException("network timeout")
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    cache_store = {}
+    tools = {
+        tool.name: tool
+        for tool in create_science_tools(cache_store=cache_store)
+    }
+
+    result1 = tools["search_literature"].invoke(
+        {"query": "PET depolymerase", "n_results": 3}
+    )
+    result2 = tools["search_literature"].invoke(
+        {"query": "PET depolymerase", "n_results": 3}
+    )
+
+    assert result1["success"] is False
+    assert result2["success"] is False
     assert calls["count"] == 1

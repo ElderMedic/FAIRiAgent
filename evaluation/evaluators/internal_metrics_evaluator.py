@@ -169,6 +169,14 @@ class InternalMetricsEvaluator:
             
             if failed_attempts:
                 result['retry_analysis']['failed_attempts_timeline'] = failed_attempts
+
+            agent_handoff = execution_summary.get('agent_handoff') or {}
+            result['agent_handoff'] = {
+                'total_messages': agent_handoff.get('total_messages', 0),
+                'by_type': agent_handoff.get('by_type', {}),
+                'acked': agent_handoff.get('acked', 0),
+                'unacked': agent_handoff.get('unacked', 0),
+            }
         
         # Human review flags
         result['human_review_flags'] = {

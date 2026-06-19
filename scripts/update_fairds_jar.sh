@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_DIR="${ROOT_DIR}/docker/fairds"
 TARGET="${TARGET_DIR}/fairds.jar"
-URL="${FAIRDS_JAR_URL:-http://download.systemsbiology.nl/unlock/fairds-latest.jar}"
+URL="${FAIRDS_JAR_URL:-https://download.systemsbiology.nl/download/unlock/fairds-latest.jar}"
 
 mkdir -p "${TARGET_DIR}"
 

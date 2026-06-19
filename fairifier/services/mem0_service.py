@@ -6,7 +6,8 @@ across the workflow session. The service performs runtime health checks and
 can auto-configure embedding/model backends when local dependencies are absent.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
+import inspect
 import logging
 import hashlib
 import json
@@ -59,6 +60,60 @@ When in doubt, extract — cross-run knowledge is always valuable in this workfl
 
 # Global singleton instance
 _mem0_service: Optional["Mem0Service"] = None
+_LIMIT_PARAM_CACHE: Dict[int, str] = {}
+
+
+def _parse_version_tuple(version: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for piece in (version or "0").strip().split("."):
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits or "0"))
+    return tuple(parts or (0,))
+
+
+def _mem0_version_below(required: str) -> bool:
+    try:
+        import mem0
+
+        installed = getattr(mem0, "__version__", "0")
+        return _parse_version_tuple(installed) < _parse_version_tuple(required)
+    except Exception:
+        return False
+
+
+def _warn_if_mem0_outdated() -> None:
+    if not _mem0_version_below("2.0.1"):
+        return
+    try:
+        import mem0
+
+        logger.warning(
+            "mem0ai %s is below FAIRiAgent requirement (>=2.0.1). "
+            "Memory list/search may fail due to API changes (limit vs top_k). "
+            "Upgrade with: pip install 'mem0ai>=2.0.1'",
+            getattr(mem0, "__version__", "unknown"),
+        )
+    except Exception:
+        logger.warning(
+            "mem0ai is below FAIRiAgent requirement (>=2.0.1). "
+            "Upgrade with: pip install 'mem0ai>=2.0.1'"
+        )
+
+
+def _memory_limit_kwargs(method: Callable[..., Any], limit: int) -> Dict[str, int]:
+    """Return limit/top_k kwargs compatible with installed mem0 Memory API."""
+    cache_key = id(method)
+    param_name = _LIMIT_PARAM_CACHE.get(cache_key)
+    if param_name is None:
+        params = inspect.signature(method).parameters
+        if "top_k" in params:
+            param_name = "top_k"
+        elif "limit" in params:
+            param_name = "limit"
+        else:
+            param_name = "top_k"
+        _LIMIT_PARAM_CACHE[cache_key] = param_name
+    return {param_name: limit}
 
 
 class Mem0Service:
@@ -81,6 +136,7 @@ class Mem0Service:
         """
         self._init_error: Optional[Exception] = None  # Stored for strict-mode re-raise
         try:
+            _warn_if_mem0_outdated()
             from ..utils.env_patch import apply_libstdcxx_fix
             apply_libstdcxx_fix()
             from mem0 import Memory
@@ -90,7 +146,11 @@ class Mem0Service:
             self._seen_message_fingerprints: set[str] = set()
             # Quick health check: try a lightweight operation to catch version mismatches
             try:
-                self.memory.search(query="health_check", filters={"user_id": "_health_"}, top_k=1)
+                self.memory.search(
+                    query="health_check",
+                    filters={"user_id": "_health_"},
+                    **_memory_limit_kwargs(self.memory.search, 1),
+                )
             except Exception:
                 pass  # 404 or other errors here are fine — the collection may be empty
 
@@ -145,8 +205,8 @@ class Mem0Service:
             results = self.memory.search(
                 query=query,
                 filters=filters,
-                top_k=limit,
-                threshold=0.0  # Retain v2 behavior
+                threshold=0.0,  # Retain v2 behavior
+                **_memory_limit_kwargs(self.memory.search, limit),
             )
             memories = results.get("results", [])
             valid_memories = [m for m in memories if self.is_memory_valid(m)]
@@ -223,13 +283,32 @@ class Mem0Service:
             }
             merged_metadata = {**lifecycle_meta, **(metadata or {})}
 
-            # Scope matches search()/list_memories(); Memory.add maps these via _build_filters_and_metadata.
-            result = self.memory.add(
-                messages=normalized_messages,
-                user_id=filters["user_id"],
-                agent_id=filters.get("agent_id"),
-                metadata=merged_metadata,
-            )
+            # Scope matches search()/list_memories(); Memory.add maps these via
+            # _build_filters_and_metadata.
+            #
+            # IMPORTANT: We already distill one actionable insight per message in
+            # FAIRiAgent, so mem0 should store it directly instead of re-running
+            # mem0's internal fact-extraction loop. This avoids long stalls and
+            # noisy NONE-event vector errors seen with some mem0/qdrant versions.
+            add_kwargs = {
+                "messages": normalized_messages,
+                "user_id": filters["user_id"],
+                "agent_id": filters.get("agent_id"),
+                "metadata": merged_metadata,
+            }
+            try:
+                add_params = inspect.signature(self.memory.add).parameters
+                accepts_kwargs = any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD
+                    for param in add_params.values()
+                )
+                if "infer" in add_params or accepts_kwargs:
+                    add_kwargs["infer"] = False
+            except Exception:
+                # Signature inspection failure should not block memory writes.
+                pass
+
+            result = self.memory.add(**add_kwargs)
             self._seen_message_fingerprints.add(fingerprint)
             added_count = len(result.get("results", []))
             if added_count > 0:
@@ -353,8 +432,10 @@ class Mem0Service:
             filters = {"user_id": session_id}
             if agent_id:
                 filters["agent_id"] = agent_id
-            # Use a large top_k to emulate v2 get_all behavior which returned everything
-            results = self.memory.get_all(filters=filters, top_k=1000)
+            results = self.memory.get_all(
+                filters=filters,
+                **_memory_limit_kwargs(self.memory.get_all, 1000),
+            )
             memories = results.get("results", [])
             logger.debug(f"Listed {len(memories)} memories for session={session_id}, agent={agent_id}")
             return memories

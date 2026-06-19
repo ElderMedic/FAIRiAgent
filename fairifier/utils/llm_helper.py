@@ -1019,6 +1019,8 @@ class LLMHelper:
                 base_url=base_url,  # None uses default OpenAI API
                 temperature=config.llm_temperature,
                 max_tokens=self._resolved_max_tokens(),  # Limit output tokens
+                timeout=180,
+                max_retries=3,
             )
         elif self.provider == "qwen":
             if ChatOpenAI is None:
@@ -1037,6 +1039,8 @@ class LLMHelper:
                 base_url=base_url,
                 temperature=config.llm_temperature,
                 max_tokens=self._resolved_max_tokens(),  # DashScope rejects values above provider limit
+                timeout=180,
+                max_retries=3,
             )
         elif self.provider == "deepseek":
             if ChatOpenAI is None:
@@ -1053,6 +1057,8 @@ class LLMHelper:
                 base_url=base_url,
                 temperature=config.llm_temperature,
                 max_tokens=self._resolved_max_tokens(),
+                timeout=180,
+                max_retries=3,
             )
         elif self.provider in {"gemini", "google"}:
             if ChatGoogleGenerativeAI is None:

@@ -76,6 +76,7 @@ class BatchEvaluationRunner:
         output_dir: Path,
         env_file: Path,
         exclude_documents: List[str] = None,
+        include_documents: List[str] = None,
         timeout: int = 3600
     ):
         """
@@ -94,14 +95,21 @@ class BatchEvaluationRunner:
         self.output_dir = output_dir
         self.env_file = env_file
         self.timeout = timeout
+        self.include_documents = include_documents or []
         
         # Load ground truth
         with open(ground_truth_path, 'r', encoding='utf-8') as f:
             gt_data = json.load(f)
             all_documents = gt_data.get('documents', [])
         
-        # Filter documents if exclude list is provided
-        if exclude_documents:
+        if self.include_documents:
+            include_set = set(self.include_documents)
+            self.documents = [
+                doc for doc in all_documents
+                if doc.get('document_id') in include_set
+            ]
+            print(f"✅ Including documents: {', '.join(sorted(include_set))}")
+        elif exclude_documents:
             self.documents = [
                 doc for doc in all_documents 
                 if doc.get('document_id') not in exclude_documents
@@ -154,6 +162,8 @@ class BatchEvaluationRunner:
         
         print(f"\n✅ Batch evaluation complete!")
         print(f"📄 Run metadata saved to: {metadata_file}")
+        
+        self._prepare_outputs_layout()
         
         # Run evaluators to compute detailed metrics
         print(f"\n📊 Running evaluators to compute detailed metrics...")
@@ -220,6 +230,20 @@ class BatchEvaluationRunner:
             import traceback
             traceback.print_exc()
             return None
+    
+    def _prepare_outputs_layout(self) -> None:
+        """Create outputs/{config_name} symlinks expected by evaluate_outputs.py."""
+        outputs_dir = self.output_dir / 'outputs'
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        for config_path in self.model_configs:
+            config_name = config_path.stem
+            src = self.output_dir / config_name
+            dst = outputs_dir / config_name
+            if not src.exists():
+                continue
+            if dst.exists() or dst.is_symlink():
+                continue
+            dst.symlink_to(src.resolve(), target_is_directory=True)
     
     async def _run_with_config(
         self,
@@ -580,6 +604,8 @@ async def main():
                        help='Timeout per document run in seconds (default: 3600). Increase for slower models (e.g., --timeout 7200 for Ollama).')
     parser.add_argument('--exclude-documents', type=str, nargs='+', default=None,
                        help='Document IDs to exclude from evaluation (e.g., --exclude-documents biorem)')
+    parser.add_argument('--include-documents', type=str, nargs='+', default=None,
+                       help='Document IDs to include (overrides --exclude-documents)')
     
     args = parser.parse_args()
     
@@ -593,6 +619,7 @@ async def main():
         output_dir=args.output_dir,
         env_file=args.env_file,
         exclude_documents=args.exclude_documents,
+        include_documents=args.include_documents,
         timeout=args.timeout
     )
     

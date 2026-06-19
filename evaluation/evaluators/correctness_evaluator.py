@@ -78,6 +78,15 @@ class CorrectnessEvaluator:
                 base_url=base_url,
                 temperature=temperature
             )
+        elif provider == 'deepseek':
+            # DeepSeek uses OpenAI-compatible API
+            base_url = self.judge_config.get('base_url', 'https://api.deepseek.com/v1')
+            self.llm_judge = ChatOpenAI(
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                temperature=temperature
+            )
         else:
             raise ValueError(f"Unsupported LLM provider: {provider}")
     

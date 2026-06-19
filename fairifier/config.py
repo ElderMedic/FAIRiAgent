@@ -80,6 +80,7 @@ class FAIRifierConfig:
     llm_enable_thinking: bool = True  # Thinking enabled by default — models that support it benefit from reasoning traces
     llm_thinking_budget: int = 2048  # Token budget for thinking/reasoning (Gemini, Anthropic). 0 = model default
     enable_deep_agents: bool = True  # Use deepagents inner loops when dependency is available
+    enable_a2a: bool = True  # Structured in-process agent-to-agent handoff (AgentMailbox)
     
     # Document parsing context limits (characters)
     # Modern LLMs support 200K+ tokens (~800K chars), these limits are conservative
@@ -315,6 +316,9 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("FAIRIFIER_ENABLE_DEEP_AGENTS"):
         value = os.getenv("FAIRIFIER_ENABLE_DEEP_AGENTS").strip().lower()
         config_instance.enable_deep_agents = value in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_ENABLE_A2A"):
+        value = os.getenv("FAIRIFIER_ENABLE_A2A").strip().lower()
+        config_instance.enable_a2a = value in ("1", "true", "yes", "on")
     if os.getenv("REACT_LOOP_MAX_ITERATIONS"):
         config_instance.react_loop_max_iterations = int(os.getenv("REACT_LOOP_MAX_ITERATIONS"))
     if os.getenv("REACT_LOOP_MAX_TOOL_CALLS"):

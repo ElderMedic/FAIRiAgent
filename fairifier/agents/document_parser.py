@@ -427,10 +427,26 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
                 max_packets=max(config.react_loop_document_parser_target_packets * 2, 12),
             )
             state["evidence_packets"] = evidence_packets
+            if config.enable_a2a:
+                from ..services.agent_mailbox import AgentMailbox
+                mailbox = AgentMailbox(state)
+                source_type = self._infer_document_source_type(
+                    is_mineru_content, document_path
+                )
+                mailbox.publish_evidence_bundle(
+                    from_agent="DocumentParser",
+                    packets=evidence_packets,
+                    source_path=document_path,
+                    source_type=source_type,
+                )
+                a2a_note = " (A2A published)"
+            else:
+                a2a_note = ""
+
             self.log_execution(state, f"✅ Stored document_info in state with {len(state['document_info'])} fields")
             self.log_execution(
                 state,
-                f"📦 Built {len(evidence_packets)} evidence packets for downstream agents"
+                f"📦 Built {len(evidence_packets)} evidence packets for downstream agents{a2a_note}"
             )
             confidence = self._calculate_llm_confidence(doc_info_dict)
             

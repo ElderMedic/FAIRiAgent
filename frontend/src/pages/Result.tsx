@@ -18,6 +18,9 @@ import { CATEGORY_COLORS } from '../components/wordCloudColors';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { buildAppRoute, getWebSession } from '../utils/session';
 import MetadataPreview from '../components/MetadataPreview';
+import AgentHandoffCard from '../components/AgentHandoffCard';
+import AgentMessagesPanel from '../components/AgentMessagesPanel';
+import { coerceAgentHandoff } from '../types/agentHandoff';
 import './InteriorPages.css';
 
 function formatSize(size: number) {
@@ -40,10 +43,6 @@ function formatSummaryValueWithKey(key: string, value: unknown) {
     return String(value);
   }
   return JSON.stringify(value);
-}
-
-function isRetriesByAgentKey(key: string) {
-  return key === 'retries_by_agent';
 }
 
 function coerceRetriesByAgent(value: unknown): Array<{ agent: string; retries: number }> | null {
@@ -268,8 +267,17 @@ export default function Result() {
   const trajectory = coerceRetryTrajectory(
     rawSummary.find(([k]) => k === 'retry_trajectory')?.[1],
   );
+  const agentHandoff = coerceAgentHandoff(
+    project.execution_summary?.agent_handoff,
+  );
+  const retriesByAgent = coerceRetriesByAgent(
+    project.execution_summary?.retries_by_agent,
+  );
   const summary = rawSummary.filter(
-    ([k]) => k !== 'retry_trajectory' && k !== 'retries_by_agent',
+    ([k]) =>
+      k !== 'retry_trajectory'
+      && k !== 'retries_by_agent'
+      && k !== 'agent_handoff',
   );
   const sourceGrounding = (
     project.quality_metrics?.source_grounding as
@@ -286,6 +294,9 @@ export default function Result() {
   const mainArtifacts = artifacts.filter((a) => !a.name.startsWith('mineru_'));
   const mineruArtifacts = artifacts.filter((a) => a.name.startsWith('mineru_'));
   const visibleArtifacts = showMinerU ? artifacts : mainArtifacts;
+  const processingLogAvailable = artifacts.some(
+    (a) => a.name === 'processing_log.jsonl' && a.available,
+  );
 
   return (
     <div className="page-frame">
@@ -414,6 +425,14 @@ export default function Result() {
               </article>
             )}
 
+            <AgentHandoffCard handoff={agentHandoff} />
+
+            <AgentMessagesPanel
+              projectId={projectId}
+              session={session}
+              logAvailable={processingLogAvailable}
+            />
+
             {trajectory && trajectory.length > 0 && (
               <article className="page-card">
                 <div className="page-card__header">
@@ -470,6 +489,36 @@ export default function Result() {
               </article>
             )}
 
+            {retriesByAgent && retriesByAgent.length > 0 && (
+              <article className="page-card">
+                <div className="page-card__header">
+                  <div>
+                    <p className="page-card__eyebrow">Retries</p>
+                    <h2 className="page-card__title">Retries by agent</h2>
+                    <p className="page-card__body">
+                      Number of extra attempts per agent after the initial execution step.
+                    </p>
+                  </div>
+                </div>
+                <table className="result-summary-table" aria-label="Retries by agent">
+                  <thead>
+                    <tr>
+                      <th scope="col">Agent</th>
+                      <th scope="col">Retries</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {retriesByAgent.map((row) => (
+                      <tr key={row.agent}>
+                        <td>{row.agent}</td>
+                        <td>{row.retries}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </article>
+            )}
+
             {summary.length > 0 && (
               <article className="page-card">
                 <div className="page-card__header">
@@ -479,55 +528,14 @@ export default function Result() {
                   </div>
                 </div>
                 <div className="result-summary-grid">
-                  {summary.map(([key, value]) => {
-                    if (isRetriesByAgentKey(key)) {
-                      const rows = coerceRetriesByAgent(value);
-                      if (rows === null) {
-                        return (
-                          <div key={key} className="result-summary-card">
-                            <p className="result-summary-card__label">{scoreLabel(key)}</p>
-                            <p className="result-summary-card__value result-summary-card__value--muted">
-                              Retry counts are unavailable (invalid or non-numeric values in summary data).
-                            </p>
-                          </div>
-                        );
-                      }
-                      return (
-                        <div key={key} className="result-summary-card">
-                          <p className="result-summary-card__label">{scoreLabel(key)}</p>
-                          {rows.length === 0 ? (
-                            <p className="result-summary-card__value">0</p>
-                          ) : (
-                            <table className="result-summary-table" aria-label="Retries by agent">
-                              <thead>
-                                <tr>
-                                  <th scope="col">Agent</th>
-                                  <th scope="col">Retries</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {rows.map((row) => (
-                                  <tr key={row.agent}>
-                                    <td>{row.agent}</td>
-                                    <td>{row.retries}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          )}
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <div key={key} className="result-summary-card">
-                        <p className="result-summary-card__label">{scoreLabel(key)}</p>
-                        <p className="result-summary-card__value">
-                          {formatSummaryValueWithKey(key, value)}
-                        </p>
-                      </div>
-                    );
-                  })}
+                  {summary.map(([key, value]) => (
+                    <div key={key} className="result-summary-card">
+                      <p className="result-summary-card__label">{scoreLabel(key)}</p>
+                      <p className="result-summary-card__value">
+                        {formatSummaryValueWithKey(key, value)}
+                      </p>
+                    </div>
+                  ))}
                 </div>
               </article>
             )}

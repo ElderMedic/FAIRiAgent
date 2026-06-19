@@ -59,7 +59,7 @@ def check_ground_truth():
         if doc_path:
             full_path = Path(doc_path)
             if not full_path.is_absolute():
-                full_path = Path("evaluation") / doc_path
+                full_path = Path(__file__).resolve().parents[2] / doc_path
             
             if full_path.exists():
                 print(f"   ✅ 文档路径存在: {full_path}")

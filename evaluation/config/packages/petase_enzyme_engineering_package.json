@@ -1,11 +1,11 @@
 {
-  "packageName": "pet_hydrolase_enzyme_engineering",
+  "packageName": "petase_enzyme_engineering",
   "itemCount": 49,
   "metadata": [
     {
       "label": "sample type",
       "sheetName": "Sample",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "sample type",
@@ -24,7 +24,7 @@
     {
       "label": "enzyme identifier",
       "sheetName": "Sample",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "enzyme identifier",
@@ -43,7 +43,7 @@
     {
       "label": "substrate identifier",
       "sheetName": "Sample",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "substrate identifier",
@@ -62,7 +62,7 @@
     {
       "label": "enzyme type",
       "sheetName": "Sample",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "enzyme type",
@@ -81,7 +81,7 @@
     {
       "label": "enzyme mutation",
       "sheetName": "Sample",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "enzyme mutation",
@@ -100,7 +100,7 @@
     {
       "label": "enzyme organism source",
       "sheetName": "Sample",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "enzyme organism source",
@@ -119,7 +119,7 @@
     {
       "label": "enzyme melting temperature",
       "sheetName": "Sample",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "enzyme melting temperature",
@@ -138,7 +138,7 @@
     {
       "label": "PET substrate type",
       "sheetName": "Sample",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "PET substrate type",
@@ -157,7 +157,7 @@
     {
       "label": "substrate form factor",
       "sheetName": "Sample",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "substrate form factor",
@@ -176,7 +176,7 @@
     {
       "label": "PET crystallinity",
       "sheetName": "Sample",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "PET crystallinity",
@@ -195,7 +195,7 @@
     {
       "label": "PET glass transition temperature",
       "sheetName": "Sample",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "PET glass transition temperature",
@@ -214,7 +214,7 @@
     {
       "label": "PET molecular weight",
       "sheetName": "Sample",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "PET molecular weight",
@@ -233,7 +233,7 @@
     {
       "label": "assay identifier",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "assay identifier",
@@ -252,7 +252,7 @@
     {
       "label": "assay name",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "assay name",
@@ -271,7 +271,7 @@
     {
       "label": "enzyme sample identifier",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "enzyme sample identifier",
@@ -290,7 +290,7 @@
     {
       "label": "substrate sample identifier",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "substrate sample identifier",
@@ -309,7 +309,7 @@
     {
       "label": "buffer type",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "buffer type",
@@ -328,7 +328,7 @@
     {
       "label": "buffer concentration",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "buffer concentration",
@@ -347,7 +347,7 @@
     {
       "label": "reaction pH",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "reaction pH",
@@ -366,7 +366,7 @@
     {
       "label": "reaction temperature",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "reaction temperature",
@@ -385,7 +385,7 @@
     {
       "label": "enzyme loading",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "enzyme loading",
@@ -404,7 +404,7 @@
     {
       "label": "substrate solid loading",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "substrate solid loading",
@@ -423,7 +423,7 @@
     {
       "label": "reactor volume",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "reactor volume",
@@ -442,7 +442,7 @@
     {
       "label": "agitation rate",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "agitation rate",
@@ -461,7 +461,7 @@
     {
       "label": "reaction time",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "reaction time",
@@ -480,7 +480,7 @@
     {
       "label": "actual PET vs proxy substrate",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "actual PET vs proxy substrate",
@@ -499,7 +499,7 @@
     {
       "label": "analytical separation method",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "analytical separation method",
@@ -518,7 +518,7 @@
     {
       "label": "detection method",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "detection method",
@@ -537,7 +537,7 @@
     {
       "label": "UV detection wavelength",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "UV detection wavelength",
@@ -556,7 +556,7 @@
     {
       "label": "observation unit identifier",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "observation unit identifier",
@@ -575,7 +575,7 @@
     {
       "label": "assay identifier reference",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "assay identifier reference",
@@ -594,7 +594,7 @@
     {
       "label": "analyte identity",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "analyte identity",
@@ -613,7 +613,7 @@
     {
       "label": "specific activity",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "specific activity",
@@ -632,7 +632,7 @@
     {
       "label": "PET depolymerisation percentage",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "PET depolymerisation percentage",
@@ -651,7 +651,7 @@
     {
       "label": "product concentration",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "product concentration",
@@ -670,7 +670,7 @@
     {
       "label": "initial reaction rate",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "initial reaction rate",
@@ -689,7 +689,7 @@
     {
       "label": "space-time yield",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "space-time yield",
@@ -708,7 +708,7 @@
     {
       "label": "catalytic rate constant kcat",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "catalytic rate constant kcat",
@@ -727,7 +727,7 @@
     {
       "label": "Michaelis constant Km",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "Michaelis constant Km",
@@ -746,7 +746,7 @@
     {
       "label": "kinetic substrate basis",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "kinetic substrate basis",
@@ -765,7 +765,7 @@
     {
       "label": "kinetic model",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "kinetic model",
@@ -784,7 +784,7 @@
     {
       "label": "half inactivation temperature",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "half inactivation temperature",
@@ -803,7 +803,7 @@
     {
       "label": "measurement type",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
         "label": "measurement type",
@@ -822,7 +822,7 @@
     {
       "label": "time point",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "time point",
@@ -841,7 +841,7 @@
     {
       "label": "replicate count",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "replicate count",
@@ -860,7 +860,7 @@
     {
       "label": "measurement uncertainty",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "measurement uncertainty",
@@ -879,7 +879,7 @@
     {
       "label": "measurement notes",
       "sheetName": "ObservationUnit",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "OPTIONAL",
       "term": {
         "label": "measurement notes",
@@ -898,7 +898,7 @@
     {
       "label": "investigation contentUrl",
       "sheetName": "Investigation",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "investigation contentUrl",
@@ -917,7 +917,7 @@
     {
       "label": "study identifier",
       "sheetName": "Assay",
-      "packageName": "pet_hydrolase_enzyme_engineering",
+      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
         "label": "study identifier",

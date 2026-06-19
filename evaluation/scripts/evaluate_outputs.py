@@ -199,9 +199,18 @@ class EvaluationOrchestrator:
         # Find all model configurations
         outputs_dir = self.run_dir / 'outputs'
         if not outputs_dir.exists():
-            raise ValueError(f"Outputs directory not found: {outputs_dir}")
-        
-        model_configs = [d for d in outputs_dir.iterdir() if d.is_dir()]
+            # Batch runner layout: {run_dir}/{config_name}/{doc_id}/run_N/
+            skip = {'outputs', 'results'}
+            model_configs = [
+                d for d in self.run_dir.iterdir()
+                if d.is_dir() and d.name not in skip and not d.name.startswith('.')
+            ]
+            if model_configs:
+                print(f"  📁 Using batch layout under: {self.run_dir}")
+            else:
+                raise ValueError(f"Outputs directory not found: {outputs_dir}")
+        else:
+            model_configs = [d for d in outputs_dir.iterdir() if d.is_dir()]
         
         print(f"\n🔍 Found {len(model_configs)} model configurations to evaluate\n")
         
