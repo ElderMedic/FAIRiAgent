@@ -22,9 +22,9 @@ def fair_ds_tools(mock_client):
 class TestFAIRDSToolsCreation:
     """Test FAIR-DS tools creation and structure."""
     
-    def test_creates_five_tools(self, fair_ds_tools):
-        """Test that factory creates exactly 5 tools."""
-        assert len(fair_ds_tools) == 5
+    def test_creates_six_tools(self, fair_ds_tools):
+        """Test that factory creates exactly 6 tools."""
+        assert len(fair_ds_tools) == 6
     
     def test_tool_names(self, fair_ds_tools):
         """Test that all expected tools are created."""
@@ -32,6 +32,7 @@ class TestFAIRDSToolsCreation:
         
         expected_names = [
             "get_available_packages",
+            "get_package_summaries",
             "get_package",
             "get_terms",
             "search_terms_for_fields",
@@ -95,6 +96,17 @@ class TestGetAvailablePackagesTool:
         mock_client.get_available_packages.assert_called_once_with(force_refresh=False)
 
 
+class TestGetPackageSummariesTool:
+    def test_successful_retrieval(self, fair_ds_tools, mock_client):
+        summaries = [{"name": "soil", "description": "Soil metadata"}]
+        mock_client.get_package_summaries.return_value = summaries
+
+        result = fair_ds_tools[1].invoke({"force_refresh": False})
+
+        assert result == {"success": True, "data": summaries, "error": None}
+        mock_client.get_package_summaries.assert_called_once_with(force_refresh=False)
+
+
 class TestGetPackageTool:
     """Test get_package tool."""
     
@@ -107,7 +119,7 @@ class TestGetPackageTool:
         }
         mock_client.get_package.return_value = package_data
         
-        tool = fair_ds_tools[1]  # get_package
+        tool = fair_ds_tools[2]  # get_package
         result = tool.invoke({"package_name": "miappe"})
         
         assert result["success"] is True
@@ -119,7 +131,7 @@ class TestGetPackageTool:
         """Test handling when package is not found."""
         mock_client.get_package.return_value = None
         
-        tool = fair_ds_tools[1]
+        tool = fair_ds_tools[2]
         result = tool.invoke({"package_name": "nonexistent"})
         
         assert result["success"] is False
@@ -130,7 +142,7 @@ class TestGetPackageTool:
         """Test error handling."""
         mock_client.get_package.side_effect = Exception("Network error")
         
-        tool = fair_ds_tools[1]
+        tool = fair_ds_tools[2]
         result = tool.invoke({"package_name": "miappe"})
         
         assert result["success"] is False
@@ -148,7 +160,7 @@ class TestGetTermsTool:
         }
         mock_client.get_terms.return_value = terms_data
         
-        tool = fair_ds_tools[2]  # get_terms
+        tool = fair_ds_tools[3]  # get_terms
         result = tool.invoke({"force_refresh": False})
         
         assert result["success"] is True
@@ -159,7 +171,7 @@ class TestGetTermsTool:
         """Test error handling."""
         mock_client.get_terms.side_effect = Exception("Database error")
         
-        tool = fair_ds_tools[2]
+        tool = fair_ds_tools[3]
         result = tool.invoke({"force_refresh": False})
         
         assert result["success"] is False
@@ -178,7 +190,7 @@ class TestSearchTermsForFieldsTool:
         ]
         mock_client.search_terms_for_fields.return_value = search_results
         
-        tool = fair_ds_tools[3]  # search_terms_for_fields
+        tool = fair_ds_tools[4]  # search_terms_for_fields
         result = tool.invoke({"term_label": "temperature", "definition": None})
         
         assert result["success"] is True
@@ -189,7 +201,7 @@ class TestSearchTermsForFieldsTool:
         """Test search with definition parameter."""
         mock_client.search_terms_for_fields.return_value = []
         
-        tool = fair_ds_tools[3]
+        tool = fair_ds_tools[4]
         tool.invoke({"term_label": "temp", "definition": "measure"})
         
         mock_client.search_terms_for_fields.assert_called_once_with("temp", "measure")
@@ -198,7 +210,7 @@ class TestSearchTermsForFieldsTool:
         """Test error handling."""
         mock_client.search_terms_for_fields.side_effect = Exception("Search failed")
         
-        tool = fair_ds_tools[3]
+        tool = fair_ds_tools[4]
         result = tool.invoke({"term_label": "test", "definition": None})
         
         assert result["success"] is False
@@ -216,7 +228,7 @@ class TestSearchFieldsInPackagesTool:
         ]
         mock_client.search_fields_in_packages.return_value = search_results
         
-        tool = fair_ds_tools[4]  # search_fields_in_packages
+        tool = fair_ds_tools[5]  # search_fields_in_packages
         result = tool.invoke({"field_label": "temperature", "package_names": None})
         
         assert result["success"] is True
@@ -227,7 +239,7 @@ class TestSearchFieldsInPackagesTool:
         """Test search with comma-separated package names."""
         mock_client.search_fields_in_packages.return_value = []
         
-        tool = fair_ds_tools[4]
+        tool = fair_ds_tools[5]
         tool.invoke({"field_label": "temp", "package_names": "miappe,soil,default"})
         
         # Verify it was called with list
@@ -240,7 +252,7 @@ class TestSearchFieldsInPackagesTool:
         """Test error handling."""
         mock_client.search_fields_in_packages.side_effect = Exception("Search error")
         
-        tool = fair_ds_tools[4]
+        tool = fair_ds_tools[5]
         result = tool.invoke({"field_label": "test", "package_names": None})
         
         assert result["success"] is False
@@ -257,7 +269,7 @@ class TestToolsWithoutClient:
         
         tools = create_fair_ds_tools(client=None)
         
-        assert len(tools) == 5
+        assert len(tools) == 6
     
     @patch('fairifier.config.config')
     def test_tools_return_error_when_client_unavailable(self, mock_config):
@@ -270,7 +282,7 @@ class TestToolsWithoutClient:
         # Test each tool returns error for unavailable client
         for tool in tools:
             # Create appropriate input for each tool
-            if tool.name == "get_available_packages":
+            if tool.name in {"get_available_packages", "get_package_summaries"}:
                 result = tool.invoke({"force_refresh": False})
             elif tool.name == "get_package":
                 result = tool.invoke({"package_name": "test"})
@@ -302,22 +314,23 @@ class TestToolIntegrationWithLangChain:
     def test_tool_invoke_returns_dict(self, fair_ds_tools, mock_client):
         """Test that all tools return dictionaries."""
         mock_client.get_available_packages.return_value = []
+        mock_client.get_package_summaries.return_value = []
         mock_client.get_package.return_value = None
         mock_client.get_terms.return_value = {}
         mock_client.search_terms_for_fields.return_value = []
         mock_client.search_fields_in_packages.return_value = []
         
-        for i, tool in enumerate(fair_ds_tools):
+        for tool in fair_ds_tools:
             # Invoke with appropriate parameters
-            if i == 0:  # get_available_packages
+            if tool.name in {"get_available_packages", "get_package_summaries"}:
                 result = tool.invoke({"force_refresh": False})
-            elif i == 1:  # get_package
+            elif tool.name == "get_package":
                 result = tool.invoke({"package_name": "test"})
-            elif i == 2:  # get_terms
+            elif tool.name == "get_terms":
                 result = tool.invoke({"force_refresh": False})
-            elif i == 3:  # search_terms_for_fields
+            elif tool.name == "search_terms_for_fields":
                 result = tool.invoke({"term_label": "test", "definition": None})
-            elif i == 4:  # search_fields_in_packages
+            elif tool.name == "search_fields_in_packages":
                 result = tool.invoke({"field_label": "test", "package_names": None})
             
             assert isinstance(result, dict)

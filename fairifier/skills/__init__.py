@@ -243,6 +243,20 @@ def skills_catalog_seed_files(
     return {"/workspace/skills_catalog.md": create_file_data(body)}
 
 
+FAIRDS_REMOTE_SKILL_VIRTUAL_PATH = "/skills/remote/fairds-metadata/SKILL.md"
+
+
+def fairds_remote_skill_seed_files(
+    markdown: Optional[str],
+    *,
+    create_file_data: Optional[Callable[[str], Any]],
+) -> Dict[str, Any]:
+    """Mount a FAIR-DS hosted skill into the deepagents virtual workspace."""
+    if not markdown or not markdown.strip() or create_file_data is None:
+        return {}
+    return {FAIRDS_REMOTE_SKILL_VIRTUAL_PATH: create_file_data(markdown)}
+
+
 def load_skill_files(*roots: Path) -> Dict[str, Any]:
     """Load skill markdown (SKILL.md + sibling pack ``*.md``) into deepagents file payloads.
 

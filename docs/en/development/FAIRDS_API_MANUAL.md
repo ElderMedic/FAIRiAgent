@@ -2,7 +2,7 @@
 
 This document describes the FAIR Data Station (FAIR-DS) API structure and usage for FAIRiAgent integration.
 
-> **API Version:** FAIR-DS JAR (Latest - January 2026)  
+> **API Version:** FAIR-DS JAR (Latest - June 2026)
 > **Base URL:** `http://localhost:8083`  
 > **Swagger UI:** http://localhost:8083/swagger-ui/index.html
 
@@ -14,7 +14,12 @@ This document describes the FAIR Data Station (FAIR-DS) API structure and usage 
 |----------|--------|--------|-------------|
 | `GET /api` | GET | Available | Get API overview and list available endpoints |
 | `GET /api/terms` | GET | Available | Get all metadata terms or filter by label/definition |
-| `GET /api/package` | GET | Available | Get all packages or a specific package by name |
+| `GET /api/packages` | GET | Available | Get lightweight package descriptions and statistics for package selection |
+| `GET /api/packages/{name}` | GET | Available | Get full metadata for one package |
+| `GET /api/package` | GET | Legacy alias | Backward-compatible package list/detail alias |
+| `GET /api/skills` | GET | Available | Get the complete FAIR-DS Agent Skill markdown (ISOSA guide + package catalog) |
+| `GET /api/skills/catalog` | GET | Available | Discover remotely hosted Agent Skills |
+| `GET /api/skills/fairds-metadata/SKILL.md` | GET | Alias | Same content as `GET /api/skills` (Anthropic path convention) |
 | `POST /api/upload` | POST | Available | Validates metadata Excel file |
 | `POST /api/isa` | POST | Available | Submit ISA JSON; receive generated metadata Excel (`.xlsx`) |
 
@@ -35,9 +40,14 @@ curl http://localhost:8083/api
 ```json
 {
   "availableEndpoints": [
+    "/api/skills",
+    "/api/skills/catalog",
+    "/api/packages",
+    "/api/packages/{name}",
+    "/api/package",
     "/api/upload",
     "/api/terms",
-    "/api/package"
+    "/api/isa"
   ]
 }
 ```
@@ -124,9 +134,119 @@ curl "http://localhost:8083/api/terms?label=temp&definition=temperature"
 
 ---
 
+## GET `/api/packages`
+
+Returns all package descriptions and selection statistics in one request. FAIRiAgent uses this endpoint before requesting full fields, avoiding one `/api/packages/{name}` call for every possible package.
+
+```bash
+curl http://localhost:8083/api/packages
+```
+
+```json
+{
+  "total": 59,
+  "packages": [
+    {
+      "name": "soil",
+      "description": "MIxS soil environmental standard for terrestrial soil sampling and characterisation.",
+      "levels": ["Sample"],
+      "fieldCount": 42,
+      "requirements": {"MANDATORY": 5, "OPTIONAL": 37}
+    }
+  ]
+}
+```
+
+Use this compact response for package ranking, then fetch only shortlisted packages with `/api/packages/<exact-name>`.
+
+---
+
+## GET `/api/packages/{name}`
+
+Canonical endpoint for full metadata of one package.
+
+### Request
+
+```bash
+curl "http://localhost:8083/api/packages/miappe"
+```
+
+### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Exact metadata package name to retrieve |
+
+### Response
+
+```json
+{
+  "packageName": "miappe",
+  "itemCount": 63,
+  "metadata": [
+    {
+      "definition": null,
+      "sheetName": "Study",
+      "packageName": "miappe",
+      "requirement": "MANDATORY",
+      "label": "start date of study",
+      "term": {
+        "label": "start date of study",
+        "syntax": "{date}",
+        "example": "2002-04-04 00:00:00",
+        "preferredUnit": "",
+        "definition": "Date and, if relevant, time when the experiment started",
+        "ontology": null,
+        "regex": "\\d{4}-\\d{2}-\\d{2}(?:[ T]00:00:00)?",
+        "file": false,
+        "date": true,
+        "dateTime": false,
+        "url": "http://fairbydesign.nl/ontology/start_date_of_study"
+      }
+    }
+  ]
+}
+```
+
+---
+
+## GET `/api/skills`
+
+Returns the complete FAIR-DS Agent Skill as a single markdown document with YAML frontmatter. The response includes ISOSA guidance, an inline package catalog, API workflow steps, and validation notes. Package rows are generated at runtime from the active metadata workbook.
+
+```bash
+curl http://localhost:8083/api/skills
+```
+
+FAIRiAgent optionally fetches this document at KnowledgeRetriever startup and mounts it at `/skills/remote/fairds-metadata/SKILL.md` when `FAIRIFIER_FETCH_FAIRDS_AGENT_SKILL=true` (default). Failures are ignored silently.
+
+## GET `/api/skills/catalog`
+
+Discovery endpoint for hosted Agent Skills. Returns JSON metadata only; fetch the markdown body from the `skill` URL.
+
+```bash
+curl http://localhost:8083/api/skills/catalog
+```
+
+```json
+{
+  "skills": [
+    {
+      "name": "fairds-metadata",
+      "description": "Discover and select FAIR-DS packages, inspect fields and terms, build ISOSA metadata, generate templates, and validate metadata.",
+      "skill": "/api/skills"
+    }
+  ]
+}
+```
+
+`GET /api/skills/fairds-metadata/SKILL.md` returns the same markdown body for clients that expect an Anthropic-style path.
+
+---
+
 ## GET `/api/package`
 
-Retrieves all available metadata packages or a specific package by name.
+Legacy compatibility alias. Use `GET /api/packages` for summaries and `GET /api/packages/{name}` for detail in new clients.
 
 ### Request
 
@@ -134,7 +254,7 @@ Retrieves all available metadata packages or a specific package by name.
 # Get list of all packages
 curl http://localhost:8083/api/package
 
-# Get specific package
+# Get specific package through legacy alias
 curl "http://localhost:8083/api/package?name=miappe"
 ```
 
@@ -156,7 +276,7 @@ curl "http://localhost:8083/api/package?name=miappe"
     "water",
     // ... 59 total packages
   ],
-  "example": "/api/package?name=soil"
+  "example": "/api/packages/soil"
 }
 ```
 
@@ -389,7 +509,7 @@ for sheet, fields in fields_by_sheet.items():
 
 ### Best Practices
 
-1. **Use `/api/package?name={name}`** instead of fetching all fields and filtering client-side
+1. **Use `/api/packages/{name}`** instead of fetching all fields and filtering client-side
    - Reduces data transfer by ~98%
    - Faster response times
 

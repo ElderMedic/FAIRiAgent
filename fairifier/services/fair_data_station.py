@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import quote
 
 try:
     import requests
@@ -52,7 +53,11 @@ class FAIRDataStationClient:
     Endpoints (see live ``GET {base}/api`` for the authoritative list):
         - GET /api — discovery / available subpaths
         - GET /api/terms — all terms or ``?label=`` / ``?definition=`` filters
-        - GET /api/package — package name list (no query) or ``?name=`` for metadata
+        - GET /api/packages — lightweight package summaries for agent selection
+        - GET /api/packages/{name} — canonical full metadata for one package
+        - GET /api/package — legacy alias for package list (no query) or ``?name=`` detail
+        - GET /api/skills — Anthropic-style FAIR-DS agent skill (single markdown document)
+        - GET /api/skills/catalog — discover hosted agent skills
         - POST /api/isa — submit ISA JSON, receive generated metadata Excel (``.xlsx`` bytes)
         - POST /api/upload — Excel upload/validation
 
@@ -75,6 +80,7 @@ class FAIRDataStationClient:
         self._packages_cache: Optional[List[Dict[str, Any]]] = None
         self._terms_cache: Optional[Dict[str, Dict[str, Any]]] = None
         self._available_packages_cache: Optional[List[str]] = None
+        self._package_summaries_cache: Optional[List[Dict[str, Any]]] = None
         self._package_detail_cache: Dict[str, Dict[str, Any]] = {}
 
     def is_available(self) -> bool:
@@ -189,12 +195,72 @@ class FAIRDataStationClient:
     # Package API
     # =========================================================================
 
+    def get_package_summaries(
+        self, force_refresh: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Return lightweight package descriptions for package selection.
+
+        Each summary contains ``name``, ``description``, ``levels``,
+        ``fieldCount``, and requirement counts. This endpoint should be used
+        before fetching full package fields to avoid one request per candidate.
+        Older FAIR-DS servers are supported with a name-only fallback.
+        """
+        if self._package_summaries_cache is not None and not force_refresh:
+            return self._package_summaries_cache
+
+        try:
+            response = self._session.get(
+                f"{self._base_url}/api/packages", timeout=self._timeout
+            )
+            if response.status_code == 200:
+                data = response.json()
+                packages = data.get("packages", []) if isinstance(data, dict) else []
+                if packages and all(isinstance(pkg, dict) for pkg in packages):
+                    self._package_summaries_cache = packages
+                    self._available_packages_cache = [
+                        str(pkg["name"])
+                        for pkg in packages
+                        if pkg.get("name")
+                    ]
+                    return self._package_summaries_cache
+        except Exception as exc:
+            logger.info("FAIR-DS package summaries unavailable; using legacy list: %s", exc)
+
+        names = self._get_legacy_available_packages(force_refresh=force_refresh)
+        self._package_summaries_cache = [
+            {
+                "name": name,
+                "description": "",
+                "levels": [],
+                "fieldCount": 0,
+                "requirements": {},
+            }
+            for name in names
+        ]
+        return self._package_summaries_cache
+
     def get_available_packages(self, force_refresh: bool = False) -> List[str]:
         """Get list of all available package names.
         
         Returns:
             List of package names
         """
+        if self._available_packages_cache is not None and not force_refresh:
+            return self._available_packages_cache
+
+        summaries = self.get_package_summaries(force_refresh=force_refresh)
+        if summaries:
+            self._available_packages_cache = [
+                str(pkg["name"]) for pkg in summaries if pkg.get("name")
+            ]
+            return self._available_packages_cache
+
+        return self._get_legacy_available_packages(force_refresh=force_refresh)
+
+    def _get_legacy_available_packages(
+        self, force_refresh: bool = False
+    ) -> List[str]:
+        """Fallback package-name discovery for older FAIR-DS servers."""
         if self._available_packages_cache is not None and not force_refresh:
             return self._available_packages_cache
 
@@ -245,24 +311,45 @@ class FAIRDataStationClient:
 
         try:
             response = self._session.get(
-                f"{self._base_url}/api/package",
-                params={"name": package_name},
-                timeout=self._timeout
+                f"{self._base_url}/api/packages/{quote(package_name, safe='')}",
+                timeout=self._timeout,
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
                 if isinstance(data, dict) and "metadata" in data:
                     self._package_detail_cache[package_name] = data
+                    canonical_name = data.get("packageName")
+                    if canonical_name:
+                        self._package_detail_cache[str(canonical_name)] = data
                     logger.info(
                         f"✅ Fetched package '{package_name}' with "
                         f"{data.get('itemCount', len(data['metadata']))} fields"
                     )
                     return data
-                    
-            elif response.status_code == 404:
+
+            if response.status_code in {404, 405}:
+                response = self._session.get(
+                    f"{self._base_url}/api/package",
+                    params={"name": package_name},
+                    timeout=self._timeout,
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    if isinstance(data, dict) and "metadata" in data:
+                        self._package_detail_cache[package_name] = data
+                        canonical_name = data.get("packageName")
+                        if canonical_name:
+                            self._package_detail_cache[str(canonical_name)] = data
+                        logger.info(
+                            f"✅ Fetched package '{package_name}' via legacy FAIR-DS endpoint with "
+                            f"{data.get('itemCount', len(data['metadata']))} fields"
+                        )
+                        return data
+
+            if response.status_code == 404:
                 logger.warning(f"⚠️ Package '{package_name}' not found")
-                
+
         except Exception as exc:
             logger.warning(f"Unable to fetch package '{package_name}': {exc}")
             
@@ -614,6 +701,26 @@ class FAIRDataStationClient:
             }
             
         return structure
+
+    def fetch_agent_skill_markdown(self) -> Optional[str]:
+        """Fetch the FAIR-DS hosted Agent Skill markdown document, if available."""
+        if requests is None:
+            return None
+
+        try:
+            response = self._session.get(
+                f"{self._base_url}/api/skills",
+                timeout=min(self._timeout, 10),
+                headers={"Accept": "text/markdown"},
+            )
+            if response.status_code == 200:
+                body = response.text.strip()
+                if body:
+                    return body
+        except Exception as exc:
+            logger.info("FAIR-DS agent skill unavailable: %s", exc)
+
+        return None
 
 
 __all__ = ["FAIRDataStationClient", "FAIRDataStationUnavailable"]

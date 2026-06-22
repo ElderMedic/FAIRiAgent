@@ -14,7 +14,11 @@ from .response_models import KnowledgeResponse
 from ..models import FAIRifierState, KnowledgeItem
 from ..config import config
 from ..services.evidence_packets import build_evidence_context
-from ..skills import load_skill_files, skills_catalog_seed_files
+from ..skills import (
+    fairds_remote_skill_seed_files,
+    load_skill_files,
+    skills_catalog_seed_files,
+)
 from ..services.fair_data_station import FAIRDataStationClient
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.llm_helper import get_llm_helper
@@ -348,6 +352,16 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 create_file_data=self._maybe_create_file_data,
             )
         )
+        if config.fetch_fairds_agent_skill and self.fair_ds_client is not None:
+            fetch_skill = getattr(self.fair_ds_client, "fetch_agent_skill_markdown", None)
+            remote_skill = fetch_skill() if callable(fetch_skill) else None
+            if remote_skill:
+                seed_files.update(
+                    fairds_remote_skill_seed_files(
+                        remote_skill,
+                        create_file_data=self._maybe_create_file_data,
+                    )
+                )
         return seed_files
 
     def _select_optional_fields_from_structured(
@@ -430,25 +444,46 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 self.update_confidence(state, "knowledge_retrieval", 0.0)
                 return state
             
-            self.log_execution(state, "   📡 GET /api/package (list all packages)...")
+            self.log_execution(state, "   📡 GET /api/packages (package summaries)...")
             self.log_execution(state, "   📡 GET /api/terms...")
-            
-            # Step 1: Get list of all available packages (using tool)
-            packages_result = self.tools["get_available_packages"].invoke({"force_refresh": False})
-            if not packages_result["success"]:
-                error_msg = f"Failed to get available packages: {packages_result['error']}"
-                self.log_execution(state, f"❌ {error_msg}", "error")
-                state["errors"] = state.get("errors", []) + [error_msg]
-                self.update_confidence(state, "knowledge_retrieval", 0.0)
-                return state
-            
-            available_package_names = packages_result["data"]
-            self.log_execution(state, f"   ✅ Found {len(available_package_names)} available packages: {available_package_names}")
-            api_available_package_names = list(available_package_names)
+            summaries_tool = self.tools.get("get_package_summaries")
+            summaries_result = (
+                summaries_tool.invoke({"force_refresh": False})
+                if summaries_tool is not None
+                else {"success": False, "data": []}
+            )
+            package_summaries = (
+                summaries_result["data"] if summaries_result["success"] else []
+            )
+            if package_summaries:
+                api_available_package_names = [
+                    str(summary["name"])
+                    for summary in package_summaries
+                    if summary.get("name")
+                ]
+            else:
+                packages_result = self.tools["get_available_packages"].invoke({"force_refresh": False})
+                if not packages_result["success"]:
+                    error_msg = f"Failed to get available packages: {packages_result['error']}"
+                    self.log_execution(state, f"❌ {error_msg}", "error")
+                    state["errors"] = state.get("errors", []) + [error_msg]
+                    self.update_confidence(state, "knowledge_retrieval", 0.0)
+                    return state
+                api_available_package_names = packages_result["data"]
+
+            self.log_execution(
+                state,
+                f"   ✅ Found {len(api_available_package_names)} available API packages: {api_available_package_names}",
+            )
+            if package_summaries:
+                self.log_execution(
+                    state,
+                    f"   ✅ Loaded descriptions and statistics for {len(package_summaries)} packages in one request",
+                )
             local_package_registry = self._load_local_package_registry()
             local_package_names = list(local_package_registry.keys())
             available_package_names = self._merge_available_package_names(
-                available_package_names,
+                api_available_package_names,
                 local_package_names,
             )
             if local_package_names:
@@ -572,35 +607,6 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     f"🚫 Excluding domain-mismatched packages from first-pass retrieval: {sorted(excluded_package_names)}"
                 )
 
-            self.log_execution(
-                state,
-                f"   📦 Fetching fields from {len(candidate_package_names)}/{len(available_package_names)} candidate packages..."
-            )
-            all_packages_metadata = []
-            for pkg_name in candidate_package_names:
-                if pkg_name in local_package_registry:
-                    fields = local_package_registry[pkg_name].get("metadata", []) or []
-                    if fields:
-                        all_packages_metadata.extend(fields)
-                        self.log_execution(
-                            state,
-                            f"      • {pkg_name}: {len(fields)} fields (local extension)"
-                        )
-                    else:
-                        self.log_execution(
-                            state,
-                            f"      ⚠️ {pkg_name}: local package has no metadata rows",
-                            "warning",
-                        )
-                    continue
-                pkg_result = self.tools["get_package"].invoke({"package_name": pkg_name})
-                if pkg_result["success"] and pkg_result["data"] and "metadata" in pkg_result["data"]:
-                    fields = pkg_result["data"]["metadata"]
-                    all_packages_metadata.extend(fields)
-                    self.log_execution(state, f"      • {pkg_name}: {len(fields)} fields")
-                else:
-                    self.log_execution(state, f"      ⚠️ {pkg_name}: failed or no metadata", "warning")
-            
             # Get terms from FAIR-DS API (using tool)
             terms_result = self.tools["get_terms"].invoke({"force_refresh": False})
             if not terms_result["success"]:
@@ -608,25 +614,103 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 terms = {}
             else:
                 terms = terms_result["data"]  # Returns Dict[str, Dict] - already parsed
-            
-            # Group all fields by sheet
-            packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(all_packages_metadata)
-            
-            # Validate we got real API data
-            if not packages_by_sheet or len(packages_by_sheet) == 0:
-                error_msg = "FAIR-DS API returned no data. Ensure API is properly configured."
-                self.log_execution(state, f"❌ {error_msg}", "error")
-                state["errors"] = state.get("errors", []) + [error_msg]
-                self.update_confidence(state, "knowledge_retrieval", 0.0)
-                return state
-            
-            # Get all unique package names with stats
-            all_packages = FAIRDSAPIParser.get_all_package_names(packages_by_sheet)
-            
+
+            all_packages_metadata = []
+            packages_by_sheet = {}
+            if package_summaries:
+                all_packages = [
+                    {
+                        "name": summary["name"],
+                        "description": summary.get("description", ""),
+                        "field_count": summary.get("fieldCount", 0),
+                        "mandatory_count": summary.get("requirements", {}).get(
+                            "MANDATORY", 0
+                        )
+                        + summary.get("requirements", {}).get("REQUIRED", 0),
+                        "optional_count": summary.get("requirements", {}).get(
+                            "OPTIONAL", 0
+                        ),
+                        "sheets": summary.get("levels", []),
+                        "sample_fields": [],
+                    }
+                    for summary in package_summaries
+                    if summary.get("name") in api_available_package_names
+                ]
+                for package_name, local_package in local_package_registry.items():
+                    local_fields = local_package.get("metadata", []) or []
+                    mandatory_count = sum(
+                        1
+                        for field in local_fields
+                        if str(field.get("requirement", "")).upper() in {"MANDATORY", "REQUIRED"}
+                    )
+                    optional_count = sum(
+                        1
+                        for field in local_fields
+                        if str(field.get("requirement", "")).upper() == "OPTIONAL"
+                    )
+                    sheets = sorted(
+                        {
+                            FAIRDSAPIParser.raw_isa_level_from_field(field)
+                            for field in local_fields
+                            if FAIRDSAPIParser.raw_isa_level_from_field(field)
+                        }
+                    )
+                    all_packages.append(
+                        {
+                            "name": package_name,
+                            "description": local_package.get("description", ""),
+                            "field_count": len(local_fields),
+                            "mandatory_count": mandatory_count,
+                            "optional_count": optional_count,
+                            "sheets": sheets,
+                            "sample_fields": [],
+                        }
+                    )
+            else:
+                self.log_execution(
+                    state,
+                    f"   📦 Package summaries unavailable; fetching fields from {len(candidate_package_names)}/{len(available_package_names)} candidate packages..."
+                )
+                for pkg_name in candidate_package_names:
+                    if pkg_name in local_package_registry:
+                        fields = local_package_registry[pkg_name].get("metadata", []) or []
+                        if fields:
+                            all_packages_metadata.extend(fields)
+                            self.log_execution(
+                                state,
+                                f"      • {pkg_name}: {len(fields)} fields (local extension)"
+                            )
+                        else:
+                            self.log_execution(
+                                state,
+                                f"      ⚠️ {pkg_name}: local package has no metadata rows",
+                                "warning",
+                            )
+                        continue
+                    pkg_result = self.tools["get_package"].invoke({"package_name": pkg_name})
+                    if pkg_result["success"] and pkg_result["data"] and "metadata" in pkg_result["data"]:
+                        fields = pkg_result["data"]["metadata"]
+                        all_packages_metadata.extend(fields)
+                        self.log_execution(state, f"      • {pkg_name}: {len(fields)} fields")
+                    else:
+                        self.log_execution(state, f"      ⚠️ {pkg_name}: failed or no metadata", "warning")
+
+                packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(all_packages_metadata)
+
+                if not packages_by_sheet:
+                    error_msg = "FAIR-DS API returned no data. Ensure API is properly configured."
+                    self.log_execution(state, f"❌ {error_msg}", "error")
+                    state["errors"] = state.get("errors", []) + [error_msg]
+                    self.update_confidence(state, "knowledge_retrieval", 0.0)
+                    return state
+
+                all_packages = FAIRDSAPIParser.get_all_package_names(packages_by_sheet)
+
             self.log_execution(state, f"✅ Retrieved from FAIR-DS API:")
-            self.log_execution(state, f"   ISA Sheets: {list(packages_by_sheet.keys())}")
             self.log_execution(state, f"   Total unique packages: {len(all_packages)}")
             self.log_execution(state, f"   Total terms: {len(terms)}")
+            if packages_by_sheet:
+                self.log_execution(state, f"   ISA Sheets: {list(packages_by_sheet.keys())}")
             
             # Show all packages (no truncation)
             self.log_execution(state, "📦 All packages by field count:")
@@ -763,7 +847,7 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             if missing_selected_packages:
                 self.log_execution(
                     state,
-                    f"📦 Fetching metadata for {len(missing_selected_packages)} selected package(s) outside initial candidate set: {missing_selected_packages}"
+                    f"📦 Fetching metadata for {len(missing_selected_packages)} selected package(s): {missing_selected_packages}"
                 )
                 for pkg_name in missing_selected_packages:
                     if pkg_name in local_package_registry:
@@ -796,7 +880,13 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                             "warning",
                         )
                 packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(all_packages_metadata)
-                all_packages = FAIRDSAPIParser.get_all_package_names(packages_by_sheet)
+
+            if not packages_by_sheet:
+                error_msg = "FAIR-DS API returned no package field metadata for the selected packages."
+                self.log_execution(state, f"❌ {error_msg}", "error")
+                state["errors"] = state.get("errors", []) + [error_msg]
+                self.update_confidence(state, "knowledge_retrieval", 0.0)
+                return state
             
             # Phase 2: Get all fields from selected packages, grouped by ISA sheet
             self.log_execution(state, "📦 Phase 2: Collecting fields from selected packages (by ISA sheet)...")
@@ -840,6 +930,31 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 )
                 
                 if default_package_name and not default_already_selected:
+                    fetched_default_fields = any(
+                        field.get("packageName") == default_package_name
+                        for field in all_packages_metadata
+                    )
+                    if not fetched_default_fields:
+                        if default_package_name in local_package_registry:
+                            default_metadata = (
+                                local_package_registry[default_package_name].get("metadata", [])
+                                or []
+                            )
+                        else:
+                            default_result = self.tools["get_package"].invoke(
+                                {"package_name": default_package_name}
+                            )
+                            default_metadata = (
+                                default_result.get("data", {}).get("metadata", [])
+                                if default_result.get("success")
+                                else []
+                            )
+                        if default_metadata:
+                            all_packages_metadata.extend(default_metadata)
+                            packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(
+                                all_packages_metadata
+                            )
+
                     # Check if default package has fields for missing ISA levels
                     default_fields = FAIRDSAPIParser.get_fields_by_package_and_isa_sheet(
                         packages_by_sheet, [default_package_name]

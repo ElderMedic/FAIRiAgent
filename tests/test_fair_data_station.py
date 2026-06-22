@@ -6,6 +6,7 @@ the API and retrieve data from the database.
 
 import pytest
 from unittest.mock import MagicMock
+from unittest.mock import call
 from fairifier.services.fair_data_station import (
     FAIRDataStationClient,
     FAIRDataStationUnavailable,
@@ -165,6 +166,60 @@ class TestFAIRDataStationTermsAPI:
 class TestFAIRDataStationPackageAPI:
     """Test FAIR-DS Package API endpoints."""
 
+    def test_get_package_summaries_uses_compact_endpoint_and_cache(self):
+        client = FAIRDataStationClient(base_url="http://example.test", timeout=2)
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "total": 1,
+            "packages": [
+                {
+                    "name": "soil",
+                    "description": "MIxS soil environmental standard",
+                    "levels": ["Sample"],
+                    "fieldCount": 42,
+                    "requirements": {"MANDATORY": 5},
+                }
+            ],
+        }
+        client._session = MagicMock()
+        client._session.get.return_value = response
+
+        first = client.get_package_summaries()
+        second = client.get_package_summaries()
+
+        assert first == second
+        assert first[0]["description"].startswith("MIxS soil")
+        assert client.get_available_packages() == ["soil"]
+        client._session.get.assert_called_once_with(
+            "http://example.test/api/packages", timeout=2
+        )
+
+    def test_fetch_agent_skill_markdown(self):
+        client = FAIRDataStationClient(base_url="http://example.test", timeout=2)
+        response = MagicMock()
+        response.status_code = 200
+        response.text = "---\nname: fairds-metadata\n---\n\n# FAIR Data Station metadata"
+        client._session = MagicMock()
+        client._session.get.return_value = response
+
+        body = client.fetch_agent_skill_markdown()
+
+        assert body is not None
+        assert "fairds-metadata" in body
+        client._session.get.assert_called_once_with(
+            "http://example.test/api/skills",
+            timeout=2,
+            headers={"Accept": "text/markdown"},
+        )
+
+    def test_fetch_agent_skill_markdown_returns_none_on_failure(self):
+        client = FAIRDataStationClient(base_url="http://example.test", timeout=2)
+        client._session = MagicMock()
+        client._session.get.side_effect = RuntimeError("offline")
+
+        assert client.fetch_agent_skill_markdown() is None
+
     @pytest.mark.integration
     def test_get_available_packages(self, fair_ds_client):
         """Test fetching list of available packages."""
@@ -234,7 +289,39 @@ class TestFAIRDataStationPackageAPI:
         package2 = client.get_package("soil")
 
         assert package1 == package2
-        client._session.get.assert_called_once()
+        client._session.get.assert_called_once_with(
+            "http://example.test/api/packages/soil", timeout=2
+        )
+
+    def test_get_package_falls_back_to_legacy_detail_endpoint(self):
+        """Older FAIR-DS servers without /api/packages/{name} should still work."""
+        client = FAIRDataStationClient(base_url="http://example.test", timeout=2)
+        first = MagicMock()
+        first.status_code = 404
+        second = MagicMock()
+        second.status_code = 200
+        second.json.return_value = {
+            "packageName": "soil",
+            "itemCount": 1,
+            "metadata": [{"label": "soil type"}],
+        }
+        client._session = MagicMock()
+        client._session.get.side_effect = [first, second]
+
+        package = client.get_package("soil")
+
+        assert package is not None
+        assert package["packageName"] == "soil"
+        client._session.get.assert_has_calls(
+            [
+                call("http://example.test/api/packages/soil", timeout=2),
+                call(
+                    "http://example.test/api/package",
+                    params={"name": "soil"},
+                    timeout=2,
+                ),
+            ]
+        )
 
 
 class TestFAIRDataStationDataIntegrity:

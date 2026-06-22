@@ -156,6 +156,7 @@ class FAIRifierConfig:
     # External services
     # FAIR Data Station API URL (default: local)
     fair_ds_api_url: Optional[str] = "http://localhost:8083"
+    fetch_fairds_agent_skill: bool = True
     qdrant_url: Optional[str] = None  # Vector database (optional)
     crossref_mailto: Optional[str] = None  # Contact email for polite Crossref API usage
     
@@ -558,6 +559,10 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
 
     if os.getenv("FAIR_DS_API_URL"):
         config_instance.fair_ds_api_url = os.getenv("FAIR_DS_API_URL")
+    if os.getenv("FAIRIFIER_FETCH_FAIRDS_AGENT_SKILL"):
+        config_instance.fetch_fairds_agent_skill = os.getenv(
+            "FAIRIFIER_FETCH_FAIRDS_AGENT_SKILL"
+        ).lower() in ("true", "1", "yes")
     
     # Processing limits
     if os.getenv("FAIRIFIER_MAX_DOCUMENT_SIZE_MB"):

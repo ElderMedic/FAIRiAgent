@@ -582,7 +582,10 @@ java -jar fairds-latest.jar
 **Available API Endpoints:**
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/package` | List all packages or get specific package by name |
+| `GET /api/packages` | Lightweight package summaries for agent selection |
+| `GET /api/packages/{name}` | Full metadata for one package |
+| `GET /api/package` | Legacy alias for package list/detail |
+| `GET /api/skills` | Complete FAIR-DS Agent Skill markdown |
 | `GET /api/terms` | Get all terms or filter by label/definition |
 | `POST /api/upload` | Validate metadata Excel file |
 

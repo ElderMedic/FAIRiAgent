@@ -41,6 +41,7 @@ async def llm_select_relevant_packages(
     for pkg in all_packages:  # Show ALL packages - complete information
         pkg_summary.append({
             "name": pkg["name"],
+            "description": pkg.get("description", ""),
             "field_count": pkg["field_count"],
             "mandatory": pkg["mandatory_count"],
             "optional": pkg["optional_count"],

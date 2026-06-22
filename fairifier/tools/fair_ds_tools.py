@@ -101,6 +101,35 @@ def create_fair_ds_tools(client=None, cache_store: Optional[Dict[str, Any]] = No
             }
     
     @tool
+    def get_package_summaries(force_refresh: bool = False) -> Dict[str, Any]:
+        """Get all FAIR-DS package descriptions and statistics in one request.
+
+        Use this before get_package when selecting packages for a research
+        domain. The result includes each package's name, description, ISOSA
+        levels, field count, and requirement counts without full field data.
+        """
+        if _client is None:
+            return {
+                "success": False,
+                "data": [],
+                "error": "FAIR-DS client not available",
+            }
+
+        try:
+            return _cached_tool_result(
+                "fairds:get_package_summaries",
+                {"force_refresh": force_refresh},
+                lambda: {
+                    "success": True,
+                    "data": _client.get_package_summaries(force_refresh=force_refresh),
+                    "error": None,
+                },
+            )
+        except Exception as exc:
+            logger.error("get_package_summaries failed: %s", exc)
+            return {"success": False, "data": [], "error": str(exc)}
+
+    @tool
     def get_package(package_name: str) -> Dict[str, Any]:
         """Get a specific FAIR-DS metadata package with all its fields.
         
@@ -285,6 +314,7 @@ def create_fair_ds_tools(client=None, cache_store: Optional[Dict[str, Any]] = No
     
     return [
         get_available_packages,
+        get_package_summaries,
         get_package,
         get_terms,
         search_terms_for_fields,
