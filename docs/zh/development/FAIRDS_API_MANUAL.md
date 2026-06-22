@@ -14,7 +14,11 @@
 |------|------|------|------|
 | `GET /api` | GET | 可用 | 获取 API 概览和可用端点列表 |
 | `GET /api/terms` | GET | 可用 | 获取所有元数据术语或按标签/定义过滤 |
-| `GET /api/package` | GET | 可用 | 获取所有包或按名称获取特定包 |
+| `GET /api/packages` | GET | 可用 | 获取轻量级 package 描述与统计（agent 选包） |
+| `GET /api/packages/{name}` | GET | 可用 | 获取单个 package 的完整字段 |
+| `GET /api/package` | GET | 兼容别名 | 旧版 package 列表/详情接口 |
+| `GET /api/skills` | GET | 可用 | 完整 FAIR-DS Agent Skill markdown |
+| `GET /api/skills/catalog` | GET | 可用 | 发现远程托管的 Agent Skills |
 | `POST /api/upload` | POST | 可用 | 验证元数据 Excel 文件 |
 | `POST /api/isa` | POST | 可用 | 提交 ISA JSON；返回生成的元数据 Excel（`.xlsx`） |
 
@@ -35,9 +39,14 @@ curl http://localhost:8083/api
 ```json
 {
   "availableEndpoints": [
+    "/api/skills",
+    "/api/skills/catalog",
+    "/api/packages",
+    "/api/packages/{name}",
+    "/api/package",
     "/api/upload",
     "/api/terms",
-    "/api/package"
+    "/api/isa"
   ]
 }
 ```
@@ -124,9 +133,37 @@ curl "http://localhost:8083/api/terms?label=temp&definition=temperature"
 
 ---
 
+## GET `/api/packages`
+
+一次返回所有 package 的描述与统计信息，供 agent 选包。FAIRiAgent 在拉取全量字段前先调用此端点。
+
+```bash
+curl http://localhost:8083/api/packages
+```
+
+先用此响应做 package 排序/筛选，再对候选 package 调用 `/api/packages/<exact-name>`。
+
+---
+
+## GET `/api/packages/{name}`
+
+获取单个 package 的全部字段（canonical 详情端点）。
+
+```bash
+curl "http://localhost:8083/api/packages/miappe"
+```
+
+---
+
+## GET `/api/skills`
+
+返回完整的 FAIR-DS Agent Skill markdown（含 ISOSA 说明与内联 package 目录）。FAIRiAgent 可选在 KnowledgeRetriever 启动时拉取并挂载到 virtual workspace。
+
+---
+
 ## GET `/api/package`
 
-检索所有可用的元数据包或按名称获取特定包。
+旧版兼容别名。新客户端请使用 `GET /api/packages`（summaries）和 `GET /api/packages/{name}`（详情）。
 
 ### 请求
 
