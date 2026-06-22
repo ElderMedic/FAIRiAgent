@@ -170,8 +170,38 @@ def iter_skill_catalog_rows(*roots: Path) -> List[Tuple[str, Dict[str, Any]]]:
     return rows
 
 
-def build_skills_catalog_markdown(*roots: Path) -> str:
+def _merge_catalog_rows(
+    *roots: Path,
+    extra_rows: Optional[Sequence[Tuple[str, Dict[str, Any]]]] = None,
+) -> List[Tuple[str, Dict[str, Any]]]:
+    rows = list(iter_skill_catalog_rows(*roots))
+    if extra_rows:
+        rows.extend(extra_rows)
+    rows.sort(key=lambda item: item[0])
+    return rows
+
+
+def _catalog_section_lines(vpath: str, meta: Dict[str, Any]) -> List[str]:
+    name = str(meta.get("name") or "").strip()
+    desc = str(meta.get("description") or "").strip()
+    when = str(meta.get("when_to_use") or "").strip()
+    lines = [f"## `{vpath}`"]
+    if name:
+        lines.append(f"- **name**: {name}")
+    if desc:
+        lines.append(f"- **description**: {desc}")
+    if when:
+        lines.append(f"- **when_to_use**: {when}")
+    lines.append("")
+    return lines
+
+
+def build_skills_catalog_markdown(
+    *roots: Path,
+    extra_rows: Optional[Sequence[Tuple[str, Dict[str, Any]]]] = None,
+) -> str:
     """Full markdown catalog for ``/workspace/skills_catalog.md`` (Level-1 disclosure)."""
+    rows = _merge_catalog_rows(*roots, extra_rows=extra_rows)
     lines = [
         "# Skill catalog",
         "",
@@ -180,24 +210,18 @@ def build_skills_catalog_markdown(*roots: Path) -> str:
         "``.md`` files in the same folder tree under `/skills/`).",
         "",
     ]
-    for vpath, meta in iter_skill_catalog_rows(*roots):
-        name = str(meta.get("name") or "").strip()
-        desc = str(meta.get("description") or "").strip()
-        when = str(meta.get("when_to_use") or "").strip()
-        lines.append(f"## `{vpath}`")
-        if name:
-            lines.append(f"- **name**: {name}")
-        if desc:
-            lines.append(f"- **description**: {desc}")
-        if when:
-            lines.append(f"- **when_to_use**: {when}")
-        lines.append("")
+    for vpath, meta in rows:
+        lines.extend(_catalog_section_lines(vpath, meta))
     return "\n".join(lines).strip() + "\n"
 
 
-def format_skills_catalog_for_task(*roots: Path, max_entries: int = 24) -> str:
+def format_skills_catalog_for_task(
+    *roots: Path,
+    max_entries: int = 24,
+    extra_rows: Optional[Sequence[Tuple[str, Dict[str, Any]]]] = None,
+) -> str:
     """Compact catalog lines for the first user message (trimmed)."""
-    rows = iter_skill_catalog_rows(*roots)
+    rows = _merge_catalog_rows(*roots, extra_rows=extra_rows)
     if not rows:
         return ""
     lines = [
@@ -229,21 +253,29 @@ def format_skills_catalog_for_task(*roots: Path, max_entries: int = 24) -> str:
 def skills_catalog_seed_files(
     *roots: Path,
     create_file_data: Optional[Callable[[str], Any]],
+    extra_rows: Optional[Sequence[Tuple[str, Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     """Virtual file so the model can always open the catalog without scanning ``/skills/``.
 
     ``create_file_data`` is keyword-only (same factory as deepagents file payloads). Do not pass
     it positionally after ``*roots`` — use ``create_file_data=...``.
     """
-    if not roots or create_file_data is None:
+    if create_file_data is None or (not roots and not extra_rows):
         return {}
-    body = build_skills_catalog_markdown(*roots)
+    body = build_skills_catalog_markdown(*roots, extra_rows=extra_rows)
     if not body.strip():
         return {}
     return {"/workspace/skills_catalog.md": create_file_data(body)}
 
 
 FAIRDS_REMOTE_SKILL_VIRTUAL_PATH = "/skills/remote/fairds-metadata/SKILL.md"
+
+
+def fairds_remote_skill_catalog_row(
+    markdown: str,
+) -> Tuple[str, Dict[str, Any]]:
+    """Catalog row for a FAIR-DS hosted skill markdown document."""
+    return (FAIRDS_REMOTE_SKILL_VIRTUAL_PATH, _parse_yaml_frontmatter(markdown))
 
 
 def fairds_remote_skill_seed_files(

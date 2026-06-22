@@ -15,6 +15,7 @@ from ..models import FAIRifierState, KnowledgeItem
 from ..config import config
 from ..services.evidence_packets import build_evidence_context
 from ..skills import (
+    fairds_remote_skill_catalog_row,
     fairds_remote_skill_seed_files,
     load_skill_files,
     skills_catalog_seed_files,
@@ -281,7 +282,8 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             "Skills live under /skills/ with a summary at /workspace/skills_catalog.md (Anthropic-style SKILL.md + "
             "optional sibling .md). You MUST read /workspace/skills_catalog.md on the first tool-capable turn, "
             "match skills to doc_info and evidence, open matching SKILL.md files, and use them to prioritize optional "
-            "fields, ontology search terms, and gap hints—without inventing non-existent FAIR-DS packages."
+            "fields, ontology search terms, and gap hints—without inventing non-existent FAIR-DS packages. "
+            "When the FAIR-DS hosted skill is listed in the catalog, read it before finalizing package and field choices."
         )
         subagents = [
             {
@@ -346,22 +348,29 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             seed_files["/workspace/evidence_packets.json"] = evidence_file
 
         seed_files.update(load_skill_files(*config.skill_roots))
+
+        remote_skill: Optional[str] = None
+        if config.fetch_fairds_agent_skill and self.fair_ds_client is not None:
+            fetch_skill = getattr(self.fair_ds_client, "fetch_agent_skill_markdown", None)
+            remote_skill = fetch_skill() if callable(fetch_skill) else None
+
+        extra_rows = (
+            [fairds_remote_skill_catalog_row(remote_skill)] if remote_skill else None
+        )
         seed_files.update(
             skills_catalog_seed_files(
                 *config.skill_roots,
                 create_file_data=self._maybe_create_file_data,
+                extra_rows=extra_rows,
             )
         )
-        if config.fetch_fairds_agent_skill and self.fair_ds_client is not None:
-            fetch_skill = getattr(self.fair_ds_client, "fetch_agent_skill_markdown", None)
-            remote_skill = fetch_skill() if callable(fetch_skill) else None
-            if remote_skill:
-                seed_files.update(
-                    fairds_remote_skill_seed_files(
-                        remote_skill,
-                        create_file_data=self._maybe_create_file_data,
-                    )
+        if remote_skill:
+            seed_files.update(
+                fairds_remote_skill_seed_files(
+                    remote_skill,
+                    create_file_data=self._maybe_create_file_data,
                 )
+            )
         return seed_files
 
     def _select_optional_fields_from_structured(

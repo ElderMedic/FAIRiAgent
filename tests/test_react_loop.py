@@ -8,7 +8,9 @@ from fairifier.agents.react_loop import ReactLoopMixin
 import pytest
 
 from fairifier.skills import (
+    FAIRDS_REMOTE_SKILL_VIRTUAL_PATH,
     build_skills_catalog_markdown,
+    fairds_remote_skill_catalog_row,
     list_skill_virtual_paths,
     load_skill_files,
     skills_catalog_seed_files,
@@ -258,3 +260,42 @@ def test_skills_catalog_seed_files_requires_keyword_create_file_data(tmp_path):
 
     with pytest.raises(TypeError):
         skills_catalog_seed_files(root, fake_create_file_data)
+
+
+def test_build_skills_catalog_includes_remote_fairds_skill():
+    remote = (
+        "---\n"
+        "name: fairds-metadata\n"
+        "description: FAIR-DS API workflow for package and field selection\n"
+        "---\n\n"
+        "# FAIR Data Station metadata\n"
+    )
+    cat = build_skills_catalog_markdown(
+        config.skills_dir,
+        extra_rows=[fairds_remote_skill_catalog_row(remote)],
+    )
+    assert FAIRDS_REMOTE_SKILL_VIRTUAL_PATH in cat
+    assert "fairds-metadata" in cat
+    assert "FAIR-DS API workflow" in cat
+
+
+def test_kr_seed_files_include_remote_skill_in_catalog():
+    from unittest.mock import MagicMock
+
+    from fairifier.agents.knowledge_retriever import KnowledgeRetrieverAgent
+
+    agent = KnowledgeRetrieverAgent.__new__(KnowledgeRetrieverAgent)
+    agent.fair_ds_client = MagicMock()
+    agent.fair_ds_client.fetch_agent_skill_markdown.return_value = (
+        "---\nname: fairds-metadata\ndescription: hosted skill\n---\n# body\n"
+    )
+    agent._maybe_create_file_data = lambda content: {"content": content}
+
+    seeds = agent._build_kr_seed_files({}, {"all_packages": []})
+
+    assert FAIRDS_REMOTE_SKILL_VIRTUAL_PATH in seeds
+    catalog = "".join(seeds["/workspace/skills_catalog.md"]["content"])
+    assert "fairds-metadata" in catalog
+    assert FAIRDS_REMOTE_SKILL_VIRTUAL_PATH in catalog
+    skill_body = "".join(seeds[FAIRDS_REMOTE_SKILL_VIRTUAL_PATH]["content"])
+    assert "# body" in skill_body
