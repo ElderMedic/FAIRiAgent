@@ -39,3 +39,57 @@ def test_infer_local_domain_package_hints_for_petase_context():
     )
 
     assert "petase_enzyme_engineering" in hints
+
+
+def test_search_local_package_fields_matches_labels_and_definitions():
+    kr = _make_kr_without_init()
+    kr._local_package_registry = {
+        "petase_enzyme_engineering": {
+            "packageName": "petase_enzyme_engineering",
+            "metadata": [
+                {
+                    "label": "PET crystallinity",
+                    "sheetName": "Sample",
+                    "packageName": "petase_enzyme_engineering",
+                    "requirement": "RECOMMENDED",
+                    "term": {"definition": "Crystalline fraction of the PET substrate"},
+                },
+                {
+                    "label": "reaction temperature",
+                    "sheetName": "Assay",
+                    "packageName": "petase_enzyme_engineering",
+                    "requirement": "MANDATORY",
+                    "term": {"definition": "Temperature of enzyme incubation"},
+                },
+            ],
+        }
+    }
+
+    label_hits = kr._search_local_package_fields(
+        "crystallinity", ["petase_enzyme_engineering"]
+    )
+    definition_hits = kr._search_local_package_fields(
+        "enzyme incubation", ["petase_enzyme_engineering"]
+    )
+    excluded_hits = kr._search_local_package_fields("crystallinity", ["default"])
+
+    assert [field["label"] for field in label_hits] == ["PET crystallinity"]
+    assert [field["label"] for field in definition_hits] == ["reaction temperature"]
+    assert excluded_hits == []
+
+
+def test_deduplicate_local_fields_preserves_same_label_on_different_sheets():
+    fields = [
+        {
+            "label": "study identifier",
+            "sheetName": "Study",
+            "packageName": "default",
+        },
+        {
+            "label": "study identifier",
+            "sheetName": "Assay",
+            "packageName": "petase_enzyme_engineering",
+        },
+    ]
+
+    assert len(KnowledgeRetrieverAgent._deduplicate_package_fields(fields)) == 2

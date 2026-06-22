@@ -726,7 +726,47 @@ class LLMHelper:
             # Don't fail the entire operation if logging fails
             logger.warning(f"Failed to log LLM response for {operation_name}: {e}")
     
-    async def _call_llm(self, messages, operation_name="LLM Call"):
+    async def _call_llm_json_object(
+        self,
+        messages,
+        operation_name: str,
+        max_tokens: Optional[int],
+        run_config: Optional[Dict[str, Any]],
+    ):
+        """OpenAI-compatible JSON Output mode (DeepSeek json_object, etc.)."""
+        bind_kwargs: Dict[str, Any] = {"response_format": {"type": "json_object"}}
+        if max_tokens is not None:
+            bind_kwargs["max_tokens"] = max_tokens
+
+        if self.provider == "deepseek":
+            # DeepSeek JSON Output: https://api-docs.deepseek.com/guides/json_mode
+            bind_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        elif self.provider == "qwen":
+            bind_kwargs["extra_body"] = {"enable_thinking": False}
+
+        try:
+            llm_with_params = self.llm.bind(**bind_kwargs)
+            result = await llm_with_params.ainvoke(messages, config=run_config)
+            self._log_llm_response(result, messages, operation_name)
+            return result
+        except Exception as exc:
+            logger.warning(
+                "json_object response_format failed for %s (%s); using plain invoke",
+                self.provider,
+                exc,
+            )
+            result = await self.llm.ainvoke(messages, config=run_config)
+            self._log_llm_response(result, messages, operation_name)
+            return result
+
+    async def _call_llm(
+        self,
+        messages,
+        operation_name="LLM Call",
+        *,
+        json_mode: bool = False,
+        max_tokens: Optional[int] = None,
+    ):
         """Helper method to call LLM with proper parameters.
 
         Thinking mode is controlled by config.llm_enable_thinking (LLM_ENABLE_THINKING env).
@@ -739,11 +779,24 @@ class LLMHelper:
         - anthropic: extra_body={"reasoning": {"enabled": bool}} (Claude Extended Thinking)
         All providers fall back gracefully to plain invoke when thinking is unsupported.
 
+        When ``json_mode=True``, providers that support OpenAI-style ``json_object``
+        (DeepSeek, OpenAI, Qwen) use ``response_format={'type': 'json_object'}``.
+
         Args:
             messages: List of messages to send to LLM
             operation_name: Name of the operation for display purposes.
+            json_mode: Use provider JSON Output mode when supported.
+            max_tokens: Optional output token cap for this call.
         """
         run_config = self._build_run_config()
+        if json_mode and self.provider in {"deepseek", "openai", "qwen"}:
+            return await self._call_llm_json_object(
+                messages,
+                operation_name,
+                max_tokens,
+                run_config,
+            )
+
         enable_thinking = config.llm_enable_thinking
 
         # For Qwen provider, use extra_body as per official documentation
@@ -2305,7 +2358,13 @@ REQUIREMENTS:
         )
 
         try:
-            response = await self._call_llm(messages, operation_name="Generate Complete Metadata")
+            from fairifier.utils.structured_output import supports_api_json_object
+
+            response = await self._call_llm(
+                messages,
+                operation_name="Generate Complete Metadata",
+                json_mode=supports_api_json_object(self.provider),
+            )
             content = normalize_llm_response_content(
                 getattr(response, 'content', None) if response else None
             )

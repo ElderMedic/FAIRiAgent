@@ -1,6 +1,6 @@
 """Unit tests for Critic agent utility functions."""
 
-from fairifier.agents.critic import safe_json_parse
+from fairifier.utils.json_parse import safe_json_parse
 from fairifier.utils.llm_helper import normalize_llm_response_content
 
 

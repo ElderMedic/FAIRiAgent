@@ -208,12 +208,22 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
 
         @tool
         def list_packages() -> Dict[str, Any]:
-            """List FAIR-DS package names available through the configured API."""
-            return self.tools["get_available_packages"].invoke({"force_refresh": False})
+            """List FAIR-DS API packages plus locally injected packages."""
+            result = self.tools["get_available_packages"].invoke({"force_refresh": False})
+            api_names = result.get("data", []) if result.get("success") else []
+            local_names = list(self._load_local_package_registry())
+            return {
+                "success": bool(result.get("success") or local_names),
+                "data": self._merge_available_package_names(api_names, local_names),
+                "error": result.get("error") if not local_names else None,
+            }
 
         @tool
         def get_package_info(package_name: str) -> Dict[str, Any]:
-            """Fetch a FAIR-DS package and all of its fields."""
+            """Fetch an API or locally injected FAIR-DS package."""
+            local_package = self._load_local_package_registry().get(package_name)
+            if local_package is not None:
+                return {"success": True, "data": local_package, "error": None}
             return self.tools["get_package"].invoke({"package_name": package_name})
 
         @tool
@@ -225,14 +235,35 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
 
         @tool
         def search_package_fields(field_label: str, package_names: str = "") -> Dict[str, Any]:
-            """Search FAIR-DS package fields by label."""
+            """Search API and locally injected FAIR-DS package fields by label."""
             scoped_package_names = package_names or ",".join(default_candidate_packages or [])
-            return self.tools["search_fields_in_packages"].invoke(
-                {
-                    "field_label": field_label,
-                    "package_names": scoped_package_names or None,
-                }
+            requested_names = [
+                name.strip() for name in scoped_package_names.split(",") if name.strip()
+            ]
+            local_names = {
+                name.lower() for name in self._load_local_package_registry()
+            }
+            api_names = [name for name in requested_names if name.lower() not in local_names]
+            api_result = (
+                self.tools["search_fields_in_packages"].invoke(
+                    {
+                        "field_label": field_label,
+                        "package_names": ",".join(api_names) or None,
+                    }
+                )
+                if api_names or not requested_names
+                else {"success": True, "data": [], "error": None}
             )
+            local_hits = self._search_local_package_fields(
+                field_label,
+                requested_names or None,
+            )
+            api_hits = api_result.get("data", []) if api_result.get("success") else []
+            return {
+                "success": bool(api_result.get("success") or local_hits),
+                "data": self._deduplicate_package_fields(api_hits + local_hits),
+                "error": api_result.get("error") if not local_hits else None,
+            }
 
         system_prompt = (
             "You are the internal KnowledgeRetriever loop for FAIRiAgent. "
@@ -857,6 +888,45 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             
             # Start with all mandatory fields
             final_selected_fields = list(all_mandatory_fields)
+
+            # A selected local package is an explicit runtime contract. Retain
+            # its RECOMMENDED fields deterministically instead of allowing the
+            # optional-field LLM to silently prune the domain schema.
+            if config.local_package_include_recommended:
+                recommended_local_fields = [
+                    field
+                    for field in all_packages_metadata
+                    if field.get("packageName") in local_package_registry
+                    and field.get("packageName") in selected_package_names
+                    and str(field.get("requirement", "")).upper() == "RECOMMENDED"
+                ]
+                existing_keys = {
+                    (
+                        FAIRDSAPIParser.normalize_isa_sheet(
+                            FAIRDSAPIParser.raw_isa_level_from_field(field)
+                        ),
+                        str(field.get("label", "")).strip().lower(),
+                    )
+                    for field in final_selected_fields
+                }
+                added_recommended = 0
+                for field in recommended_local_fields:
+                    key = (
+                        FAIRDSAPIParser.normalize_isa_sheet(
+                            FAIRDSAPIParser.raw_isa_level_from_field(field)
+                        ),
+                        str(field.get("label", "")).strip().lower(),
+                    )
+                    if key[1] and key not in existing_keys:
+                        final_selected_fields.append(field)
+                        existing_keys.add(key)
+                        added_recommended += 1
+                if added_recommended:
+                    self.log_execution(
+                        state,
+                        f"   🧩 Retained {added_recommended} RECOMMENDED field(s) "
+                        "from selected local packages",
+                    )
             
             # Collect all terms to search (from LLM requests)
             all_terms_to_search = []
@@ -986,7 +1056,7 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             )
 
             # Phase 4: Search for additional terms/fields if LLM requested (using tools)
-            if all_terms_to_search and self.fair_ds_client:
+            if all_terms_to_search and (self.fair_ds_client or local_package_registry):
                 self.log_execution(state, f"🔍 Phase 4: Searching for {len(all_terms_to_search)} additional terms...")
                 term_search_outcomes: Dict[str, Dict[str, int]] = {}
                 
@@ -1030,13 +1100,22 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                         "field_label": term,
                         "package_names": package_names_str
                     })
+                    local_found_fields = self._search_local_package_fields(
+                        term,
+                        selected_package_names,
+                    )
                     field_hits = 0
+                    found_fields = []
                     if fields_search_result["success"] and fields_search_result["data"]:
-                        found_fields = fields_search_result["data"]
+                        found_fields.extend(fields_search_result["data"])
+                    found_fields.extend(local_found_fields)
+                    found_fields = self._deduplicate_package_fields(found_fields)
+                    if found_fields:
                         field_hits = len(found_fields)
                         self.log_execution(
                             state,
-                            f"   📦 Found {len(found_fields)} fields matching '{term}' across packages"
+                            f"   📦 Found {len(found_fields)} fields matching '{term}' "
+                            "across API and local packages"
                         )
                         existing_labels = {f.get("label") for f in final_selected_fields}
                         for field in found_fields:
@@ -1239,18 +1318,30 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 merged.append(normalized)
         return merged
 
+    def _local_package_files(self) -> List[Path]:
+        """Resolve built-in and environment-configured local package sources."""
+        default_dir = Path(config.project_root) / "evaluation" / "config" / "packages"
+        sources = [default_dir, *config.local_package_paths]
+        files: List[Path] = []
+        for source in sources:
+            path = Path(source).expanduser()
+            if not path.is_absolute():
+                path = Path(config.project_root) / path
+            candidates = sorted(path.glob("*_package.json")) if path.is_dir() else [path]
+            for candidate in candidates:
+                if candidate.is_file() and candidate not in files:
+                    files.append(candidate)
+        return files
+
     def _load_local_package_registry(self) -> Dict[str, Dict[str, Any]]:
-        """Load local FAIR-DS extension packages from evaluation/config/packages."""
+        """Load local FAIR-DS extension packages from configured JSON sources."""
         cached = getattr(self, "_local_package_registry", None)
         if isinstance(cached, dict) and cached:
             return cached
 
         registry: Dict[str, Dict[str, Any]] = {}
         try:
-            package_dir = Path(config.project_root) / "evaluation" / "config" / "packages"
-            if not package_dir.exists():
-                return {}
-            for package_file in sorted(package_dir.glob("*_package.json")):
+            for package_file in self._local_package_files():
                 try:
                     payload = json.loads(package_file.read_text(encoding="utf-8"))
                 except Exception as exc:
@@ -1262,6 +1353,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     continue
                 if not isinstance(package.get("metadata"), list):
                     continue
+                for field in package["metadata"]:
+                    if isinstance(field, dict):
+                        field["packageName"] = package_name
                 registry[package_name] = package
         except Exception as exc:
             logger.warning("Failed loading local package registry: %s", exc)
@@ -1269,6 +1363,59 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
 
         self._local_package_registry = registry
         return registry
+
+    @staticmethod
+    def _deduplicate_package_fields(fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Deduplicate search results while retaining ISA-level distinctions."""
+        unique: List[Dict[str, Any]] = []
+        seen = set()
+        for field in fields or []:
+            if not isinstance(field, dict):
+                continue
+            key = (
+                str(field.get("packageName", "")).strip().lower(),
+                FAIRDSAPIParser.normalize_isa_sheet(
+                    FAIRDSAPIParser.raw_isa_level_from_field(field)
+                ),
+                str(field.get("label", "")).strip().lower(),
+            )
+            if key[2] and key not in seen:
+                seen.add(key)
+                unique.append(field)
+        return unique
+
+    def _search_local_package_fields(
+        self,
+        query: str,
+        package_names: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search injected package labels/definitions without the FAIR-DS API."""
+        normalized_query = " ".join(str(query or "").lower().split())
+        if not normalized_query:
+            return []
+        allowed = {
+            str(name).strip().lower()
+            for name in (package_names or [])
+            if str(name).strip()
+        }
+        hits: List[Dict[str, Any]] = []
+        for package_name, package in self._load_local_package_registry().items():
+            if allowed and package_name.lower() not in allowed:
+                continue
+            for field in package.get("metadata", []) or []:
+                term = field.get("term") or {}
+                haystack = " ".join(
+                    str(value or "").lower()
+                    for value in (
+                        field.get("label"),
+                        field.get("definition"),
+                        term.get("label"),
+                        term.get("definition"),
+                    )
+                )
+                if normalized_query in haystack:
+                    hits.append(field)
+        return self._deduplicate_package_fields(hits)
 
     def _infer_local_domain_package_hints(
         self,

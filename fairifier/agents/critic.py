@@ -17,7 +17,9 @@ from langsmith import traceable
 from .base import BaseAgent
 from ..models import FAIRifierState
 from ..config import config
-from ..utils.llm_helper import get_llm_helper, normalize_llm_response_content
+from ..utils.json_parse import safe_json_parse
+from ..utils.llm_helper import get_llm_helper
+from ..utils.structured_output import invoke_structured_output
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -31,66 +33,6 @@ class CriticEvaluation(BaseModel):
     )
     issues: List[str] = Field(default_factory=list, description="List of identified issues (< 100 chars each)")
     suggestions: List[str] = Field(default_factory=list, description="Actionable steps to fix issues (< 150 chars each)")
-
-def safe_json_parse(raw: Any) -> Optional[Dict[str, Any]]:
-    """Parse JSON content with support for fenced code blocks and various formats."""
-    if not raw:
-        return None
-    
-    snippet = normalize_llm_response_content(raw).strip()
-    
-    # Strategy 1: Remove markdown code fences
-    if "```json" in snippet:
-        snippet = snippet.split("```json", 1)[1].split("```", 1)[0].strip()
-    elif "```" in snippet:
-        # Handle generic code blocks
-        parts = snippet.split("```")
-        if len(parts) >= 3:
-            snippet = parts[1].strip()
-        elif snippet.startswith("```") and snippet.endswith("```"):
-            snippet = snippet[3:-3].strip()
-    
-    # Strategy 2: Direct parse
-    try:
-        return json.loads(snippet)
-    except json.JSONDecodeError:
-        pass
-    
-    # Strategy 3: Extract first complete JSON object
-    start = snippet.find("{")
-    if start != -1:
-        brace_count = 0
-        in_string = False
-        escape_next = False
-        
-        for i in range(start, len(snippet)):
-            char = snippet[i]
-            
-            if escape_next:
-                escape_next = False
-                continue
-            
-            if char == '\\':
-                escape_next = True
-                continue
-            
-            if char == '"' and not escape_next:
-                in_string = not in_string
-                continue
-            
-            if not in_string:
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        try:
-                            return json.loads(snippet[start:i+1])
-                        except json.JSONDecodeError:
-                            pass
-                        break
-    
-    return None
 
 
 class CriticAgent(BaseAgent):
@@ -779,42 +721,16 @@ class CriticAgent(BaseAgent):
         )
         
         from langchain_core.messages import HumanMessage
-        
-        try:
-            llm = self.llm_helper.get_llm()
-            # Cap Critic output at 1 024 tokens — a well-formed evaluation needs
-            # < 200 chars of critique + 3×80-char issues + 3×120-char suggestions.
-            # This hard cap prevents the 35B MoE model from drifting into
-            # thousand-word essays that can block the pipeline for 15+ minutes.
-            if hasattr(llm, "max_tokens"):
-                llm.max_tokens = min(getattr(llm, "max_tokens", 1024) or 1024, 1024)
-            if hasattr(llm, "num_predict"):
-                llm.num_predict = 1024
-            structured_llm = llm.with_structured_output(CriticEvaluation)
-            result = await structured_llm.ainvoke([HumanMessage(content=prompt)])
-            parsed = result.model_dump()
-        except Exception as e:
-            logger.warning(f"Structured output parsing failed: {e}. Falling back to standard LLM call.")
-            # Prompt adjustment for standard fallback
-            fallback_prompt = prompt + (
-                "\n\n**CRITICAL — JSON OUTPUT REQUIRED:**\n"
-                "Wrap your JSON in markdown code blocks.  Entire response < 1,500 chars.\n"
-                "```json\n"
-                "{\n"
-                '  "score": 0.0-1.0,\n'
-                '  "critique": "one sentence < 180 chars",\n'
-                '  "issues": ["≤3 items, each < 80 chars"],\n'
-                '  "suggestions": ["≤3 items, each < 120 chars"]\n'
-                "}\n"
-                "```\n"
-                "Do NOT write anything outside the code block."
-            )
-            response = await self.llm_helper._call_llm(
-                [HumanMessage(content=fallback_prompt)],
-                operation_name=f"Critic.{node_key}"
-            )
-            content = getattr(response, "content", "") if response else ""
-            parsed = safe_json_parse(content)
+
+        # Cap Critic output at 1 024 tokens — a well-formed evaluation needs
+        # < 200 chars of critique + 3×80-char issues + 3×120-char suggestions.
+        parsed = await invoke_structured_output(
+            self.llm_helper,
+            [HumanMessage(content=prompt)],
+            CriticEvaluation,
+            operation_name=f"Critic.{node_key}",
+            max_tokens=1024,
+        )
         
         if not parsed:
             logger.error(f"Failed to parse Critic response.")

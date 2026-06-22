@@ -64,6 +64,10 @@ class FAIRifierConfig:
     # Extra SKILL.md roots merged into the same /skills/ virtual tree (later wins on collision).
     # Populated from FAIRIFIER_SKILLS_EXTRA_DIRS and CLAUDE_SKILLS_PATH (see apply_env_overrides).
     skills_extra_dirs: Tuple[Path, ...] = ()
+    # FAIR-DS package JSON files/directories injected locally without first
+    # publishing them to the FAIR Data Station API.
+    local_package_paths: Tuple[Path, ...] = ()
+    local_package_include_recommended: bool = True
     # When true, also load ~/.claude/skills and <project>/.claude/skills if present (Claude Code layout).
     import_claude_skills: bool = False
     
@@ -305,6 +309,17 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     extra_skill_roots = _parse_path_list_from_env("FAIRIFIER_SKILLS_EXTRA_DIRS")
     extra_skill_roots.extend(_parse_path_list_from_env("CLAUDE_SKILLS_PATH"))
     config_instance.skills_extra_dirs = tuple(extra_skill_roots)
+
+    config_instance.local_package_paths = tuple(
+        _parse_path_list_from_env("FAIRIFIER_LOCAL_PACKAGE_PATHS")
+    )
+    if os.getenv("FAIRIFIER_LOCAL_PACKAGE_INCLUDE_RECOMMENDED"):
+        value = os.getenv(
+            "FAIRIFIER_LOCAL_PACKAGE_INCLUDE_RECOMMENDED", ""
+        ).strip().lower()
+        config_instance.local_package_include_recommended = value in (
+            "1", "true", "yes", "on"
+        )
 
     if os.getenv("FAIRIFIER_IMPORT_CLAUDE_SKILLS", "").strip().lower() in (
         "1",

@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .base import BaseAgent
-from .critic import safe_json_parse
+from ..utils.json_parse import safe_json_parse
 from .react_loop import ReactLoopMixin
 from .response_models import ISAValueMappingResponse
 from ..models import FAIRifierState

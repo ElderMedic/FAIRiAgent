@@ -432,6 +432,27 @@ class BatchEvaluationRunner:
         doc_output_dir = config_output_dir / doc_id / f"run_{run_idx}"
         doc_output_dir.mkdir(parents=True, exist_ok=True)
         
+        # Skip if already completed successfully
+        eval_result_file = doc_output_dir / 'eval_result.json'
+        if eval_result_file.exists():
+            try:
+                with open(eval_result_file, 'r', encoding='utf-8') as f:
+                    eval_data = json.load(f)
+                if eval_data.get('success', False):
+                    metadata_json_path = resolve_metadata_output_read_path(doc_output_dir)
+                    if metadata_json_path is None:
+                        found_metadata = []
+                        for _name in (METADATA_OUTPUT_FILENAME, LEGACY_METADATA_OUTPUT_FILENAME):
+                            found_metadata.extend(doc_output_dir.rglob(_name))
+                        if found_metadata:
+                            metadata_json_path = found_metadata[0]
+                    
+                    if metadata_json_path and metadata_json_path.exists():
+                        print(f"   Run {run_idx}: Already completed successfully (skipping execution)")
+                        return eval_data
+            except Exception as e:
+                pass
+        
         # Resolve document path (might be relative to evaluation dir)
         project_root = Path(__file__).parents[2]
         if not Path(doc_path).is_absolute():
