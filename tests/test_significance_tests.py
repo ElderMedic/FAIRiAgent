@@ -74,6 +74,50 @@ def test_bootstrap_pass_at_k_ci_contains_estimate():
     assert math.isclose(result.estimate, 1.0)
 
 
+def test_bootstrap_seed_varies_by_document():
+    from evaluation.analysis.analyzers.pass_at_k import _bootstrap_seed
+
+    seed_a = _bootstrap_seed(5, doc_key="doc_a", k=1)
+    seed_b = _bootstrap_seed(5, doc_key="doc_b", k=1)
+    assert seed_a is not None and seed_b is not None
+    assert seed_a != seed_b
+
+
+def test_aggregate_bootstrap_ci_uses_distinct_document_seeds():
+    run = {
+        "success": True,
+        "n_fields_extracted": 12,
+        "completeness": {"required_completeness": 0.8},
+        "correctness": {"f1_score": 0.6},
+        "internal_metrics": {"overall_confidence": 0.7},
+    }
+    fail = {
+        "success": False,
+        "n_fields_extracted": 0,
+        "completeness": {"required_completeness": 0.0},
+        "correctness": {"f1_score": 0.0},
+        "internal_metrics": {"overall_confidence": 0.0},
+    }
+    analyzer = PassAtKAnalyzer(
+        runs_dir="evaluation/runs",
+        k_values=[1],
+        bootstrap=True,
+        n_boot=120,
+        random_seed=5,
+    )
+    analyzer.eval_results = {
+        "model_a": {
+            "doc_a": [run, fail, run],
+            "doc_b": [fail, run, run],
+        }
+    }
+
+    results = analyzer.get_model_pass_at_k("model_a")
+    doc_a_ci = results["by_document"]["doc_a"]["pass@1_ci_lo"]
+    doc_b_ci = results["by_document"]["doc_b"]["pass@1_ci_lo"]
+    assert doc_a_ci != doc_b_ci
+
+
 def test_pass_at_k_analyzer_adds_bootstrap_ci_columns():
     analyzer = PassAtKAnalyzer(
         runs_dir="evaluation/runs",

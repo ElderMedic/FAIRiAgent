@@ -6,6 +6,7 @@ the probability of successful metadata extraction.
 """
 
 import math
+import hashlib
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -15,6 +16,14 @@ from collections import defaultdict
 import json
 
 from .significance_tests import bootstrap_pass_at_k_ci
+
+
+def _bootstrap_seed(base: Optional[int], *, doc_key: str, k: int) -> Optional[int]:
+    """Derive a stable, document-specific RNG seed from the analyzer base seed."""
+    if base is None:
+        return None
+    payload = f"{base}:{doc_key}:{k}".encode()
+    return int(hashlib.sha256(payload).hexdigest()[:8], 16)
 
 
 @dataclass
@@ -302,7 +311,9 @@ class PassAtKAnalyzer:
         
         all_n = []
         all_c = []
-        aggregate_success_arrays: Dict[int, List[np.ndarray]] = {k: [] for k in self.k_values}
+        aggregate_success_arrays: Dict[int, List[Tuple[str, np.ndarray]]] = {
+            k: [] for k in self.k_values
+        }
         
         for doc_id, runs in model_results.items():
             n = len(runs)
@@ -332,11 +343,13 @@ class PassAtKAnalyzer:
                         k,
                         n_boot=self.n_boot,
                         alpha=self.ci_alpha,
-                        random_seed=self.random_seed,
+                        random_seed=_bootstrap_seed(
+                            self.random_seed, doc_key=str(doc_id), k=k
+                        ),
                     )
                     doc_pass_at_k[f'pass@{k}_ci_lo'] = ci.ci_lo
                     doc_pass_at_k[f'pass@{k}_ci_hi'] = ci.ci_hi
-                    aggregate_success_arrays[k].append(successes)
+                    aggregate_success_arrays[k].append((str(doc_id), successes))
             
             results['by_document'][doc_id] = {
                 'n': n,
@@ -353,13 +366,15 @@ class PassAtKAnalyzer:
             if self.bootstrap and aggregate_success_arrays[k]:
                 ci_los = []
                 ci_his = []
-                for successes in aggregate_success_arrays[k]:
+                for doc_id, successes in aggregate_success_arrays[k]:
                     ci = bootstrap_pass_at_k_ci(
                         successes,
                         k,
                         n_boot=self.n_boot,
                         alpha=self.ci_alpha,
-                        random_seed=self.random_seed,
+                        random_seed=_bootstrap_seed(
+                            self.random_seed, doc_key=doc_id, k=k
+                        ),
                     )
                     ci_los.append(ci.ci_lo)
                     ci_his.append(ci.ci_hi)
