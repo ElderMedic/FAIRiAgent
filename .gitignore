@@ -5,6 +5,10 @@ __pycache__/
 
 .DS_Store
 
+# macOS Finder / iCloud duplicate copies (e.g. "module 2.py", "Makefile 2")
+**/* 2.*
+**/* 2
+
 # Temporary files and local memory
 .memory/
 
@@ -254,10 +258,8 @@ docker/fairds_storage/
 # Private manuscript drafts (local only)
 docs/manuscript/
 
-# Presentation web app build/sync artifacts (keep presentation-v2/src)
-docs/fairiagent-presentation/presentation-v2/node_modules/
-docs/fairiagent-presentation/presentation-v2/dist/
-docs/fairiagent-presentation/presentation-v2/public/figs/
+# Local presentation materials and web app (not for GitHub)
+docs/fairiagent-presentation/
 
 # Local FAIR-DS stats HTML snapshot
 fairds_stats.html
@@ -299,6 +301,7 @@ evaluation/scripts/evaluate_agent_quality.py
 evaluation/scripts/generate_ablation_chart.py
 evaluation/scripts/generate_poster_fig3_fig4_combined_v2.py
 evaluation/generate_presentation*.py
+evaluation/paper_experiments_v1/sync_presentation_assets.py
 evaluation/generate_exp1_final.py
 evaluation/generate_final_charts.py
 docs/figures/poster_*
