@@ -215,8 +215,18 @@ def test_stop_endpoint_sets_project_scoped_stop_flag(
 
 def test_create_project_rejects_non_object_config_overrides(
     tmp_path,
+    monkeypatch,
 ):
     app, store = _create_test_app(tmp_path)
+    demo_pdf = tmp_path / "demo.pdf"
+    demo_pdf.write_bytes(b"%PDF-1.4")
+    from fairifier.apps.api.routers import v1 as v1_router
+
+    monkeypatch.setitem(
+        v1_router._DEMO_DOCUMENTS,
+        "earthworm_paper",
+        {"path": demo_pdf, "label": "Demo", "description": "test"},
+    )
 
     try:
         request = _FakeRequest(
