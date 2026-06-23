@@ -15,7 +15,7 @@ def test_fair_ds_tools():
     # Create tools
     tools = create_fair_ds_tools()
     print(f"✅ Created {len(tools)} FAIR-DS tools")
-    assert len(tools) == 5, "Should create 5 FAIR-DS tools"
+    assert len(tools) == 6, "Should create 6 FAIR-DS tools"
     
     # List tool names
     for tool in tools:
@@ -72,7 +72,7 @@ def test_knowledge_retriever_has_tools():
     for name in agent.tools.keys():
         print(f"   - {name}")
     
-    assert len(agent.tools) == 5, "Should have 5 FAIR-DS tools"
+    assert len(agent.tools) == 6, "Should have 6 FAIR-DS tools"
 
 
 def test_document_parser_has_tool():
