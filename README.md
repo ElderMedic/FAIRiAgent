@@ -512,7 +512,7 @@ FAIRiAgent generates structured, evidence-based metadata in FAIR-DS compatible f
 
 ```json
 {
-  "fairifier_version": "V2.0.0",
+  "fairifier_version": "V2.0.1",
   "generated_at": "2025-01-27T10:30:00",
   "document_source": "paper.pdf",
   "overall_confidence": 0.85,

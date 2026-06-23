@@ -21,7 +21,7 @@ DB_PATH = DB_DIR / "projects.db"
 
 FRONTEND_DIST = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 
-API_VERSION = "2.0.0"
+API_VERSION = "2.0.1"
 
 
 def _resolve_frontend_file(
