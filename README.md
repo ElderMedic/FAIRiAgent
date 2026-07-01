@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![FAIR-DS](https://img.shields.io/badge/FAIR--DS-Compatible-orange.svg)](https://fairds.fairbydesign.nl/)
 
-[🚀 Quick Start / 快速开始](#-quick-start--快速开始) • [📖 Documentation / 详细文档](#-documentation--详细文档) • [🌐 Web UI](#-web-ui--网页端)
+[🚀 Quick Start / 快速开始](#-quick-start--快速开始) • [📖 Documentation / 详细文档](#-documentation--详细文档) • [🌐 Web UI](fairifier/apps/README.md)
 
 ---
 

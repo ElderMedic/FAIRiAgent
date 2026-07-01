@@ -15,51 +15,51 @@ flowchart TD
         M[🔧 MinerU Parser]
         A --> M
     end
-    
+
     subgraph ORCHESTRATOR["🎯 Orchestrator (LangGraph)"]
         direction TB
-        
+
         subgraph PARSE["Step 1: Document Parsing"]
             B[🔍 Document Parser<br/>LLM Extraction]
             C1[🧑⚖️ Critic]
             B --> C1
         end
-        
+
         subgraph BIO["Step 2: Bioinformatics (conditional)"]
             G[🧬 BioMetadataAgent<br/>Containerised tools]
         end
-        
+
         subgraph PLAN["Step 3: Planning"]
             D[📋 Planner<br/>Agent-specific guidance]
         end
-        
+
         subgraph RETRIEVE["Step 4: Knowledge Retrieval"]
             E[🧠 Knowledge Retriever<br/>FAIR-DS API + Local KB]
             C2[🧑⚖️ Critic]
             E --> C2
         end
-        
+
         subgraph GENERATE["Step 5: JSON Generation"]
             F[📝 JSON Generator<br/>ISA-Tab Mapping]
             C3[🧑⚖️ Critic]
             F --> C3
         end
-        
+
         subgraph MAP["Step 6: ISA Value Mapping"]
             H[🔗 ISA Value Mapper<br/>Entity Grouping + Terms]
         end
     end
-    
+
     subgraph EXTERNAL["🌐 External Services"]
         API[🗄️ FAIR-DS API<br/>59 Packages, 892 Terms]
         FAIR[📊 FAIR-DS Validator<br/>ShEx Schema]
     end
-    
+
     subgraph OUTPUT["📤 Output Layer"]
         J[📊 FAIR Metadata JSON]
         R[📋 Workflow Report<br/>Confidence + Evidence]
     end
-    
+
     M --> B
     C1 -->|ACCEPT| G
     C1 -->|RETRY| B
@@ -74,7 +74,7 @@ flowchart TD
     H --> J
     J --> R
     FAIR -.->|validate| J
-    
+
     style A fill:#e3f2fd,stroke:#1565c0
     style J fill:#c8e6c9,stroke:#2e7d32
     style C1 fill:#fff9c4,stroke:#f9a825

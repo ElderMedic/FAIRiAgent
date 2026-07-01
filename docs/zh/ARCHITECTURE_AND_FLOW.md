@@ -173,7 +173,7 @@ export LANGCHAIN_TRACING_V2="true"
 export LANGSMITH_API_KEY="your_api_key"
 export LANGSMITH_PROJECT="fairifier-testing"
 ```
-Or launch locally via LangGraph Studio:
+或者通过 LangGraph Studio 在本地启动：
 ```bash
 langgraph dev
 # 访问本地 Studio 可视化界面 http://localhost:8123
