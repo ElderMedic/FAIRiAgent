@@ -389,6 +389,15 @@ msc_thesis_project/
 # baselines
 evaluation/baselines/
 
+# Confidential evaluation results
+evaluation/reports/FINAL_EVALUATION_RESULTS.md
+evaluation/archive/docs/FINAL_ANALYSIS_RESULTS.md
+evaluation/paper_experiments_v1/EXPERIMENT_SUMMARY.md
+evaluation/reports/*_RESULTS.md
+evaluation/reports/*.json
+evaluation/reports/*.csv
+evaluation/reports/*.png
+
 # Local API key file
 api_keys.txt
 
