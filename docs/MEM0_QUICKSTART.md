@@ -50,7 +50,7 @@ MEM0_COLLECTION_NAME=fairifier_memories
 
 ```bash
 # Check mem0 service status
-fairifier memory status
+python run_fairifier.py memory status
 
 # Should output:
 # ✅ Status:     Available
@@ -79,31 +79,31 @@ When mem0 is enabled, it automatically:
 
 ```bash
 # Check memory status
-fairifier memory status
+python run_fairifier.py memory status
 
 # List all memories for a session
-fairifier memory list fairifier_20260129_120000
+python run_fairifier.py memory list fairifier_20260129_120000
 
 # Filter by agent
-fairifier memory list fairifier_20260129_120000 -a DocumentParser
+python run_fairifier.py memory list fairifier_20260129_120000 -a DocumentParser
 
 # Clear memories for re-run with fresh context
-fairifier memory clear fairifier_20260129_120000
+python run_fairifier.py memory clear fairifier_20260129_120000
 
 # Clear without confirmation
-fairifier memory clear fairifier_20260129_120000 -f
+python run_fairifier.py memory clear fairifier_20260129_120000 -f
 ```
 
 ### Example Workflow
 
 ```bash
 # 1. Process a document (mem0 enabled)
-fairifier process document.pdf --project-id my_project
+python run_fairifier.py process document.pdf --project-id my_project
 
 # Memories are automatically stored during processing
 
 # 2. View stored memories
-fairifier memory list my_project
+python run_fairifier.py memory list my_project
 
 # Output:
 # 🆔 abc123def456...
@@ -113,11 +113,11 @@ fairifier memory list my_project
 # 💭 [DocumentParser] Parsed document: 'RNA-seq Analysis in Arabidopsis'...
 
 # 3. Resume workflow (uses memories automatically)
-fairifier resume my_project
+python run_fairifier.py resume my_project
 
 # 4. Clear memories before re-processing
-fairifier memory clear my_project
-fairifier process document.pdf --project-id my_project
+python run_fairifier.py memory clear my_project
+python run_fairifier.py process document.pdf --project-id my_project
 ```
 
 ## Advanced Configuration
@@ -174,7 +174,7 @@ LANGCHAIN_TRACING_V2=true
 
 ```bash
 # Check status
-fairifier memory status
+python run_fairifier.py memory status
 
 # Common issues:
 # 1. Qdrant not running
@@ -200,7 +200,7 @@ No code changes or special handling required.
 
 ```bash
 # Clear specific session
-fairifier memory clear <session_id>
+python run_fairifier.py memory clear <session_id>
 
 # Clear all memories (via Qdrant)
 curl -X DELETE http://localhost:6333/collections/fairifier_memories

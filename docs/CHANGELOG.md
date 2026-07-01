@@ -231,7 +231,7 @@ Completed comprehensive re-evaluation with v1.2.2 memory system:
 Comprehensive optimization of mem0 memory layer for improved fact quality, cross-agent knowledge sharing, and intelligent context compression.
 
 #### Memory Overview Feature (ChatGPT-style) ⭐ **NEW**
-Added a new `fairifier memory overview <session_id>` command that provides a ChatGPT-style summary of what the workflow has learned.
+Added a new `python run_fairifier.py memory overview <session_id>` command that provides a ChatGPT-style summary of what the workflow has learned.
 
 **Key Features**:
 - 📊 **Statistics Dashboard**: Total memory count, agent activity breakdown
@@ -250,9 +250,9 @@ Added a new `fairifier memory overview <session_id>` command that provides a Cha
 
 **Commands**:
 ```bash
-fairifier memory overview <session_id>           # Full LLM summary
-fairifier memory overview <session_id> --simple  # Fast template summary
-fairifier memory overview <session_id> --json    # Raw JSON data
+python run_fairifier.py memory overview <session_id>           # Full LLM summary
+python run_fairifier.py memory overview <session_id> --simple  # Fast template summary
+python run_fairifier.py memory overview <session_id> --json    # Raw JSON data
 ```
 
 **Documentation**: See [MEMORY_OVERVIEW_GUIDE.md](MEMORY_OVERVIEW_GUIDE.md) for complete guide.
@@ -307,7 +307,7 @@ Added optional persistent memory layer using mem0 for context compression and se
 - 🔍 **Semantic Search**: Vector-based memory retrieval using Qdrant
 - 📊 **Session Scoping**: Memories bound to workflow thread_id for resume support
 - 🎛️ **Opt-in Design**: Disabled by default, zero impact on existing users
-- 🛠️ **CLI Tools**: `fairifier memory` command group for management
+- 🛠️ **CLI Tools**: `python run_fairifier.py memory` command group for management
 - 📈 **LangSmith Tracing**: Full observability for memory operations
 
 **Architecture:**
@@ -327,9 +327,9 @@ MEM0_COLLECTION_NAME=fairifier_memories
 
 **CLI Commands:**
 ```bash
-fairifier memory status          # Check status
-fairifier memory list <session>  # List memories
-fairifier memory clear <session> # Clear memories
+python run_fairifier.py memory status          # Check status
+python run_fairifier.py memory list <session>  # List memories
+python run_fairifier.py memory clear <session> # Clear memories
 ```
 
 **Documentation:**

@@ -17,13 +17,13 @@ The Memory Overview feature provides a ChatGPT-style summary of what the FAIRiAg
 
 ```bash
 # Generate full overview with LLM summary
-fairifier memory overview my_project_20260129
+python run_fairifier.py memory overview my_project_20260129
 
 # Fast overview without LLM (simple statistics)
-fairifier memory overview my_project_20260129 --simple
+python run_fairifier.py memory overview my_project_20260129 --simple
 
 # Get raw JSON data
-fairifier memory overview my_project_20260129 --json
+python run_fairifier.py memory overview my_project_20260129 --json
 ```
 
 ### Example Output
@@ -65,7 +65,7 @@ fairifier memory overview my_project_20260129 --json
    2. elevation gradient studies in alpine ecology commonly link to soil micr...
 
 ======================================================================
-💡 Tip: Use 'fairifier memory list <session_id>' to see all memories
+💡 Tip: Use 'python run_fairifier.py memory list <session_id>' to see all memories
 ```
 
 ---
@@ -76,7 +76,7 @@ fairifier memory overview my_project_20260129 --json
 
 ```
 ┌─────────────────────────────────────────────────┐
-│ User: fairifier memory overview <session_id>    │
+│ User: python run_fairifier.py memory overview <session_id>    │
 └─────────────────┬───────────────────────────────┘
                   │
                   v
@@ -156,7 +156,7 @@ When `use_llm=True`:
 **Scenario**: After completing a workflow, review what the system learned.
 
 ```bash
-fairifier memory overview my_biorem_study
+python run_fairifier.py memory overview my_biorem_study
 ```
 
 **Use**: Understand workflow insights before starting next document.
@@ -166,7 +166,7 @@ fairifier memory overview my_biorem_study
 **Scenario**: Workflow behaving unexpectedly, check if memories are influencing it.
 
 ```bash
-fairifier memory overview my_project --json > memories.json
+python run_fairifier.py memory overview my_project --json > memories.json
 # Inspect memories.json to see stored facts
 ```
 
@@ -175,7 +175,7 @@ fairifier memory overview my_project --json > memories.json
 **Scenario**: Verify that high-quality facts are being stored (not low-value noise).
 
 ```bash
-fairifier memory overview my_project
+python run_fairifier.py memory overview my_project
 # Read summary - should show domain patterns, not execution status
 ```
 
@@ -184,7 +184,7 @@ fairifier memory overview my_project
 **Scenario**: Share workflow learnings with team members.
 
 ```bash
-fairifier memory overview shared_project > project_memory.txt
+python run_fairifier.py memory overview shared_project > project_memory.txt
 # Send project_memory.txt to team
 ```
 
@@ -193,8 +193,8 @@ fairifier memory overview shared_project > project_memory.txt
 **Scenario**: Compare what was learned across multiple sessions.
 
 ```bash
-fairifier memory overview session1 > s1.txt
-fairifier memory overview session2 > s2.txt
+python run_fairifier.py memory overview session1 > s1.txt
+python run_fairifier.py memory overview session2 > s2.txt
 diff s1.txt s2.txt
 ```
 
@@ -213,7 +213,7 @@ Use simple summary without LLM.
 
 **Example**:
 ```bash
-fairifier memory overview my_project -s
+python run_fairifier.py memory overview my_project -s
 ```
 
 **Output**: Statistics + template-based summary (no LLM inference)
@@ -229,7 +229,7 @@ Output raw JSON data instead of pretty format.
 
 **Example**:
 ```bash
-fairifier memory overview my_project --json | jq '.summary'
+python run_fairifier.py memory overview my_project --json | jq '.summary'
 ```
 
 **Output**: Raw JSON object (can pipe to `jq` for processing)
@@ -297,10 +297,10 @@ MEM0_COLLECTION_NAME=fairifier_memories
 
 ```bash
 # 1. Run a workflow to generate memories
-fairifier process examples/inputs/earthworm_4n_paper_bioRxiv.pdf --project-id test_overview
+python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRxiv.pdf --project-id test_overview
 
 # 2. Generate overview
-fairifier memory overview test_overview
+python run_fairifier.py memory overview test_overview
 
 # 3. Verify output quality
 # - Summary should mention domain (e.g., "alpine ecology")
@@ -325,7 +325,7 @@ pytest tests/test_mem0_overview.py -v
 
 ```bash
 # After workflow completes
-fairifier memory overview <session_id>
+python run_fairifier.py memory overview <session_id>
 ```
 
 **Why**: Understand what patterns the system learned for better next run.
@@ -333,7 +333,7 @@ fairifier memory overview <session_id>
 ### 2. Use Simple Mode for Quick Checks
 
 ```bash
-fairifier memory overview <session_id> -s
+python run_fairifier.py memory overview <session_id> -s
 ```
 
 **Why**: Faster, no LLM cost, good for quick status checks.
@@ -343,7 +343,7 @@ fairifier memory overview <session_id> -s
 If overview shows low-value facts:
 
 ```bash
-fairifier memory clear <session_id>
+python run_fairifier.py memory clear <session_id>
 ```
 
 **When**: After optimizing extraction prompt, clear old memories.
@@ -351,7 +351,7 @@ fairifier memory clear <session_id>
 ### 4. Export for Documentation
 
 ```bash
-fairifier memory overview <session_id> > docs/session_learnings.md
+python run_fairifier.py memory overview <session_id> > docs/session_learnings.md
 ```
 
 **Why**: Document workflow insights for reproducibility.
@@ -383,10 +383,10 @@ docker run -d -p 6333:6333 qdrant/qdrant
 **Solution**:
 ```bash
 # List all sessions with memories
-fairifier memory status
+python run_fairifier.py memory status
 
 # Check if workflow completed
-fairifier status <session_id>
+python run_fairifier.py status <session_id>
 ```
 
 ### Issue: LLM summary is generic/unhelpful
@@ -396,10 +396,10 @@ fairifier status <session_id>
 **Solution**:
 ```bash
 # Use simple summary instead
-fairifier memory overview <session_id> -s
+python run_fairifier.py memory overview <session_id> -s
 
 # Or inspect raw memories
-fairifier memory list <session_id>
+python run_fairifier.py memory list <session_id>
 ```
 
 ### Issue: Themes not capturing domain
@@ -425,10 +425,10 @@ Potential improvements (v1.3.0+):
 
 ## 📚 Related Commands
 
-- `fairifier memory list <session_id>` - List all memories in detail
-- `fairifier memory clear <session_id>` - Delete session memories
-- `fairifier memory status` - Check mem0 service status
-- `fairifier status <session_id>` - Check workflow run status
+- `python run_fairifier.py memory list <session_id>` - List all memories in detail
+- `python run_fairifier.py memory clear <session_id>` - Delete session memories
+- `python run_fairifier.py memory status` - Check mem0 service status
+- `python run_fairifier.py status <session_id>` - Check workflow run status
 
 ---
 
@@ -449,23 +449,23 @@ You're processing multiple documents from an alpine ecology research project.
 
 ```bash
 # Process first document
-fairifier process alpine_study_1.pdf --project-id alpine_project
+python run_fairifier.py process alpine_study_1.pdf --project-id alpine_project
 
 # Check what was learned
-fairifier memory overview alpine_project
+python run_fairifier.py memory overview alpine_project
 
 # Output shows: "alpine ecology + metagenomics + elevation gradients"
 
 # Process second document (benefits from memories)
-fairifier process alpine_study_2.pdf --project-id alpine_project
+python run_fairifier.py process alpine_study_2.pdf --project-id alpine_project
 
 # Check updated learnings
-fairifier memory overview alpine_project
+python run_fairifier.py memory overview alpine_project
 
 # Output shows accumulated knowledge from both documents
 
 # Export final overview
-fairifier memory overview alpine_project > alpine_project_summary.md
+python run_fairifier.py memory overview alpine_project > alpine_project_summary.md
 ```
 
 ### Result
