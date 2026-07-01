@@ -644,10 +644,16 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.mineru_cli_path = os.getenv("MINERU_CLI_PATH")
     if os.getenv("MINERU_BACKEND"):
         config_instance.mineru_backend = os.getenv("MINERU_BACKEND")
-    if os.getenv("MINERU_SERVER_URL"):
-        config_instance.mineru_server_url = os.getenv("MINERU_SERVER_URL")
-    if os.getenv("MINERU_VLM_URL"):
-        config_instance.mineru_server_url = os.getenv("MINERU_VLM_URL")
+    from fairifier.services.mineru_client import resolve_mineru_server_url_from_env
+
+    resolved_server_url, url_warning = resolve_mineru_server_url_from_env(
+        server_url=os.getenv("MINERU_SERVER_URL"),
+        vlm_url=os.getenv("MINERU_VLM_URL"),
+    )
+    if url_warning:
+        logging.getLogger(__name__).warning(url_warning)
+    if resolved_server_url:
+        config_instance.mineru_server_url = resolved_server_url
     if os.getenv("MINERU_API_URL"):
         config_instance.mineru_api_url = os.getenv("MINERU_API_URL")
     if os.getenv("MINERU_EFFORT"):

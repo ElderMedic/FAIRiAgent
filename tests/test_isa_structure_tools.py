@@ -245,6 +245,60 @@ def test_isa_value_mapper_falls_back_when_agentic_result_is_empty(monkeypatch):
     ]
 
 
+def test_isa_value_mapper_fills_missing_core_study_identifier(monkeypatch):
+    agent = ISAValueMapperAgent()
+
+    async def fake_llm_matrix(**_kwargs):
+        return {
+            "investigation": {
+                "columns": ["investigation title"],
+                "rows": [{"investigation title": "PETase enzyme engineering"}],
+            },
+            "study": {
+                "columns": ["study title"],
+                "rows": [{"study title": "PETase activity screen"}],
+            },
+            "observationunit": {
+                "columns": ["observation unit identifier", "observation unit name"],
+                "rows": [
+                    {
+                        "observation unit identifier": "WT_PETase",
+                        "observation unit name": "Wild-type PETase",
+                    }
+                ],
+            },
+            "sample": {"columns": [], "rows": []},
+            "assay": {"columns": [], "rows": []},
+        }
+
+    monkeypatch.setattr(agent, "_build_matrix_with_llm", fake_llm_matrix)
+    state = {
+        "metadata_fields": [
+            {
+                "field_name": "study title",
+                "value": "PETase activity screen",
+                "isa_sheet": "study",
+                "confidence": 0.9,
+            }
+        ],
+        "retrieved_knowledge": [],
+        "source_workspace": {},
+        "document_info": {"doi": "10.1002/anie.202218390"},
+        "artifacts": {},
+        "confidence_scores": {},
+        "context": {},
+        "agent_guidance": {},
+        "errors": [],
+    }
+
+    result = asyncio.run(agent.execute(state))
+
+    matrix = json.loads(result["artifacts"]["isa_values_json"])
+    assert matrix["study"]["rows"][0]["study identifier"] == "STUDY_10_1002_anie_202218390"
+    assert matrix["study"]["rows"][0]["investigation identifier"] == "INV_10_1002_anie_202218390"
+    assert matrix["observationunit"]["rows"][0]["study identifier"] == "STUDY_10_1002_anie_202218390"
+
+
 def test_isa_value_mapper_seeds_rows_from_source_workspace_sheet_headers(monkeypatch, tmp_path):
     agent = ISAValueMapperAgent()
 

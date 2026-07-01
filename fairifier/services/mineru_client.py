@@ -20,6 +20,46 @@ from .mineru_paths import (
 logger = logging.getLogger(__name__)
 
 
+def mineru_backend_requires_vlm_url(backend: str) -> bool:
+    """Return True when the backend expects a remote OpenAI-compatible VLM URL."""
+    return "http-client" in (backend or "")
+
+
+def mineru_runtime_enabled(
+    *,
+    enabled: bool,
+    backend: str,
+    server_url: Optional[str],
+) -> bool:
+    """Return True when MinerU should be initialised for the configured backend."""
+    if not enabled:
+        return False
+    if mineru_backend_requires_vlm_url(backend):
+        return bool(server_url)
+    return True
+
+
+def resolve_mineru_server_url_from_env(
+    *,
+    server_url: Optional[str],
+    vlm_url: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve VLM endpoint from env aliases with documented precedence.
+
+    ``MINERU_VLM_URL`` wins when both variables are set. Returns
+    ``(resolved_url, warning_message)``.
+    """
+    server = (server_url or "").strip() or None
+    vlm = (vlm_url or "").strip() or None
+    if vlm and server and server != vlm:
+        return vlm, (
+            f"MINERU_VLM_URL ({vlm}) overrides MINERU_SERVER_URL ({server}); "
+            "use one variable or keep both identical."
+        )
+    resolved = vlm or server
+    return resolved, None
+
+
 class MinerUConversionError(RuntimeError):
     """Raised when MinerU conversion fails."""
 
@@ -86,10 +126,9 @@ def structured_output_metadata(result: Any) -> Dict[str, Any]:
 
 def mineru_client_from_config(config: Any) -> "MinerUClient":
     """Build a :class:`MinerUClient` from ``fairifier.config`` settings."""
-    vlm_url = getattr(config, "mineru_vlm_url", None) or config.mineru_server_url
     return MinerUClient(
         cli_path=config.mineru_cli_path,
-        server_url=vlm_url or "",
+        server_url=config.mineru_server_url or "",
         api_url=getattr(config, "mineru_api_url", None),
         backend=config.mineru_backend,
         timeout_seconds=config.mineru_timeout_seconds,

@@ -13,6 +13,7 @@ from ..services.mineru_client import (
     MinerUClient,
     MinerUConversionError,
     mineru_client_from_config,
+    mineru_runtime_enabled,
     structured_output_metadata,
 )
 
@@ -52,7 +53,11 @@ def create_mineru_convert_tool(client=None):
     from ..config import config
 
     if client is None:
-        if config.mineru_enabled and config.mineru_server_url:
+        if mineru_runtime_enabled(
+            enabled=config.mineru_enabled,
+            backend=config.mineru_backend,
+            server_url=config.mineru_server_url,
+        ):
             try:
                 client = mineru_client_from_config(config)
                 if not client.is_available():

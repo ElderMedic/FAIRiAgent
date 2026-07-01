@@ -68,6 +68,68 @@ def test_petase_local_package_hint_limits_generic_environment_candidates():
     assert candidates == ["default", "petase_enzyme_engineering"]
 
 
+def test_petase_local_package_prunes_biological_default_sample_fields():
+    kr = _make_kr_without_init()
+
+    fields = [
+        {
+            "label": "investigation identifier",
+            "sheetName": "Investigation",
+            "packageName": "default",
+        },
+        {
+            "label": "ncbi taxonomy id",
+            "sheetName": "Sample",
+            "packageName": "default",
+        },
+        {
+            "label": "sample name",
+            "sheetName": "Sample",
+            "packageName": "default",
+        },
+        {
+            "label": "enzyme type",
+            "sheetName": "Sample",
+            "packageName": "petase_enzyme_engineering",
+        },
+    ]
+
+    pruned = kr._prune_default_fields_for_local_domain_package(
+        fields,
+        selected_package_names=["default", "petase_enzyme_engineering"],
+        local_package_registry={"petase_enzyme_engineering": {"metadata": []}},
+    )
+
+    assert [field["label"] for field in pruned] == [
+        "investigation identifier",
+        "enzyme type",
+    ]
+
+
+def test_petase_local_package_clamps_final_selected_packages():
+    kr = _make_kr_without_init()
+
+    selected = kr._clamp_selected_packages_for_local_domain(
+        selected_package_names=[
+            "petase_enzyme_engineering",
+            "default",
+            "miappe",
+            "miscellaneous natural or artificial environment",
+            "soil",
+        ],
+        local_domain_package_hints=["petase_enzyme_engineering"],
+        available_package_names=[
+            "default",
+            "miappe",
+            "miscellaneous natural or artificial environment",
+            "soil",
+            "petase_enzyme_engineering",
+        ],
+    )
+
+    assert selected == ["default", "petase_enzyme_engineering"]
+
+
 def test_search_local_package_fields_matches_labels_and_definitions():
     kr = _make_kr_without_init()
     kr._local_package_registry = {

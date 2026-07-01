@@ -18,7 +18,59 @@ from fairifier.services.mineru_client import (
     MinerUClient,
     MinerUConversionError,
     MinerUConversionResult,
+    mineru_backend_requires_vlm_url,
+    mineru_runtime_enabled,
+    resolve_mineru_server_url_from_env,
 )
+
+
+class TestMinerURuntimeHelpers:
+    """Unit tests for MinerU env resolution and runtime gating."""
+
+    def test_resolve_server_url_prefers_vlm_when_both_set(self):
+        resolved, warning = resolve_mineru_server_url_from_env(
+            server_url="http://localhost:30000",
+            vlm_url="http://localhost:40000",
+        )
+        assert resolved == "http://localhost:40000"
+        assert warning is not None
+        assert "MINERU_VLM_URL" in warning
+
+    def test_resolve_server_url_uses_server_when_only_server_set(self):
+        resolved, warning = resolve_mineru_server_url_from_env(
+            server_url="http://localhost:30000",
+            vlm_url=None,
+        )
+        assert resolved == "http://localhost:30000"
+        assert warning is None
+
+    def test_resolve_server_url_no_warning_when_identical(self):
+        resolved, warning = resolve_mineru_server_url_from_env(
+            server_url="http://localhost:30000",
+            vlm_url="http://localhost:30000",
+        )
+        assert resolved == "http://localhost:30000"
+        assert warning is None
+
+    def test_runtime_enabled_without_vlm_url_for_pipeline_backend(self):
+        assert mineru_runtime_enabled(
+            enabled=True,
+            backend="pipeline",
+            server_url=None,
+        )
+
+    def test_runtime_disabled_without_vlm_url_for_http_client_backend(self):
+        assert not mineru_runtime_enabled(
+            enabled=True,
+            backend="vlm-http-client",
+            server_url=None,
+        )
+
+    def test_backend_requires_vlm_url_only_for_http_client(self):
+        assert mineru_backend_requires_vlm_url("vlm-http-client")
+        assert mineru_backend_requires_vlm_url("hybrid-http-client")
+        assert not mineru_backend_requires_vlm_url("pipeline")
+        assert not mineru_backend_requires_vlm_url("hybrid-auto-engine")
 
 
 @pytest.fixture

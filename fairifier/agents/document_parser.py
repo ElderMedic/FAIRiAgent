@@ -20,7 +20,12 @@ from ..services.retrieval_cache import get_cache_bucket
 from ..tools.science_tools import create_science_tools
 from ..tools.bio_tools import create_bio_tools
 from ..utils.llm_helper import get_llm_helper
-from ..services.mineru_client import MinerUClient, MinerUConversionError, mineru_client_from_config
+from ..services.mineru_client import (
+    MinerUClient,
+    MinerUConversionError,
+    mineru_client_from_config,
+    mineru_runtime_enabled,
+)
 from ..tools.mineru_tools import create_mineru_convert_tool
 
 
@@ -35,7 +40,11 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
         
         self.mineru_client: Optional[MinerUClient] = None
         self.mineru_tool = None
-        if config.mineru_enabled and config.mineru_server_url:
+        if mineru_runtime_enabled(
+            enabled=config.mineru_enabled,
+            backend=config.mineru_backend,
+            server_url=config.mineru_server_url,
+        ):
             try:
                 candidate = mineru_client_from_config(config)
                 if candidate.is_available():

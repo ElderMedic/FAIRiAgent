@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from pathlib import Path
 from fairifier.tools.mineru_tools import create_mineru_convert_tool, MinerUToolResult
-from fairifier.services.mineru_client import MinerUConversionError, MinerUConversionResult
+from fairifier.services.mineru_client import MinerUClient, MinerUConversionError, MinerUConversionResult
 
 
 @pytest.fixture
@@ -150,6 +150,20 @@ class TestConvertDocumentTool:
 
 class TestToolWithoutClient:
     """Test tool behavior when client is not available."""
+
+    @patch("fairifier.tools.mineru_tools.mineru_client_from_config")
+    @patch("fairifier.config.config")
+    def test_creates_client_for_pipeline_without_server_url(
+        self, mock_config, mock_from_config
+    ):
+        mock_config.mineru_enabled = True
+        mock_config.mineru_backend = "pipeline"
+        mock_config.mineru_server_url = None
+        mock_from_config.return_value = MagicMock(spec=MinerUClient)
+
+        create_mineru_convert_tool(client=None)
+
+        mock_from_config.assert_called_once_with(mock_config)
     
     @patch('fairifier.config.config')
     def test_creates_tool_with_unavailable_client(self, mock_config):

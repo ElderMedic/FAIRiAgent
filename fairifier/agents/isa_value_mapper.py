@@ -233,6 +233,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         # ── Post-process: normalize, split entities, align columns ───
         matrix = self._split_entities_heuristic(matrix)
         matrix = self._normalize_row_columns(matrix)
+        matrix = self._ensure_core_linkage_fields(matrix, state)
         quality = self._compute_matrix_quality(matrix, tool_metrics, tool_issues)
         state["isa_value_quality"] = quality
 
@@ -898,6 +899,92 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                         row[col] = ""
 
         return matrix
+
+    def _ensure_core_linkage_fields(
+        self,
+        matrix: Dict[str, Dict[str, Any]],
+        state: FAIRifierState,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fill required ISA workbook linkage identifiers after extraction.
+
+        The LLM prompt correctly discourages inventing document facts, but ISA
+        identifiers are workbook keys. Leaving them blank makes otherwise useful
+        extractions fail schema validation, so derive stable IDs from document
+        context only when the corresponding rows already exist.
+        """
+        fallback = self._derive_document_identifier(state)
+
+        inv_id = self._first_value(matrix, "investigation", "investigation identifier")
+        study_id = self._first_value(matrix, "study", "study identifier")
+
+        if not inv_id and study_id:
+            inv_id = self._prefixed_identifier("INV", study_id)
+        elif not inv_id:
+            inv_id = self._prefixed_identifier("INV", fallback)
+
+        if not study_id:
+            study_id = self._prefixed_identifier("STUDY", fallback or inv_id)
+
+        self._fill_missing_column(matrix, "investigation", "investigation identifier", inv_id)
+        self._fill_missing_column(matrix, "study", "study identifier", study_id)
+        self._fill_missing_column(matrix, "study", "investigation identifier", inv_id)
+        self._fill_missing_column(matrix, "observationunit", "study identifier", study_id)
+        return self._normalize_row_columns(matrix)
+
+    def _fill_missing_column(
+        self,
+        matrix: Dict[str, Dict[str, Any]],
+        level: str,
+        column: str,
+        value: str,
+    ) -> None:
+        if not value:
+            return
+        sheet = matrix.get(level) or {}
+        rows = sheet.get("rows") or []
+        if not rows:
+            return
+        columns = sheet.setdefault("columns", [])
+        if column not in columns:
+            columns.append(column)
+        for row in rows:
+            if isinstance(row, dict) and not str(row.get(column) or "").strip():
+                row[column] = value
+
+    def _derive_document_identifier(self, state: FAIRifierState) -> str:
+        doc_info = state.get("document_info") or {}
+        if not isinstance(doc_info, dict):
+            doc_info = {}
+        source_workspace = state.get("source_workspace") or {}
+        candidates = [
+            doc_info.get("doi"),
+            doc_info.get("document_id"),
+            state.get("document_id"),
+            state.get("project_id"),
+            doc_info.get("title"),
+            state.get("document_path"),
+            source_workspace.get("root_dir") if isinstance(source_workspace, dict) else "",
+        ]
+        for candidate in candidates:
+            text = str(candidate or "").strip()
+            if text:
+                return self._slug_identifier(text)
+        return "document"
+
+    def _prefixed_identifier(self, prefix: str, raw: str) -> str:
+        slug = self._slug_identifier(raw or "document")
+        prefix_norm = self._slug_identifier(prefix).upper()
+        if slug.upper().startswith(f"{prefix_norm}_"):
+            return slug
+        return f"{prefix_norm}_{slug}"
+
+    def _slug_identifier(self, value: str) -> str:
+        text = str(value or "").strip()
+        text = re.sub(r"^(?:https?://)?(?:dx\.)?doi\.org/", "", text, flags=re.IGNORECASE)
+        if "/" in text and not re.match(r"^10\.\d{4,9}/", text, flags=re.IGNORECASE):
+            text = Path(text).stem or text
+        slug = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")
+        return slug or "document"
 
     # ── Helpers ───────────────────────────────────────────────────────
 

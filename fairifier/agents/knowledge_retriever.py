@@ -838,6 +838,18 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 if pkg in selected_package_names:
                     selected_package_names.remove(pkg)
                 selected_package_names.insert(0, pkg)
+            clamped_package_names = self._clamp_selected_packages_for_local_domain(
+                selected_package_names,
+                local_domain_package_hints,
+                available_package_names,
+            )
+            if clamped_package_names != selected_package_names:
+                self.log_execution(
+                    state,
+                    "🧩 Clamped selected packages to PETase domain package(s): "
+                    f"{clamped_package_names}"
+                )
+                selected_package_names = clamped_package_names
             if not selected_package_names:
                 selected_package_names = priority_package_hints[:]
             if not selected_package_names:
@@ -1545,6 +1557,94 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 if normalized_query in haystack:
                     hits.append(field)
         return self._deduplicate_package_fields(hits)
+
+    @staticmethod
+    def _is_petase_package_name(package_name: str) -> bool:
+        lowered = str(package_name).lower()
+        return any(token in lowered for token in ("petase", "enzyme_engineering", "depolymer"))
+
+    def _prune_default_fields_for_local_domain_package(
+        self,
+        fields: List[Dict[str, Any]],
+        selected_package_names: List[str],
+        local_package_registry: Dict[str, Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Avoid forcing generic biological default fields for PETase local packages.
+
+        The FAIRDS default package contains useful Investigation/Study core fields,
+        but its Sample defaults (taxonomy, biosafety, collection date) are MIxS-like
+        biological sampling fields. For PETase enzyme/material papers they caused
+        systematic over-extraction and low precision in full-run evaluation.
+        """
+        selected_local_petase = any(
+            package_name in local_package_registry
+            and self._is_petase_package_name(package_name)
+            for package_name in selected_package_names
+        )
+        if not selected_local_petase:
+            return fields
+
+        allowed_default = {
+            ("investigation", "investigation identifier"),
+            ("investigation", "investigation title"),
+            ("investigation", "investigation description"),
+            ("study", "study identifier"),
+            ("study", "study title"),
+            ("study", "study description"),
+            ("study", "investigation identifier"),
+            ("observationunit", "observation unit identifier"),
+            ("observationunit", "observation unit name"),
+            ("observationunit", "observation unit description"),
+            ("observationunit", "study identifier"),
+            ("assay", "assay identifier"),
+            ("assay", "assay name"),
+            ("assay", "assay description"),
+            ("assay", "protocol"),
+            ("assay", "facility"),
+            ("assay", "assay date"),
+        }
+
+        pruned: List[Dict[str, Any]] = []
+        for field in fields:
+            package_name = str(field.get("packageName", "")).strip().lower()
+            if package_name != "default":
+                pruned.append(field)
+                continue
+            sheet = FAIRDSAPIParser.normalize_isa_sheet(
+                FAIRDSAPIParser.raw_isa_level_from_field(field)
+            )
+            label = str(field.get("label", "")).strip().lower()
+            if (sheet, label) in allowed_default:
+                pruned.append(field)
+        return pruned
+
+    def _clamp_selected_packages_for_local_domain(
+        self,
+        selected_package_names: List[str],
+        local_domain_package_hints: List[str],
+        available_package_names: List[str],
+    ) -> List[str]:
+        """Constrain PETase runs to core + local domain packages.
+
+        Deep package selection can otherwise reintroduce broad ENA/MIxS packages
+        after the first-pass candidate set was narrowed, which was a major source
+        of over-extraction in the PETase full run.
+        """
+        if not any(self._is_petase_package_name(pkg) for pkg in local_domain_package_hints):
+            return selected_package_names
+
+        default_name = next(
+            (name for name in available_package_names if name.lower() == "default"),
+            "default",
+        )
+        clamped_package_names: List[str] = []
+        for package_name in [default_name, *local_domain_package_hints]:
+            if (
+                package_name in available_package_names
+                and package_name not in clamped_package_names
+            ):
+                clamped_package_names.append(package_name)
+        return clamped_package_names or selected_package_names
 
     def _infer_local_domain_package_hints(
         self,
