@@ -67,10 +67,18 @@ fi
 
 echo ""
 
-TEST_DOC="examples/inputs/earthworm_4n_paper_bioRxiv.pdf"
+TEST_DOC="examples/inputs/sample_study.txt"
 if [ ! -f "$TEST_DOC" ]; then
-    echo "❌ Bundled sample not found: $TEST_DOC"
-    exit 1
+    # Fallback to locally available PDF files if sample_study.txt is missing
+    if [ -f "examples/inputs/earthworm_4n_paper_bioRxiv.pdf" ]; then
+        TEST_DOC="examples/inputs/earthworm_4n_paper_bioRxiv.pdf"
+    elif [ -f "examples/inputs/BIOREM_appendix2.pdf" ]; then
+        TEST_DOC="examples/inputs/BIOREM_appendix2.pdf"
+    else
+        echo "❌ No test document found in examples/inputs/!"
+        echo "   Please place a PDF or text file there and specify it."
+        exit 1
+    fi
 fi
 
 # Create output directory

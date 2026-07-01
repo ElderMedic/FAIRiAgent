@@ -1,0 +1,13 @@
+Title: Metagenomic Analysis of Soil Microbiomes in Alpine Grasslands
+
+Authors: Jane Doe (Wageningen University), John Smith (Systems Biology NL)
+
+Abstract:
+We performed shotgun metagenomic sequencing of soil samples collected from alpine grasslands in the Swiss Alps across an elevation gradient (2000m, 2500m, and 3000m). Using Illumina NovaSeq, we sequenced DNA extracted from 9 soil cores. Our analysis reveals distinct bacterial and archaeal community shifts correlated with altitude and soil pH. This study maps the taxonomic and functional profiles to standardized ontologies.
+
+Metadata Variables:
+- Location: Swiss Alps (46.62 N, 8.04 E)
+- Organisms: Soil metagenome
+- Platform: Illumina NovaSeq 6000
+- Project Name: Alpine Soil Metagenomics (ASM)
+- Sample Size: 9 cores
