@@ -299,6 +299,61 @@ def test_isa_value_mapper_fills_missing_core_study_identifier(monkeypatch):
     assert matrix["observationunit"]["rows"][0]["study identifier"] == "STUDY_10_1002_anie_202218390"
 
 
+def test_isa_value_mapper_normalizes_existing_doi_identifiers(monkeypatch):
+    agent = ISAValueMapperAgent()
+
+    async def fake_llm_matrix(**_kwargs):
+        return {
+            "investigation": {
+                "columns": ["investigation identifier", "investigation title"],
+                "rows": [{
+                    "investigation identifier": "10.1038/s41586-020-2149-4",
+                    "investigation title": "PET bottle depolymerase",
+                }],
+            },
+            "study": {
+                "columns": ["study identifier", "investigation identifier", "study title"],
+                "rows": [{
+                    "study identifier": "10.1038/s41586-020-2149-4",
+                    "investigation identifier": "10.1038/s41586-020-2149-4",
+                    "study title": "Nature 2020 PETase",
+                }],
+            },
+            "observationunit": {
+                "columns": ["observation unit identifier", "study identifier"],
+                "rows": [{
+                    "observation unit identifier": "OU_1",
+                    "study identifier": "10.1038/s41586-020-2149-4",
+                }],
+            },
+            "sample": {"columns": [], "rows": []},
+            "assay": {"columns": [], "rows": []},
+        }
+
+    monkeypatch.setattr(agent, "_build_matrix_with_llm", fake_llm_matrix)
+    state = {
+        "metadata_fields": [
+            {"field_name": "study title", "value": "Nature 2020 PETase", "isa_sheet": "study"}
+        ],
+        "retrieved_knowledge": [],
+        "source_workspace": {},
+        "document_info": {"doi": "10.1038/s41586-020-2149-4"},
+        "artifacts": {},
+        "confidence_scores": {},
+        "context": {},
+        "agent_guidance": {},
+        "errors": [],
+    }
+
+    result = asyncio.run(agent.execute(state))
+
+    matrix = json.loads(result["artifacts"]["isa_values_json"])
+    assert matrix["investigation"]["rows"][0]["investigation identifier"] == "10_1038_s41586_020_2149_4"
+    assert matrix["study"]["rows"][0]["study identifier"] == "10_1038_s41586_020_2149_4"
+    assert matrix["study"]["rows"][0]["investigation identifier"] == "10_1038_s41586_020_2149_4"
+    assert matrix["observationunit"]["rows"][0]["study identifier"] == "10_1038_s41586_020_2149_4"
+
+
 def test_isa_value_mapper_seeds_rows_from_source_workspace_sheet_headers(monkeypatch, tmp_path):
     agent = ISAValueMapperAgent()
 

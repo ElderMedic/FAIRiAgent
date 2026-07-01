@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────────────────
 
 ISA_LEVELS = ISA_LEVEL_ORDER
+_FAIRDS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.-]{5,50}$")
 
 # Fields that are internal database keys (not extractable from documents).
 # The agent should NOT fabricate values for these.
@@ -914,8 +915,12 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         """
         fallback = self._derive_document_identifier(state)
 
-        inv_id = self._first_value(matrix, "investigation", "investigation identifier")
-        study_id = self._first_value(matrix, "study", "study identifier")
+        inv_id = self._normalize_core_identifier(
+            self._first_value(matrix, "investigation", "investigation identifier")
+        )
+        study_id = self._normalize_core_identifier(
+            self._first_value(matrix, "study", "study identifier")
+        )
 
         if not inv_id and study_id:
             inv_id = self._prefixed_identifier("INV", study_id)
@@ -929,6 +934,10 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         self._fill_missing_column(matrix, "study", "study identifier", study_id)
         self._fill_missing_column(matrix, "study", "investigation identifier", inv_id)
         self._fill_missing_column(matrix, "observationunit", "study identifier", study_id)
+        self._normalize_existing_column(matrix, "investigation", "investigation identifier")
+        self._normalize_existing_column(matrix, "study", "study identifier")
+        self._normalize_existing_column(matrix, "study", "investigation identifier")
+        self._normalize_existing_column(matrix, "observationunit", "study identifier")
         return self._normalize_row_columns(matrix)
 
     def _fill_missing_column(
@@ -950,6 +959,22 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         for row in rows:
             if isinstance(row, dict) and not str(row.get(column) or "").strip():
                 row[column] = value
+
+    def _normalize_existing_column(
+        self,
+        matrix: Dict[str, Dict[str, Any]],
+        level: str,
+        column: str,
+    ) -> None:
+        sheet = matrix.get(level) or {}
+        rows = sheet.get("rows") or []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            current = str(row.get(column) or "").strip()
+            normalized = self._normalize_core_identifier(current)
+            if normalized and normalized != current:
+                row[column] = normalized
 
     def _derive_document_identifier(self, state: FAIRifierState) -> str:
         doc_info = state.get("document_info") or {}
@@ -977,6 +1002,14 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         if slug.upper().startswith(f"{prefix_norm}_"):
             return slug
         return f"{prefix_norm}_{slug}"
+
+    def _normalize_core_identifier(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if _FAIRDS_IDENTIFIER_RE.fullmatch(text):
+            return text
+        return self._slug_identifier(text)
 
     def _slug_identifier(self, value: str) -> str:
         text = str(value or "").strip()

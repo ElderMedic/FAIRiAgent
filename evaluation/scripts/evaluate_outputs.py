@@ -455,49 +455,32 @@ class EvaluationOrchestrator:
         return results
     
     def _compute_aggregate_score(self, results: Dict[str, Any]) -> float:
-        """Compute overall aggregate quality score."""
+        """Compute overall aggregate quality score.
+
+        Primary score should reflect ground-truth coverage and GT-field quality.
+        Extra inferred metadata is reported separately and should not be a
+        first-order penalty in the headline metric.
+        """
         scores = []
         weights = []
         
-        # Completeness (25%)
+        # GT completeness (55%)
         if 'completeness' in results:
             comp = results['completeness']['aggregated'].get('mean_overall_completeness', 0.0)
             scores.append(comp)
-            weights.append(0.25)
+            weights.append(0.55)
         
-        # Correctness (30%)
+        # GT-only accuracy (35%)
         if 'correctness' in results:
-            corr = results['correctness']['aggregated'].get('mean_f1_score', 0.0)
+            corr = results['correctness']['aggregated'].get('mean_gt_value_accuracy', 0.0)
             scores.append(corr)
-            weights.append(0.30)
+            weights.append(0.35)
         
         # Schema compliance (10%)
         if 'schema_validation' in results:
             schema = results['schema_validation']['aggregated'].get('mean_compliance_rate', 0.0)
             scores.append(schema)
             weights.append(0.10)
-        
-        # LLM Judge (10%)
-        if 'llm_judge' in results:
-            judge = results['llm_judge']['aggregated'].get('mean_overall_score', 0.0)
-            scores.append(judge)
-            weights.append(0.10)
-        
-        # Internal Metrics (15%) - Use FAIRiAgent's own confidence scores
-        if 'internal_metrics' in results:
-            internal = results['internal_metrics']['aggregated']
-            # Use mean overall confidence from workflow, or fallback to metadata confidence
-            internal_score = internal.get('mean_overall_confidence', 0.0)
-            if internal_score == 0.0:
-                # Fallback: use critic confidence or field confidence
-                internal_score = (
-                    internal.get('mean_critic_confidence', 0.0) * 0.4 +
-                    internal.get('mean_field_confidence', 0.0) * 0.3 +
-                    internal.get('mean_structural_confidence', 0.0) * 0.2 +
-                    internal.get('mean_validation_confidence', 0.0) * 0.1
-                )
-            scores.append(internal_score)
-            weights.append(0.15)
         
         if not scores:
             return 0.0
@@ -516,6 +499,7 @@ class EvaluationOrchestrator:
             comparison['metrics'][model_name] = {
                 'aggregate_score': results.get('aggregate_score', 0.0),
                 'completeness': results['completeness']['aggregated'].get('mean_overall_completeness', 0.0),
+                'gt_accuracy': results['correctness']['aggregated'].get('mean_gt_value_accuracy', 0.0),
                 'correctness_f1': results['correctness']['aggregated'].get('mean_f1_score', 0.0),
                 'schema_compliance': results['schema_validation']['aggregated'].get('mean_compliance_rate', 0.0),
                 'llm_judge_score': results['llm_judge']['aggregated'].get('mean_overall_score', 0.0)

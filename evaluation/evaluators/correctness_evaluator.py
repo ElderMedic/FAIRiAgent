@@ -118,10 +118,13 @@ class CorrectnessEvaluator:
         gt_field_names = {f['field_name'] for f in ground_truth_fields}
         gt_map = {f['field_name']: f for f in ground_truth_fields}
         
-        # Evaluate field-by-field (only presence, not values)
+        # Evaluate field-by-field (GT-only quality; extras are reported separately)
         field_results = {}
         present_fields = 0
         missing_fields = 0
+        gt_fields_with_values = 0
+        gt_fields_with_evidence = 0
+        gt_fields_confirmed = 0
         
         for field_name in gt_field_names:
             is_present = field_name in extracted_field_names
@@ -129,12 +132,22 @@ class CorrectnessEvaluator:
             if is_present:
                 present_fields += 1
                 extracted_field = next(f for f in extracted_fields if f['field_name'] == field_name)
+                has_value = bool(extracted_field.get('value'))
+                has_evidence = bool(extracted_field.get('evidence'))
+                is_confirmed = str(extracted_field.get('status', '')).lower() == 'confirmed'
+                if has_value:
+                    gt_fields_with_values += 1
+                if has_evidence:
+                    gt_fields_with_evidence += 1
+                if is_confirmed:
+                    gt_fields_confirmed += 1
                 field_results[field_name] = {
                     'is_present': True,
                     'status': 'PRESENT',
                     'confidence': extracted_field.get('confidence', 0.0),
-                    'has_value': bool(extracted_field.get('value')),
-                    'has_evidence': bool(extracted_field.get('evidence'))
+                    'has_value': has_value,
+                    'has_evidence': has_evidence,
+                    'is_confirmed': is_confirmed,
                 }
             else:
                 missing_fields += 1
@@ -143,7 +156,8 @@ class CorrectnessEvaluator:
                     'status': 'MISSING',
                     'confidence': 0.0,
                     'has_value': False,
-                    'has_evidence': False
+                    'has_evidence': False,
+                    'is_confirmed': False,
                 }
         
         # Calculate metrics based on field presence only
@@ -228,6 +242,11 @@ class CorrectnessEvaluator:
                 'adjusted_precision': adjusted_precision,
                 'adjusted_f1': adjusted_f1,
                 'discovery_bonus': discovery_bonus,
+                # GT-only quality metrics: these ignore extra fields entirely.
+                'gt_completeness': present_fields / n_gt_fields if n_gt_fields > 0 else 0.0,
+                'gt_value_accuracy': gt_fields_with_values / n_gt_fields if n_gt_fields > 0 else 0.0,
+                'gt_evidence_accuracy': gt_fields_with_evidence / n_gt_fields if n_gt_fields > 0 else 0.0,
+                'gt_confirmed_accuracy': gt_fields_confirmed / n_gt_fields if n_gt_fields > 0 else 0.0,
             }
         }
         
@@ -315,6 +334,10 @@ class CorrectnessEvaluator:
         
         # Collect metrics
         field_presence_rates = []
+        gt_completeness_scores = []
+        gt_value_accuracies = []
+        gt_evidence_accuracies = []
+        gt_confirmed_accuracies = []
         precisions = []
         recalls = []
         f1_scores = []
@@ -322,12 +345,20 @@ class CorrectnessEvaluator:
         for result in per_document_results.values():
             metrics = result['summary_metrics']
             field_presence_rates.append(metrics['field_presence_rate'])
+            gt_completeness_scores.append(metrics['gt_completeness'])
+            gt_value_accuracies.append(metrics['gt_value_accuracy'])
+            gt_evidence_accuracies.append(metrics['gt_evidence_accuracy'])
+            gt_confirmed_accuracies.append(metrics['gt_confirmed_accuracy'])
             precisions.append(metrics['precision'])
             recalls.append(metrics['recall'])
             f1_scores.append(metrics['f1_score'])
         
         return {
             'mean_field_presence_rate': sum(field_presence_rates) / len(field_presence_rates),
+            'mean_gt_completeness': sum(gt_completeness_scores) / len(gt_completeness_scores),
+            'mean_gt_value_accuracy': sum(gt_value_accuracies) / len(gt_value_accuracies),
+            'mean_gt_evidence_accuracy': sum(gt_evidence_accuracies) / len(gt_evidence_accuracies),
+            'mean_gt_confirmed_accuracy': sum(gt_confirmed_accuracies) / len(gt_confirmed_accuracies),
             'mean_precision': sum(precisions) / len(precisions),
             'mean_recall': sum(recalls) / len(recalls),
             'mean_f1_score': sum(f1_scores) / len(f1_scores),
