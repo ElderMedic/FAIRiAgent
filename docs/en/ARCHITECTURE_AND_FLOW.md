@@ -1,119 +1,204 @@
 # FAIRiAgent System Architecture & Workflow
 
-This document illustrates the high-level architecture and interaction flow of the **FAIRiAgent** system.
+This document illustrates the detailed architecture, agent configurations, interaction flows, and developer setups for **FAIRiAgent**.
+
+---
 
 ## 1. System Architecture Diagram
 
+The system uses a **LangGraph-based multi-agent workflow** with API-aware evaluation and intelligent self-correction:
+
 ```mermaid
-graph TD
-    %% Define Styles
-    classDef input fill:#f9f9f9,stroke:#333,stroke-width:2px,color:#333;
-    classDef process fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#01579b;
-    classDef decision fill:#fff9c4,stroke:#fbc02d,stroke-width:2px,color:#f57f17;
-    classDef knowledge fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20;
-    classDef output fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#4a148c;
-    classDef agent fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#b71c1c;
-
-    %% Input Layer
-    subgraph Input_Layer [📄 Input Processing]
-        direction TB
-        PDF["PDF Document"]:::input --> MinerU["MinerU Parser<br/>Layout Analysis & OCR"]:::process
-        MinerU --> MD["Structured Markdown"]:::input
+flowchart TD
+    subgraph INPUT["📥 Input Layer"]
+        A[📄 PDF Document]
+        M[🔧 MinerU Parser]
+        A --> M
     end
-
-    %% Knowledge Layer
-    subgraph Knowledge_Layer [🧠 Knowledge Retrieval]
-        direction TB
-        Ontology["Ontology Database<br/>ENVO, NCBI, etc."]:::knowledge
-        Schema["Schema Definitions<br/>MIxS Standards"]:::knowledge
-        MD --> ContextRetriever["Context Retriever<br/>RAG System"]:::process
-        Ontology -.-> ContextRetriever
-        Schema -.-> ContextRetriever
-    end
-
-    %% Agentic Core
-    subgraph Agentic_Core [🤖 FAIRiAgent Core Workflow]
+    
+    subgraph ORCHESTRATOR["🎯 Orchestrator (LangGraph)"]
         direction TB
         
-        %% Extraction
-        ContextRetriever --> Generator["Metadata Generator Agent<br/>LLM-based Extraction"]:::agent
+        subgraph PARSE["Step 1: Document Parsing"]
+            B[🔍 Document Parser<br/>LLM Extraction]
+            C1[🧑⚖️ Critic]
+            B --> C1
+        end
         
-        %% Validation Loop
-        Generator --> JSON["Draft JSON Metadata"]:::process
-        JSON --> Critic["Critic Agent<br/>Self-Reflection & Validation"]:::agent
+        subgraph BIO["Step 2: Bioinformatics (conditional)"]
+            G[🧬 BioMetadataAgent<br/>Containerised tools]
+        end
         
-        Critic --> Check{"Pass Threshold?<br/>Confidence > 0.75"}:::decision
+        subgraph PLAN["Step 3: Planning"]
+            D[📋 Planner<br/>Agent-specific guidance]
+        end
         
-        %% Feedback Loop
-        Check --|No Retry| Feedback["Generate Critique &<br/>Refinement Instructions"]:::process
-        Feedback --> Generator
+        subgraph RETRIEVE["Step 4: Knowledge Retrieval"]
+            E[🧠 Knowledge Retriever<br/>FAIR-DS API + Local KB]
+            C2[🧑⚖️ Critic]
+            E --> C2
+        end
         
-        %% Finalization
-        Check --|Yes| Finalizer["Format & Finalize"]:::process
+        subgraph GENERATE["Step 5: JSON Generation"]
+            F[📝 JSON Generator<br/>ISA-Tab Mapping]
+            C3[🧑⚖️ Critic]
+            F --> C3
+        end
+        
+        subgraph MAP["Step 6: ISA Value Mapping"]
+            H[🔗 ISA Value Mapper<br/>Entity Grouping + Terms]
+        end
     end
-
-    %% Output Layer
-    subgraph Output_Layer [💾 Standardized Output]
-        direction TB
-        Finalizer --> ISATab["ISA-Tab Format"]:::output
-        Finalizer --> JSON_Out["Standardized JSON"]:::output
-        Finalizer --> Report["Validation Report"]:::output
+    
+    subgraph EXTERNAL["🌐 External Services"]
+        API[🗄️ FAIR-DS API<br/>59 Packages, 892 Terms]
+        FAIR[📊 FAIR-DS Validator<br/>ShEx Schema]
     end
-
-    %% Data Flow
-    Input_Layer --> Knowledge_Layer
-    Knowledge_Layer --> Agentic_Core
-    Agentic_Core --> Output_Layer
-
-    %% Link Styles
-    linkStyle default stroke:#666,stroke-width:2px;
+    
+    subgraph OUTPUT["📤 Output Layer"]
+        J[📊 FAIR Metadata JSON]
+        R[📋 Workflow Report<br/>Confidence + Evidence]
+    end
+    
+    M --> B
+    C1 -->|ACCEPT| G
+    C1 -->|RETRY| B
+    G --> D
+    D --> E
+    API -.->|packages, terms| E
+    E -.->|api_capabilities| C2
+    C2 -->|ACCEPT| F
+    C2 -->|RETRY| E
+    C3 -->|ACCEPT| H
+    C3 -->|RETRY| F
+    H --> J
+    J --> R
+    FAIR -.->|validate| J
+    
+    style A fill:#e3f2fd,stroke:#1565c0
+    style J fill:#c8e6c9,stroke:#2e7d32
+    style C1 fill:#fff9c4,stroke:#f9a825
+    style C2 fill:#fff9c4,stroke:#f9a825
+    style C3 fill:#fff9c4,stroke:#f9a825
+    style API fill:#e8f5e9,stroke:#43a047
+    style R fill:#f3e5f5,stroke:#8e24aa
 ```
 
-## 2. Module Descriptions
+---
 
-### 📄 Input Processing (Grey)
-Handles the ingestion of raw scientific documents.
-*   **MinerU Parser:** A specialized tool for high-fidelity PDF-to-Markdown conversion. It preserves document structure, tables, and scientific notation, which is critical for accurate metadata extraction.
-*   **Tool Integration:** MinerU is exposed as a LangChain tool (`convert_document`), enabling transparent document conversion with full tracing in LangSmith.
+## 2. Agent & Node Breakdown
 
-### 🧠 Knowledge Retrieval (Green)
-Grounds the agent's generation in established scientific standards.
-*   **FAIR Data Station Client:** Integrates with the FAIR-DS API for metadata retrieval:
-    - `GET /api/package?name={name}` - Fetch specific metadata packages efficiently (e.g., miappe, soil, default)
-    - `GET /api/terms?label={pattern}` - Search terms by label with server-side filtering
-    - `GET /api/terms?definition={pattern}` - Search terms by definition
-*   **LangChain Tools Layer (v1.0+):** External dependencies (FAIR-DS API, MinerU) are exposed as LangChain tools for:
-    - **Full observability**: Every tool call traced in LangSmith
-    - **Reusability**: Tools shared across agents and workflows
-    - **Structured error handling**: Consistent `{success, data, error}` format
-*   **Context Retriever:** Uses RAG (Retrieval-Augmented Generation) to fetch relevant schema definitions (e.g., "What is 'collection date' in MIxS?") and ontology terms (e.g., valid ENVO codes) based on the document's content.
+1. **Document Parser**: Extracts structured information from documents using LLM.
+   - Routed to **Critic evaluation** → ACCEPT / RETRY (up to 2×)
+2. **BioMetadataAgent** *(conditional)*: Recovers metadata from raw bioinformatics files (BAM, VCF, FASTQ) using Dockerised biocontainers (Samtools, Bcftools) from `quay.io/biocontainers`.
+3. **Planner**: Analyzes document domain and generates per-agent guidance instructions.
+4. **Knowledge Retriever**: Queries FAIR-DS API (59 packages, 892 terms) + local knowledge base.
+   - Reports **API capabilities** for Critic awareness.
+   - Routed to **Critic evaluation** → ACCEPT / RETRY / ESCALATE.
+5. **JSON Generator**: Maps extracted info to ISA-Tab metadata.
+   - **Recursive Batch Splitting**: Auto-detects truncation and splits batches (16→8→4→2→1 fields) to prevent token window overflow.
+   - Routed to **Critic evaluation** → ACCEPT / RETRY.
+   - **Cross-layer rollback** (ρ mechanism): JSON hard-gate failure triggers KnowledgeRetriever redo.
+6. **ISA Value Mapper**: Assigns entity_id grouping, maps values to standardised ISA terms.
+   - **Cardinality gate**: Skips expensive deep-agent loop when >12 entity groups to save costs.
+7. **Critic Agent**: Embedded after most nodes; rubric-driven LLM-as-Judge.
 
-### 🤖 FAIRiAgent Core Workflow (Red & Blue)
-The "brain" of the system, implementing a reflective agentic loop with API-aware evaluation.
+---
 
-*   **Document Parser Agent:** LLM-based extraction of structured information from scientific documents.
-*   **Planner Node:** Analyzes document domain and generates agent-specific guidance.
-*   **Knowledge Retriever Agent:** Queries FAIR-DS API for metadata packages and terms, reports API capabilities.
-*   **JSON Generator Agent:** Maps extracted information to ISA-Tab compliant FAIR metadata.
-*   **Critic Agent:** An LLM-as-Judge that evaluates each agent's output using rubric-driven scoring.
+## 3. Self-Correction & Retry Loop Logic
 
-**Critic Decision Logic:**
-*   **ACCEPT:** Score ≥ accept_threshold (typically 0.65-0.70) → Proceed to next step
-*   **RETRY:** revise_min ≤ score < accept_threshold (typically 0.40-0.65) → Retry with feedback
-*   **ESCALATE:** Score < revise_min (typically < 0.40) → Critical issues, requires attention
+- **Retry Attempts**: Up to 2 retries per agent (configurable via `max_step_retries`).
+- **Global Limit**: Maximum total retries across all agents (configurable via `max_global_retries`).
+- **No-Progress Exit**: If the score is unchanged for 2 consecutive attempts, the workflow accepts the output with a review flag to prevent infinite loops.
+- **Cross-Layer Rollback (ρ)**: A validation failure in JSON generation routes feedback back to the Knowledge Retriever rather than just retrying JSON mapping.
+- **Feedback Deduplication**: Limits guidelines to 10 items per agent to prevent token accumulation.
 
-**Key Features:**
-*   **API-Aware Evaluation:** Critic considers FAIR-DS API limitations when evaluating Knowledge Retriever. If API only provides limited packages, Critic evaluates whether agent made optimal use of available resources rather than penalizing for unavailable packages.
-*   **No-Progress Detection:** If score remains unchanged for 2 consecutive retry attempts, workflow terminates early with output flagged for human review. This prevents infinite loops when external constraints (e.g., API limitations) prevent improvement.
-*   **Feedback Deduplication:** Historical guidance is limited to 10 items per agent to prevent token waste from accumulating redundant suggestions.
+---
 
-**Retry Mechanism (Priority Order):**
-1. **User-configured `max_step_retries`** (HIGHEST PRIORITY) - Ensures user-defined retry limits are always respected
-2. **No-Progress Detection** - Exits early if consecutive attempts produce identical scores
-3. **Critic Decision** - If retries available, RETRY/ESCALATE decisions trigger retry attempts
-4. **Output Quality Check** - After max retries, workflow continues if usable output exists (flagged for human review)
+## 4. State Persistence & Checkpointers
 
-**Feedback Loop:** The Critic generates specific, actionable feedback that guides agents to improve. Feedback is deduplicated and limited to prevent context window overflow. All LLM interactions are logged to `llm_responses.json` for debugging.
+FAIRiAgent uses a checkpointer backend to persist state, enabling workflow resume.
+- `none`: Stateless.
+- `memory`: In-memory (dev/testing only).
+- `sqlite`: Persistent SQLite database (production-ready, defaults to `output/.checkpoints.db`).
 
-### 💾 Standardized Output (Purple)
-*   **Finalizer:** Converts the validated JSON into domain-specific formats like **ISA-Tab** (Investigation-Study-Assay) for direct repository submission.
+### Resource Management Snippet
+
+```python
+# Recommended for scripts using context manager
+from fairifier.graph import FAIRifierLangGraphApp
+
+with FAIRifierLangGraphApp() as workflow:
+    result = await workflow.run(document_path, project_id)
+    # Auto-cleanup of database connections on exit
+```
+
+---
+
+## 5. Local Provisional Extensions
+
+Add custom terms to local knowledge base at `kb/`:
+
+```python
+from fairifier.services.local_knowledge import initialize_local_kb, LocalTerm
+from pathlib import Path
+
+local_kb = initialize_local_kb(Path("kb"))
+local_kb.add_term(LocalTerm(
+    name="custom_field",
+    label="Custom Field",
+    description="Project-specific metadata field",
+    source="local",
+    status="provisional",
+    confidence=0.7
+))
+```
+
+---
+
+## 6. Output Files & Formats
+
+Outputs are saved to `output/<project_id>/`:
+1. **`metadata.json`**: Standardized FAIR-DS JSON.
+2. **`processing_log.jsonl`**: Real-time structured log events.
+3. **`llm_responses.json`**: Complete record of all LLM requests/responses.
+4. **`runtime_config.json`**: Environment and config variables used in the run.
+5. **`validation_report.txt`**: Shex/validator report.
+
+### Output JSON Schema Example
+
+```json
+{
+  "fairifier_version": "V2.0.2",
+  "generated_at": "2026-07-01T18:00:00",
+  "document_source": "paper.pdf",
+  "overall_confidence": 0.85,
+  "metadata": [
+    {
+      "field_name": "project_name",
+      "value": "Soil Metagenomics Study",
+      "evidence": "Extracted from title",
+      "confidence": 0.95,
+      "origin": "document_parser",
+      "package_source": "MIMAG",
+      "status": "confirmed"
+    }
+  ]
+}
+```
+
+---
+
+## 7. Developer Tracing & LangSmith
+
+To debug multi-agent trajectories, configure LangSmith:
+```bash
+export LANGCHAIN_TRACING_V2="true"
+export LANGSMITH_API_KEY="your_api_key"
+export LANGSMITH_PROJECT="fairifier-testing"
+```
+Or launch locally via LangGraph Studio:
+```bash
+langgraph dev
+# Studio open at http://localhost:8123
+```
