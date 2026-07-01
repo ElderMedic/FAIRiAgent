@@ -4,33 +4,26 @@
 
 ### *FAIR Metadata Generation Framework*
 
-**Generate FAIR-DS compatible metadata from research documents**
+**Generate FAIR-DS compatible metadata from research documents / 从研究文献中自动生成符合 FAIR 规范的元数据**
 
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-green.svg)](https://langchain-ai.github.io/langgraph/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![FAIR-DS](https://img.shields.io/badge/FAIR--DS-Compatible-orange.svg)](https://fairds.fairbydesign.nl/)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ElderMedic/FAIRiAgent)
 
-[🚀 Quick Start](#-quick-start) • [📖 Documentation](#-documentation) • [🌐 Web UI](#-web-ui) • [🤝 Contributing](#-contributing)
-
-**[🇨🇳 中文版 / Chinese Version](docs/README.md#-中文-chinese)** | **[🇬🇧 English](README.md)**
+[🚀 Quick Start / 快速开始](#-quick-start--快速开始) • [📖 Documentation / 详细文档](#-documentation--详细文档) • [🌐 Web UI](#-web-ui--网页端)
 
 ---
-
-<div align="center">
 
 ![FAIRiAgent Banner](docs/figures/wide_greetings.png)
 
-PDF in, FAIR metadata out.
-
-</div>
+*PDF in, FAIR metadata out.*
 
 </div>
 
 ---
 
-## 🎯 What is FAIRiAgent?
+## 🎯 Overview / 概述
 
 <div align="center">
 
@@ -38,836 +31,85 @@ PDF in, FAIR metadata out.
 
 </div>
 
-FAIRiAgent is a **CLI-first, multi-agent framework** that automatically extracts information from research documents (PDF/text) and generates **FAIR-DS compatible JSON metadata**. Built with LangGraph and LangChain, it transforms unstructured scientific documents into standardized, machine-readable metadata that follows FAIR principles.
+**FAIRiAgent** is a CLI-first, multi-agent framework built with LangGraph and LangChain. It automatically extracts structured details from scientific documents (PDFs/text) and generates standardized, **FAIR-DS compatible JSON metadata**. Every field contains clear evidence, confidence levels, and provenance paths.
 
-### 🌟 Why FAIRiAgent?
-
-- ⚡ **Fast**: Process documents in minutes, not hours
-- 🎯 **Accurate**: Multi-agent architecture with self-correcting critic loops
-- 📊 **Standards-compliant**: FAIR-DS compatible output format
-- 🔍 **Evidence-based**: Every field includes evidence, confidence, and provenance
-- 🧠 **Intelligent**: LLM-as-Judge critic with rubric-driven quality assessment
-- 🎨 **Usable**: React Web UI for upload, review, and export
-- 🔧 **Flexible**: Support for local models (Ollama) and cloud providers (OpenAI, Qwen, Gemini, Anthropic)
-
-### 📈 The Problem We Solve
-
-Research metadata generation is **time-consuming** and **error-prone**. Scientists spend hours manually extracting metadata from papers, often missing critical fields or using inconsistent formats. 
-
-<div align="center">
-
-| ❌ **Before FAIRiAgent** | ✅ **With FAIRiAgent** |
-|:---:|:---:|
-| ⏱️ Hours of manual work | ⚡ Minutes of automated processing |
-| ❌ Inconsistent formats | ✅ FAIR-DS compliant output |
-| 🐛 Human errors | 🤖 AI-powered accuracy |
-| 📝 Missing fields | 🔍 Comprehensive extraction |
-
-</div>
-
-**FAIRiAgent automates this process with:**
-
-- 🤖 **Intelligent extraction** from complex PDF layouts
-- 🧠 **Knowledge enrichment** from FAIR Data Station and ontologies  
-- ✅ **Automatic validation** against schema standards
-- 🔄 **Self-correction** through reflective critic loops
+**FAIRiAgent** 是一个基于 LangGraph 与 LangChain 构建的、命令行优先的多 Agent 框架。它能自动提取科学文献（PDF/文本）中的结构化字段，生成标准化的、符合 **FAIR-DS 规范的 JSON 元数据**，并对提取的每个字段保留可追溯的证据链与置信度。
 
 ---
 
-## ✨ Key Features
+## 📖 Documentation / 详细文档
 
-<div align="center">
+For detailed architecture, agent configurations, and developer manuals, please see:
+详细的系统架构、Agent 逻辑与接口手册请参阅：
 
-| 🎯 **Core Capabilities** | 🚀 **Advanced Features** | 🛠️ **Developer Tools** |
-|:---:|:---:|:---:|
-| 🤖 Multi-Agent Architecture | 🧑‍⚖️ LLM-as-Judge Critic | 🔍 LangSmith Integration |
-| 📄 PDF/Text Processing | 📈 Confidence Aggregator | 📝 JSON Line Logging |
-| 🧠 Knowledge Retrieval | 🔄 Self-Correction Loops | ⚙️ Config Management |
-| 🏷️ Evidence-based Fields | 🌐 React Web UI | 📋 Runtime Export |
-
-</div>
-
-### 🎯 Core Features
-
-- 🤖 **Multi-Agent Architecture**: Specialized agents for document parsing, knowledge retrieval, and JSON generation
-- 📄 **Document Processing**: Extract metadata from PDF and text documents with MinerU integration
-- 🧬 **Bioinformatics Agentic Analysis**: Active recovery of missing metadata directly from raw biological files (BAM, VCF, FASTQ) using containerized tools (Samtools, Bcftools) from **quay.io/biocontainers**.
-- 🧠 **Knowledge Retrieval**: Integrate with FAIR Data Station API (59 packages, 892 terms) and local knowledge base
-- 🏷️ **Evidence-based Fields**: Every field includes evidence, confidence, origin, and package source
-- 📊 **JSON-only Output**: FAIR-DS compatible metadata format (no RDF/RO-Crate)
-- 🎛️ **Multi-Model Support**: Ollama (local) / OpenAI / Qwen / Gemini / Anthropic
-
-### 🚀 Advanced Features
-
-- 🧑‍⚖️ **LLM-as-Judge Critic**: Rubric-driven auditing with actionable guidance per agent
-- 📈 **Confidence Aggregator**: Blends critic scores, structural coverage, and validation health
-- 🔄 **Self-Correction**: Automatic retry with feedback from Critic agent
-- 🌐 **React Web UI**: Upload, configure, stream logs, and download results from one interface
-- 💬 **Real-time Streaming**: Chat-like interface with live progress updates
-- ⚙️ **Configuration Management**: Save and manage runtime configurations
-- 📋 **Runtime Config Export**: Automatic export of input, .env, and runtime configurations
-
-## 📁 Repository layout
-
-```
-FAIRiAgent/
-├── fairifier/          # Core: agents, graph, services, apps (API + UI assets), tools, validation
-├── frontend/           # React UI source (see Quick Start for npm install)
-├── kb/                 # Local knowledge base
-├── examples/           # Sample documents
-├── docs/               # Documentation
-├── docker/             # Compose stack (API, Qdrant, FAIR-DS) and image helpers
-├── tests/              # Pytest suite (for contributors)
-├── run_fairifier.py    # CLI entry
-├── run_tests.py        # Test runner (development)
-└── langgraph.json      # LangGraph Studio
-```
-
-Run outputs go under `output/`; optional local scratch under `.memory/` (gitignored).
-
-## 🏗️ Architecture
-
-<div align="center">
-
-![FAIRiAgent Architecture](docs/figures/biodata_robot_fair.png)
-
-</div>
-
-### Graphical Abstract
-
-The system uses a **LangGraph-based multi-agent workflow** with **API-aware evaluation** and intelligent self-correction:
-
-```mermaid
-flowchart TD
-    subgraph INPUT["📥 Input Layer"]
-        A[📄 PDF Document]
-        M[🔧 MinerU Parser]
-        A --> M
-    end
-    
-    subgraph ORCHESTRATOR["🎯 Orchestrator (LangGraph)"]
-        direction TB
-        
-        subgraph PARSE["Step 1: Document Parsing"]
-            B[🔍 Document Parser<br/>LLM Extraction]
-            C1[🧑‍⚖️ Critic]
-            B --> C1
-        end
-        
-        subgraph BIO["Step 2: Bioinformatics (conditional)"]
-            G[🧬 BioMetadataAgent<br/>Containerised tools]
-        end
-        
-        subgraph PLAN["Step 3: Planning"]
-            D[📋 Planner<br/>Agent-specific guidance]
-        end
-        
-        subgraph RETRIEVE["Step 4: Knowledge Retrieval"]
-            E[🧠 Knowledge Retriever<br/>FAIR-DS API + Local KB]
-            C2[🧑‍⚖️ Critic]
-            E --> C2
-        end
-        
-        subgraph GENERATE["Step 5: JSON Generation"]
-            F[📝 JSON Generator<br/>ISA-Tab Mapping]
-            C3[🧑‍⚖️ Critic]
-            F --> C3
-        end
-        
-        subgraph MAP["Step 6: ISA Value Mapping"]
-            H[🔗 ISA Value Mapper<br/>Entity Grouping + Terms]
-        end
-    end
-    
-    subgraph EXTERNAL["🌐 External Services"]
-        API[🗄️ FAIR-DS API<br/>59 Packages, 892 Terms]
-        FAIR[📊 FAIR-DS Validator<br/>ShEx Schema]
-    end
-    
-    subgraph OUTPUT["📤 Output Layer"]
-        J[📊 FAIR Metadata JSON]
-        R[📋 Workflow Report<br/>Confidence + Evidence]
-    end
-    
-    M --> B
-    C1 -->|ACCEPT| G
-    C1 -->|RETRY| B
-    G --> D
-    D --> E
-    API -.->|packages, terms| E
-    E -.->|api_capabilities| C2
-    C2 -->|ACCEPT| F
-    C2 -->|RETRY| E
-    C3 -->|ACCEPT| H
-    C3 -->|RETRY| F
-    H --> J
-    J --> R
-    FAIR -.->|validate| J
-    
-    style A fill:#e3f2fd,stroke:#1565c0
-    style J fill:#c8e6c9,stroke:#2e7d32
-    style C1 fill:#fff9c4,stroke:#f9a825
-    style C2 fill:#fff9c4,stroke:#f9a825
-    style C3 fill:#fff9c4,stroke:#f9a825
-    style API fill:#e8f5e9,stroke:#43a047
-    style R fill:#f3e5f5,stroke:#8e24aa
-```
-
-> **Figure Caption:** FAIRiAgent employs a LangGraph-orchestrated 6-agent pipeline: (1) **Document Parser** extracts structured info; (2) **BioMetadataAgent** (conditional) recovers metadata from raw bioinformatics files via Dockerised biocontainers; (3) **Planner** generates per-agent guidance from document domain analysis; (4) **Knowledge Retriever** queries FAIR-DS API (59 packages, 892 terms) and local KB; (5) **JSON Generator** maps results to ISA-Tab with recursive batch splitting (16→8→4→2→1) when truncation is detected; (6) **ISA Value Mapper** assigns entity_id grouping and standardises field names. A **CriticAgent** is embedded after most nodes, evaluating outputs with a rubric-driven LLM-as-Judge and routing to ACCEPT / RETRY / ESCALATE. A cross-layer rollback mechanism (ρ) can redirect JSON hard-gate failures back to the Knowledge Retriever.
+*   **English Guides**:
+    *   [Architecture & Flow](docs/en/ARCHITECTURE_AND_FLOW.md) – Detailed agent nodes, ρ-mechanism, checkpointers.
+    *   [LLM Integration Guide](docs/en/LLM_INTEGRATION_GUIDE.md) – Provider configuration (Ollama, OpenAI, Gemini, Qwen).
+    *   [Docker Deployment](docs/en/guides/DOCKER_DEPLOYMENT.md) – Run using Docker Compose.
+    *   [API Manual](docs/en/development/FAIRIFIER_API_MANUAL.md) – FastAPI endpoints and SSE event streaming.
+*   **中文版指南**:
+    *   [系统架构与工作流](docs/zh/ARCHITECTURE_AND_FLOW.md) – Agent 节点设计、重试、持久化。
+    *   [LLM 集成指南](docs/zh/LLM_INTEGRATION_GUIDE.md) – Ollama、国内/云端大模型配置。
+    *   [快速开始指南](docs/zh/guides/QUICKSTART.md) – 中文上手与本地部署说明。
+    *   [测试指南](docs/zh/guides/TEST_GUIDE.md) – 开发人员测试流程。
 
 ---
 
-**Workflow Flow:**
+## 🚀 Quick Start / 快速开始
 
-<div align="center">
-
-![Multi-Agent Workflow](docs/figures/robot_fairdata.png)
-
-</div>
-
-**Agents & Nodes:**
-1. **Document Parser**: Extracts structured information from documents using LLM
-   - → **Critic evaluates** → ACCEPT / RETRY (up to 2×)
-2. **BioMetadataAgent** *(conditional)*: Recovers metadata from raw bioinformatics files (BAM, VCF, FASTQ) using Dockerised biocontainers (Samtools, Bcftools)
-3. **Planner**: Analyzes document domain and generates per-agent guidance
-4. **Knowledge Retriever**: Queries FAIR-DS API (59 packages, 892 terms) + local knowledge base
-   - Reports **API capabilities** for Critic awareness
-   - → **Critic evaluates** → ACCEPT / RETRY / ESCALATE
-5. **JSON Generator**: Maps extracted info to ISA-Tab metadata with recursive batch splitting
-   - Auto-detects truncation and splits batches (16→8→4→2→1 fields)
-   - → **Critic evaluates** → ACCEPT / RETRY
-   - **Cross-layer rollback** (ρ): JSON hard-gate failure triggers KnowledgeRetriever redo
-6. **ISA Value Mapper**: Assigns entity_id grouping, maps values to standardised ISA terms
-   - Cardinality gate: skips expensive deep-agent loop when >12 entity groups
-7. **Critic Agent**: Embedded after most agents; rubric-driven LLM-as-Judge with hard output-length limits
-
-**Workflow Features:**
-- 🧠 **API-Aware Evaluation**: Critic understands FAIR-DS API limitations
-- 🛑 **No-Progress Detection**: Auto-terminates retry loops when scores stagnate
-- 🔄 **Cross-Layer Rollback (ρ)**: JSON gate failure → KnowledgeRetriever redo with Critic feedback
-- 📉 **Cardinality Gate**: Skips deep ReAct loop for high-cardinality docs (>12 entities)
-- 🔀 **Recursive Batch Splitting**: Auto-splits JSON batches to prevent truncation errors
-- 📊 **Execution Tracking**: Full trajectory with step timing, token usage, and scores
-- 💾 **Checkpointer**: SQLite-based state persistence for workflow resume support
-
-**Retry Mechanism Details:**
-- **Retry Attempts**: Up to 2 retries per agent (configurable via `max_step_retries`)
-- **Global Limit**: Maximum total retries across all agents (configurable via `max_global_retries`)
-- **No-Progress Exit**: If score unchanged for 2 consecutive attempts, workflow accepts output with review flag
-- Retry trajectory tracked in `retry_trajectory` state for analysis and debugging
-
-## 🧑‍⚖️ LLM-as-Judge Critic & Confidence
-
-- **Rubric location**: `docs/en/development/critic_rubric.yaml` (customizable dimensions and thresholds)
-- **Key configuration** (all can be overridden via `.env`):
-  - `FAIRIFIER_CRITIC_RUBRIC_PATH`
-  - `FAIRIFIER_CONF_WEIGHT_CRITIC`, `FAIRIFIER_CONF_WEIGHT_STRUCTURAL`, `FAIRIFIER_CONF_WEIGHT_VALIDATION`
-  - `FAIRIFIER_STRUCTURAL_COVERAGE_TARGET`, `FAIRIFIER_EVIDENCE_COVERAGE_TARGET`, `FAIRIFIER_VALIDATION_PASS_TARGET`
-- **Critic output structure**:
-  ```json
-  {
-    "score": 0.82,
-    "decision": "ACCEPT|RETRY|ESCALATE",
-    "issues": [...],
-    "improvement_ops": [...],
-    "critique": "short narrative"
-  }
-  ```
-- `fairifier/services/confidence_aggregator.py` blends critic scores, field coverage, evidence rates, and validation results into a single confidence metric. The CLI displays four components (`critic/structural/validation/overall`) in both `processing_log.jsonl` and standard output.
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Python 3.11+ (recommended: mamba/conda environment)
-- Node.js 18+ (for Web UI)
-- [Ollama](https://ollama.ai) (for local LLM) or API key for cloud provider
-
-### Local Setup
+### 1. Installation / 安装步骤
 
 ```bash
+# Clone repository / 克隆项目
 git clone https://github.com/ElderMedic/FAIRiAgent.git
 cd FAIRiAgent
 
-# Create and activate conda environment
+# Create and activate conda environment / 创建并激活环境
 mamba create -n FAIRiAgent python=3.11 -y
 mamba activate FAIRiAgent
 
-# Install Python dependencies
+# Install Python dependencies / 安装依赖
 pip install -r requirements.txt
 
-# Frontend (optional — Web UI)
-cd frontend && npm install && cd ..
+# Configure environment / 配置环境变量
+cp env.example .env
+# Update your keys in .env (e.g. LLM_PROVIDER, LLM_API_KEY) / 编辑 .env 写入大模型 Key 与配置
 ```
 
-### Configuration
-
-Copy and edit `.env` with your LLM provider:
+### 2. Basic Commands / 基础命令
 
 ```bash
-# --- Ollama (local GPU) ---
-LLM_PROVIDER=ollama
-FAIRIFIER_LLM_MODEL=qwen3.6:27b
-FAIRIFIER_LLM_BASE_URL=http://localhost:11434
-
-# --- DeepSeek API (cloud) ---
-# LLM_PROVIDER=deepseek
-# FAIRIFIER_LLM_MODEL=deepseek-v4-pro
-# DEEPSEEK_API_KEY=sk-...
-
-# --- OpenAI / Qwen / Anthropic ---
-# Set LLM_PROVIDER, LLM_API_KEY, and optional base URL
-```
-
-Supported providers: `ollama | openai | qwen | deepseek | gemini | anthropic`
-
-### Run
-
-```bash
-# CLI: process a document
+# CLI: Process a scientific PDF / 命令行提取 PDF 元数据
 python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf
 
-# Web UI:
+# Web UI: Start local web application / 启动网页版 UI 与服务
 python run_fairifier.py webui
-# → http://localhost:8000
-
-# Check configuration
-python run_fairifier.py config-info
-
-# Validate environment (no document needed)
-python run_fairifier.py validate-document --env-only
+# Access at http://localhost:8000
 ```
-
-### 📦 Installation
-
-<details>
-<summary><b>Click to expand detailed installation steps</b></summary>
-
-**Core Installation:**
-```bash
-git clone https://github.com/ElderMedic/FAIRiAgent.git
-cd FAIRiAgent
-pip install -r requirements.txt
-cd frontend && npm install && cd ..   # optional Web UI
-```
-
-**Optional Features:**
-
-<details>
-<summary>🧠 Memory Layer (mem0 + Qdrant)</summary>
-
-Persistent semantic memory across workflow sessions. Preflight checks auto-start Qdrant via Docker when `MEM0_AUTO_START_QDRANT=true`.
-
-```bash
-pip install mem0ai qdrant-client
-docker run -d --name fairiagent-qdrant -p 6333:6333 qdrant/qdrant
-
-# .env configuration
-MEM0_ENABLED=true
-MEM0_QDRANT_HOST=localhost
-MEM0_QDRANT_PORT=6333
-MEM0_EMBEDDING_PROVIDER=ollama
-MEM0_EMBEDDING_MODEL=nomic-embed-text-v2-moe
-MEM0_EMBEDDING_DIMS=768
-MEM0_LLM_PROVIDER=ollama
-MEM0_LLM_MODEL=qwen3:30b-instruct
-MEM0_OLLAMA_BASE_URL=http://localhost:11434
-```
-
-See [Mem0 Quick Start](docs/MEM0_QUICKSTART.md) for details.
-
-</details>
-
-</details>
-
-### Basic Usage
-
-**CLI Mode:**
-```bash
-# Process a document
-python run_fairifier.py process your_document.pdf
-
-# Specify output directory
-python run_fairifier.py process document.txt --output-dir results/
-
-# Check configuration
-python run_fairifier.py config-info
-```
-
-**Web UI Mode:**
-
-```bash
-# Production (SPA + API)
-python run_fairifier.py webui
-# → http://localhost:8000
-
-# Development (Vite + hot-reload API)
-python run_fairifier.py dev
-# → Frontend http://localhost:5173 · Backend http://localhost:3000
-```
-
-API reference: [docs/en/development/FAIRIFIER_API_MANUAL.md](docs/en/development/FAIRIFIER_API_MANUAL.md)
-
-**LangGraph Studio (Development):**
-```bash
-# Start LangGraph dev server
-langgraph dev
-
-# Access LangGraph Studio at http://localhost:8123
-```
-
-### Configuration
-
-**Environment Variables (.env file):**
-```bash
-# LLM Provider (recommended: DashScope Qwen)
-LLM_PROVIDER=qwen
-FAIRIFIER_LLM_MODEL=qwen-flash
-QWEN_API_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-LLM_API_KEY=your_key
-LLM_TEMPERATURE=0.3
-LLM_MAX_TOKENS=8192
-LLM_ENABLE_THINKING=false  # For Qwen models
-# Conservative budget guardrails are on by default; only flip this for intentional high-cost runs
-# FAIRIFIER_ALLOW_EXPENSIVE_RUNS=true
-
-# FAIR Data Station (optional)
-FAIR_DS_API_URL=http://localhost:8083
-
-# LangSmith (optional)
-LANGSMITH_API_KEY=your_key
-LANGSMITH_PROJECT=fairifier-testing
-
-# Deep inner loops
-FAIRIFIER_ENABLE_DEEP_AGENTS=true
-
-# Source workspace / agentic source search
-FAIRIFIER_SOURCE_WORKSPACE_ENABLED=true
-FAIRIFIER_METADATA_CONTEXT_MODE=agentic_search
-FAIRIFIER_METADATA_MAX_CONTEXT_CHARS_PER_FIELD=12000
-
-# Crossref polite pool contact
-CROSSREF_MAILTO=your-email@example.org
-
-# Checkpointer (workflow state persistence)
-# Options: none (stateless), memory (dev/test only), sqlite (production)
-CHECKPOINTER_BACKEND=sqlite  # Default: sqlite
-# CHECKPOINT_DB_PATH=output/.checkpoints.db  # Optional: custom DB path
-```
-
-For source workspace and multi-file behavior, see
-[`docs/en/SOURCE_WORKSPACE.md`](docs/en/SOURCE_WORKSPACE.md).
-
-**Checkpointer modes:**
-- `none`: Stateless, no resume support (for one-shot workflows)
-- `memory`: In-memory only, **dev/test only** (state lost on exit)
-- `sqlite`: Persistent storage, enables `resume` command (production-ready)
-
-**Resource management:**
-```python
-# Option 1: Context manager (recommended for scripts)
-with FAIRifierLangGraphApp() as workflow:
-    result = await workflow.run(document_path, project_id)
-    # Automatic cleanup on exit
-
-# Option 2: Manual cleanup (recommended for API/long-running services)
-workflow = FAIRifierLangGraphApp()
-try:
-    result = await workflow.run(document_path, project_id)
-finally:
-    workflow.close()  # Explicit cleanup of SQLite connections
-
-# Option 3: Garbage collection (automatic, but timing not guaranteed)
-workflow = FAIRifierLangGraphApp()
-result = await workflow.run(document_path, project_id)
-# Will cleanup when garbage collected (not recommended for production)
-```
-
-**Web UI configuration:**
-- Run `python run_fairifier.py webui` and use the in-app settings where available, or edit `.env` for LLM, LangSmith, and FAIR-DS options
-- Export or copy values to `.env` when you want the CLI or next run to pick them up without the browser
-
-### Output Files
-
-FAIRiAgent generates (in `output/<project_id>/`):
-1. **`metadata.json`** - FAIR-DS compatible metadata
-2. **`processing_log.jsonl`** - JSON line logs
-3. **`llm_responses.json`** - All LLM API interactions (automatically logged, including Critic evaluations)
-4. **`runtime_config.json`** - Complete runtime configuration including:
-   - Input document path
-   - Environment variables (.env)
-   - LLM configuration
-   - Runtime settings
-   - Project metadata
-5. **`validation_report.txt`** - Validation results (optional)
-
-## 📊 Output Format
-
-### FAIR-DS Compatible JSON
-
-FAIRiAgent generates structured, evidence-based metadata in FAIR-DS compatible format:
-
-<details>
-<summary><b>📋 Click to see example output structure</b></summary>
-
-```json
-{
-  "fairifier_version": "V2.0.1",
-  "generated_at": "2025-01-27T10:30:00",
-  "document_source": "paper.pdf",
-  "overall_confidence": 0.85,
-  
-  "metadata": [
-    {
-      "field_name": "project_name",
-      "value": "Soil Metagenomics Study",
-      "evidence": "Extracted from document title",
-      "confidence": 0.95,
-      "origin": "document_parser",
-      "package_source": "MIMAG",
-      "status": "confirmed"
-    },
-    {
-      "field_name": "investigation_type",
-      "value": "metagenome",
-      "evidence": "Inferred from research domain",
-      "confidence": 0.80,
-      "origin": "document_parser",
-      "package_source": "MIMAG",
-      "status": "provisional"
-    }
-  ],
-  
-  "statistics": {
-    "total_fields": 15,
-    "confirmed_fields": 8,
-    "provisional_fields": 7
-  }
-}
-```
-
-</details>
-
-### JSON Line Logging
-
-```json
-{"timestamp": "2025-01-27T10:30:00", "level": "info", "event": "processing_started", "document_path": "paper.pdf"}
-{"timestamp": "2025-01-27T10:30:05", "level": "info", "event": "field_extracted", "field_name": "project_name", "confidence": 0.95}
-{"timestamp": "2025-01-27T10:30:10", "level": "info", "event": "processing_completed", "status": "completed"}
-```
-
-## 🧬 FAIR Data Station Integration
-
-When connected to a FAIR Data Station instance, FAIRiAgent can:
-
-- 🔍 Search for standardized terms relevant to your research
-- 📦 Use community-approved metadata packages (59 packages available)
-- 🏷️ Enhance fields with validated definitions
-- 🌐 Ensure better interoperability
-
-### Setup FAIR Data Station
-
-**Option A — Docker Compose (recommended for a full stack):** the [Docker Compose file](docker/compose.yaml) builds and runs FAIR-DS next to the API; see [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md).
-
-**Option B — JAR on the host:**
-
-```bash
-wget http://download.systemsbiology.nl/unlock/fairds-latest.jar
-java -jar fairds-latest.jar
-
-# Access at http://localhost:8083
-# Swagger UI: http://localhost:8083/swagger-ui/index.html
-```
-
-**Available API Endpoints:**
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/packages` | Lightweight package summaries for agent selection |
-| `GET /api/packages/{name}` | Full metadata for one package |
-| `GET /api/package` | Legacy alias for package list/detail |
-| `GET /api/skills` | Complete FAIR-DS Agent Skill markdown |
-| `GET /api/terms` | Get all terms or filter by label/definition |
-| `POST /api/upload` | Validate metadata Excel file |
-
-See [FAIR-DS API Manual](docs/en/development/FAIRDS_API_MANUAL.md) for detailed documentation.
-
-## 🔧 Local Provisional Extensions
-
-Add custom terms not in FAIR-DS:
-
-```python
-from fairifier.services.local_knowledge import initialize_local_kb, LocalTerm
-from pathlib import Path
-
-# Initialize local knowledge base
-local_kb = initialize_local_kb(Path("kb"))
-
-# Add custom term
-local_kb.add_term(LocalTerm(
-    name="custom_field",
-    label="Custom Field",
-    description="Project-specific metadata field",
-    source="local",
-    status="provisional",
-    confidence=0.7
-))
-```
-
-Local terms are automatically included with `source=local` and `status=provisional`.
-
-## 📈 Quality Metrics
-
-FAIRiAgent provides **multi-dimensional confidence scoring**:
-
-<div align="center">
-
-| Metric | Description | Target |
-|:---:|:---|:---:|
-| 🧑‍⚖️ **Critic Score** | LLM-as-Judge evaluation | > 0.75 |
-| 📊 **Structural Coverage** | Field completion rate | > 0.80 |
-| ✅ **Validation Health** | Schema compliance | 100% |
-| 📈 **Overall Confidence** | Weighted combination | > 0.80 |
-
-</div>
-
-**Confidence Levels:**
-- 🟢 **> 0.8**: High confidence, ready to use
-- 🟡 **0.5-0.8**: Good, may need minor review  
-- 🔴 **< 0.5**: Requires manual review
-
-### 📊 Example Confidence Breakdown
-
-```
-Overall Confidence: 0.85
-├── Critic Score: 0.82 (weight: 0.5)
-├── Structural Coverage: 0.88 (weight: 0.3)
-└── Validation Health: 1.00 (weight: 0.2)
-```
-
-## 🛠️ Dependencies
-
-Core dependencies:
-- `langgraph`: Multi-agent workflow orchestration
-- `langchain`: Agent framework and tools
-- `langsmith`: Tracing and debugging
-- `rdflib`: RDF processing (minimal use)
-- `PyMuPDF`: PDF document processing
-- `click`: CLI framework
-
-## 📋 CLI Commands
-
-```bash
-# Process document and generate FAIR metadata
-python run_fairifier.py process <document> [options]
-
-# Run the API wrapper
-python run_fairifier.py api
-
-# Show status for a run
-python run_fairifier.py status <project-id>
-
-# Resume an interrupted run
-python run_fairifier.py resume <project-id>
-
-# Show current configuration
-python run_fairifier.py config-info
-
-# Pre-flight: document (size/format) + environment (MinerU, FAIR-DS, LLM)
-python run_fairifier.py validate-document <document>
-python run_fairifier.py validate-document --env-only   # environment only, no document
-
-# Check MinerU service availability
-python run_fairifier.py check-mineru [-v]
-
-# Memory tools
-python run_fairifier.py memory status
-```
-
-**Process options:**
-- `--output-dir, -o`: Output directory for artifacts (default: `output/<timestamp>`)
-- `--project-id, -p`: Project ID for this run (default: auto-generated)
-- `--env-file, -e`: Path to .env file for this run (optional)
-- `--json-log`: Write JSONL processing log (default: True)
-- `--verbose, -v`: Print detailed processing steps
-
-**General:** Run `python run_fairifier.py --help` for full usage; run `python run_fairifier.py COMMAND --help` for command-specific options.
-
-## 🌐 Web UI
-
-The default interface is the React Web UI served by the FastAPI backend.
-
-```bash
-# Production: built SPA + API on one port
-python run_fairifier.py webui
-# → http://localhost:8000  (API docs: /docs)
-
-# Development: hot-reload backend + Vite dev server
-python run_fairifier.py dev
-# → Backend: http://localhost:3000  ·  Frontend: http://localhost:5173
-```
-
-See [Web UI Guide](fairifier/apps/README.md) and [REST API Manual](docs/en/development/FAIRIFIER_API_MANUAL.md) for endpoints, session headers, and SSE streaming.
-
-## 🧪 Examples & checks
-
-### Quick run
-
-```bash
-python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf
-python run_fairifier.py validate-document --env-only
-python run_fairifier.py webui
-```
-
-Use an example file from `examples/inputs/` in the Web UI when prompted.
-
-**Contributors:** automated test commands are documented in [`tests/README.md`](tests/README.md).
-
-### MinerU (optional PDF parsing service)
-
-```bash
-python run_fairifier.py check-mineru
-```
-
-### 📚 Example Files
-
-- 📄 `examples/inputs/earthworm_4n_paper_bioRXiv.pdf` - Research paper example
-- 📝 More examples in `examples/inputs/` directory
-
-### 🎬 Demo Workflow
-
-```
-1. Upload PDF → 2. Parse Document → 3. Extract Metadata 
-   → 4. Enrich with Knowledge → 5. Generate JSON → 6. Validate & Review
-```
-
-**Expected Output:**
-- ✅ FAIR-DS compatible JSON metadata
-- 📊 Confidence scores for each field
-- 🔍 Evidence traces for all extracted values
-- 📋 Processing logs and LLM interactions
-
-### LangSmith Integration
-
-FAIRiAgent includes comprehensive LangSmith integration for debugging and monitoring:
-
-```bash
-# Set up LangSmith (get API key from https://smith.langchain.com/)
-export LANGSMITH_API_KEY="your_api_key_here"
-export LANGSMITH_PROJECT="fairifier-testing"
-
-# Or set the same variables in `.env` or your shell before starting the web UI
-```
-
-LangSmith provides:
-- 🔍 **Trace Visualization**: Complete workflow execution flow
-- 📊 **Performance Metrics**: Token usage, costs, and timing
-- 🐛 **Debug Tools**: Step-by-step debugging and error analysis
-- 📈 **Monitoring**: Track performance over time
-- 🔗 **Trace Links**: Links to traces in the LangSmith UI when tracing is enabled
-
-**LangGraph Studio Integration:**
-```bash
-# Start LangGraph dev server
-langgraph dev
-
-# Access LangGraph Studio at http://localhost:8123
-# Visualize and debug the workflow graph
-```
-
-See [LangGraph Studio Setup](docs/en/guides/LANGGRAPH_STUDIO_SETUP.md) and [LangSmith Testing Guide](docs/en/LANGSMITH_TESTING_GUIDE.md) for detailed instructions.
-
-## 📚 Documentation
-
-Detailed documentation is available in the [docs/](docs/README.md) directory.
-
-- **Core**
-  - [Architecture & Flow](docs/en/ARCHITECTURE_AND_FLOW.md) – High-level system architecture
-  - [Evaluation Methodology](docs/en/EVALUATION_METHODOLOGY.md) – Evaluation metrics and baseline comparison
-  - [LLM Integration Guide](docs/en/LLM_INTEGRATION_GUIDE.md) – Provider configuration
-  - [LangSmith Testing Guide](docs/en/LANGSMITH_TESTING_GUIDE.md) – Testing and debugging
-- **Deployment**
-  - [Docker Deployment](docs/en/guides/DOCKER_DEPLOYMENT.md) – Docker and Docker Compose guide
-  - [docker/ README](docker/README.md) – Quick reference for Docker setup
-- **Guides**
-  - [LangGraph Studio Setup](docs/en/guides/LANGGRAPH_STUDIO_SETUP.md) – Local development environment
-  - [Quick Start (中文)](docs/zh/guides/QUICKSTART.md) – Quick start guide in Chinese
-  - [Mem0 快速开始 (中文)](docs/zh/guides/MEM0_QUICKSTART.md) – Memory layer quick start in Chinese
-  - [Test Guide (中文)](docs/zh/guides/TEST_GUIDE.md) – Test guide in Chinese
-- **Development**
-  - [FAIRiAgent REST API Manual](docs/en/development/FAIRIFIER_API_MANUAL.md) – Web UI backend (`/api/v1`)
-  - [FAIR-DS API Manual](docs/en/development/FAIRDS_API_MANUAL.md) – FAIR Data Station integration
-  - [Critic Rubric](docs/en/development/critic_rubric.yaml) – Evaluation criteria
-- **Web UI**
-  - [Web UI Guide](fairifier/apps/README.md) – React Web UI, dev mode, and API entry points
-
-For a complete index by language, see [docs/README.md](docs/README.md).
-
-## 🤝 Contributing
-
-<div align="center">
-
-**We welcome contributions!** 🎉
-
-</div>
-
-This is a research tool designed for:
-- 🔬 Scientific metadata standardization
-- 📊 FAIR data principles implementation
-- 🤖 Multi-agent system research
-- 🧠 Agentic RAG development
-
-### 🛠️ How to Contribute
-
-1. 🍴 Fork the repository
-2. 🌿 Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. 💾 Commit your changes (`git commit -m 'Add amazing feature'`)
-4. 📤 Push to the branch (`git push origin feature/amazing-feature`)
-5. 🔀 Open a Pull Request
-
-### 📝 Areas for Contribution
-
-- 🐛 Bug fixes and improvements
-- 📚 Documentation enhancements
-- 🧪 Test cases and examples
-- 🌐 Additional LLM provider support
-- 🎨 UI/UX improvements
-
-## 📧 Contact
-
-**Changlin Ke** — [Changlin.ke@wur.nl](mailto:Changlin.ke@wur.nl)
-
-Systems and Synthetic Biology Lab, Wageningen University & Research
 
 ---
 
-## 📄 License
+## 🐛 Troubleshooting / 常见排错
 
-MIT License - Free for academic and research use.
-
----
-
-<div align="center">
-
-**🎯 FAIRiAgent v2.0**  
-*6-Agent LangGraph • Critic-Gated • Cross-Layer Rollback*
-
-[⬆ Back to Top](#-fairiagent)
+| Issue / 问题 | Cause / 原因 | Solution / 解决方法 |
+| :--- | :--- | :--- |
+| **API connection timeout / LLM 报错** | Invalid API keys or network connection error. / API Key 错误或网络阻断。 | Check `.env` and verify provider endpoint. / 检查 `.env` 中的 Key 与对应 provider 是否配置正确。 |
+| **FAIR-DS connection failed / 连接服务失败** | The local FAIR-DS service is not running. / FAIR-DS 数据站服务未启动。 | Ensure service is started: `curl http://localhost:8083/api/package`. / 确保依赖已启动。若采用 Docker, 可运行 `docker compose up -d`. |
+| **Ollama Model not found / 模型缺失** | Ollama lacks the selected model. / 本地缺少配置的模型。 | Run `ollama pull <model_name>` (e.g., `ollama pull qwen3:8b`). / 手动拉取所需模型。 |
+| **Docker container networking / 容器通信受阻** | The API container cannot connect to local port. / 容器内应用无法访问宿主机端口。 | Use `http://host.docker.internal:11434` instead of `localhost` in Docker env. / 容器配置中使用内部宿主机域名。 |
 
 ---
 
-### 🌟 Made with ❤️ for the FAIR Data Community
+## 🔒 Security Notice / 安全性提示
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ElderMedic/FAIRiAgent&type=Date)](https://star-history.com/#ElderMedic/FAIRiAgent&Date)
-
-</div>
+> [!IMPORTANT]
+> Keep your configuration files (`.env`, `api_keys.txt`) private. Do not check these files or experimental evaluation run files into public Git repositories.
+>
+> 请妥善保管您的配置文件（`.env`、`api_keys.txt`）以及本地评测结果数据。它们已被加入 `.gitignore`，请勿提交到公开 GitHub 仓库。
 
 ---
 
-## 🔄 Recent Updates (v2.0 — Architecture Refactor)
+## 🤝 License & Contact / 授权与联系
 
-- ✅ **6-Agent LangGraph Pipeline**: DocumentParser → BioMetadataAgent → Planner → KnowledgeRetriever → JSONGenerator → ISAValueMapper with CriticAgent embedded after each node
-- ✅ **Cross-Layer Rollback (ρ mechanism)**: JSON hard-gate failure auto-triggers KnowledgeRetriever redo with Critic feedback
-- ✅ **Cardinality-Gated Deep Agents**: ISAValueMapper skips expensive ReAct loop for high-cardinality documents (>12 entity groups), using deterministic heuristic instead
-- ✅ **Recursive Batch Splitting**: JSON generation automatically splits 16→8→4→2→1 fields per batch when truncation is detected
-- ✅ **DeepSeek v4-pro Provider**: Full API support with thinking mode control and optimized batch sizing
-- ✅ **Phase-0 Evaluation Pipeline**: Systematic comparison of 5 LLMs × 4 conditions (B1/B2/B3/Full) on 10 expert-annotated documents
+- **Contact**: Changlin Ke — [Changlin.ke@wur.nl](mailto:Changlin.ke@wur.nl) (Wageningen University & Research)
+- **License**: MIT License - Free for academic and research use.
