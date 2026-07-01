@@ -24,6 +24,13 @@ from ..services.fair_data_station import FAIRDataStationClient
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.llm_helper import get_llm_helper
 from ..utils.isa_order import ISA_LEVEL_ORDER
+from ..utils.package_selection import (
+    build_document_match_text,
+    rank_packages_by_document,
+    score_package_relevance,
+    summary_to_package_record,
+    top_relevant_package_names,
+)
 from . import knowledge_retriever_llm_methods as llm_methods
 from ..tools.fair_ds_tools import create_fair_ds_tools
 from ..tools.science_tools import create_science_tools
@@ -586,6 +593,12 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     available_package_names,
                     evidence_packets,
                 )
+            document_match_text = build_document_match_text(
+                doc_info,
+                planner_instruction=planner_instruction,
+                evidence_packets=evidence_packets,
+                critic_feedback=critic_feedback,
+            )
             candidate_package_names = self._build_candidate_package_names(
                 doc_info,
                 planner_instruction,
@@ -593,6 +606,14 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 evidence_packets,
                 priority_package_hints,
                 excluded_package_names,
+                package_catalog=[
+                    summary_to_package_record(summary)
+                    for summary in package_summaries
+                    if summary.get("name")
+                ]
+                if package_summaries
+                else None,
+                document_match_text=document_match_text,
             )
 
             if priority_package_hints:
@@ -628,23 +649,28 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             packages_by_sheet = {}
             if package_summaries:
                 all_packages = [
-                    {
-                        "name": summary["name"],
-                        "description": summary.get("description", ""),
-                        "field_count": summary.get("fieldCount", 0),
-                        "mandatory_count": summary.get("requirements", {}).get(
-                            "MANDATORY", 0
-                        )
-                        + summary.get("requirements", {}).get("REQUIRED", 0),
-                        "optional_count": summary.get("requirements", {}).get(
-                            "OPTIONAL", 0
-                        ),
-                        "sheets": summary.get("levels", []),
-                        "sample_fields": [],
-                    }
+                    summary_to_package_record(summary)
                     for summary in package_summaries
                     if summary.get("name") in api_available_package_names
                 ]
+                all_packages = rank_packages_by_document(
+                    all_packages, document_match_text
+                )
+                top_ranked = [
+                    pkg
+                    for pkg in all_packages[:5]
+                    if score_package_relevance(document_match_text, pkg) > 0
+                ]
+                if top_ranked:
+                    self.log_execution(
+                        state,
+                        "   🎯 Top FAIR-DS packages by description-aware ranking:",
+                    )
+                    for pkg in top_ranked:
+                        self.log_execution(
+                            state,
+                            f"      • {pkg['name']}: {pkg.get('description', '')[:120]}",
+                        )
                 for package_name, local_package in local_package_registry.items():
                     local_fields = local_package.get("metadata", []) or []
                     mandatory_count = sum(
@@ -721,13 +747,15 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             if packages_by_sheet:
                 self.log_execution(state, f"   ISA Sheets: {list(packages_by_sheet.keys())}")
             
-            # Show all packages (no truncation)
-            self.log_execution(state, "📦 All packages by field count:")
-            for pkg in all_packages:  # ALL packages - no truncation
+            self.log_execution(state, "📦 All packages (ranked when summaries available):")
+            for pkg in all_packages:
+                description = str(pkg.get("description", "")).strip()
+                summary_suffix = f" — {description[:100]}" if description else ""
                 self.log_execution(
                     state,
                     f"   • {pkg['name']}: {pkg['field_count']} fields "
                     f"({pkg['mandatory_count']} mandatory, {pkg['optional_count']} optional)"
+                    f"{summary_suffix}",
                 )
                 
             if critic_feedback:
@@ -811,7 +839,8 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     critic_feedback,
                     planner_instruction=planner_instruction,
                     prior_memory_context=llm_context,
-                    priority_package_hints=priority_package_hints
+                    priority_package_hints=priority_package_hints,
+                    document_match_text=document_match_text,
                 )
                 self.log_execution(state, f"✅ LLM selected packages: {selected_package_names}")
 
@@ -2193,26 +2222,18 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         evidence_packets: Optional[List[Dict[str, Any]]],
         priority_package_hints: List[str],
         excluded_package_names: set[str],
+        package_catalog: Optional[List[Dict[str, Any]]] = None,
+        document_match_text: Optional[str] = None,
     ) -> List[str]:
         """Build a small, high-signal candidate package set for first-pass retrieval."""
         package_lookup = {name.lower(): name for name in available_package_names}
-        packet_values = " ".join(
-            str(packet.get("value", ""))
-            for packet in (evidence_packets or [])[:16]
-            if packet.get("value")
-        )
-        text = " ".join(
-            str(part)
-            for part in [
-                doc_info.get("title", ""),
-                doc_info.get("document_type", ""),
-                doc_info.get("research_domain", ""),
-                doc_info.get("methodology", ""),
-                " ".join(doc_info.get("keywords", []) or []),
-                packet_values,
-                planner_instruction or "",
-            ]
-            if part
+        text = (
+            document_match_text
+            or build_document_match_text(
+                doc_info,
+                planner_instruction=planner_instruction,
+                evidence_packets=evidence_packets,
+            )
         ).lower()
 
         candidates: List[str] = []
@@ -2250,36 +2271,72 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         if any(token in text for token in ["metabolom"]):
             add("Metabolomics")
 
-        stop_tokens = {
-            "checklist", "sample", "reporting", "standard", "pilot", "global",
-            "enhanced", "annotation", "associated", "default", "ena", "gsc",
-        }
-        lexical_scores: List[tuple[int, str]] = []
-        for package_name in available_package_names:
-            if package_name in excluded_package_names:
-                continue
-            tokens = [
-                token for token in package_name.lower().replace("-", " ").replace("_", " ").split()
-                if len(token) > 3 and token not in stop_tokens
-            ]
-            score = sum(1 for token in tokens if token in text)
-            if score > 0:
-                lexical_scores.append((score, package_name))
+        if package_catalog:
+            for package_name in top_relevant_package_names(
+                package_catalog,
+                text,
+                limit=12,
+                min_score=2,
+            ):
+                add(package_name)
+                if len(candidates) >= 12:
+                    break
+        else:
+            stop_tokens = {
+                "checklist", "sample", "reporting", "standard", "pilot", "global",
+                "enhanced", "annotation", "associated", "default", "ena", "gsc",
+            }
+            lexical_scores: List[tuple[int, str]] = []
+            for package_name in available_package_names:
+                if package_name in excluded_package_names:
+                    continue
+                tokens = [
+                    token
+                    for token in package_name.lower().replace("-", " ").replace("_", " ").split()
+                    if len(token) > 3 and token not in stop_tokens
+                ]
+                score = sum(1 for token in tokens if token in text)
+                if score > 0:
+                    lexical_scores.append((score, package_name))
 
-        for _, package_name in sorted(lexical_scores, reverse=True):
-            add(package_name)
-            if len(candidates) >= 12:
-                break
+            for _, package_name in sorted(lexical_scores, reverse=True):
+                add(package_name)
+                if len(candidates) >= 12:
+                    break
 
         if not candidates:
             return [name for name in available_package_names if name not in excluded_package_names]
 
         if len(candidates) < 4:
-            for package_name in available_package_names:
-                if package_name not in excluded_package_names:
+            if package_catalog:
+                catalog_names = {
+                    str(pkg.get("name", "")).lower()
+                    for pkg in package_catalog
+                    if pkg.get("name")
+                }
+                for package_name in top_relevant_package_names(
+                    package_catalog,
+                    text,
+                    limit=6,
+                    min_score=1,
+                ):
                     add(package_name)
-                if len(candidates) >= 6:
-                    break
+                    if len(candidates) >= 6:
+                        break
+                if len(candidates) < 6:
+                    for package_name in available_package_names:
+                        if package_name.lower() in catalog_names:
+                            continue
+                        if package_name not in excluded_package_names:
+                            add(package_name)
+                        if len(candidates) >= 6:
+                            break
+            else:
+                for package_name in available_package_names:
+                    if package_name not in excluded_package_names:
+                        add(package_name)
+                    if len(candidates) >= 6:
+                        break
 
         return candidates
 

@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from fairifier.utils.llm_helper import normalize_llm_response_content
+from fairifier.utils.package_selection import rank_packages_by_document
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ async def llm_select_relevant_packages(
     planner_instruction: Optional[str] = None,
     prior_memory_context: Optional[str] = None,
     priority_package_hints: Optional[List[str]] = None,
+    document_match_text: Optional[str] = None,
 ) -> List[str]:
     """
     LLM determines which FAIR-DS packages are relevant for this document.
@@ -36,39 +38,68 @@ async def llm_select_relevant_packages(
     Returns:
         List of relevant package names (e.g., ["soil", "GSC MIMAGS", "default"])
     """
+    if document_match_text:
+        all_packages = rank_packages_by_document(all_packages, document_match_text)
+
     # Prepare package summary for LLM (show ALL packages - no sampling)
     pkg_summary = []
-    for pkg in all_packages:  # Show ALL packages - complete information
+    for pkg in all_packages:
         pkg_summary.append({
             "name": pkg["name"],
             "description": pkg.get("description", ""),
             "field_count": pkg["field_count"],
             "mandatory": pkg["mandatory_count"],
             "optional": pkg["optional_count"],
+            "recommended": pkg.get("recommended_count", 0),
             "sheets": pkg["sheets"],
-            "sample_fields": pkg.get("sample_fields", [])  # Show all sample fields
+            "sample_fields": pkg.get("sample_fields", []),
         })
-    
+
+    described_packages = [pkg for pkg in all_packages if str(pkg.get("description", "")).strip()]
+    description_note = (
+        "Each package includes a FAIR-DS summary `description` describing its domain, "
+        "sample/assay scope, and intended use. Treat this description as the primary "
+        "signal for relevance; package names alone can be ambiguous."
+        if described_packages
+        else "Package descriptions were not available from the API; rely on names and field counts."
+    )
+
     # Dynamically categorize packages based on API data (ALL packages)
     package_categories = {}
     for pkg in all_packages:
-        name_lower = pkg["name"].lower()
-        if any(x in name_lower for x in ["default", "core", "basic"]):
+        searchable = " ".join(
+            [
+                pkg["name"],
+                str(pkg.get("description", "")),
+                " ".join(pkg.get("sheets") or []),
+            ]
+        ).lower()
+        if any(x in searchable for x in ["default", "core", "basic"]):
             package_categories.setdefault("universal", []).append(pkg["name"])
-        elif any(x in name_lower for x in ["soil", "water", "air", "sediment", "marine"]):
+        elif any(x in searchable for x in ["soil", "water", "air", "sediment", "marine", "environment"]):
             package_categories.setdefault("environmental", []).append(pkg["name"])
-        elif any(x in name_lower for x in ["gsc", "mims", "mimag", "misag", "miuvig", "genome"]):
+        elif any(x in searchable for x in ["gsc", "mims", "mimag", "misag", "miuvig", "genome", "sequenc"]):
             package_categories.setdefault("genomics", []).append(pkg["name"])
-        elif any(x in name_lower for x in ["plant", "miappe", "crop"]):
+        elif any(x in searchable for x in ["plant", "miappe", "crop"]):
             package_categories.setdefault("plant_science", []).append(pkg["name"])
         else:
             package_categories.setdefault("other_domains", []).append(pkg["name"])
-    
+
     # Build dynamic package overview (show ALL packages - no truncation)
-    pkg_overview = f"**Available FAIR-DS Packages (from API - Total: {len(all_packages)}):**\n"
+    pkg_overview = (
+        f"**Available FAIR-DS Packages (from API - Total: {len(all_packages)}):**\n"
+        f"{description_note}\n"
+    )
     for category, pkgs in package_categories.items():
         category_name = category.replace("_", " ").title()
-        pkg_overview += f"• {category_name}: {', '.join(pkgs)}\n"  # Show ALL packages
+        pkg_overview += f"• {category_name}: {', '.join(pkgs)}\n"
+
+    if described_packages:
+        pkg_overview += "\n**Highest-signal package descriptions (pre-ranked):**\n"
+        for pkg in described_packages[:8]:
+            description = str(pkg.get("description", "")).strip()
+            if description:
+                pkg_overview += f"- {pkg['name']}: {description[:160]}\n"
     
     system_prompt = f"""You are an expert at selecting appropriate FAIR-DS metadata packages for research data.
 
@@ -82,22 +113,23 @@ async def llm_select_relevant_packages(
 {pkg_overview}
 
 **Selection principles:**
-1. Match packages to the research domain and sample type
-2. Prioritize packages that support publication-ready FAIR metadata: study identifiers, provenance, taxa, host/pathogen context, methods, and sample descriptors
-3. For project proposals, grants, or DMP-like documents, ensure investigation/study/project metadata is covered, not only assay/sample metadata
-4. Select domain-specific packages based on actual API data above
-5. Select method-specific packages only when explicitly supported by the document
-6. Avoid generic environmental or omics-heavy packages unless the document clearly justifies them
-7. Prefer precision over breadth when two packages provide overlapping coverage
-8. If the document concerns plant-pathogen or host-pathogen systems, strongly prefer plant/pathogen packages that capture host, pathogen, taxon, biosafety, and inoculation metadata
-9. Select at least 1 package. Choose as many as needed to fully cover the document's metadata requirements
-10. There is no upper limit - use your judgment to determine the optimal number of packages
-11. ONLY select from the packages listed above - these are real and current
+1. Read each package's `description` first, then confirm with field counts and ISA sheets
+2. Match packages to the research domain, sample type, and methods described in the document
+3. Prioritize packages that support publication-ready FAIR metadata: study identifiers, provenance, taxa, host/pathogen context, methods, and sample descriptors
+4. For project proposals, grants, or DMP-like documents, ensure investigation/study/project metadata is covered, not only assay/sample metadata
+5. Select domain-specific packages based on the API descriptions above, not package-name keywords alone
+6. Select method-specific packages only when the description clearly matches the document methods
+7. Avoid generic environmental or omics-heavy packages unless the document and description both justify them
+8. Prefer precision over breadth when two packages provide overlapping coverage
+9. If the document concerns plant-pathogen or host-pathogen systems, strongly prefer packages whose descriptions cover host, pathogen, taxon, biosafety, and inoculation metadata
+10. Select at least 1 package. Choose as many as needed to fully cover the document's metadata requirements
+11. There is no upper limit - use your judgment to determine the optimal number of packages
+12. ONLY select from the packages listed above - these are real and current
 
 **Think step by step:**
 1. What is the research domain? (genomics, ecology, plant science, etc.)
-2. What type of samples? (soil, water, organism, etc.)
-3. What methods are used? (sequencing, phenotyping, etc.)
+2. What type of samples or assays? (soil, water, organism, sequencing platform, etc.)
+3. Which package descriptions best match these characteristics?
 4. Which packages from the list above best match these characteristics?
 
 **OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**
