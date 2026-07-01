@@ -321,23 +321,25 @@ def _fetch_ollama_models_payload(
         return False, f"Invalid Ollama response: {exc}", []
 
 
-def _build_mineru_status_message(
-    *,
-    cli_detected: bool,
-    server_reachable: bool,
-    server_configured: bool,
-) -> str:
-    if cli_detected and server_reachable:
-        return "CLI and MinerU server reachable"
-    if cli_detected and not server_configured:
-        return "CLI detected, but MinerU server URL is not configured"
-    if cli_detected and not server_reachable:
-        return "CLI detected, but MinerU server is unreachable"
-    if not cli_detected and server_reachable:
-        return "MinerU server reachable, but CLI is not installed"
-    if not server_configured:
-        return "MinerU CLI missing and server URL is not configured"
-    return "MinerU CLI missing and server is unreachable"
+def _build_mineru_status_message(health: dict) -> str:
+    if not health.get("cli_ok"):
+        return f"CLI unavailable ({health.get('cli_version', 'not found')})"
+    parts = [f"CLI {health.get('cli_version', 'ok')}"]
+    api = health.get("api")
+    vlm = health.get("vlm")
+    if api is not None:
+        parts.append(
+            f"mineru-api: {api.message}"
+            if api.tcp_reachable or api.http_ok
+            else f"mineru-api unreachable ({api.message})"
+        )
+    if health.get("needs_vlm") and vlm is not None:
+        parts.append(
+            f"VLM: {vlm.message}"
+            if vlm.tcp_reachable or vlm.http_ok
+            else f"VLM unreachable ({vlm.message})"
+        )
+    return "; ".join(parts)
 
 
 def _build_system_status() -> SystemStatusResponse:
@@ -348,7 +350,8 @@ def _build_system_status() -> SystemStatusResponse:
         _is_qdrant_available,
         _ollama_has_model,
     )
-    from fairifier.services.mineru_client import MinerUClient
+    from fairifier.services.mineru_client import mineru_client_from_config
+    from fairifier.services.mineru_health import summarize_mineru_health
 
     services: list[ServiceStatusResponse] = []
 
@@ -380,41 +383,35 @@ def _build_system_status() -> SystemStatusResponse:
         )
     )
 
-    mineru_cli_exists = True
     if fc.mineru_enabled:
-        mineru_client = MinerUClient(
-            cli_path=fc.mineru_cli_path,
-            server_url=fc.mineru_server_url or "",
-            backend=fc.mineru_backend,
-            timeout_seconds=fc.mineru_timeout_seconds,
-        )
+        mineru_client = mineru_client_from_config(fc)
         mineru_cli_exists = mineru_client.is_available()
-        mineru_reachable = False
-        if fc.mineru_server_url:
-            from urllib.parse import urlparse
-
-            parsed = urlparse(fc.mineru_server_url)
-            mineru_reachable = _probe_tcp(
-                parsed.hostname or "localhost",
-                parsed.port or 30000,
-            )
+        mineru_health = summarize_mineru_health(
+            cli_path=fc.mineru_cli_path,
+            vlm_url=fc.mineru_server_url,
+            api_url=fc.mineru_api_url,
+            backend=fc.mineru_backend,
+        )
         services.append(
             _infer_service_status(
                 name="mineru",
                 label="MinerU",
                 enabled=True,
-                reachable=bool(mineru_cli_exists and mineru_reachable),
-                message=_build_mineru_status_message(
-                    cli_detected=mineru_cli_exists,
-                    server_reachable=mineru_reachable,
-                    server_configured=bool(fc.mineru_server_url),
-                ),
-                endpoint=fc.mineru_server_url,
+                reachable=bool(mineru_health["ready"]),
+                message=_build_mineru_status_message(mineru_health),
+                endpoint=fc.mineru_api_url or fc.mineru_server_url,
                 details={
                     "cli_path": fc.mineru_cli_path,
                     "backend": fc.mineru_backend,
+                    "effort": fc.mineru_effort,
                     "cli_detected": mineru_cli_exists,
-                    "server_reachable": mineru_reachable,
+                    "cli_version": mineru_health.get("cli_version"),
+                    "api_url": fc.mineru_api_url,
+                    "api_reachable": mineru_health["api"].tcp_reachable,
+                    "api_http_ok": mineru_health["api"].http_ok,
+                    "vlm_url": fc.mineru_server_url,
+                    "vlm_reachable": mineru_health["vlm"].tcp_reachable,
+                    "vlm_http_ok": mineru_health["vlm"].http_ok,
                     "timeout_seconds": fc.mineru_timeout_seconds,
                 },
             )
@@ -577,6 +574,9 @@ def _build_system_status() -> SystemStatusResponse:
         "fair_ds_api_url": fc.fair_ds_api_url,
         "mineru_enabled": fc.mineru_enabled,
         "mineru_server_url": fc.mineru_server_url,
+        "mineru_api_url": fc.mineru_api_url,
+        "mineru_backend": fc.mineru_backend,
+        "mineru_effort": fc.mineru_effort,
         "mem0_enabled": fc.mem0_enabled,
         "mem0_llm_provider": fc.mem0_llm_provider,
         "mem0_embedding_provider": fc.mem0_embedding_provider,

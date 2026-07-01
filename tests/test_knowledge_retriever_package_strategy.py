@@ -41,6 +41,33 @@ def test_infer_local_domain_package_hints_for_petase_context():
     assert "petase_enzyme_engineering" in hints
 
 
+def test_petase_local_package_hint_limits_generic_environment_candidates():
+    kr = _make_kr_without_init()
+
+    candidates = kr._build_candidate_package_names(
+        doc_info={
+            "title": "Engineered PETase depolymerises polyethylene terephthalate",
+            "research_domain": "biocatalysis enzyme engineering",
+            "keywords": ["PETase", "PET depolymerization", "substrate"],
+            "methodology": "UHPLC product quantification",
+        },
+        planner_instruction="Use PETase enzyme engineering metadata fields.",
+        available_package_names=[
+            "default",
+            "miscellaneous natural or artificial environment",
+            "soil",
+            "petase_enzyme_engineering",
+        ],
+        evidence_packets=[
+            {"value": "LCC ICCG enzyme, Gf-PET substrate, pH 8.0, 65 °C"}
+        ],
+        priority_package_hints=["default", "petase_enzyme_engineering"],
+        excluded_package_names=set(),
+    )
+
+    assert candidates == ["default", "petase_enzyme_engineering"]
+
+
 def test_search_local_package_fields_matches_labels_and_definitions():
     kr = _make_kr_without_init()
     kr._local_package_registry = {

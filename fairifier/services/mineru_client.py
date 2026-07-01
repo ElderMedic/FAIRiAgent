@@ -8,7 +8,13 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
+
+from .mineru_paths import (
+    discover_structured_artifacts,
+    find_markdown_in_tree,
+    load_content_list_v2,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -27,6 +33,11 @@ class MinerUConversionResult:
     markdown_path: Path
     markdown_text: str
     images_dir: Optional[Path] = None
+    parse_dir: Optional[Path] = None
+    content_list_v2_path: Optional[Path] = None
+    content_list_path: Optional[Path] = None
+    middle_json_path: Optional[Path] = None
+    structured_blocks: List[Dict[str, Any]] = field(default_factory=list)
     other_files: List[Path] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, str]:
@@ -38,30 +49,85 @@ class MinerUConversionResult:
         }
         if self.images_dir:
             data["images_dir"] = str(self.images_dir)
+        if self.parse_dir:
+            data["parse_dir"] = str(self.parse_dir)
+        if self.content_list_v2_path:
+            data["content_list_v2_path"] = str(self.content_list_v2_path)
+        if self.content_list_path:
+            data["content_list_path"] = str(self.content_list_path)
+        if self.middle_json_path:
+            data["middle_json_path"] = str(self.middle_json_path)
+        if self.structured_blocks:
+            data["structured_block_count"] = str(len(self.structured_blocks))
         if self.other_files:
             serialized = [str(path) for path in self.other_files]
             data["other_files"] = json.dumps(serialized)
         return data
 
 
+def structured_output_metadata(result: Any) -> Dict[str, Any]:
+    """Extract structured MinerU artifact metadata for workflow state."""
+    meta: Dict[str, Any] = {}
+    for attr in (
+        "parse_dir",
+        "content_list_v2_path",
+        "content_list_path",
+        "middle_json_path",
+    ):
+        value = getattr(result, attr, None)
+        if value is not None:
+            meta[attr] = str(value)
+    blocks = getattr(result, "structured_blocks", None) or []
+    if blocks:
+        meta["structured_block_count"] = len(blocks)
+        meta["structured_blocks"] = blocks[:200]
+    return meta
+
+
+def mineru_client_from_config(config: Any) -> "MinerUClient":
+    """Build a :class:`MinerUClient` from ``fairifier.config`` settings."""
+    vlm_url = getattr(config, "mineru_vlm_url", None) or config.mineru_server_url
+    return MinerUClient(
+        cli_path=config.mineru_cli_path,
+        server_url=vlm_url or "",
+        api_url=getattr(config, "mineru_api_url", None),
+        backend=config.mineru_backend,
+        timeout_seconds=config.mineru_timeout_seconds,
+        effort=getattr(config, "mineru_effort", None),
+        image_analysis=getattr(config, "mineru_image_analysis", None),
+        structured_output_enabled=getattr(
+            config, "mineru_structured_output_enabled", True
+        ),
+    )
+
+
 class MinerUClient:
-    """Minimal client for invoking MinerU HTTP backend via CLI."""
+    """Client for invoking MinerU via CLI (mineru-api orchestration + optional VLM URL)."""
 
     def __init__(
         self,
         cli_path: str,
         server_url: str,
         backend: str = "vlm-http-client",
-        timeout_seconds: int = 300,
+        timeout_seconds: int = 1800,
+        api_url: Optional[str] = None,
+        effort: Optional[str] = None,
+        image_analysis: Optional[bool] = None,
+        structured_output_enabled: bool = True,
     ):
         self.cli_path = cli_path
         self.server_url = server_url
+        self.api_url = api_url
         self.backend = backend
         self.timeout_seconds = timeout_seconds
+        self.effort = effort
+        self.image_analysis = image_analysis
+        self.structured_output_enabled = structured_output_enabled
 
     def is_available(self) -> bool:
-        """Return True if CLI is installed and server URL configured."""
-        if not self.server_url:
+        """Return True if CLI is installed (VLM URL required for http-client backends)."""
+        http_client = "http-client" in self.backend
+        if http_client and not self.server_url:
             return False
         try:
             subprocess.run(
@@ -75,11 +141,36 @@ class MinerUClient:
         except FileNotFoundError:
             return False
         except subprocess.TimeoutExpired:
-            # CLI exists; help command hung but assume available.
             return True
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("MinerU availability check failed: %s", exc)
             return False
+
+    def build_command(
+        self,
+        src_path: Path,
+        out_dir: Path,
+    ) -> List[str]:
+        """Assemble the MinerU CLI command for the configured backend."""
+        cmd = [
+            self.cli_path,
+            "-p",
+            str(src_path),
+            "-o",
+            str(out_dir),
+            "-b",
+            self.backend,
+        ]
+        if self.api_url:
+            cmd.extend(["--api-url", self.api_url])
+        if "http-client" in self.backend and self.server_url:
+            cmd.extend(["-u", self.server_url])
+        if self.effort and "hybrid" in self.backend:
+            cmd.extend(["--effort", self.effort])
+        if self.image_analysis is not None and "hybrid" in self.backend:
+            flag = "true" if self.image_analysis else "false"
+            cmd.extend(["--image-analysis", flag])
+        return cmd
 
     def convert_document(
         self,
@@ -89,25 +180,18 @@ class MinerUClient:
         """
         Convert a document to Markdown using MinerU.
 
-        Args:
-            input_path: Path to the source document (e.g. PDF).
-            output_dir: Optional directory to store MinerU artifacts. When
-                omitted, a temporary directory is created.
-
-        Returns:
-            MinerUConversionResult with paths and Markdown content.
-
         Raises:
             MinerUConversionError: Raised when conversion fails or expected
                 artifacts are missing.
         """
-        if not self.server_url:
-            raise MinerUConversionError("MinerU server URL is not configured.")
+        if "http-client" in self.backend and not self.server_url:
+            raise MinerUConversionError(
+                "MinerU VLM URL is not configured (MINERU_SERVER_URL / MINERU_VLM_URL)."
+            )
 
         src_path = Path(input_path).expanduser().resolve()
         if not src_path.exists():
-            message = f"Input file does not exist: {src_path}"
-            raise MinerUConversionError(message)
+            raise MinerUConversionError(f"Input file does not exist: {src_path}")
 
         if output_dir is None:
             tmp_dir = tempfile.mkdtemp(prefix="mineru_", dir=None)
@@ -116,17 +200,7 @@ class MinerUClient:
             out_dir = Path(output_dir).expanduser().resolve()
             out_dir.mkdir(parents=True, exist_ok=True)
 
-        cmd = [
-            self.cli_path,
-            "-p",
-            str(src_path),
-            "-o",
-            str(out_dir),
-            "-b",
-            self.backend,
-            "-u",
-            self.server_url,
-        ]
+        cmd = self.build_command(src_path, out_dir)
         logger.info("Running MinerU conversion: %s", " ".join(cmd))
 
         try:
@@ -152,10 +226,9 @@ class MinerUClient:
             raise MinerUConversionError(message) from exc
         except subprocess.CalledProcessError as exc:
             stderr = exc.stderr or ""
-            error_detail = stderr.strip()
             message = (
                 "MinerU conversion failed with exit code "
-                f"{exc.returncode}: {error_detail}"
+                f"{exc.returncode}: {stderr.strip()}"
             )
             raise MinerUConversionError(message) from exc
 
@@ -163,56 +236,58 @@ class MinerUClient:
             logger.debug("MinerU stdout: %s", completed.stdout.strip())
         if completed.stderr:
             logger.debug("MinerU stderr: %s", completed.stderr.strip())
-            # Check for errors in stderr even if return code is 0
             if "ERROR" in completed.stderr or "Error" in completed.stderr:
-                error_lines = [line for line in completed.stderr.split('\n') 
-                              if 'ERROR' in line or 'Error' in line or 'Traceback' in line]
+                error_lines = [
+                    line
+                    for line in completed.stderr.split("\n")
+                    if "ERROR" in line or "Error" in line or "Traceback" in line
+                ]
                 if error_lines:
-                    error_summary = '\n'.join(error_lines[:5])  # First 5 error lines
-                    logger.warning("MinerU stderr contains errors: %s", error_summary)
+                    logger.warning(
+                        "MinerU stderr contains errors: %s",
+                        "\n".join(error_lines[:5]),
+                    )
 
-        # MinerU creates output in: {out_dir}/{docname}/vlm/{docname}.md
-        # Search recursively for .md files
-        markdown_files = list(out_dir.glob("**/*.md"))
-        if not markdown_files:
-            # List what files were actually created for debugging
-            all_files = list(out_dir.rglob("*"))
-            file_list = "\n".join([f"  - {f}" for f in all_files[:10] if f.is_file()])
+        doc_stem = src_path.stem
+        located = find_markdown_in_tree(out_dir, doc_stem)
+        if not located:
+            all_files = [f for f in out_dir.rglob("*") if f.is_file()][:10]
+            file_list = "\n".join(f"  - {f}" for f in all_files)
             message = (
                 f"MinerU output directory '{out_dir}' does not contain a Markdown file.\n"
                 f"Return code: {completed.returncode}\n"
             )
             if completed.stderr:
-                error_summary = completed.stderr.strip()[:500]
-                message += f"Stderr: {error_summary}\n"
-            if file_list:
-                message += f"Files found in output directory:\n{file_list}"
-            else:
-                message += "No files found in output directory."
+                message += f"Stderr: {completed.stderr.strip()[:500]}\n"
+            message += (
+                f"Files found in output directory:\n{file_list}"
+                if file_list
+                else "No files found in output directory."
+            )
             raise MinerUConversionError(message)
 
-        # Use the first markdown file found (typically there's only one)
-        markdown_path = markdown_files[0]
-        logger.info(f"Found MinerU Markdown at: {markdown_path}")
-        
+        markdown_path, images_dir = located
+        logger.info("Found MinerU Markdown at: %s", markdown_path)
+
         try:
             markdown_text = markdown_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            markdown_text = markdown_path.read_text(
-                encoding="utf-8",
-                errors="ignore",
-            )
+            markdown_text = markdown_path.read_text(encoding="utf-8", errors="ignore")
 
-        # Images are in the same directory as the markdown file
-        images_dir = markdown_path.parent / "images"
-        if not images_dir.exists():
-            images_dir = None
+        parse_dir = markdown_path.parent
+        artifacts = discover_structured_artifacts(parse_dir, doc_stem)
+        structured_blocks: List[Dict[str, Any]] = []
+        content_list_v2_path = artifacts.get("content_list_v2")
+        content_list_path = artifacts.get("content_list")
+        middle_json_path = artifacts.get("middle_json")
 
-        other_files = self._collect_other_files(
-            out_dir,
-            markdown_path,
-            images_dir,
-        )
+        if self.structured_output_enabled and content_list_v2_path:
+            try:
+                structured_blocks = load_content_list_v2(content_list_v2_path)
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning("Failed to load content_list_v2: %s", exc)
+
+        other_files = self._collect_other_files(out_dir, markdown_path, images_dir)
 
         return MinerUConversionResult(
             input_path=src_path,
@@ -220,6 +295,11 @@ class MinerUClient:
             markdown_path=markdown_path,
             markdown_text=markdown_text,
             images_dir=images_dir,
+            parse_dir=parse_dir,
+            content_list_v2_path=content_list_v2_path,
+            content_list_path=content_list_path,
+            middle_json_path=middle_json_path,
+            structured_blocks=structured_blocks,
             other_files=other_files,
         )
 
@@ -233,7 +313,6 @@ class MinerUClient:
             skip = list(skip) + [images_dir]
 
         skip_set = {path.resolve() for path in skip}
-
         other_files: List[Path] = []
         for path in output_dir.iterdir():
             resolved = path.resolve()

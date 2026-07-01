@@ -160,6 +160,22 @@ class TestMinerUServer:
 class TestMinerUClient:
     """Test MinerUClient initialization and basic functionality."""
 
+    def test_build_command_hybrid_http_client(self, tmp_path):
+        client = MinerUClient(
+            cli_path="mineru",
+            server_url="http://localhost:30000",
+            api_url="http://localhost:8000",
+            backend="hybrid-http-client",
+            effort="medium",
+            timeout_seconds=1800,
+        )
+        cmd = client.build_command(tmp_path / "sample.pdf", tmp_path / "out")
+        assert cmd[:2] == ["mineru", "-p"]
+        assert "-b" in cmd and "hybrid-http-client" in cmd
+        assert "--api-url" in cmd and "http://localhost:8000" in cmd
+        assert "-u" in cmd and "http://localhost:30000" in cmd
+        assert "--effort" in cmd and "medium" in cmd
+
     def test_mineru_client_initialization(self, mineru_client):
         """Test that MinerUClient can be initialized."""
         assert mineru_client is not None

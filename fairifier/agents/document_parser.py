@@ -20,7 +20,7 @@ from ..services.retrieval_cache import get_cache_bucket
 from ..tools.science_tools import create_science_tools
 from ..tools.bio_tools import create_bio_tools
 from ..utils.llm_helper import get_llm_helper
-from ..services.mineru_client import MinerUClient, MinerUConversionError
+from ..services.mineru_client import MinerUClient, MinerUConversionError, mineru_client_from_config
 from ..tools.mineru_tools import create_mineru_convert_tool
 
 
@@ -37,12 +37,7 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
         self.mineru_tool = None
         if config.mineru_enabled and config.mineru_server_url:
             try:
-                candidate = MinerUClient(
-                    cli_path=config.mineru_cli_path,
-                    server_url=config.mineru_server_url,
-                    backend=config.mineru_backend,
-                    timeout_seconds=config.mineru_timeout_seconds,
-                )
+                candidate = mineru_client_from_config(config)
                 if candidate.is_available():
                     self.mineru_client = candidate
                     # Create MinerU tool for LangChain integration
@@ -504,7 +499,9 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             {"mineru", "pdf_text", "text_file"}.
         """
         conversion_info: Dict[str, Any] = {}
-        if document_path.endswith('.pdf'):
+        suffix = Path(document_path).suffix.lower()
+        mineru_suffixes = {".pdf", ".docx", ".pptx", ".xlsx"}
+        if suffix in mineru_suffixes:
             if self.mineru_tool:
                 # Use MinerU tool for conversion
                 result = self.mineru_tool.invoke({
@@ -518,8 +515,19 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
                         "markdown_path": result["markdown_path"],
                         "output_dir": result["output_dir"],
                         "images_dir": result["images_dir"],
-                        "method": result["method"]
+                        "method": result["method"],
+                        "content_type": "markdown",
                     }
+                    for key in (
+                        "parse_dir",
+                        "content_list_v2_path",
+                        "content_list_path",
+                        "middle_json_path",
+                        "structured_blocks",
+                        "structured_block_count",
+                    ):
+                        if result.get(key) is not None:
+                            conversion_info[key] = result[key]
                     self.log_execution(
                         state,
                         f"🪄 MinerU converted PDF to Markdown at {result['markdown_path']}"

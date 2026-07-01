@@ -164,12 +164,20 @@ class FAIRifierConfig:
     mineru_enabled: bool = False
     mineru_cli_path: str = "mineru"
     mineru_backend: str = "vlm-http-client"
-    mineru_server_url: Optional[str] = "http://localhost:30000"
-    mineru_timeout_seconds: int = 300
+    mineru_server_url: Optional[str] = "http://localhost:30000"  # MinerU OpenAI-compatible URL
+    mineru_api_url: Optional[str] = None  # optional; omit for single-endpoint + SSH tunnel setups
+    mineru_effort: str = "medium"  # hybrid backend: medium|high
+    mineru_image_analysis: Optional[bool] = None  # None = MinerU default for effort level
+    mineru_timeout_seconds: int = 1800
+    mineru_structured_output_enabled: bool = True  # load content_list_v2 for grounding
     # Reuse MinerU GPU output for identical uploads (SHA-256 of file bytes)
     mineru_cache_enabled: bool = True
     # Shared across runs; keep next to default ``output`` so permissions match project outputs
     mineru_cache_dir: Path = project_root / "output" / ".mineru_cache"
+    # Optional MinerU-Popo post-processing (external repo / Docker)
+    mineru_popo_enabled: bool = False
+    mineru_popo_root: Optional[Path] = None
+    mineru_popo_model_path: Optional[str] = None
 
     # Deep agent inner-loop contracts
     react_loop_max_iterations: int = 6
@@ -638,9 +646,33 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.mineru_backend = os.getenv("MINERU_BACKEND")
     if os.getenv("MINERU_SERVER_URL"):
         config_instance.mineru_server_url = os.getenv("MINERU_SERVER_URL")
+    if os.getenv("MINERU_VLM_URL"):
+        config_instance.mineru_server_url = os.getenv("MINERU_VLM_URL")
+    if os.getenv("MINERU_API_URL"):
+        config_instance.mineru_api_url = os.getenv("MINERU_API_URL")
+    if os.getenv("MINERU_EFFORT"):
+        config_instance.mineru_effort = os.getenv("MINERU_EFFORT")
+    if os.getenv("MINERU_IMAGE_ANALYSIS"):
+        v = os.getenv("MINERU_IMAGE_ANALYSIS", "").strip().lower()
+        config_instance.mineru_image_analysis = v in ("1", "true", "yes", "on")
     if os.getenv("MINERU_TIMEOUT_SECONDS"):
         timeout_value = os.getenv("MINERU_TIMEOUT_SECONDS")
         config_instance.mineru_timeout_seconds = int(timeout_value)
+    if os.getenv("MINERU_STRUCTURED_OUTPUT_ENABLED"):
+        v = os.getenv("MINERU_STRUCTURED_OUTPUT_ENABLED", "").strip().lower()
+        config_instance.mineru_structured_output_enabled = v not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
+    if os.getenv("MINERU_POPO_ENABLED"):
+        v = os.getenv("MINERU_POPO_ENABLED", "").strip().lower()
+        config_instance.mineru_popo_enabled = v in ("1", "true", "yes", "on")
+    if os.getenv("MINERU_POPO_ROOT"):
+        config_instance.mineru_popo_root = Path(os.getenv("MINERU_POPO_ROOT"))
+    if os.getenv("MINERU_POPO_MODEL_PATH"):
+        config_instance.mineru_popo_model_path = os.getenv("MINERU_POPO_MODEL_PATH")
     if os.getenv("MINERU_CACHE_ENABLED"):
         v = os.getenv("MINERU_CACHE_ENABLED", "").strip().lower()
         config_instance.mineru_cache_enabled = v not in ("0", "false", "no", "off")

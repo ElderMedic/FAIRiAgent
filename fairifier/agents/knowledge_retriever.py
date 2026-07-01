@@ -1009,6 +1009,11 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             all_mandatory_fields = []
             for sheet in isa_sheets:
                 all_mandatory_fields.extend(fields_by_isa_sheet[sheet]["mandatory"])
+            all_mandatory_fields = self._prune_default_fields_for_local_domain_package(
+                all_mandatory_fields,
+                selected_package_names,
+                local_package_registry,
+            )
             
             # Start with all mandatory fields
             final_selected_fields = list(all_mandatory_fields)
@@ -2224,6 +2229,18 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
 
         for package_name in priority_package_hints:
             add(package_name)
+
+        local_domain_hints = [
+            hint
+            for hint in priority_package_hints
+            if hint in available_package_names
+            and hint != package_lookup.get("default")
+            and any(token in hint.lower() for token in ("petase", "enzyme_engineering", "depolymer"))
+        ]
+        if local_domain_hints:
+            for package_name in ["default", *local_domain_hints]:
+                add(package_name)
+            return candidates
 
         if any(token in text for token in ["ecotoxic", "nanotoxic", "exposure", "soil", "earthworm", "sediment"]):
             for package_name in ["soil", "sediment", "water", "miscellaneous natural or artificial environment"]:

@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 from langchain_core.tools import tool
+
+from ..services.mineru_client import (
+    MinerUClient,
+    MinerUConversionError,
+    mineru_client_from_config,
+    structured_output_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +22,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MinerUToolResult:
     """Structured result from MinerU conversion tool."""
+
     success: bool
     markdown_text: Optional[str] = None
     markdown_path: Optional[str] = None
@@ -24,29 +32,29 @@ class MinerUToolResult:
     error: Optional[str] = None
 
 
+def _result_payload(result) -> Dict[str, Any]:
+    """Build tool response dict from :class:`MinerUConversionResult`."""
+    payload = {
+        "success": True,
+        "markdown_text": result.markdown_text,
+        "markdown_path": str(result.markdown_path),
+        "output_dir": str(result.output_dir),
+        "images_dir": str(result.images_dir) if result.images_dir else None,
+        "method": "mineru",
+        "error": None,
+    }
+    payload.update(structured_output_metadata(result))
+    return payload
+
+
 def create_mineru_convert_tool(client=None):
-    """Create MinerU document conversion tool.
-    
-    Args:
-        client: Optional MinerUClient instance. If None, tool will
-                create client from config when invoked.
-    
-    Returns:
-        LangChain tool for MinerU document conversion.
-    """
-    from ..services.mineru_client import MinerUClient, MinerUConversionError
+    """Create MinerU document conversion tool."""
     from ..config import config
-    
-    # Create client if not provided
+
     if client is None:
         if config.mineru_enabled and config.mineru_server_url:
             try:
-                client = MinerUClient(
-                    cli_path=config.mineru_cli_path,
-                    server_url=config.mineru_server_url,
-                    backend=config.mineru_backend,
-                    timeout_seconds=config.mineru_timeout_seconds,
-                )
+                client = mineru_client_from_config(config)
                 if not client.is_available():
                     logger.warning("MinerU CLI not available")
                     client = None
@@ -56,35 +64,16 @@ def create_mineru_convert_tool(client=None):
         else:
             logger.debug("MinerU not enabled in config")
             client = None
-    
-    # Closure variable for tool to access client
+
     _client = client
-    
+
     @tool
-    def convert_document(input_path: str, output_dir: Optional[str] = None) -> Dict[str, Any]:
-        """Convert a document (PDF) to Markdown using MinerU.
-        
-        Uses MinerU's VLM-based extraction for better structure preservation
-        compared to basic PDF text extraction. Falls back gracefully if conversion fails.
-        
-        Args:
-            input_path: Path to the source document (e.g., PDF file)
-            output_dir: Optional directory to store MinerU artifacts.
-                       If None, a temporary directory is created.
-        
-        Returns:
-            Dictionary with conversion result:
-            {
-                "success": bool,
-                "markdown_text": str or None,
-                "markdown_path": str or None,
-                "output_dir": str or None,
-                "images_dir": str or None,
-                "method": "mineru",
-                "error": str or None
-            }
-            
-            If success=False, caller should fallback to PyMuPDF or other methods.
+    def convert_document(
+        input_path: str, output_dir: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Convert a document (PDF, DOCX, PPTX, XLSX) to Markdown using MinerU.
+
+        Returns success=False on failure so callers can fall back to PyMuPDF.
         """
         if _client is None:
             return {
@@ -94,30 +83,17 @@ def create_mineru_convert_tool(client=None):
                 "output_dir": None,
                 "images_dir": None,
                 "method": "mineru",
-                "error": "MinerU client not available or not enabled"
+                "error": "MinerU client not available or not enabled",
             }
-        
+
         try:
-            # Convert path to Path object for output_dir if provided
             output_path = Path(output_dir) if output_dir else None
-            
-            # Call MinerU conversion
             result = _client.convert_document(
                 input_path=input_path,
-                output_dir=output_path
+                output_dir=output_path,
             )
-            
-            # Build response from MinerUConversionResult
-            return {
-                "success": True,
-                "markdown_text": result.markdown_text,
-                "markdown_path": str(result.markdown_path),
-                "output_dir": str(result.output_dir),
-                "images_dir": str(result.images_dir) if result.images_dir else None,
-                "method": "mineru",
-                "error": None
-            }
-            
+            return _result_payload(result)
+
         except MinerUConversionError as exc:
             logger.warning("MinerU conversion failed for %s: %s", input_path, exc)
             return {
@@ -127,7 +103,7 @@ def create_mineru_convert_tool(client=None):
                 "output_dir": None,
                 "images_dir": None,
                 "method": "mineru",
-                "error": f"Conversion failed: {str(exc)}"
+                "error": f"Conversion failed: {str(exc)}",
             }
         except Exception as exc:
             logger.error("Unexpected error in MinerU conversion: %s", exc)
@@ -138,7 +114,7 @@ def create_mineru_convert_tool(client=None):
                 "output_dir": None,
                 "images_dir": None,
                 "method": "mineru",
-                "error": f"Unexpected error: {str(exc)}"
+                "error": f"Unexpected error: {str(exc)}",
             }
-    
+
     return convert_document

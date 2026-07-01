@@ -39,7 +39,7 @@ from ..output_paths import resolve_metadata_output_read_path, METADATA_OUTPUT_FI
 from ..utils.llm_helper import get_llm_helper, normalize_llm_response_content
 from ..utils.report_generator import WorkflowReportGenerator
 from ..utils.run_control import run_stop_requested, reset_run_stop_requested
-from ..services.mineru_client import MinerUClient, MinerUConversionError
+from ..services.mineru_client import MinerUClient, MinerUConversionError, mineru_client_from_config
 from ..services import mineru_cache as mineru_cache_service
 from ..services.confidence_aggregator import aggregate_confidence
 from ..services.fairds_api_parser import FAIRDSAPIParser
@@ -193,12 +193,7 @@ class FAIRifierLangGraphApp:
         if not (config.mineru_enabled and config.mineru_server_url):
             return None
         try:
-            client = MinerUClient(
-                cli_path=config.mineru_cli_path,
-                server_url=config.mineru_server_url,
-                backend=config.mineru_backend,
-                timeout_seconds=config.mineru_timeout_seconds,
-            )
+            client = mineru_client_from_config(config)
             if client.is_available():
                 logger.info("MinerU client enabled for LangGraph document loading.")
                 return client

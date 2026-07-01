@@ -42,7 +42,12 @@ from ..output_paths import resolve_metadata_output_read_path, METADATA_OUTPUT_FI
 from ..utils.llm_helper import get_llm_helper, normalize_llm_response_content
 from ..utils.report_generator import WorkflowReportGenerator
 from ..utils.run_control import run_stop_requested, reset_run_stop_requested
-from ..services.mineru_client import MinerUClient, MinerUConversionError
+from ..services.mineru_client import (
+    MinerUClient,
+    MinerUConversionError,
+    mineru_client_from_config,
+)
+from ..services.mineru_paths import find_markdown_in_tree
 from ..services import mineru_cache as mineru_cache_service
 from ..services.confidence_aggregator import aggregate_confidence
 from ..services.fairds_api_parser import FAIRDSAPIParser
@@ -240,48 +245,31 @@ class ReadFileNode:
         Check if pre-converted MinerU results exist for this document.
 
         Searches, in order:
-        1. ``{output_dir}/mineru_{doc_name}/`` (normal web run / cache materialization)
-        2. ``{document_parent}/mineru_{doc_name}/`` (legacy CLI layout beside the file)
+        1. ``{output_dir}/mineru_{doc_name}/``
+        2. ``{document_parent}/mineru_{doc_name}/`` (legacy CLI layout)
 
-        Inside that tree:
-        - ``mineru_{doc_name}/{doc_name}/vlm/{doc_name}.md`` (standard layout), or
-        - any ``*.md`` under the mineru directory (reused cache may use a different inner stem).
+        Supports vlm, hybrid_*, office, and pipeline parse subdirectories.
         """
         from pathlib import Path
 
         doc_path = _filesystem_document_path(document_path)
         doc_name = doc_path.stem
-        doc_dir = doc_path.parent
 
         search_roots: list[Path] = []
         if output_dir:
             search_roots.append(Path(output_dir) / f"mineru_{doc_name}")
-        search_roots.append(doc_dir / f"mineru_{doc_name}")
+        search_roots.append(doc_path.parent / f"mineru_{doc_name}")
 
         for mineru_dir in search_roots:
             if not mineru_dir.exists():
                 continue
 
             logger.info("🔍 Found pre-converted MinerU directory: %s", mineru_dir)
-
-            standard_md_path = mineru_dir / doc_name / "vlm" / f"{doc_name}.md"
-            if standard_md_path.exists():
-                images_dir = mineru_dir / doc_name / "vlm" / "images"
-                logger.info("✅ Found pre-converted markdown: %s", standard_md_path)
-                return str(standard_md_path), str(images_dir) if images_dir.exists() else None
-
-            md_files = list(mineru_dir.rglob("*.md"))
-            if md_files:
-                for md_file in md_files:
-                    if doc_name in md_file.stem:
-                        images_dir = md_file.parent / "images"
-                        logger.info("✅ Found pre-converted markdown: %s", md_file)
-                        return str(md_file), str(images_dir) if images_dir.exists() else None
-
-                md_file = md_files[0]
-                images_dir = md_file.parent / "images"
-                logger.info("✅ Found pre-converted markdown: %s", md_file)
-                return str(md_file), str(images_dir) if images_dir.exists() else None
+            located = find_markdown_in_tree(mineru_dir, doc_name)
+            if located:
+                markdown_path, images_dir = located
+                logger.info("✅ Found pre-converted markdown: %s", markdown_path)
+                return str(markdown_path), str(images_dir) if images_dir else None
 
             logger.warning("⚠️ MinerU directory exists but no markdown found: %s", mineru_dir)
 
@@ -342,7 +330,7 @@ class ReadFileNode:
         if not (config.source_workspace_enabled and output_dir and records):
             return
         workspace = build_source_workspace(records, Path(output_dir))
-        conversion_info["source_workspace"] = {
+        workspace_meta = {
             "root_dir": str(workspace.root_dir),
             "manifest_path": str(workspace.manifest_path),
             "summary_path": str(workspace.summary_path),
@@ -356,6 +344,14 @@ class ReadFileNode:
             },
             "manifest": workspace.manifest,
         }
+        structured_blocks = conversion_info.get("structured_blocks")
+        if structured_blocks:
+            workspace_meta["mineru_structured_blocks"] = structured_blocks
+        if conversion_info.get("content_list_v2_path"):
+            workspace_meta["mineru_content_list_v2_path"] = conversion_info[
+                "content_list_v2_path"
+            ]
+        conversion_info["source_workspace"] = workspace_meta
 
     def _read_single_document_content(
         self,
@@ -484,7 +480,7 @@ class ReadFileNode:
             conversion_info["content_type"] = "jsonl"
             return "\n".join(lines), conversion_info
 
-        if suffix == ".pdf":
+        if suffix in {".pdf", ".docx", ".pptx", ".xlsx"}:
             doc_path = fs_path
             doc_name = doc_path.stem
 
@@ -578,12 +574,31 @@ class ReadFileNode:
                         "method": result["method"],
                         "content_type": "markdown",
                     }
+                    conversion_info.update(
+                        {
+                            k: v
+                            for k, v in result.items()
+                            if k
+                            in {
+                                "parse_dir",
+                                "content_list_v2_path",
+                                "content_list_path",
+                                "middle_json_path",
+                                "structured_blocks",
+                                "structured_block_count",
+                            }
+                            and v is not None
+                        }
+                    )
                     if file_digest:
                         conversion_info["source_sha256"] = file_digest
                     logger.info("MinerU conversion successful: %s", result["markdown_path"])
                     logger.info("MinerU artifacts: %s", result["output_dir"])
                     if result["images_dir"]:
                         logger.info("MinerU images: %s", result["images_dir"])
+                    from ..services.mineru_popo import try_enrich_conversion_with_popo
+
+                    conversion_info = try_enrich_conversion_with_popo(conversion_info)
                     if (
                         file_digest
                         and config.mineru_cache_enabled

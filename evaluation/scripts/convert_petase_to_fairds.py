@@ -2,10 +2,10 @@
 """
 PETase → FAIR-DS ISA-Tab Converter v2.0
 
-Redesigned with assay-level decomposition:
-- Each experimental condition → separate Assay row (not JSON-stringified dicts)
+Redesigned with FAIRDS/ISA-style decomposition:
+- PETase experimental subjects → ObservationUnit rows
 - Enzyme variants + substrate types → separate Sample rows
-- Measurement results → Observation Unit rows
+- Reaction/treatment conditions, measurement methods, and results → Assay rows
 - Missing values omitted (not filled with "NA")
 - Controlled vocabularies applied where available
 
@@ -125,6 +125,49 @@ def _classify_detection(detection_str: str) -> Tuple[str, Optional[str]]:
     wavelength = f"{wl_match.group(1)} nm" if wl_match else None
 
     return method, wavelength
+
+
+def _classify_observation_unit_type(assay_key: str) -> str:
+    """Classify the PETase subject represented by an expert assay key."""
+    key = assay_key.lower()
+    if any(token in key for token in ("bhet", "mhet", "pnpb", "proxy")):
+        return "enzyme_substrate_pair"
+    if any(token in key for token in ("panel", "comparison", "screen")):
+        return "enzyme_panel"
+    return "enzyme_substrate_pair"
+
+
+def _classify_reaction_scale(reported_volume: str, assay_key: str) -> str:
+    """Infer reaction scale from vessel/volume text and expert assay key."""
+    text = f"{reported_volume} {assay_key}".lower()
+    if "pilot" in text or re.search(r"\b\d+\s*l\b", text):
+        return "pilot_scale"
+    if "bioreactor" in text or "minibio" in text:
+        return "bioreactor"
+    if "microplate" in text or "96-well" in text:
+        return "microplate"
+    if "bottle" in text:
+        return "bottle"
+    if "flask" in text:
+        return "flask"
+    return "other"
+
+
+def _extract_proxy_substrate(proxy_text: str) -> Optional[str]:
+    """Return the first common proxy substrate mentioned in free text."""
+    for candidate in ("BHET-OH", "BHET", "MHET", "pNPB"):
+        if candidate.lower() in proxy_text:
+            return candidate
+    return None
+
+
+def _append_condition_note(row: Dict[str, Any], label: str, value: Any) -> None:
+    """Preserve source condition details that cannot be mapped unambiguously."""
+    if _is_missing(value):
+        return
+    note = f"{label}: {value}"
+    existing = row.get("reaction condition notes")
+    row["reaction condition notes"] = f"{existing}; {note}" if existing else note
 
 
 def _extract_assay_keys(reaction_conditions: Dict, enzyme_types: List[str]) -> List[str]:
@@ -354,91 +397,134 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
 
         isa_sheets["sample"]["expected_rows"].append(sample_row)
 
-    # ── Assay rows (one per experimental condition) ──
+    # ── ObservationUnit rows (one per experimental condition) ──
     default_enz = enz_ids[0] if enz_ids else ""
     default_sub = sub_ids[0] if sub_ids else ""
+    observation_unit_ids = {}
 
     for ak in assay_keys:
-        assay_id = f"ASSAY_{doi_slug[:20]}_{_slugify(ak)[:20]}"
-        assay_row = {
-            "assay identifier": assay_id,
-            "assay name": _humanize_assay_name(ak),
+        ou_id = f"OU_{doi_slug[:20]}_{_slugify(ak)[:20]}"
+        observation_unit_ids[ak] = ou_id
+        ou_row = {
+            "observation unit identifier": ou_id,
+            "observation unit name": _humanize_assay_name(ak),
+            "observation unit description": (
+                f"PETase experimental subject curated from {ak}; reaction "
+                f"conditions and measurements are represented as Assay rows."
+            ),
             "study identifier": f"STUDY_{doi_slug[:30]}",
+            "observation unit type": _classify_observation_unit_type(ak),
+            "experimental subject name": _humanize_assay_name(ak),
             "enzyme sample identifier": default_enz,
             "substrate sample identifier": default_sub,
             "_evidence": f"DOI: {doi}; assay: {ak}",
         }
 
-        # Enzyme loading
+        isa_sheets["observationunit"]["expected_rows"].append(ou_row)
+
+        assay_id = f"ASSAY_{doi_slug[:20]}_{_slugify(ak)[:16]}_analysis"
+        assay_row = {
+            "assay identifier": assay_id,
+            "assay name": f"{_humanize_assay_name(ak)} product analysis",
+            "assay description": "Analytical measurement of PET depolymerisation products or activity.",
+            "protocol": "PETase product quantification protocol reported in source paper",
+            "Facility": "not reported",
+            "assay date": "not reported",
+            "observation unit identifier reference": ou_id,
+            "assay type": "product_quantification",
+            "_evidence": f"DOI: {doi}; assay: {ak}",
+        }
+
+        # Reaction/treatment conditions belong to the Assay, not the subject.
         el_val = _get_assay_value(rcl.get("enzyme_loading", {}), ak)
         if not _is_missing(el_val) and not isinstance(el_val, dict):
             assay_row["enzyme loading"] = str(el_val)
+        elif isinstance(el_val, dict):
+            _append_condition_note(assay_row, "enzyme loading", el_val)
 
-        # Substrate solid loading
         ssl_val = _get_assay_value(rcl.get("substrate_solid_loading", {}), ak)
         if not _is_missing(ssl_val) and not isinstance(ssl_val, dict):
             assay_row["substrate solid loading"] = str(ssl_val)
+        elif isinstance(ssl_val, dict):
+            _append_condition_note(assay_row, "substrate solid loading", ssl_val)
 
-        # Reactor volume
         rv_val = _get_assay_value(rcl.get("reactor_volume", {}), ak)
         if not _is_missing(rv_val) and not isinstance(rv_val, dict):
             assay_row["reactor volume"] = str(rv_val)
+            assay_row["reaction scale"] = _classify_reaction_scale(str(rv_val), ak)
+        elif isinstance(rv_val, dict):
+            _append_condition_note(assay_row, "reactor volume", rv_val)
 
-        # Buffer
         buf_val = _get_assay_value(rcl.get("buffer_type_and_concentration", {}), ak)
-        if not _is_missing(buf_val):
-            if isinstance(buf_val, dict):
-                pass # Skipping enzyme-keyed buffer logic to be strict about columns
-            else:
-                buf_type, buf_conc = _classify_buffer(str(buf_val))
-                assay_row["buffer type"] = buf_type
-                if buf_conc:
-                    assay_row["buffer concentration"] = buf_conc
+        if not _is_missing(buf_val) and not isinstance(buf_val, dict):
+            buf_type, buf_conc = _classify_buffer(str(buf_val))
+            assay_row["buffer type"] = buf_type
+            if buf_conc:
+                assay_row["buffer concentration"] = buf_conc
+        elif isinstance(buf_val, dict):
+            _append_condition_note(assay_row, "buffer type and concentration", buf_val)
 
-        # pH
         ph_val = _get_assay_value(rcl.get("pH", {}), ak)
         if not _is_missing(ph_val) and not isinstance(ph_val, dict):
-            try:
-                # Extract numeric pH
-                ph_match = re.search(r'(\d+\.?\d*)', str(ph_val))
-                if ph_match:
-                    assay_row["reaction pH"] = ph_match.group(1)
-            except (ValueError, AttributeError):
-                pass
+            ph_match = re.search(r'(\d+\.?\d*)', str(ph_val))
+            if ph_match:
+                assay_row["reaction pH"] = ph_match.group(1)
+        elif isinstance(ph_val, dict):
+            _append_condition_note(assay_row, "pH", ph_val)
 
-        # Temperature
         temp_val = _get_assay_value(rcl.get("temperature", {}), ak)
         if not _is_missing(temp_val) and not isinstance(temp_val, dict):
-            temp_str = str(temp_val)
-            temp_match = re.search(r'(\d+\.?\d*)\s*°?C?', temp_str)
+            temp_match = re.search(r'(\d+\.?\d*)\s*°?C?', str(temp_val))
             if temp_match:
                 assay_row["reaction temperature"] = f"{temp_match.group(1)} °C"
+        elif isinstance(temp_val, dict):
+            _append_condition_note(assay_row, "temperature", temp_val)
 
-        # Agitation
         agit_val = _get_assay_value(rcl.get("agitation_rate", {}), ak)
         if not _is_missing(agit_val) and not isinstance(agit_val, dict):
-            agit_str = str(agit_val)
-            rpm_match = re.search(r'(\d+)\s*rpm', agit_str)
+            rpm_match = re.search(r'(\d+)\s*rpm', str(agit_val))
             if rpm_match:
                 assay_row["agitation rate"] = f"{rpm_match.group(1)} rpm"
+        elif isinstance(agit_val, dict):
+            _append_condition_note(assay_row, "agitation rate", agit_val)
 
-        # Reaction time
         rt_val = _get_assay_value(rcl.get("reaction_time", {}), ak)
         if not _is_missing(rt_val) and not isinstance(rt_val, dict):
             assay_row["reaction time"] = str(rt_val)
+        elif isinstance(rt_val, dict):
+            _append_condition_note(assay_row, "reaction time", rt_val)
 
-        # Real PET substrate
         proxy_val = kpma.get(
             "does_the_study_use_proxy_substrate_or_actual_PET_substrate", ""
         )
         if not _is_missing(proxy_val):
             proxy_lower = str(proxy_val).lower()
             if "actual" in proxy_lower and "proxy" not in proxy_lower:
-                assay_row["actual PET vs proxy substrate"] = "yes"
-            elif "proxy" in proxy_lower:
-                assay_row["actual PET vs proxy substrate"] = "no"
-            else:
+                assay_row["actual PET vs proxy substrate"] = "actual_pet"
+            elif "proxy" in proxy_lower and "actual" not in proxy_lower:
+                assay_row["actual PET vs proxy substrate"] = "proxy_substrate"
+                proxy_substrate = _extract_proxy_substrate(proxy_lower)
+                if proxy_substrate:
+                    assay_row["proxy substrate identity"] = proxy_substrate
+            elif "proxy" in proxy_lower and "actual" in proxy_lower:
                 assay_row["actual PET vs proxy substrate"] = "both"
+            else:
+                assay_row["actual PET vs proxy substrate"] = "not_reported"
+
+        measurement_design = kpma.get(
+            "is_depolymerisation_efficacy_endpoint_or_time_resolved", ""
+        )
+        design_val = _get_assay_value(measurement_design, ak)
+        if not _is_missing(design_val):
+            design_lower = str(design_val).lower()
+            if "time" in design_lower and "endpoint" in design_lower:
+                assay_row["depolymerisation measurement design"] = "both"
+            elif "time" in design_lower:
+                assay_row["depolymerisation measurement design"] = "time_resolved"
+            elif "endpoint" in design_lower:
+                assay_row["depolymerisation measurement design"] = "endpoint"
+            else:
+                assay_row["depolymerisation measurement design"] = "not_reported"
 
         # HPLC
         hplc_val = kpma.get(
@@ -460,17 +546,30 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
 
         isa_sheets["assay"]["expected_rows"].append(assay_row)
 
-    # ── Observation Unit rows ──
+    def _first_ou_reference() -> str:
+        return observation_unit_ids.get(assay_keys[0], "") if assay_keys else ""
+
+    def _result_assay_row(kind: str, condition: str) -> Dict[str, Any]:
+        ou_ref = observation_unit_ids.get(condition, _first_ou_reference())
+        return {
+            "assay identifier": f"ASSAY_{doi_slug[:20]}_{kind}_{_slugify(condition)[:15]}",
+            "assay name": f"{kind} measurement for {_humanize_assay_name(condition)}",
+            "assay description": "Analytical result extracted from expert PETase metadata.",
+            "protocol": "Reported in source publication",
+            "Facility": "not reported",
+            "assay date": "not reported",
+            "observation unit identifier reference": ou_ref,
+            "assay type": "product_quantification",
+            "_evidence": f"DOI: {doi}; condition: {condition}",
+        }
+
+    # ── Measurement/result Assay rows ──
     # Specific activity
     spec_act = kpma.get("specific_activity")
     if not _is_missing(spec_act):
         if isinstance(spec_act, dict):
             for condition, value in spec_act.items():
-                assay_id = f"ASSAY_{doi_slug[:20]}_{_slugify(condition)[:20]}" if condition in assay_keys else f"ASSAY_{doi_slug[:20]}_{_slugify(assay_keys[0])[:20]}"
-                obs_row = {
-                    "observation unit identifier": f"OBS_{doi_slug[:20]}_spec_{_slugify(condition)[:20]}",
-                    "assay identifier reference": assay_id,
-                }
+                assay_row = _result_assay_row("specific_activity", condition)
                 val_str = str(value)
                 num_match = re.search(r'([\d.]+)\s*(?:±\s*[\d.]+)?', val_str)
                 if num_match:
@@ -479,14 +578,12 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
                         if pattern in val_str.lower():
                             unit_code = uc
                             break
-                    obs_row["specific activity"] = f"{num_match.group(1)} {unit_code}"
-                isa_sheets["observationunit"]["expected_rows"].append(obs_row)
+                    assay_row["specific activity"] = f"{num_match.group(1)} {unit_code}"
+                    assay_row["activity unit"] = unit_code
+                assay_row["measurement notes"] = val_str
+                isa_sheets["assay"]["expected_rows"].append(assay_row)
         else:
-            assay_id = f"ASSAY_{doi_slug[:20]}_{_slugify(assay_keys[0])[:20]}"
-            obs_row = {
-                "observation unit identifier": f"OBS_{doi_slug[:20]}_spec",
-                "assay identifier reference": assay_id,
-            }
+            assay_row = _result_assay_row("specific_activity", "default")
             val_str = str(spec_act)
             num_match = re.search(r'([\d.]+)\s*(?:±\s*[\d.]+)?', val_str)
             if num_match:
@@ -495,86 +592,84 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
                     if pattern in val_str.lower():
                         unit_code = uc
                         break
-                obs_row["specific activity"] = f"{num_match.group(1)} {unit_code}"
-            isa_sheets["observationunit"]["expected_rows"].append(obs_row)
+                assay_row["specific activity"] = f"{num_match.group(1)} {unit_code}"
+                assay_row["activity unit"] = unit_code
+            assay_row["measurement notes"] = val_str
+            isa_sheets["assay"]["expected_rows"].append(assay_row)
 
     # Initial rate
     init_rate = kpma.get("initial_rate")
     if not _is_missing(init_rate):
         if isinstance(init_rate, dict):
             for condition, value in init_rate.items():
-                assay_id = f"ASSAY_{doi_slug[:20]}_{_slugify(condition)[:20]}" if condition in assay_keys else f"ASSAY_{doi_slug[:20]}_{_slugify(assay_keys[0])[:20]}"
-                obs_row = {
-                    "observation unit identifier": f"OBS_{doi_slug[:20]}_ir_{_slugify(condition)[:15]}",
-                    "assay identifier reference": assay_id,
+                assay_row = _result_assay_row("initial_rate", condition)
+                assay_row.update({
                     "initial reaction rate": str(value),
-                }
-                isa_sheets["observationunit"]["expected_rows"].append(obs_row)
+                })
+                isa_sheets["assay"]["expected_rows"].append(assay_row)
         else:
-            assay_id = f"ASSAY_{doi_slug[:20]}_{_slugify(assay_keys[0])[:20]}"
-            obs_row = {
-                "observation unit identifier": f"OBS_{doi_slug[:20]}_ir",
-                "assay identifier reference": assay_id,
+            assay_row = _result_assay_row("initial_rate", "default")
+            assay_row.update({
                 "initial reaction rate": str(init_rate),
-            }
-            isa_sheets["observationunit"]["expected_rows"].append(obs_row)
+            })
+            isa_sheets["assay"]["expected_rows"].append(assay_row)
 
     # kcat
     kcat_val = kpma.get("kcat")
     if not _is_missing(kcat_val):
         if isinstance(kcat_val, dict):
             for condition, value in kcat_val.items():
-                assay_id = f"ASSAY_{doi_slug[:20]}_{_slugify(condition)[:20]}" if condition in assay_keys else f"ASSAY_{doi_slug[:20]}_{_slugify(assay_keys[0])[:20]}"
-                isa_sheets["observationunit"]["expected_rows"].append({
-                    "observation unit identifier": f"OBS_{doi_slug[:20]}_kcat_{_slugify(condition)[:15]}",
-                    "assay identifier reference": assay_id,
+                assay_row = _result_assay_row("kcat", condition)
+                assay_row.update({
+                    "assay type": "kinetic_parameter_estimation",
                     "catalytic rate constant kcat": str(value),
                 })
+                isa_sheets["assay"]["expected_rows"].append(assay_row)
         else:
-            assay_id = f"ASSAY_{doi_slug[:20]}_{_slugify(assay_keys[0])[:20]}"
-            isa_sheets["observationunit"]["expected_rows"].append({
-                "observation unit identifier": f"OBS_{doi_slug[:20]}_kcat",
-                "assay identifier reference": assay_id,
+            assay_row = _result_assay_row("kcat", "default")
+            assay_row.update({
+                "assay type": "kinetic_parameter_estimation",
                 "catalytic rate constant kcat": str(kcat_val),
             })
+            isa_sheets["assay"]["expected_rows"].append(assay_row)
 
     # Km
     km_val = kpma.get("Km")
     if not _is_missing(km_val):
         if isinstance(km_val, dict):
             for condition, value in km_val.items():
-                assay_id = f"ASSAY_{doi_slug[:20]}_{_slugify(condition)[:20]}" if condition in assay_keys else f"ASSAY_{doi_slug[:20]}_{_slugify(assay_keys[0])[:20]}"
-                isa_sheets["observationunit"]["expected_rows"].append({
-                    "observation unit identifier": f"OBS_{doi_slug[:20]}_km_{_slugify(condition)[:15]}",
-                    "assay identifier reference": assay_id,
+                assay_row = _result_assay_row("km", condition)
+                assay_row.update({
+                    "assay type": "kinetic_parameter_estimation",
                     "Michaelis constant Km": str(value),
                 })
+                isa_sheets["assay"]["expected_rows"].append(assay_row)
         else:
-            assay_id = f"ASSAY_{doi_slug[:20]}_{_slugify(assay_keys[0])[:20]}"
-            isa_sheets["observationunit"]["expected_rows"].append({
-                "observation unit identifier": f"OBS_{doi_slug[:20]}_km",
-                "assay identifier reference": assay_id,
+            assay_row = _result_assay_row("km", "default")
+            assay_row.update({
+                "assay type": "kinetic_parameter_estimation",
                 "Michaelis constant Km": str(km_val),
             })
+            isa_sheets["assay"]["expected_rows"].append(assay_row)
 
     # T0.5
     t05_val = kpma.get("T0.5")
     if not _is_missing(t05_val):
         if isinstance(t05_val, dict):
             for condition, value in t05_val.items():
-                assay_id = f"ASSAY_{doi_slug[:20]}_{_slugify(condition)[:20]}" if condition in assay_keys else f"ASSAY_{doi_slug[:20]}_{_slugify(assay_keys[0])[:20]}"
-                isa_sheets["observationunit"]["expected_rows"].append({
-                    "observation unit identifier": f"OBS_{doi_slug[:20]}_t05_{_slugify(condition)[:15]}",
-                    "assay identifier reference": assay_id,
+                assay_row = _result_assay_row("t05", condition)
+                assay_row.update({
+                    "assay type": "thermal_stability",
                     "half inactivation temperature": str(value),
                 })
+                isa_sheets["assay"]["expected_rows"].append(assay_row)
         else:
-            assay_id = f"ASSAY_{doi_slug[:20]}_{_slugify(assay_keys[0])[:20]}"
-            isa_sheets["observationunit"]["expected_rows"].append({
-                "observation unit identifier": f"OBS_{doi_slug[:20]}_t05",
-                "assay identifier reference": assay_id,
+            assay_row = _result_assay_row("t05", "default")
+            assay_row.update({
+                "assay type": "thermal_stability",
                 "half inactivation temperature": str(t05_val),
             })
+            isa_sheets["assay"]["expected_rows"].append(assay_row)
 
     return {
         "document_id": doc_id,
@@ -603,7 +698,7 @@ def _humanize_assay_name(assay_key: str) -> str:
 def main():
     print("=" * 70)
     print("PETase → FAIR-DS ISA-Tab Converter v2.0")
-    print("Assay-level decomposition  |  No 'NA' fillers  |  Controlled vocab")
+    print("Subject/assay decomposition  |  No 'NA' fillers  |  Controlled vocab")
     print("=" * 70)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -658,7 +753,7 @@ def main():
         out_path.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
 
     print(f"\n{'='*70}")
-    print(f"✓ Conversion complete — v2.0 assay-level decomposition")
+    print(f"✓ Conversion complete — v2.0 subject/assay decomposition")
     print(f"  Papers:             {stats['papers']}")
     print(f"  Total assay rows:   {stats['assay_rows']}")
     print(f"  Total sample rows:  {stats['sample_rows']}")
