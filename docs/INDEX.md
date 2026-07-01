@@ -44,7 +44,7 @@
 | [FAIR-DS API Manual](en/development/FAIRDS_API_MANUAL.md) | External FAIR Data Station REST API |
 | [Prompt Engineering Guide](en/development/PROMPT_ENGINEERING_GUIDE.md) | Prompt and context design |
 | [Source Grounding Architecture](en/development/SOURCE_GROUNDING_ARCHITECTURE.md) | Source-grounded metadata implementation notes and next steps |
-| [Architecture & Flow](en/ARCHITECTURE_AND_FLOW.md) | System architecture |
+| [Architecture & Flow](en/ARCHITECTURE_AND_FLOW.md) | Detailed 6-agent nodes, ρ-mechanism, checkpointer |
 
 ### Development Resources
 | Document | Description |

@@ -11,7 +11,7 @@ Welcome to the FAIRiAgent documentation. Please select your preferred language:
 ## 🌏 English
 
 ### Core Documentation
-- [**Architecture & Flow**](en/ARCHITECTURE_AND_FLOW.md): High-level system architecture and workflow diagrams.
+- [**Architecture & Flow**](en/ARCHITECTURE_AND_FLOW.md): Detailed 6-agent system architecture, ρ-mechanism, and checkpointer configurations.
 - [**Evaluation Methodology**](en/EVALUATION_METHODOLOGY.md): Details on how the system is evaluated.
 - [**LLM Integration Guide**](en/LLM_INTEGRATION_GUIDE.md): How to configure and use different LLM providers.
 - [**Source Workspace and Multi-file Inputs**](en/SOURCE_WORKSPACE.md): Preserved source artifacts, configurable context budgets, and multi-file source selection.
@@ -38,6 +38,7 @@ Welcome to the FAIRiAgent documentation. Please select your preferred language:
 ## 🌏 中文 (Chinese)
 
 ### 核心文档 (Core)
+- [**系统架构与工作流**](zh/ARCHITECTURE_AND_FLOW.md): 详细的 6-Agent 节点设计、自校正 ρ 回滚与 Checkpointer 状态持久化配置。
 - [**LLM 集成指南**](zh/LLM_INTEGRATION_GUIDE.md): 如何配置和使用不同的 LLM 提供商。
 - [**Source Workspace 与多文件输入**](zh/SOURCE_WORKSPACE.md): source artifact 保留、可配置 context budget 和多文件 source 选择。
 - [**Mem0 快速开始**](zh/guides/MEM0_QUICKSTART.md): mem0 记忆层的中文快速上手说明。
