@@ -1,22 +1,20 @@
 # Hybrid Retrieval, Evidence Store, and Deterministic Coverage — Upgrade Plan
 
-> **Status: PROPOSED (v1.5.0 candidate) — v2, decisive-default revision**
+> **Status: PROPOSED (v1.5.0 candidate) — v3, resilient-default revision**
 > This document supersedes the "no vector RAG" guardrail in
 > [SOURCE_GROUNDING_ARCHITECTURE.md](SOURCE_GROUNDING_ARCHITECTURE.md) for the
 > scope described here. It complements — and does not replace —
 > [UPSTREAM_CANDIDATE_MERGING.md](UPSTREAM_CANDIDATE_MERGING.md), which stays
 > the consensus/reconciliation layer that all new candidate sources feed into.
 >
-> **Revision note:** v1 of this plan hedged every workstream behind a
-> default-`false` flag with a permanent grep-only fallback path, on the theory
-> that this repo's existing guardrail culture favors caution. That is the
-> wrong instinct for this change: once a component (chunking, hybrid
-> retrieval, the Evidence Store, section map-reduce) is implemented and
-> tested, it becomes **the** implementation — ship it default-**on**, and
-> delete the code path it replaces. Flags remain only as ops-level emergency
-> kill-switches (one per major subsystem), never as a permanent two-path
-> maintenance burden. If a workstream isn't good enough to be the default, it
-> isn't good enough to merge.
+> **Revision note:** v2 correctly moved away from permanent opt-in
+> experiments, but was too aggressive about deleting old code immediately.
+> The v3 rule is: new components must be good enough to become the default,
+> but migration is staged. Ship with shadow/compare telemetry, keep a narrow
+> runtime fallback for smooth processing, then remove superseded internals
+> only after the new path has passed the evaluation gate and survived real
+> runs without regressions. Avoid both extremes: no flag maze, no big-bang
+> rewrite.
 
 ---
 
@@ -48,14 +46,16 @@ succeeding.
 ## 2. Design principles
 
 - **One recommended path per component, not a menu of flags.** Each
-  workstream below names exactly one technology/algorithm choice. No
-  "configurable embedding provider with three fallback backends" — pick the
-  best default and commit.
-- **Backward-compatible provenance, forward-incompatible internals.** Every
+  workstream below names a primary technology/algorithm choice. Runtime
+  fallbacks are allowed only for reliability (for example, Qdrant is down),
+  not as a permanent user-facing choice between two product behaviors.
+- **Backward-compatible provenance, staged internal replacement.** Every
   candidate must still resolve to `source_id:char_start-char_end`
   (`SOURCE_REF_PATTERN`), so grounding/validation code is untouched. Internal
   implementations that hybrid retrieval / the Evidence Store supersede are
-  **deleted**, not kept as a parallel "legacy mode."
+  deprecated first, shadow-compared where practical, and deleted only after a
+  release boundary and evaluation gate. The goal is no long-term duplicate
+  stack, not no fallback.
 - **Deterministic coverage over model-judgment coverage.** Coverage of a
   document is a property of a code loop (`Send()` map-reduce), not of whether
   a DeepAgent chose to call a subagent.
@@ -74,6 +74,13 @@ succeeding.
   already implements auto-start-local-Qdrant-if-missing). That connection
   logic gets **extracted into a shared module**, not copy-pasted for a second
   vector consumer.
+- **First-principles cost control.** The bottleneck is evidence *recall* and
+  source-grounded value extraction, not building a full research-paper search
+  platform. Start with the smallest architecture that improves recall:
+  structure-aware child chunks, deterministic context headers, existing
+  lexical search, dense search, RRF, and lightweight rerank. Do not add
+  ColBERT/SPLADE, per-chunk LLM summaries, or a separate BM25 service until
+  section-coverage recall shows the simpler stack is insufficient.
 
 ---
 
@@ -81,12 +88,12 @@ succeeding.
 
 | Component | Decision | Why |
 |---|---|---|
-| **Vector store** | **Qdrant**, one collection per run (`run_{session_id}`), dropped when the run finalizes. No in-memory/numpy fallback path. | Already mandatory infra in `docker-compose` (started unconditionally, independent of `MEM0_ENABLED`). Qdrant natively combines **payload filtering + ANN search in one query**, so structured fields (`source_id`, `char_start`, `char_end`, `field_hints`, `produced_by`) live in the payload — no second SQL/document store needed. |
+| **Vector store** | **Qdrant**, one collection per run (`run_{session_id}`), normally dropped when the run finalizes; persist the manifest JSONL in `source_workspace` for audit. | Already mandatory infra in `docker-compose` (started unconditionally, independent of `MEM0_ENABLED`). Qdrant natively combines **payload filtering + ANN search in one query**, so structured fields (`source_id`, `char_start`, `char_end`, `field_hints`, `produced_by`) live in the payload — no second SQL/document store needed. If Qdrant is unreachable after auto-start/retry, semantic retrieval is skipped and the run continues with lexical search + Evidence Store JSONL export; this is a reliability fallback, not a supported long-term mode. |
 | **Qdrant connection/lifecycle code** | Extract `_try_auto_start_qdrant`, `_docker_available`, health-check logic from `mem0_service.py` into `fairifier/services/qdrant_client.py`; both `mem0_service.py` and the new semantic index import from there. | Avoids duplicating connection/retry logic for a second Qdrant consumer; one place to fix connection bugs. |
 | **Chunk/query embedding model** | **`BAAI/bge-small-en-v1.5`** (local, CPU-friendly, asymmetric `query:`/`passage:` prefixing fits "field-name query → document-passage" retrieval), run via `sentence-transformers`, already a project dependency. | Strong general+technical-text retrieval performance, small enough for CPU inference at run time (no GPU dependency introduced), asymmetric prefixing is a better fit than a symmetric model for this query/passage shape. Domain-tuned scientific embeddings (SPECTER2, BioBERT-based) are evaluated in §9.2 as a **follow-up swap of this one config value**, not a second code path. |
-| **Chunker** | Heading-aware split of MinerU Markdown (fallback: fixed ~450-token window, 15% overlap, for headerless text), implemented once in `fairifier/services/chunking.py`. | MinerU output already preserves `#`/`##` structure; reuse it instead of re-deriving section boundaries twice (chunker + `analyze_document_outline`, see §6). |
+| **Chunker** | MinerU `content_list_v2` Block → Chunk → Section pipeline (fallback: shared text/Markdown paragraph+heading parser), implemented once in `fairifier/services/chunking.py`. | MinerU already exposes typed blocks, page metadata, and heading levels; use that structure directly instead of regexing rendered Markdown. Details and parameters live in `SCIENTIFIC_DOCUMENT_CHUNKING_DESIGN.md`. |
 | **Fusion** | Reciprocal Rank Fusion (RRF, `k=60`) combining lexical (`grep_sources`) and semantic ranks. | No score-calibration problem between BM25-like lexical hits and cosine similarity; standard, well-validated choice. |
-| **Rerank** | **`cross-encoder/ms-marco-MiniLM-L-6-v2`**, always applied to the fused top-20 before truncating to the final top-K per field. On by default — it is a small CPU cross-encoder (milliseconds per pair, batched), not a latency risk worth gating behind a flag. | Precision matters most exactly where lexical and semantic disagree; reranking the small fused candidate set is cheap enough to always run. |
+| **Rerank** | **`cross-encoder/ms-marco-MiniLM-L-6-v2`**, default-on for fused top-20 → final top-K per field, batched and guarded by a latency timeout. | Production RAG practice strongly favors reranking after hybrid retrieval, but CPU cross-encoders can still become a hot path on very large bundles. If the reranker times out or is unavailable, keep the RRF order and mark `rerank_status=skipped`; do not fail the run. |
 | **Evidence Store persistence** | Same Qdrant collection as the chunk index (different payload `kind: "chunk" \| "evidence"`), not a separate database. | One store, one query surface, one lifecycle to manage per run. |
 
 ---
@@ -100,14 +107,14 @@ flowchart TD
         B --> SW[source_workspace/*]
     end
 
-    subgraph INDEX["Chunk + Semantic Index (new, default-on)"]
+    subgraph INDEX["Chunk + Semantic Index (default after gate)"]
         SW --> CH[chunking.py: section-aware chunks]
         CH --> EMB[bge-small-en-v1.5 embeddings]
         EMB --> QD[(Qdrant run_{session_id} collection)]
         CH --> OUTLINE[section outline\nreplaces analyze_document_outline tool]
     end
 
-    subgraph MAPREDUCE["Deterministic Section Map-Reduce (new, default-on)"]
+    subgraph MAPREDUCE["Deterministic Section Map-Reduce (default after gate)"]
         OUTLINE --> PLAN[plan_sections]
         PLAN -->|Send x N, parallel| WORK[extract_section worker]
         WORK --> RED[reduce_candidates]
@@ -132,7 +139,7 @@ flowchart TD
 
 ---
 
-## 5. Workstream A — Chunking + semantic index (default-on)
+## 5. Workstream A — Chunking + semantic index (default after gate)
 
 **New files:** `fairifier/services/chunking.py`, `fairifier/services/semantic_index.py`,
 `fairifier/services/qdrant_client.py` (shared connection helper, extracted
@@ -162,11 +169,13 @@ itself; do not duplicate the chunking algorithm here when implementing.
   already does for memory; this is a runtime resilience fallback, not a
   user-facing configuration mode).
 
-**Config (kill-switch only, default on):** `FAIRIFIER_SEMANTIC_INDEX_ENABLED=true`.
+**Config:** `FAIRIFIER_SEMANTIC_INDEX_ENABLED=true` once the §10 gate passes;
+until then it runs in shadow/build-only mode. After default switch, this env
+var is an emergency kill-switch, not a product mode.
 
 ---
 
-## 6. Workstream B — Hybrid retrieval replaces lexical-only retrieval (default-on, old call sites deleted)
+## 6. Workstream B — Hybrid retrieval becomes the default evidence search after shadow comparison
 
 `hybrid_search_sources()` in `fairifier/services/source_workspace.py` becomes
 the **only** way `JSONGeneratorAgent`, `DocumentParserAgent`, and
@@ -200,24 +209,56 @@ def hybrid_search_sources(
 
 - `FieldCandidate` gains `retrieval_method: Literal["grep", "semantic", "hybrid"]`
   for telemetry (§10), not for branching grounding logic.
-- **Deleted:** the direct `grep_sources(...)` loop inside
-  `JSONGeneratorAgent._build_field_source_evidence_context()` (replaced by
-  one call to `hybrid_search_sources`); the hardcoded PETase-specific
-  `alias_map` dict in `_field_search_queries()` (see §9.4 — replaced by a
-  domain-vocabulary source that generalizes beyond one enzymology dataset).
+- Replace the direct `grep_sources(...)` loop inside
+  `JSONGeneratorAgent._build_field_source_evidence_context()` with one call
+  to `hybrid_search_sources()`, but keep `grep_sources()` as the internal
+  lexical signal and as an emergency runtime fallback if the semantic index
+  is unavailable.
+- Keep the current PETase-specific `alias_map` for one migration release, but
+  log every alias hit with `alias_source="legacy_python_alias_map"`. Once
+  the same aliases are represented in FAIR-DS synonyms or skill-provided
+  vocabularies (§9.3) and regression tests pass, remove the hardcoded map.
 
-**Config (kill-switch only, default on):** `FAIRIFIER_HYBRID_RETRIEVAL_ENABLED=true`.
+### 6.1 Retrieval parameters and tuning contract
+
+Start with conservative, auditable parameters borrowed from common
+production RAG practice (small child chunks for precision, larger parent
+sections for context, hybrid retrieval + RRF + rerank), then tune only
+against this project's section-coverage recall metric:
+
+| Parameter | Default | Rationale |
+|---|---:|---|
+| lexical queries per field | up to 10 | Matches current `_field_search_queries()` ceiling; prevents alias explosion |
+| lexical hits per field | 20 | Existing `FAIRIFIER_SOURCE_MAX_SEARCH_RESULTS` default scale |
+| semantic hits per field | 24 (`top_k * 3`) | Enough dense recall before fusion without flooding rerank |
+| RRF `k` | 60 | Standard robust default for fusing heterogeneous rankers |
+| rerank candidate count | 20 | Keeps CPU cross-encoder cost bounded |
+| final evidence snippets per field | 8 | Matches current prompt-budget scale; top candidate plus alternates |
+| reranker timeout | 5 seconds per batch | Skip rerank and keep RRF order rather than failing extraction |
+
+**Do not add BM25/SPLADE in the first implementation.** BM25 over
+contextualized chunks is a known best practice, and Qdrant can support sparse
+vectors, but the repo already has a deterministic lexical signal
+(`grep_sources`) and no sparse-index dependency. First-principles fit here:
+exact identifiers, sample names, units, and ontology labels are already
+served by grep; the missing capability is semantic recall. Add a true BM25
+or sparse-vector index only if evaluation shows lexical+semantic+rerank is
+still missing evidence spans that keyword search should find.
+
+**Config:** `FAIRIFIER_HYBRID_RETRIEVAL_ENABLED=true` once shadow comparison
+passes. Before that, use the same code path for comparison telemetry without
+feeding it to generation.
 
 ---
 
-## 7. Workstream C — Evidence Store replaces the static evidence-packet model (default-on)
+## 7. Workstream C — Evidence Store becomes the default evidence substrate after wrapper parity
 
-**New file:** `fairifier/services/evidence_store.py`. **Deleted:** the
-internal per-agent, non-queryable list-building logic in
-`fairifier/services/evidence_packets.py` — its **output shape**
-(`build_evidence_context()`'s flat text) is preserved as a thin
-compatibility function so `llm_helper.py` prompts need zero changes, but its
-internals become `EvidenceStore.export_context()`.
+**New file:** `fairifier/services/evidence_store.py`. The existing public
+functions in `fairifier/services/evidence_packets.py` stay as compatibility
+wrappers for one migration release; internally they call
+`EvidenceStore.export_context()` / `EvidenceStore.add_from_document_info()`.
+This preserves prompt contracts and UI/report expectations while moving the
+source of truth into the queryable store.
 
 ```python
 @dataclass
@@ -242,17 +283,22 @@ class EvidenceStore:
   becomes queryable by every other agent in the same run — closing the gap
   `mem0_service.py` explicitly leaves open ("not document RAG") for the
   *current* document.
+- Also export `source_workspace/evidence_store.jsonl` at finalize time for
+  audit, deterministic tests, and Qdrant-outage fallback. Qdrant is the query
+  engine; JSONL is the run artifact. This keeps operations smooth without
+  introducing a second production query path.
 - `source_workspace.md`'s inventory gains the section outline produced once
   by the chunker (Workstream A) — `DocumentParser`'s optional,
-  tool-gated `analyze_document_outline` tool is **deleted**; outline
-  computation is not something a model should "decide" to do, it is a
-  deterministic prerequisite for Workstream D's fan-out.
+  tool-gated `analyze_document_outline` tool is deprecated once the chunker
+  outline lands. Keep it as a fallback for non-MinerU/plain-text edge cases
+  until the shared fallback-outline parser has equivalent test coverage.
 
-**Config (kill-switch only, default on):** `FAIRIFIER_EVIDENCE_STORE_ENABLED=true`.
+**Config:** `FAIRIFIER_EVIDENCE_STORE_ENABLED=true` once wrapper parity
+passes. The public evidence-packet API remains stable during migration.
 
 ---
 
-## 8. Workstream D — Deterministic section map-reduce + parallelization (default-on)
+## 8. Workstream D — Deterministic section map-reduce + parallelization (default after evaluation gate)
 
 ### 8.1 Why `Send()`, not DeepAgent dynamic subagents, for coverage
 
@@ -326,22 +372,27 @@ Critic retries are inherently sequential (evaluate, then maybe redo).
 ### 8.4 Budget relaxation (paired with, not independent of, §8.2)
 
 Because coverage no longer depends on one large call succeeding, the
-existing conservative constants become safe to raise **as part of shipping
-this workstream**, not as a separately-gated follow-up:
+existing conservative constants become candidates for relaxation, but they
+should move in two steps rather than one:
 
-- Replace the hardcoded `max_doc_context_markdown=200000` /
+- Step 1: keep current absolute caps while adding section map-reduce and
+  token/cost telemetry. This isolates the effect of better coverage from the
+  effect of larger prompts.
+- Step 2: once section-coverage recall improves without hallucination
+  regression, replace the hardcoded `max_doc_context_markdown=200000` /
   `max_doc_context_text=120000` and the `min(..., 200000)` clamp in
   `apply_budget_guardrails()` with a **model-context-aware** budget
   (`resolve_doc_context_budget()`: configured LLM context window minus
   reserved output tokens).
-- Replace the hardcoded `react_loop_max_iterations=6` /
+- Step 2 also replaces the hardcoded `react_loop_max_iterations=6` /
   `react_loop_max_tool_calls=18` clamps with a document-size-aware ceiling
   (scale with estimated section count from Workstream A).
 - Add per-phase token/cost/latency telemetry to `workflow_report.json` so the
   relaxed budgets are observable, not just larger numbers hoped to be fine.
 
-**Config (kill-switch only, default on):** `FAIRIFIER_MAPREDUCE_ENABLED=true`,
-`FAIRIFIER_DOC_CONTEXT_BUDGET_MODE=model_aware` (escape hatch:
+**Config:** `FAIRIFIER_MAPREDUCE_ENABLED=true` after the section-coverage
+evaluation gate passes; `FAIRIFIER_DOC_CONTEXT_BUDGET_MODE=model_aware`
+only after Step 1 telemetry validates cost/quality (§8.4). Escape hatch:
 `MAX_DOC_CONTEXT_MARKDOWN` / `MAX_DOC_CONTEXT_TEXT` env overrides still work
 for pinning a hard ceiling on a specific deployment).
 
@@ -463,7 +514,7 @@ solve.
 
 ---
 
-## 10. Evaluation and guardrail updates (must pass before merging, not an eventual A/B)
+## 10. Evaluation, rollout, and guardrail updates
 
 1. **Update `SOURCE_GROUNDING_ARCHITECTURE.md`**: replace the "no vector RAG"
    guardrail with a description of the shipped hybrid architecture and its
@@ -476,28 +527,38 @@ solve.
    field-presence counts. Implemented in
    `evaluation/analysis/analyzers/` alongside the existing field-presence
    analyzer.
-3. **Acceptance bar before merging Workstreams B/D as default-on**: run the
-   full harness against earthworm / Haarika+Bhamidipati / BIOREM and require
-   section-coverage recall and field coverage to both improve (or hold)
-   versus the v1.4.0 baseline, with hallucination indicators
-   (`ungrounded_high_confidence_fields`, Critic faithfulness score) not
-   regressing. This is a one-time PR gate, not a standing feature-flag
-   rollout.
+3. **Shadow comparison before default switch:** for one integration stage,
+   run hybrid retrieval alongside the current grep evidence builder and log
+   both candidate sets (`legacy_candidate_count`, `hybrid_candidate_count`,
+   `new_source_spans_found`, `legacy_only_spans`). The generation prompt uses
+   the current path until the comparison passes; this avoids changing recall
+   and generation behavior in the same unobservable step.
+4. **Default-switch acceptance bar:** run the full harness against earthworm /
+   Haarika+Bhamidipati / BIOREM and require section-coverage recall and field
+   coverage to both improve (or hold) versus the v1.4.0 baseline, with
+   hallucination indicators (`ungrounded_high_confidence_fields`, Critic
+   faithfulness score) not regressing. Only then make hybrid retrieval /
+   Evidence Store / map-reduce the default path.
+5. **Deletion bar:** remove superseded code only after the default path has
+   passed the above evaluation and at least one release boundary has kept the
+   fallback path available for operational rollback. This keeps smooth
+   processing without committing to permanent dual implementations.
 
 ---
 
-## 11. Code deleted or replaced by this plan
+## 11. Code migration plan: deprecate, default-switch, then delete
 
-Explicit list so the migration does not leave two parallel implementations:
+Explicit list so the migration does not leave two parallel implementations
+forever, while still preserving a smooth rollback path during the transition:
 
-| Removed | Replaced by |
+| Current code | Migration path |
 |---|---|
-| Direct `grep_sources()` loop in `JSONGeneratorAgent._build_field_source_evidence_context()` | `hybrid_search_sources()` |
-| Hardcoded PETase `alias_map` dict in `_field_search_queries()` | FAIR-DS term synonyms + skill-provided `field_aliases` (§9.3) |
-| `DocumentParser`'s optional `analyze_document_outline` tool | Deterministic chunker-produced section outline (Workstream A / [chunking design §3](SCIENTIFIC_DOCUMENT_CHUNKING_DESIGN.md#3-block-extraction-mineru-content_list_v2-as-the-primary-source-of-truth)), computed once during ingestion for both MinerU and non-MinerU inputs |
-| Internal list-building logic in `evidence_packets.py` | `EvidenceStore` (output shape of `build_evidence_context()` preserved as a compatibility wrapper) |
-| Sequential `for batch in batches: await ...` loop in `generate_complete_metadata()` | `asyncio.gather` with bounded concurrency |
-| Fixed `max_doc_context_markdown` / `max_doc_context_text` / `react_loop_max_iterations` / `react_loop_max_tool_calls` clamps in `apply_budget_guardrails()` | Model-context-aware / section-count-aware dynamic budgets |
+| Direct `grep_sources()` loop in `JSONGeneratorAgent._build_field_source_evidence_context()` | Shadow-run `hybrid_search_sources()` beside it, compare candidate spans, then switch prompt context to hybrid. Keep `grep_sources()` as the internal lexical fallback. |
+| Hardcoded PETase `alias_map` dict in `_field_search_queries()` | Move aliases into FAIR-DS synonyms / skill-provided `field_aliases` (§9.3), then delete the Python dict after alias-hit parity tests pass. |
+| `DocumentParser`'s optional `analyze_document_outline` tool | Replace with deterministic chunker-produced section outline (Workstream A / [chunking design §3](SCIENTIFIC_DOCUMENT_CHUNKING_DESIGN.md#3-block-extraction-mineru-content_list_v2-as-the-primary-source-of-truth)); keep the old tool as a fallback until non-MinerU/plain-text outline tests cover the same cases. |
+| Internal list-building logic in `evidence_packets.py` | Preserve public functions as wrappers over `EvidenceStore`; delete only private duplicate logic once UI/report/tests consume the wrapper output unchanged. |
+| Sequential `for batch in batches: await ...` loop in `generate_complete_metadata()` | Replace with bounded `asyncio.gather`; keep a provider-level concurrency setting so rate-limited deployments can set concurrency to 1 without reverting code. |
+| Fixed `max_doc_context_markdown` / `max_doc_context_text` / `react_loop_max_iterations` / `react_loop_max_tool_calls` clamps in `apply_budget_guardrails()` | Add telemetry first, then switch to model-context-aware / section-count-aware dynamic budgets once recall/hallucination metrics pass. |
 
 **Added, not deleted (fixes a gap, no prior implementation to replace):**
 MinerU `content_list_v2` `type=="table"` blocks are newly routed through the
@@ -508,25 +569,25 @@ rows at all, only as raw Markdown table text.
 
 ---
 
-## 12. Implementation sequencing (dependency order, not calendar or flag phases)
+## 12. Implementation sequencing (dependency order and safe rollout)
 
 ```
 1. qdrant_client.py (extracted shared connection helper) — needed by 2 and 4
 2. chunking.py + semantic_index.py — needed by 3, 4, 5
    (algorithm detail: SCIENTIFIC_DOCUMENT_CHUNKING_DESIGN.md)
-3. hybrid_search_sources() — needs 2; replaces grep-only call sites immediately (§11)
-4. EvidenceStore — needs 1, 2; replaces evidence_packets internals immediately (§11)
-5. Send()-based section map-reduce subgraph — needs 2, 4
+3. hybrid_search_sources() — needs 2; initially shadow-runs beside grep-only (§10/§11)
+4. EvidenceStore — needs 1, 2; first wraps evidence_packets output shape (§7/§11)
+5. Send()-based section map-reduce subgraph — needs 2, 4; starts with current prompt budgets (§8.4)
 6. Parallelization changes (§8.3) — independent of 1-5, can land anytime, no shared-state conflicts
 7. Domain optimizations (§9) — 9.1/9.3 can land alongside 3; 9.4 needs 2; 9.5 needs 3
 8. Budget relaxation (§8.4) — lands together with 5, not before
-9. Evaluation harness updates (§10) — needed to gate 3 and 5 before they're merged as default-on
+9. Evaluation harness updates (§10) — needed to gate 3 and 5 before they're switched to the default path
 ```
 
-Steps 1–4 and 6 carry minimal behavioral risk (additive capability, old code
-removed only once the new path's tests pass). Step 5 is where the coverage
-claim is actually made and must clear the §10 acceptance bar. Step 8 is
-intentionally sequenced with step 5, not before it.
+Steps 1–4 and 6 carry minimal behavioral risk because they can be validated
+in shadow/wrapper mode. Step 5 is where the coverage claim is actually made
+and must clear the §10 acceptance bar. Step 8 is intentionally sequenced
+after Step 5 telemetry, not before it.
 
 ---
 

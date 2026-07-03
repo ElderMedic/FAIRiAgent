@@ -188,10 +188,12 @@ Suggested scope for the next development phase:
   tools.  **Update:** hybrid (lexical + semantic) retrieval and deterministic
   section-coverage map-reduce have been explicitly requested and scoped in
   [HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md](HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md).
-  That plan ships as the **default, single implementation** once merged
-  (its own §10 acceptance bar gates the merge, not a runtime feature flag) —
-  it is not a permanent opt-in alternative to `grep_sources()`-only search.
-  Until it lands, this guardrail still applies to any change made outside
-  that plan's scope.
+  That plan ships hybrid retrieval as the **recommended default path** once
+  its evaluation gate passes, but migration is staged: shadow comparison,
+  narrow runtime fallback for smooth processing, then removal of superseded
+  private internals after a release boundary. It is not a permanent opt-in
+  alternative to `grep_sources()`-only search, but it also is not a big-bang
+  deletion of the existing reliable path. Until it lands, this guardrail
+  still applies to any change made outside that plan's scope.
 - Keep single-file behavior compatible by treating it as a one-source workspace.
 - Avoid broad refactors in `langgraph_app.py`; prefer focused helpers and tests.

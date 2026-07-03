@@ -45,8 +45,8 @@ not one chunk size used everywhere:
 | Tier | Size target | Consumer | Purpose |
 |---|---|---|---|
 | **Block** | Atomic (one paragraph / heading / table / figure / equation) | Internal only | Smallest structurally-typed unit; source of truth for everything else |
-| **Chunk** | ~350–400 tokens (embedding-model tokenizer) | `hybrid_search_sources()` semantic index (Workstream B) | Retrieval precision — must fit the embedding model's sequence limit |
-| **Section** | ~2,000–3,000 tokens (LLM tokenizer) | `Send()` map-reduce workers (Workstream D) | Coverage — one focused LLM call per section, cheap and parallel |
+| **Chunk** | target 384 tokens, hard cap 448 tokens including contextual header (embedding-model tokenizer) | `hybrid_search_sources()` semantic index (Workstream B) | Retrieval precision — must fit the embedding model's sequence limit |
+| **Section** | target 2,400 tokens, soft cap 3,200 tokens (LLM tokenizer approximation) | `Send()` map-reduce workers (Workstream D) | Coverage — one focused LLM call per section, cheap and parallel |
 
 A **Section owns an ordered list of Chunk IDs**, and a **Chunk owns an
 ordered list of Block IDs** — retrieving a chunk can always be expanded to
@@ -54,6 +54,9 @@ its parent section for more context (standard "small-chunk-retrieve,
 larger-chunk-generate" pattern), and every chunk still resolves to exact
 character offsets in the original source file, so citations stay
 `source_id:char_start-char_end` regardless of which tier found the evidence.
+This parent-child design follows the common production RAG lesson that small
+chunks retrieve precisely, but the reranker/LLM often needs the larger parent
+to avoid missing the decisive line just outside the retrieved child.
 
 ```python
 @dataclass
@@ -132,6 +135,21 @@ single `DocSection` of `section_type="tabular_data"` whose content for
 map-reduce purposes is a compact structured summary (column names + a few
 sample rows), reusing the existing table-extraction path untouched.
 
+### 3.1 Parameter defaults
+
+| Parameter | Default | Notes |
+|---|---:|---|
+| child chunk target | 384 embedder tokens | Leaves headroom for contextual header under bge-small's ~512-token limit |
+| child chunk hard cap | 448 embedder tokens | Split oversized paragraph/table-caption blocks if exceeded |
+| fallback overlap | 64 tokens (~15%) | Used only when a single block must be split by tokens; natural block boundaries otherwise do not need overlap |
+| section target | 2,400 approximate LLM tokens | Good size for one Methods/Results subsection |
+| section soft cap | 3,200 approximate LLM tokens | Over cap: split at nearest paragraph/block boundary |
+| max sections per run | 80 initial default | Prevents runaway cost on huge zip bundles; after prioritization/dedup (§7), not before |
+| map-reduce worker concurrency | 5 initial default | Matches existing batch-evaluation concurrency pattern; tune with provider rate limits |
+
+These are starting values, not magic constants. Tune them against
+section-coverage recall and token cost, not against subjective prompt length.
+
 ---
 
 ## 4. Section-type canonicalization (IMRaD-aware, deterministic, skill-extensible)
@@ -206,6 +224,14 @@ format, no new query path. `search_table()` then works identically whether
 the table came from a supplementary spreadsheet or was embedded in the PDF's
 page 5.
 
+Fallback: if MinerU gives a table block as plain text/Markdown rather than
+structured rows, store the raw table text as a normal chunk and log
+`table_parse_status="raw_text_only"`. Do not invent rows with an LLM in the
+first implementation; table-row synthesis is high-risk because it can create
+false data. Add deterministic Markdown-table parsing first, and only add
+LLM-assisted table repair if evaluation shows many important tables remain
+unusable.
+
 ### 5.2 Caption linking
 
 The block immediately preceding or following a `table`/`image` block is
@@ -276,7 +302,7 @@ already computed above:
   a preprint and its supplementary methods file often restate the same
   protocol nearly verbatim. Before dispatching `Send()` workers, compute a
   cheap 5-gram shingle signature per section; if a lower-priority section's
-  signature is >90% similar to an already-queued higher-priority section,
+  signature is >92% similar to an already-queued higher-priority section,
   skip a second LLM call for it and instead attach its `source_id` as
   additional provenance on the original section's result — this still lets
   `_upstream_reconcile_candidates()`'s multi-source-agreement scoring see
@@ -293,11 +319,13 @@ already computed above:
 
 - **Chunk sizing** uses the actual embedding model's tokenizer
   (`bge-small-en-v1.5` via `sentence-transformers`, max sequence length
-  ~512 tokens) — target ~350–400 tokens per chunk, leaving headroom for the
+  ~512 tokens) — target 384 tokens per chunk, hard cap 448 tokens including
+  the deterministic contextual header, leaving headroom for the
   contextual header (§6). Getting this wrong silently truncates the
   embedding input, which degrades retrieval without any visible error.
-- **Section sizing** uses a `tiktoken`-based approximation (good enough for
-  budgeting purposes across providers) targeting ~2,000–3,000 tokens —
+- **Section sizing** uses a provider-agnostic approximation (prefer
+  `tiktoken` when installed, fall back to a 4 chars/token heuristic)
+  targeting 2,400 tokens with a 3,200-token soft cap —
   large enough for one Methods subsection's full detail, small enough to
   keep `Send()` workers cheap and fast.
 - **Overlap**: primary splitting is on natural block/paragraph boundaries —
@@ -308,16 +336,29 @@ already computed above:
 
 ---
 
-## 9. Interaction with existing code (what changes, what doesn't)
+## 9. Interaction with existing code and fallback policy
 
 | Existing component | Change |
 |---|---|
 | `load_content_list_v2()` (`mineru_paths.py`) | Add `max_blocks=None` unrestricted variant for chunking; capture `text_level` into the normalized block dict |
 | `structured_output_metadata()` (`mineru_client.py`) | Unchanged — still uses the 200-block cap for prompt context, a separate concern from chunking |
-| `DocumentParser`'s `analyze_document_outline` tool | Deleted, per main plan §11 — superseded by the deterministic chunker's block-derived (or fallback-regex) outline |
+| `DocumentParser`'s `analyze_document_outline` tool | Deprecated, not immediately deleted — superseded by the deterministic chunker's block-derived (or fallback-regex) outline once tests cover MinerU, PyMuPDF, Markdown, and plain text inputs |
 | `_infer_role()` / `source_role_priority()` (`source_workspace.py`) | Unchanged — file-level role stays exactly as-is; `section_type` is a new, additional, orthogonal signal |
 | `record.tables` / `tables/*.jsonl` extraction | Extended to also receive rows parsed from MinerU `type=="table"` blocks, using the identical file-writing code path |
 | `grep_sources()` | Unchanged — still the lexical half of `hybrid_search_sources()` (main plan §6) |
+
+Fallback rules:
+
+1. If MinerU structured blocks are present, use them as the primary block
+   source.
+2. If MinerU blocks are absent but Markdown/text exists, use fallback
+   paragraph/heading parsing and record `chunking_source="fallback_text"`.
+3. If chunking fails for a source, keep the source in the workspace and fall
+   back to current lexical grep over the full source text for that source,
+   with a warning in `workflow_report.json`.
+4. Never silently drop a source because chunking failed. A failed chunker
+   reduces semantic/map-reduce coverage, but it must not reduce today's
+   baseline lexical accessibility.
 
 ---
 
