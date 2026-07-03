@@ -139,6 +139,115 @@ flowchart TD
 
 ---
 
+## 4.1 Integration with the current LangGraph / agent harness
+
+Current reality in the repo:
+
+- `FAIRifierLangGraphApp._build_graph_structure()` is intentionally small:
+  `read_file -> orchestrate -> finalize` (`fairifier/graph/app.py`).
+- The actual multi-agent sequence (`DocumentParser`, optional
+  `BioMetadataAgent`, Planner, `KnowledgeRetriever`, `JSONGenerator`,
+  `ISAValueMapper`, Critic retries) lives inside `OrchestrateNode`
+  (`fairifier/graph/nodes.py`), not as separate graph nodes.
+- `FAIRifierState` already has extension points that should be reused:
+  `source_workspace`, `retrieval_cache`, `react_scratchpad`,
+  `agent_messages`, `confidence_scores`, `execution_history`,
+  `retry_trajectory` (`fairifier/graph/state.py`).
+
+**Do not bury the new coverage layer inside `OrchestrateNode`.** Add explicit
+graph nodes between `read_file` and `orchestrate` so LangGraph Studio,
+checkpoints, stop requests, and workflow reports can see the new stage:
+
+```text
+read_file
+  -> index_sources          # chunking + Qdrant collection + evidence_store bootstrap
+  -> section_map_reduce     # optional by applicability gate; writes section candidates/evidence
+  -> orchestrate            # existing agent sequence, now consuming EvidenceStore/hybrid search
+  -> finalize
+```
+
+This is intentionally less invasive than splitting every existing agent into
+top-level LangGraph nodes. A full graph refactor may be valuable later, but it
+is not required to solve the current omission problem and would couple two
+large changes (retrieval architecture + orchestration refactor) in one PR.
+
+### State keys to add
+
+Add typed keys to `FAIRifierState` instead of stashing new runtime data in
+anonymous `context` entries:
+
+```python
+source_chunks: List[Dict[str, Any]]
+source_sections: List[Dict[str, Any]]
+semantic_index: Dict[str, Any]          # collection name, model, counts, status
+evidence_store: Dict[str, Any]          # collection name, jsonl path, counts, status
+retrieval_telemetry: Dict[str, Any]     # hybrid/legacy comparison, rerank status
+section_coverage: Dict[str, Any]        # sections planned/processed/skipped/timeouts
+```
+
+Keep large text out of state; store it in `source_workspace/chunks/*.jsonl`
+and Qdrant, and put only paths/IDs/counts in state. This matches the existing
+`document_text_path` refactor and avoids bloating checkpoints.
+
+### Agent harness compatibility
+
+- `DocumentParser`: keep its DeepAgent inner loop, but seed it with the
+  chunker-produced outline and EvidenceStore summary. Its existing
+  `react_scratchpad` telemetry stays unchanged; add only a count of
+  EvidenceStore reads/writes if useful.
+- `KnowledgeRetriever`: unchanged for FAIR-DS API retrieval. Do not mix
+  document semantic retrieval into package/field schema retrieval; those are
+  separate retrieval domains.
+- `JSONGenerator`: primary integration point for `hybrid_search_sources()`.
+  It should receive `FieldCandidate`s from grep/semantic/map-reduce through
+  the same `_upstream_reconcile_candidates()` path; do not add a second
+  reconciliation algorithm.
+- `ISAValueMapper`: reads richer evidence via the EvidenceStore but keeps the
+  existing high-cardinality deterministic fallback. Do not force DeepAgent
+  mapping on large entity matrices.
+- `AgentMailbox` / `agent_messages`: keep for semantic handoffs/gap reports.
+  EvidenceStore is not a replacement for A2A messages; it is the backing store
+  for source-grounded evidence that messages may reference.
+- Critic retries: section indexing/map-reduce are pre-agent evidence stages.
+  Critic should not retry Qdrant indexing; it should evaluate whether
+  downstream extraction used the retrieved evidence faithfully. Indexing
+  failures are operational telemetry and fallback triggers, not LLM quality
+  failures.
+
+### Workflow report additions
+
+`WorkflowReportGenerator` already surfaces source-grounding and agent
+handoff metrics. Extend `workflow_report.json` with:
+
+```json
+{
+  "retrieval_metrics": {
+    "semantic_index_status": "ok|skipped|failed",
+    "chunk_count": 0,
+    "section_count": 0,
+    "evidence_items": 0,
+    "hybrid_fields": 0,
+    "legacy_only_fields": 0,
+    "semantic_only_fields": 0,
+    "rerank_status": "ok|skipped|timeout",
+    "qdrant_fallback_used": false
+  },
+  "section_coverage": {
+    "planned_sections": 0,
+    "processed_sections": 0,
+    "skipped_duplicate_sections": 0,
+    "timed_out_sections": 0,
+    "sections_by_source_role": {},
+    "sections_by_type": {}
+  }
+}
+```
+
+These fields are what the evaluation layer reads; do not make evaluation
+scrape log text.
+
+---
+
 ## 5. Workstream A — Chunking + semantic index (default after gate)
 
 **New files:** `fairifier/services/chunking.py`, `fairifier/services/semantic_index.py`,
@@ -543,6 +652,118 @@ solve.
    passed the above evaluation and at least one release boundary has kept the
    fallback path available for operational rollback. This keeps smooth
    processing without committing to permanent dual implementations.
+
+### 10.1 Evaluation-system integration points
+
+The current evaluation stack has three relevant layers:
+
+1. `evaluation/scripts/run_batch_evaluation.py` runs the workflow and stores
+   `metadata.json`, `workflow_report.json`, and `eval_result.json` per run.
+2. `evaluation/scripts/evaluate_outputs.py` orchestrates evaluators against
+   `metadata.json` plus optional `workflow_report.json`.
+3. `evaluation/analysis/data_loaders/evaluation_loader.py` and
+   `evaluation/analysis/analyzers/*` aggregate run outputs into reports and
+   visualizations.
+
+Add retrieval/coverage evaluation at all three layers so the new system is
+measured with the same harness that already measures completeness,
+correctness, workflow reliability, and pass@k.
+
+#### New evaluator: `RetrievalCoverageEvaluator`
+
+Add `evaluation/evaluators/retrieval_coverage_evaluator.py` and register it
+in `evaluation/evaluators/__init__.py` plus
+`EvaluationOrchestrator._initialize_evaluators()`.
+
+Inputs:
+
+- `metadata_json`
+- `workflow_report`
+- optional ground-truth field annotations (`evidence_location`,
+  `expected_value`)
+- optional `source_workspace/evidence_store.jsonl`
+
+Outputs:
+
+```json
+{
+  "retrieval_coverage": {
+    "section_coverage_ratio": 0.0,
+    "fields_with_source_refs": 0,
+    "fields_with_semantic_only_candidates": 0,
+    "fields_with_legacy_only_candidates": 0,
+    "qdrant_fallback_used": false,
+    "rerank_timeout_rate": 0.0,
+    "evidence_store_items": 0
+  }
+}
+```
+
+Evidence-location overlap should be best-effort because existing ground truth
+often stores free-text locations like `"Page X, Section Y"` rather than exact
+character spans. Use three tiers:
+
+1. exact span overlap when annotations provide `source_id:start-end`,
+2. page/section match when annotations provide page/section text,
+3. source-reference presence only when no comparable ground-truth location is
+   available.
+
+This avoids pretending the current ground truth is more precise than it is,
+while still making the metric useful immediately.
+
+#### Extend `InternalMetricsEvaluator`
+
+`evaluation/evaluators/internal_metrics_evaluator.py` already extracts
+`workflow_report.json` quality/retry/handoff metrics. Extend it to include:
+
+- `retrieval_metrics` block from workflow report,
+- `section_coverage` block from workflow report,
+- `qdrant_fallback_used`,
+- rerank status/timeout counters,
+- `semantic_index_status`.
+
+This keeps internal telemetry in one evaluator instead of scattering parsing
+logic across analysis scripts.
+
+#### Extend analysis loader and analyzers
+
+- `evaluation/analysis/data_loaders/evaluation_loader.py`: include
+  retrieval/coverage metrics from `eval_result.json` in the synthetic rows it
+  builds for each model/document/run. It currently skips some individual
+  `eval_result.json` files for DataFrame generation; retrieval metrics should
+  be part of the run-level records used by new analyzers, not only batch
+  aggregate files.
+- Add `evaluation/analysis/analyzers/retrieval_coverage.py` with:
+  - section coverage by document/model,
+  - semantic-only vs legacy-only evidence counts,
+  - fallback frequency,
+  - rerank timeout rate,
+  - correlation between section-coverage recall and field completeness.
+- Add one visualization module under
+  `evaluation/analysis/visualizations/retrieval_coverage.py`:
+  coverage heatmap by model/document and a before/after bar chart for
+  legacy-grep vs hybrid retrieval.
+
+#### Batch-evaluation knobs
+
+Add model/run config env entries to `evaluation/config/env.evaluation.template`
+so comparisons are reproducible:
+
+```bash
+FAIRIFIER_SEMANTIC_INDEX_ENABLED=true
+FAIRIFIER_HYBRID_RETRIEVAL_ENABLED=true
+FAIRIFIER_EVIDENCE_STORE_ENABLED=true
+FAIRIFIER_MAPREDUCE_ENABLED=true
+FAIRIFIER_RETRIEVAL_SHADOW_MODE=true   # comparison stage only
+FAIRIFIER_RERANK_TIMEOUT_SECONDS=5
+FAIRIFIER_MAPREDUCE_MAX_PARALLEL_WORKERS=5
+```
+
+`run_batch_evaluation.py --workers 5` controls document-level concurrency;
+`FAIRIFIER_MAPREDUCE_MAX_PARALLEL_WORKERS` controls within-document section
+worker concurrency. Document workers × section workers can multiply API
+pressure, so the evaluation README should warn users to reduce one when
+increasing the other.
 
 ---
 

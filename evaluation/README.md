@@ -136,6 +136,37 @@ The framework evaluates:
 - **Runtime**: Time taken for extraction
 - **Pass@k**: Probability of successful extraction in k attempts (similar to SWE-agent benchmark)
 
+### Planned Retrieval Coverage Metrics
+
+The hybrid retrieval / section-map-reduce upgrade plan
+(`docs/en/development/HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md`) adds a
+retrieval-focused evaluation layer that complements field presence metrics.
+The goal is to measure whether the system actually *found* the source spans
+needed for values, not only whether a field appears in `metadata.json`.
+
+Planned additions:
+
+- `RetrievalCoverageEvaluator` in `evaluation/evaluators/`
+- retrieval and section-coverage telemetry parsed from `workflow_report.json`
+- optional detailed evidence analysis from `source_workspace/evidence_store.jsonl`
+- `retrieval_coverage` analyzer/visualization under `evaluation/analysis/`
+
+Core metrics:
+
+| Metric | Meaning |
+|--------|---------|
+| `section_coverage_ratio` | processed sections / planned sections, excluding duplicate-skipped sections |
+| `fields_with_source_refs` | generated fields whose evidence contains a source reference |
+| `fields_with_semantic_only_candidates` | fields where semantic retrieval found evidence not found by legacy lexical search |
+| `fields_with_legacy_only_candidates` | fields where legacy lexical search found evidence missed by semantic retrieval |
+| `qdrant_fallback_used` | whether the run continued without semantic retrieval because Qdrant was unavailable |
+| `rerank_timeout_rate` | fraction of rerank batches that timed out and fell back to RRF order |
+
+When running batch evaluation for this upgrade, remember that
+`--workers` controls document-level concurrency while
+`FAIRIFIER_MAPREDUCE_MAX_PARALLEL_WORKERS` controls within-document section
+worker concurrency. Their product drives total LLM/API pressure.
+
 ### Pass@k Metrics
 
 Pass@k measures the probability of at least one successful run in k attempts. Success is defined by configurable criteria:

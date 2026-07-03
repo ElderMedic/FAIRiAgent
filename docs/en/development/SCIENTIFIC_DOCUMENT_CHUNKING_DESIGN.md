@@ -362,7 +362,36 @@ Fallback rules:
 
 ---
 
-## 10. Explicit non-goals
+## 10. Artifacts consumed by the agent harness and evaluation
+
+Chunking/indexing must write deterministic run artifacts, not only transient
+Qdrant state. Required files under `source_workspace/`:
+
+| Artifact | Purpose |
+|---|---|
+| `chunks/block_manifest.jsonl` | One `DocBlock` per line; debug MinerU/fallback parsing and page/heading metadata |
+| `chunks/chunk_manifest.jsonl` | One `SourceChunk` per line; used by evaluation to count chunks/section types without querying Qdrant |
+| `chunks/section_manifest.jsonl` | One `DocSection` per line; source of section coverage denominators |
+| `evidence_store.jsonl` | Evidence items exported from Qdrant for audit, tests, and Qdrant-outage fallback |
+| `tables/*.jsonl` | Existing table path, extended to include parsed in-PDF tables |
+
+`workflow_report.json` should store counts and status only (paths, counts,
+fallback flags), not duplicate large manifests. Evaluation reads the manifests
+when it needs detailed coverage analysis.
+
+The section manifest is the denominator for `section_coverage_ratio`:
+
+```text
+processed_sections / planned_sections
+```
+
+where `planned_sections` excludes references sections and duplicate-skipped
+sections, but includes any section skipped because a worker timed out (timeout
+is a coverage failure, duplicate skip is not).
+
+---
+
+## 11. Explicit non-goals
 
 - **Not building a general-purpose scientific-document parser** (no GROBID,
   no PubLayNet/layout model integration) — MinerU already does PDF layout
