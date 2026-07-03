@@ -40,7 +40,7 @@ def build_document_entry(gt: dict[str, Any]) -> dict[str, Any]:
                 "investigation identifier",
                 "investigation title",
                 "investigation description",
-                "investigation contentUrl",
+                "Associated publication",
                 "firstname",
                 "lastname",
                 "email address",
@@ -58,7 +58,7 @@ def build_document_entry(gt: dict[str, Any]) -> dict[str, Any]:
                     in {
                         "investigation title",
                         "investigation description",
-                        "investigation contentUrl",
+                        "Associated publication",
                         "investigation identifier",
                         "firstname",
                         "lastname",

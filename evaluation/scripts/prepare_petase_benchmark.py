@@ -15,7 +15,7 @@ RAW_DIR = PROJECT_ROOT / "evaluation" / "datasets" / "raw" / "petase_enzyme_engi
 VALUES_DIR = PROJECT_ROOT / "evaluation" / "datasets" / "annotated" / "values"
 FILTERED_PATH = PROJECT_ROOT / "evaluation/datasets/annotated/ground_truth_filtered.json"
 PETASE_ONLY_PATH = PROJECT_ROOT / "evaluation/datasets/annotated/ground_truth_petase_only.json"
-PACKAGE_PATH = PROJECT_ROOT / "evaluation/config/packages/pet_hydrolase_enzyme_engineering_package.json"
+PACKAGE_PATH = PROJECT_ROOT / "evaluation/config/packages/petase_enzyme_engineering_package.json"
 
 # Papers with PDF but no expert GT — excluded from benchmark
 EXCLUDED_DOCUMENT_IDS = {"unknown_for_manu_petase_papers_no_1"}

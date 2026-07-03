@@ -298,7 +298,7 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
             f"enzyme variants, substrate specificity, reaction conditions, "
             f"and kinetic parameters."
         ),
-        "investigation contentUrl": doi,
+        "Associated publication": doi.replace("https://doi.org/", "") if doi.startswith("https://doi.org/") else doi,
         "_evidence": f"DOI: {doi}",
     }
     # Only include author fields if we could extract them
@@ -332,7 +332,7 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
         enz_ids.append(enz_id)
         sample_row = {
             "enzyme identifier": enz_id,
-            "sample type": "enzyme_variant",
+            "PETase material type": "enzyme_variant",
             "enzyme type": enz,
         }
         # Extract mutation from enzyme name (e.g., "LCC ICCG / F243I/D238C/S283C/Y127G")
@@ -360,7 +360,7 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
         sub_form = _classify_substrate_form(sub)
         sample_row = {
             "substrate identifier": sub_id,
-            "sample type": "pet_substrate",
+            "PETase material type": "pet_substrate",
             "PET substrate type": sub,
             "substrate form factor": sub_form,
         }
@@ -430,8 +430,7 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
             "protocol": "PETase product quantification protocol reported in source paper",
             "Facility": "not reported",
             "assay date": "not reported",
-            "observation unit identifier reference": ou_id,
-            "assay type": "product_quantification",
+            "PETase measurement category": "product_quantification",
             "_evidence": f"DOI: {doi}; assay: {ak}",
         }
 
@@ -558,8 +557,7 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
             "protocol": "Reported in source publication",
             "Facility": "not reported",
             "assay date": "not reported",
-            "observation unit identifier reference": ou_ref,
-            "assay type": "product_quantification",
+            "PETase measurement category": "product_quantification",
             "_evidence": f"DOI: {doi}; condition: {condition}",
         }
 
@@ -621,14 +619,14 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
             for condition, value in kcat_val.items():
                 assay_row = _result_assay_row("kcat", condition)
                 assay_row.update({
-                    "assay type": "kinetic_parameter_estimation",
+                    "PETase measurement category": "kinetic_parameter_estimation",
                     "catalytic rate constant kcat": str(value),
                 })
                 isa_sheets["assay"]["expected_rows"].append(assay_row)
         else:
             assay_row = _result_assay_row("kcat", "default")
             assay_row.update({
-                "assay type": "kinetic_parameter_estimation",
+                "PETase measurement category": "kinetic_parameter_estimation",
                 "catalytic rate constant kcat": str(kcat_val),
             })
             isa_sheets["assay"]["expected_rows"].append(assay_row)
@@ -640,14 +638,14 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
             for condition, value in km_val.items():
                 assay_row = _result_assay_row("km", condition)
                 assay_row.update({
-                    "assay type": "kinetic_parameter_estimation",
+                    "PETase measurement category": "kinetic_parameter_estimation",
                     "Michaelis constant Km": str(value),
                 })
                 isa_sheets["assay"]["expected_rows"].append(assay_row)
         else:
             assay_row = _result_assay_row("km", "default")
             assay_row.update({
-                "assay type": "kinetic_parameter_estimation",
+                "PETase measurement category": "kinetic_parameter_estimation",
                 "Michaelis constant Km": str(km_val),
             })
             isa_sheets["assay"]["expected_rows"].append(assay_row)
@@ -659,14 +657,14 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
             for condition, value in t05_val.items():
                 assay_row = _result_assay_row("t05", condition)
                 assay_row.update({
-                    "assay type": "thermal_stability",
+                    "PETase measurement category": "thermal_stability",
                     "half inactivation temperature": str(value),
                 })
                 isa_sheets["assay"]["expected_rows"].append(assay_row)
         else:
             assay_row = _result_assay_row("t05", "default")
             assay_row.update({
-                "assay type": "thermal_stability",
+                "PETase measurement category": "thermal_stability",
                 "half inactivation temperature": str(t05_val),
             })
             isa_sheets["assay"]["expected_rows"].append(assay_row)

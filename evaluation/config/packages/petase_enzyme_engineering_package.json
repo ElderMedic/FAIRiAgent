@@ -1,24 +1,24 @@
 {
   "packageName": "petase_enzyme_engineering",
-  "itemCount": 60,
+  "itemCount": 59,
   "metadata": [
     {
-      "label": "investigation contentUrl",
+      "label": "Associated publication",
       "sheetName": "Investigation",
       "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
-        "label": "investigation contentUrl",
-        "syntax": "{url}",
-        "example": "https://doi.org/10.1038/s41586-020-2149-4",
+        "label": "Associated publication",
+        "syntax": "{DOI}",
+        "example": "10.1038/s41586-020-2149-4",
         "preferredUnit": "",
-        "definition": "URL or DOI link to the source publication for the investigation. Populate from the paper DOI as https://doi.org/{doi}.",
+        "definition": "DOI of the source publication for this PETase investigation.",
         "ontology": null,
         "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
-        "url": null
+        "url": "http://schema.org/citation"
       }
     },
     {
@@ -47,8 +47,8 @@
       "requirement": "MANDATORY",
       "term": {
         "label": "observation unit identifier",
-        "syntax": "{text}",
-        "example": "OU_LCCICCG_GF-PET",
+        "syntax": "^{id}{5,50}$",
+        "example": "PETaseOU01",
         "preferredUnit": "",
         "definition": "Unique identifier for one PETase experimental subject under study, analogous to the individual, group, fermenter, or source-material object that receives treatments and is observed. For PETase studies this is usually an enzyme variant, substrate material, enzyme-substrate pair, enzyme panel, or substrate panel. Do not use this row for individual analytical measurements or for each reaction-condition readout.",
         "ontology": null,
@@ -402,12 +402,12 @@
       }
     },
     {
-      "label": "sample type",
+      "label": "PETase material type",
       "sheetName": "Sample",
       "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
-        "label": "sample type",
+        "label": "PETase material type",
         "syntax": "{text}",
         "example": "enzyme_variant",
         "preferredUnit": "",
@@ -744,31 +744,12 @@
       }
     },
     {
-      "label": "observation unit identifier reference",
+      "label": "PETase measurement category",
       "sheetName": "Assay",
       "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
-        "label": "observation unit identifier reference",
-        "syntax": "{text}",
-        "example": "OU_GF-PET_LCCICCG_65C_01",
-        "preferredUnit": "",
-        "definition": "Reference to the reaction ObservationUnit measured by this Assay row. Must match an observation unit identifier in the ObservationUnit sheet.",
-        "ontology": null,
-        "regex": null,
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "assay type",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "MANDATORY",
-      "term": {
-        "label": "assay type",
+        "label": "PETase measurement category",
         "syntax": "{text}",
         "example": "product_quantification",
         "preferredUnit": "",
