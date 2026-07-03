@@ -41,7 +41,9 @@ class SuccessCriteria:
     min_required_completeness: float = 0.3
     min_recommended_completeness: float = 0.0
     
-    # Correctness criteria
+    # Layer 1 recall (optional; same as overall_completeness for flat GT lists).
+    # min_f1_score / min_precision are legacy diagnostics -- defaults keep them
+    # at 0 so extra (non-GT) field names never gate Pass@k success.
     min_f1_score: float = 0.0
     min_precision: float = 0.0
     min_recall: float = 0.0
@@ -57,6 +59,10 @@ class SuccessCriteria:
             parts.append(f"fields≥{self.min_fields_extracted}")
         if self.min_required_completeness > 0:
             parts.append(f"req_comp≥{self.min_required_completeness:.0%}")
+        if self.min_overall_completeness > 0:
+            parts.append(f"comp≥{self.min_overall_completeness:.0%}")
+        if self.min_recall > 0:
+            parts.append(f"recall≥{self.min_recall:.0%}")
         if self.min_f1_score > 0:
             parts.append(f"f1≥{self.min_f1_score:.2f}")
         return f"Success({', '.join(parts)})"
@@ -92,21 +98,21 @@ CRITERIA_PRESETS = {
     'moderate': SuccessCriteria(
         require_run_success=True,
         min_fields_extracted=10,
+        min_overall_completeness=0.5,
         min_required_completeness=0.5,
-        min_f1_score=0.3,
     ),
     'strict': SuccessCriteria(
         require_run_success=True,
         min_fields_extracted=15,
+        min_overall_completeness=0.7,
         min_required_completeness=0.7,
-        min_f1_score=0.5,
         min_overall_confidence=0.6,
     ),
     'very_strict': SuccessCriteria(
         require_run_success=True,
         min_fields_extracted=20,
+        min_overall_completeness=0.8,
         min_required_completeness=0.8,
-        min_f1_score=0.6,
         min_overall_confidence=0.7,
     ),
 }
@@ -227,18 +233,19 @@ class PassAtKAnalyzer:
         if rec_comp < criteria.min_recommended_completeness:
             failures.append(f"rec_comp={rec_comp:.2f}<{criteria.min_recommended_completeness:.2f}")
         
-        # Correctness metrics
+        # Correctness metrics (Layer 1: field-name coverage only, never
+        # checks values -- see `value_accuracy` for real value correctness)
         correctness = eval_result.get('correctness', {})
         
-        f1 = correctness.get('f1_score', 0.0)
+        f1 = correctness.get('field_coverage_f1', 0.0)
         if f1 < criteria.min_f1_score:
-            failures.append(f"f1={f1:.2f}<{criteria.min_f1_score:.2f}")
+            failures.append(f"field_coverage_f1={f1:.2f}<{criteria.min_f1_score:.2f}")
         
-        precision = correctness.get('precision', 0.0)
+        precision = correctness.get('field_coverage_precision', 0.0)
         if precision < criteria.min_precision:
             failures.append(f"precision={precision:.2f}<{criteria.min_precision:.2f}")
         
-        recall = correctness.get('recall', 0.0)
+        recall = correctness.get('field_coverage_recall', 0.0)
         if recall < criteria.min_recall:
             failures.append(f"recall={recall:.2f}<{criteria.min_recall:.2f}")
         

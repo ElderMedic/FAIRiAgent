@@ -1,10 +1,23 @@
 """
-Correctness Evaluator for FAIRiAgent outputs.
+Layer 1 - Field Coverage Evaluator for FAIRiAgent outputs.
 
-Evaluates field presence (not values):
-- Field extraction rate (which fields were extracted)
-- Precision/Recall/F1 based on field presence
-- Only checks if fields exist, not their values
+Evaluates field *presence* (name matching only, never values):
+- Field extraction rate (which field names were extracted)
+- **Headline:** ``field_coverage_recall`` (TP/(TP+FN) on field *names*; equals
+  ``CompletenessEvaluator``'s ``overall_completeness`` for flat GT lists)
+- **Diagnostic only:** ``field_coverage_precision`` / ``field_coverage_f1``
+  (penalize non-GT field names -- not used for metadata-extraction headline)
+- ``gt_field_populated_rate``: for GT fields that were extracted, what
+  fraction have *any* non-empty value. This is NOT a correctness/value
+  check -- see ``evaluation/evaluators/value_accuracy_evaluator.py``
+  (Layer 2) for real value-vs-GT comparison.
+
+Extra (non-GT) fields are reported in ``excess_field_details`` for
+inspection, but are no longer penalized/exempted based on the model's own
+self-reported confidence. Confidence is not a defensible signal for whether
+an extra field is legitimate; see
+``evaluation/evaluators/novel_field_evaluator.py`` (Layer 4) for the
+evidence-grounded replacement (``precision_excl_discoveries``).
 """
 
 from typing import Dict, List, Any, Optional, Tuple
@@ -172,54 +185,35 @@ class CorrectnessEvaluator:
         # False Negatives: fields in GT but not extracted
         fn = len(gt_field_names - extracted_field_names)
         # True Negatives: not applicable (we don't track fields that shouldn't exist)
-        
-        # === NEW: Confidence-aware excess field analysis ===
-        # Separate excess fields by confidence level
-        HIGH_CONF_THRESHOLD = 0.8
+
+        # Report extra (non-GT) fields for inspection. Classification into
+        # beneficial_discovery / domain_insight / unsupported_fabrication is
+        # done by NovelFieldEvaluator (Layer 4), which grounds each extra
+        # field against the source document instead of trusting the model's
+        # own confidence score.
         excess_field_names = extracted_field_names - gt_field_names
-        
-        high_conf_excess = 0
-        low_conf_excess = 0
-        excess_field_details = []
-        
-        for field in extracted_fields:
-            if field['field_name'] in excess_field_names:
-                conf = field.get('confidence', 0.0)
-                status = field.get('status', '')
-                excess_field_details.append({
-                    'field_name': field['field_name'],
-                    'confidence': conf,
-                    'status': status,
-                    'is_high_conf': conf >= HIGH_CONF_THRESHOLD
-                })
-                if conf >= HIGH_CONF_THRESHOLD:
-                    high_conf_excess += 1
-                else:
-                    low_conf_excess += 1
-        
-        # === Original metrics (for comparison) ===
-        # Precision: TP / (TP + FP) = correct extractions / total extractions
-        precision = tp / n_extracted_fields if n_extracted_fields > 0 else 0.0
-        
-        # Recall: TP / (TP + FN) = correct extractions / total ground truth fields
-        recall = tp / n_gt_fields if n_gt_fields > 0 else 0.0
-        
-        # F1 score
-        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-        
-        # === NEW: Adjusted metrics (only penalize low-confidence excess) ===
-        # Adjusted Precision: TP / (TP + low_conf_excess)
-        # High-confidence excess fields are not penalized
-        adjusted_denominator = tp + low_conf_excess
-        adjusted_precision = tp / adjusted_denominator if adjusted_denominator > 0 else 0.0
-        
-        # Adjusted F1
-        adjusted_f1 = 2 * (adjusted_precision * recall) / (adjusted_precision + recall) if (adjusted_precision + recall) > 0 else 0.0
-        
-        # Bonus score for high-confidence excess fields (potentially valuable discoveries)
-        # Normalized by GT size to make it comparable across documents
-        discovery_bonus = high_conf_excess / n_gt_fields if n_gt_fields > 0 else 0.0
-        
+        excess_field_details = [
+            {
+                'field_name': field['field_name'],
+                'confidence': field.get('confidence', 0.0),
+                'status': field.get('status', ''),
+            }
+            for field in extracted_fields
+            if field['field_name'] in excess_field_names
+        ]
+
+        # field_coverage_precision/recall/f1: TP/FP/FN on field *names* only.
+        # This measures "was the field name mentioned", not correctness of
+        # its value -- see ValueAccuracyEvaluator (Layer 2) for that.
+        field_coverage_precision = tp / n_extracted_fields if n_extracted_fields > 0 else 0.0
+        field_coverage_recall = tp / n_gt_fields if n_gt_fields > 0 else 0.0
+        field_coverage_f1 = (
+            2 * (field_coverage_precision * field_coverage_recall)
+            / (field_coverage_precision + field_coverage_recall)
+            if (field_coverage_precision + field_coverage_recall) > 0
+            else 0.0
+        )
+
         result = {
             'field_level_results': field_results,
             'excess_field_details': excess_field_details,
@@ -232,19 +226,15 @@ class CorrectnessEvaluator:
                 'true_positives': tp,
                 'false_positives': fp,
                 'false_negatives': fn,
-                # Original metrics
-                'precision': precision,
-                'recall': recall,
-                'f1_score': f1,
-                # NEW: Confidence-aware metrics
-                'high_conf_excess': high_conf_excess,
-                'low_conf_excess': low_conf_excess,
-                'adjusted_precision': adjusted_precision,
-                'adjusted_f1': adjusted_f1,
-                'discovery_bonus': discovery_bonus,
+                # Layer 1: field-name coverage only (never checks values).
+                'field_coverage_precision': field_coverage_precision,
+                'field_coverage_recall': field_coverage_recall,
+                'field_coverage_f1': field_coverage_f1,
                 # GT-only quality metrics: these ignore extra fields entirely.
                 'gt_completeness': present_fields / n_gt_fields if n_gt_fields > 0 else 0.0,
-                'gt_value_accuracy': gt_fields_with_values / n_gt_fields if n_gt_fields > 0 else 0.0,
+                # "Has any non-empty value" -- NOT a correctness/value-accuracy
+                # check. Renamed from the old, misleading `gt_value_accuracy`.
+                'gt_field_populated_rate': gt_fields_with_values / n_gt_fields if n_gt_fields > 0 else 0.0,
                 'gt_evidence_accuracy': gt_fields_with_evidence / n_gt_fields if n_gt_fields > 0 else 0.0,
                 'gt_confirmed_accuracy': gt_fields_confirmed / n_gt_fields if n_gt_fields > 0 else 0.0,
             }
@@ -335,7 +325,7 @@ class CorrectnessEvaluator:
         # Collect metrics
         field_presence_rates = []
         gt_completeness_scores = []
-        gt_value_accuracies = []
+        gt_field_populated_rates = []
         gt_evidence_accuracies = []
         gt_confirmed_accuracies = []
         precisions = []
@@ -346,23 +336,23 @@ class CorrectnessEvaluator:
             metrics = result['summary_metrics']
             field_presence_rates.append(metrics['field_presence_rate'])
             gt_completeness_scores.append(metrics['gt_completeness'])
-            gt_value_accuracies.append(metrics['gt_value_accuracy'])
+            gt_field_populated_rates.append(metrics['gt_field_populated_rate'])
             gt_evidence_accuracies.append(metrics['gt_evidence_accuracy'])
             gt_confirmed_accuracies.append(metrics['gt_confirmed_accuracy'])
-            precisions.append(metrics['precision'])
-            recalls.append(metrics['recall'])
-            f1_scores.append(metrics['f1_score'])
+            precisions.append(metrics['field_coverage_precision'])
+            recalls.append(metrics['field_coverage_recall'])
+            f1_scores.append(metrics['field_coverage_f1'])
         
         return {
             'mean_field_presence_rate': sum(field_presence_rates) / len(field_presence_rates),
             'mean_gt_completeness': sum(gt_completeness_scores) / len(gt_completeness_scores),
-            'mean_gt_value_accuracy': sum(gt_value_accuracies) / len(gt_value_accuracies),
+            'mean_gt_field_populated_rate': sum(gt_field_populated_rates) / len(gt_field_populated_rates),
             'mean_gt_evidence_accuracy': sum(gt_evidence_accuracies) / len(gt_evidence_accuracies),
             'mean_gt_confirmed_accuracy': sum(gt_confirmed_accuracies) / len(gt_confirmed_accuracies),
-            'mean_precision': sum(precisions) / len(precisions),
-            'mean_recall': sum(recalls) / len(recalls),
-            'mean_f1_score': sum(f1_scores) / len(f1_scores),
-            'min_f1_score': min(f1_scores),
-            'max_f1_score': max(f1_scores),
+            'mean_field_coverage_precision': sum(precisions) / len(precisions),
+            'mean_field_coverage_recall': sum(recalls) / len(recalls),
+            'mean_field_coverage_f1': sum(f1_scores) / len(f1_scores),
+            'min_field_coverage_f1': min(f1_scores),
+            'max_field_coverage_f1': max(f1_scores),
             'n_documents': len(per_document_results)
         }

@@ -246,6 +246,9 @@ class EvaluationDataLoader:
                 ontology = model_data.get('ontology', {}).get('aggregated', {})
                 llm_judge = model_data.get('llm_judge', {}).get('aggregated', {})
                 internal_metrics = model_data.get('internal_metrics', {}).get('aggregated', {})
+                value_accuracy = model_data.get('value_accuracy', {}).get('aggregated', {})
+                structural = model_data.get('structural', {}).get('aggregated', {})
+                novel_fields = model_data.get('novel_fields', {}).get('aggregated', {})
                 
                 row = {
                     'run_id': run_id,
@@ -257,11 +260,26 @@ class EvaluationDataLoader:
                     'required_completeness': completeness.get('mean_required_completeness', 0.0),
                     'recommended_completeness': completeness.get('mean_recommended_completeness', 0.0),
                     
-                    # Correctness
-                    'correctness_f1': correctness.get('mean_f1_score', 0.0),
+                    # Layer 1: Correctness / field-name coverage only (never checks values)
+                    'field_coverage_f1': correctness.get('mean_field_coverage_f1', 0.0),
                     'field_presence_rate': correctness.get('mean_field_presence_rate', 0.0),
-                    'precision': correctness.get('mean_precision', 0.0),
-                    'recall': correctness.get('mean_recall', 0.0),
+                    'field_coverage_precision': correctness.get('mean_field_coverage_precision', 0.0),
+                    'field_coverage_recall': correctness.get('mean_field_coverage_recall', 0.0),
+                    'gt_field_populated_rate': correctness.get('mean_gt_field_populated_rate', 0.0),
+                    
+                    # Layer 2: true value accuracy (only populated when values-GT exists)
+                    'value_mean_score': value_accuracy.get('mean_value_mean_score'),
+                    'value_match_rate': value_accuracy.get('mean_value_match_rate'),
+                    'value_partial_credit_score': value_accuracy.get('mean_value_partial_credit_score'),
+                    
+                    # Layer 3: structural/hierarchical correctness
+                    'sheet_placement_accuracy': structural.get('mean_sheet_placement_accuracy'),
+                    'row_alignment_f1': structural.get('mean_row_alignment_f1'),
+                    
+                    # Layer 4: evidence-grounded novel-field classification
+                    'discovery_rate': novel_fields.get('mean_discovery_rate'),
+                    'untracked_insight_rate': novel_fields.get('mean_untracked_insight_rate'),
+                    'precision_excl_discoveries': novel_fields.get('mean_precision_excl_discoveries'),
                     
                     # Schema
                     'schema_compliance': schema.get('mean_compliance_rate', 0.0),
@@ -304,11 +322,15 @@ class EvaluationDataLoader:
                 completeness_per_doc = model_data.get('completeness', {}).get('per_document', {})
                 correctness_per_doc = model_data.get('correctness', {}).get('per_document', {})
                 internal_per_doc = model_data.get('internal_metrics', {}).get('per_document', {})
+                value_accuracy_per_doc = model_data.get('value_accuracy', {}).get('per_document', {})
+                structural_per_doc = model_data.get('structural', {}).get('per_document', {})
                 
                 for doc_id in completeness_per_doc.keys():
                     comp = completeness_per_doc.get(doc_id, {})
                     corr = correctness_per_doc.get(doc_id, {})
                     internal = internal_per_doc.get(doc_id, {})
+                    value_acc = value_accuracy_per_doc.get(doc_id, {})
+                    structural = structural_per_doc.get(doc_id, {})
                     retry_analysis = internal.get('retry_analysis', {})
                     
                     row = {
@@ -320,9 +342,14 @@ class EvaluationDataLoader:
                         'completeness': comp.get('overall_metrics', {}).get('overall_completeness', 0.0),
                         'required_completeness': comp.get('overall_metrics', {}).get('required_completeness', 0.0),
                         
-                        # Correctness
-                        'correctness_f1': corr.get('summary_metrics', {}).get('f1_score', 0.0),
+                        # Layer 1: field-name coverage only (never checks values)
+                        'field_coverage_f1': corr.get('summary_metrics', {}).get('field_coverage_f1', 0.0),
                         'field_presence_rate': corr.get('summary_metrics', {}).get('field_presence_rate', 0.0),
+
+                        # Layer 2/3 (only present for docs with values-level GT)
+                        'value_mean_score': value_acc.get('summary_metrics', {}).get('value_mean_score'),
+                        'value_partial_credit_score': value_acc.get('summary_metrics', {}).get('value_partial_credit_score'),
+                        'row_alignment_f1': structural.get('summary_metrics', {}).get('row_alignment_f1'),
                         
                         # Internal metrics
                         'overall_confidence': internal.get('metadata_confidence', {}).get('overall_confidence', 0.0),

@@ -22,7 +22,8 @@ class FieldPresenceAnalyzer:
         self,
         runs: List[Dict[str, Any]],
         ground_truth: Dict[str, Any],
-        document_id: str
+        document_id: str,
+        novel_field_categories: Dict[str, str] = None,
     ) -> pd.DataFrame:
         """
         Create field presence matrix for a specific document.
@@ -31,10 +32,21 @@ class FieldPresenceAnalyzer:
             runs: List of run data (must include model_name, extracted_field_names)
             ground_truth: Ground truth document
             document_id: Document identifier
+            novel_field_categories: optional {field_name: bucket} override for
+                non-GT fields, from ``NovelFieldEvaluator`` (Layer 4):
+                ``beneficial_discovery`` / ``domain_insight`` /
+                ``unsupported_fabrication`` / ``ungroundable_no_evaluation_data``.
+                Field names without an entry here fall back to the flat
+                ``EXTRA`` category (pre-redesign behavior) -- pass this in
+                when you want ``analyze_hallucinations`` and downstream
+                categorized views to distinguish evidence-grounded discoveries
+                from actual fabrications instead of lumping them together.
             
         Returns:
             DataFrame with presence matrix
         """
+        novel_field_categories = novel_field_categories or {}
+
         # Get ground truth fields
         gt_fields = ground_truth.get('ground_truth_fields', [])
         
@@ -54,11 +66,13 @@ class FieldPresenceAnalyzer:
         for run in runs:
             all_extracted.update(run.get('extracted_field_names', []))
         
-        # Add extra fields to metadata
+        # Add extra (non-GT) fields to metadata. Category defaults to the
+        # flat 'EXTRA' bucket, or the evidence-grounded Layer 4 bucket if the
+        # caller supplied one via `novel_field_categories`.
         extra_fields = all_extracted - set(field_metadata.keys())
         for field_name in extra_fields:
             field_metadata[field_name] = {
-                'category': 'EXTRA',
+                'category': novel_field_categories.get(field_name, 'EXTRA'),
                 'isa_sheet': 'unknown',
                 'package': 'unknown',
                 'in_ground_truth': False
@@ -236,15 +250,25 @@ class FieldPresenceAnalyzer:
         presence_matrix: pd.DataFrame
     ) -> Dict[str, Any]:
         """
-        Analyze extra fields (hallucinations).
+        Analyze non-GT ("extra") fields.
+
+        Historically labeled "hallucinations", but per the evaluation-metrics
+        redesign not every non-GT field is a fabrication -- if the caller
+        passed evidence-grounded ``novel_field_categories`` into
+        ``create_presence_matrix`` (Layer 4: beneficial_discovery /
+        domain_insight / unsupported_fabrication), this picks up all of
+        those buckets (anything with ``in_ground_truth == False``), not just
+        the flat legacy ``EXTRA`` label. Callers wanting only true
+        fabrications should filter ``extra_fields_data`` on
+        ``category == 'unsupported_fabrication'`` afterwards.
         
         Args:
             presence_matrix: DataFrame from create_presence_matrix()
             
         Returns:
-            Dict with hallucination statistics
+            Dict with statistics on non-GT fields
         """
-        extra_fields = presence_matrix[presence_matrix['category'] == 'EXTRA']
+        extra_fields = presence_matrix[~presence_matrix['in_ground_truth']]
         
         if len(extra_fields) == 0:
             return {
