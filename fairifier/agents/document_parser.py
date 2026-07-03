@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 import fitz  # PyMuPDF
 from langchain_core.tools import tool
 from langsmith import traceable
@@ -120,6 +120,8 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             "authors, keywords, research_domain, methodology, location, and coordinates. "
             "When /workspace/source_workspace.md exists, use it as the source inventory; "
             "read files under /workspace/sources/ only when you need more exact evidence. "
+            "When /workspace/section_outline.md exists, use it as the authoritative "
+            "chunker-produced section map; prefer it over analyze_document_outline. "
             "If you are provided with raw biological data files (BAM, VCF, etc.) in /workspace/sources/ "
             "and narrative documentation is sparse, use bioinformatics tools via biocontainers "
             "to inspect headers and statistics to recover missing metadata. "
@@ -157,16 +159,50 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             memory_files=self._get_memory_files(),
         )
 
+    @staticmethod
+    def _format_section_outline_markdown(source_sections: List[Dict[str, Any]]) -> str:
+        """Render chunker section outline for the DocumentParser virtual workspace."""
+        lines = [
+            "# Document section outline",
+            "",
+            "Deterministic section map from index_sources (chunker). "
+            "Treat this as the authoritative structure map when present; "
+            "prefer it over calling analyze_document_outline.",
+            "",
+            "| # | title | type | source_id | char_range |",
+            "|---|---|---|---|---|",
+        ]
+        for idx, section in enumerate(source_sections[:80], 1):
+            title = str(section.get("title") or "Untitled").replace("|", "/")[:100]
+            section_type = str(section.get("section_type") or "unknown")
+            source_id = str(section.get("source_id") or "")
+            char_start = section.get("char_start", 0)
+            char_end = section.get("char_end", 0)
+            lines.append(
+                f"| {idx} | {title} | {section_type} | {source_id} | {char_start}-{char_end} |"
+            )
+        lines.extend(["", f"Total sections: {len(source_sections)}"])
+        return "\n".join(lines)
+
     def _build_dp_seed_files(
         self,
         document_text: str,
         source_workspace: Optional[Dict[str, Any]] = None,
+        *,
+        source_sections: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Build virtual files for the deepagents document parsing loop."""
         seed_files: Dict[str, Any] = {}
         document_file = self._maybe_create_file_data(document_text)
         if document_file is not None:
             seed_files["/workspace/document.md"] = document_file
+
+        if source_sections:
+            outline_file = self._maybe_create_file_data(
+                self._format_section_outline_markdown(source_sections)
+            )
+            if outline_file is not None:
+                seed_files["/workspace/section_outline.md"] = outline_file
 
         if source_workspace:
             summary_path = source_workspace.get("summary_path")
@@ -350,6 +386,7 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
                     seed_files=self._build_dp_seed_files(
                         text,
                         source_workspace=state.get("source_workspace", {}) or {},
+                        source_sections=state.get("source_sections") or None,
                     ),
                     thread_id=f"{state.get('session_id', 'default')}-dp-inner",
                     state=state,

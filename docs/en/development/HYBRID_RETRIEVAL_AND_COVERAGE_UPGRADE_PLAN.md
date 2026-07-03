@@ -884,9 +884,18 @@ python evaluation/scripts/run_batch_evaluation.py \
 
 **Remaining before Phase 4 (`FAIRIFIER_RETRIEVAL_SHADOW_MODE=false`):**
 
-1. DocumentParser chunker outline wiring (Phase 4 P1).
-2. Optional: expand subset to full Tier-A+B benchmark (8 docs) when
-   `ground_truth_filtered.json` is rebuilt locally.
+Phase 4 started (2026-07-03):
+
+| Task | Status |
+|---|---|
+| `FAIRIFIER_RETRIEVAL_SHADOW_MODE=false` default (hybrid in prompt) | ✅ `fairifier/config.py` |
+| DocumentParser chunker section outline → `/workspace/section_outline.md` | ✅ wired from `state["source_sections"]` |
+| Section worker `FieldCandidate` output | ⏳ P1 follow-up |
+| LangGraph `Send()` for map-reduce | ⏳ P2 optional |
+| ISAValueMapper reads EvidenceStore | ⏳ P2 optional |
+
+Shadow comparison runs still force `FAIRIFIER_RETRIEVAL_SHADOW_MODE=true` via
+`evaluation/config/env.evaluation.shadow` and `run_retrieval_shadow_pilot.py`.
 
 ---
 

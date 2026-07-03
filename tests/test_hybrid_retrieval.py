@@ -212,3 +212,55 @@ def test_field_evidence_telemetry_not_truncated_by_prompt_budget(tmp_path: Path)
         assert len(state["retrieval_telemetry"]) == len(knowledge_items)
     finally:
         cfg.config.metadata_max_context_chars_per_field = old_budget
+
+
+def test_format_section_outline_markdown_includes_section_metadata():
+    from fairifier.agents.document_parser import DocumentParserAgent
+
+    sections = [
+        {
+            "section_id": "source_001_section_001",
+            "title": "Introduction",
+            "section_type": "introduction",
+            "source_id": "source_001",
+            "char_start": 0,
+            "char_end": 1200,
+        },
+        {
+            "section_id": "source_001_section_002",
+            "title": "Methods",
+            "section_type": "methods",
+            "source_id": "source_001",
+            "char_start": 1200,
+            "char_end": 4500,
+        },
+    ]
+    outline = DocumentParserAgent._format_section_outline_markdown(sections)
+    assert "Introduction" in outline
+    assert "methods" in outline
+    assert "Total sections: 2" in outline
+    assert "source_001" in outline
+
+
+def test_hybrid_search_returns_hybrid_output_when_shadow_mode_disabled(tmp_path: Path):
+    from fairifier import config as cfg
+
+    workspace = build_source_workspace(
+        [
+            SourceRecord(
+                source_id="source_001",
+                path="paper.md",
+                method="direct_read",
+                content="The sampling site was Wadden Sea with elevation 2 m.",
+                content_type="markdown",
+            )
+        ],
+        tmp_path,
+    )
+    old_shadow = cfg.config.retrieval_shadow_mode
+    try:
+        cfg.config.retrieval_shadow_mode = False
+        hits = hybrid_search_sources(workspace, ["Wadden Sea"], semantic_index=None)
+        assert hits
+    finally:
+        cfg.config.retrieval_shadow_mode = old_shadow

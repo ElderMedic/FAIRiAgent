@@ -125,7 +125,7 @@ class FAIRifierConfig:
     hybrid_retrieval_enabled: bool = True
     evidence_store_enabled: bool = True
     mapreduce_enabled: bool = True
-    retrieval_shadow_mode: bool = True  # shadow/compare before default switch
+    retrieval_shadow_mode: bool = False  # Phase 4: hybrid results in prompt; set true for shadow compare
     chunk_target_tokens: int = 384
     chunk_hard_cap_tokens: int = 448
     section_target_tokens: int = 2400

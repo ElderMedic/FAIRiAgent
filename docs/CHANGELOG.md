@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.0.4] - 2026-07-03 – Phase 4 hybrid default + DocumentParser outline
+
+### Changed
+
+- **`FAIRIFIER_RETRIEVAL_SHADOW_MODE` default `false`**: hybrid fused results now enter the prompt by default; shadow compare remains opt-in via env or shadow pilot script.
+- **DocumentParser**: seed deep-agent workspace with chunker-produced `/workspace/section_outline.md` from `state["source_sections"]`; system prompt prefers it over `analyze_document_outline`.
+
+---
+
 ## [2.0.3] - 2026-07-03 – Hybrid retrieval shadow gate fixes
 
 ### Fixed
