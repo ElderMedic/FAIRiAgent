@@ -138,6 +138,14 @@ flowchart TD
 `fairifier/services/qdrant_client.py` (shared connection helper, extracted
 from `mem0_service.py`).
 
+**The chunking/sectioning algorithm itself — block extraction from MinerU's
+`content_list_v2`, the Block→Chunk→Section hierarchy, IMRaD section-type
+classification, table/caption/cross-reference linking, multi-file
+flattening, and token budgets — is specified in the companion document
+[SCIENTIFIC_DOCUMENT_CHUNKING_DESIGN.md](SCIENTIFIC_DOCUMENT_CHUNKING_DESIGN.md).**
+This section summarizes only the pieces relevant to the semantic index
+itself; do not duplicate the chunking algorithm here when implementing.
+
 - Chunk every preserved source with exact character offsets, so citations
   stay `source_NNN:char_start-char_end` — no format change downstream.
 - Build the index once per run, immediately after `source_workspace`
@@ -420,8 +428,11 @@ measured outcomes (degradation rate, concentrations) are reliably in
 
 - Extend the chunker (Workstream A) to tag each chunk with a coarse
   **section type** (abstract / methods / results / discussion / supplement),
-  derived from the same heading detection already used for chunk
-  boundaries — no new NLP component needed.
+  via the deterministic IMRaD keyword classifier specified in
+  [SCIENTIFIC_DOCUMENT_CHUNKING_DESIGN.md §4](SCIENTIFIC_DOCUMENT_CHUNKING_DESIGN.md#4-section-type-canonicalization-imrad-aware-deterministic-skill-extensible) —
+  no new NLP component needed. Note `section_type` (what the text discusses)
+  and `source_role` (which file/how trusted) are orthogonal axes: a
+  supplementary file's Methods section still gets `section_type="methods"`.
 - Use section type as a **ranking boost**, not a hard filter, inside
   `hybrid_search_sources()`: e.g. boost Methods-section chunks when the
   field's FAIR-DS `isa_sheet` is `assay`, boost Results-section chunks for
@@ -483,10 +494,17 @@ Explicit list so the migration does not leave two parallel implementations:
 |---|---|
 | Direct `grep_sources()` loop in `JSONGeneratorAgent._build_field_source_evidence_context()` | `hybrid_search_sources()` |
 | Hardcoded PETase `alias_map` dict in `_field_search_queries()` | FAIR-DS term synonyms + skill-provided `field_aliases` (§9.3) |
-| `DocumentParser`'s optional `analyze_document_outline` tool | Deterministic chunker-produced section outline (Workstream A), computed once during ingestion |
+| `DocumentParser`'s optional `analyze_document_outline` tool | Deterministic chunker-produced section outline (Workstream A / [chunking design §3](SCIENTIFIC_DOCUMENT_CHUNKING_DESIGN.md#3-block-extraction-mineru-content_list_v2-as-the-primary-source-of-truth)), computed once during ingestion for both MinerU and non-MinerU inputs |
 | Internal list-building logic in `evidence_packets.py` | `EvidenceStore` (output shape of `build_evidence_context()` preserved as a compatibility wrapper) |
 | Sequential `for batch in batches: await ...` loop in `generate_complete_metadata()` | `asyncio.gather` with bounded concurrency |
 | Fixed `max_doc_context_markdown` / `max_doc_context_text` / `react_loop_max_iterations` / `react_loop_max_tool_calls` clamps in `apply_budget_guardrails()` | Model-context-aware / section-count-aware dynamic budgets |
+
+**Added, not deleted (fixes a gap, no prior implementation to replace):**
+MinerU `content_list_v2` `type=="table"` blocks are newly routed through the
+existing Excel/CSV table-extraction path into `tables/*.jsonl`
+([chunking design §5.1](SCIENTIFIC_DOCUMENT_CHUNKING_DESIGN.md#51-in-pdf-tables-get-the-same-structured-path-as-standalone-excelcsv-fixes-the-gap-in-1)) —
+today, tables embedded directly in a PDF are never extracted as structured
+rows at all, only as raw Markdown table text.
 
 ---
 
@@ -495,6 +513,7 @@ Explicit list so the migration does not leave two parallel implementations:
 ```
 1. qdrant_client.py (extracted shared connection helper) — needed by 2 and 4
 2. chunking.py + semantic_index.py — needed by 3, 4, 5
+   (algorithm detail: SCIENTIFIC_DOCUMENT_CHUNKING_DESIGN.md)
 3. hybrid_search_sources() — needs 2; replaces grep-only call sites immediately (§11)
 4. EvidenceStore — needs 1, 2; replaces evidence_packets internals immediately (§11)
 5. Send()-based section map-reduce subgraph — needs 2, 4
