@@ -82,6 +82,9 @@ def load_all_runs(runs_dir: Path):
                     completeness = data.get('completeness', {})
                     correctness = data.get('correctness', {})
                     internal = data.get('internal_metrics', {})
+                    value_accuracy = data.get('value_accuracy', {})
+                    structural = data.get('structural', {})
+                    novel_fields = data.get('novel_fields', {})
                     
                     runs.append({
                         'model': model,
@@ -99,17 +102,27 @@ def load_all_runs(runs_dir: Path):
                         'covered_fields': completeness.get('covered_fields', 0),
                         'total_gt_fields': completeness.get('total_ground_truth_fields', 0),
                         
-                        # Correctness (original)
-                        'f1_score': correctness.get('f1_score', 0.0),
-                        'precision': correctness.get('precision', 0.0),
-                        'recall': correctness.get('recall', 0.0),
+                        # Layer 1: field-name coverage only (never checks values)
+                        'field_coverage_f1': correctness.get('field_coverage_f1', 0.0),
+                        'field_coverage_precision': correctness.get('field_coverage_precision', 0.0),
+                        'field_coverage_recall': correctness.get('field_coverage_recall', 0.0),
+                        'gt_field_populated_rate': correctness.get('gt_field_populated_rate', 0.0),
                         
-                        # Correctness (confidence-aware)
-                        'high_conf_excess': correctness.get('high_conf_excess', 0),
-                        'low_conf_excess': correctness.get('low_conf_excess', 0),
-                        'adjusted_precision': correctness.get('adjusted_precision', 0.0),
-                        'adjusted_f1': correctness.get('adjusted_f1', 0.0),
-                        'discovery_bonus': correctness.get('discovery_bonus', 0.0),
+                        # Layer 2: true value accuracy (NaN when values-level GT unavailable)
+                        'value_mean_score': value_accuracy.get('value_mean_score', np.nan),
+                        'value_partial_credit_score': value_accuracy.get('value_partial_credit_score', np.nan),
+                        
+                        # Layer 3: structural/hierarchical correctness
+                        'sheet_placement_accuracy': structural.get('sheet_placement_accuracy', np.nan),
+                        'row_alignment_f1': structural.get('row_alignment_f1', np.nan),
+                        
+                        # Layer 4: evidence-grounded novel-field classification
+                        # (replaces the old confidence-based high_conf_excess /
+                        # adjusted_precision / discovery_bonus).
+                        'discovery_rate': novel_fields.get('discovery_rate', 0.0),
+                        'untracked_insight_rate': novel_fields.get('untracked_insight_rate', 0.0),
+                        'precision_excl_discoveries': novel_fields.get('precision_excl_discoveries', 0.0),
+                        'unsupported_fabrication_count': novel_fields.get('unsupported_fabrication_count', 0),
                         
                         # Internal
                         'overall_confidence': internal.get('overall_confidence', 0.0),
@@ -136,36 +149,41 @@ def generate_model_summary(df: pd.DataFrame):
     """生成模型摘要统计"""
     summary = df.groupby('model').agg({
         'completeness': ['mean', 'std', 'count'],
-        'f1_score': ['mean', 'std'],
-        'precision': ['mean', 'std'],
-        'recall': ['mean', 'std'],
+        'field_coverage_f1': ['mean', 'std'],
+        'field_coverage_precision': ['mean', 'std'],
+        'field_coverage_recall': ['mean', 'std'],
         'runtime_seconds': ['mean', 'std'],
         'n_fields_extracted': ['mean', 'std'],
         'overall_confidence': ['mean'],
-        # NEW: Confidence-aware metrics
-        'adjusted_f1': ['mean', 'std'],
-        'adjusted_precision': ['mean', 'std'],
-        'high_conf_excess': ['mean'],
-        'low_conf_excess': ['mean'],
-        'discovery_bonus': ['mean'],
+        # Layer 2: true value accuracy (NaN-skipping mean; only non-NaN for
+        # documents with values-level GT -- see evaluation/datasets/annotated/values/)
+        'value_partial_credit_score': ['mean', 'std'],
+        # Layer 3: structural correctness
+        'row_alignment_f1': ['mean'],
+        # Layer 4: evidence-grounded novel-field classification (replaces the
+        # old confidence-based high_conf_excess / adjusted_precision / discovery_bonus)
+        'discovery_rate': ['mean'],
+        'untracked_insight_rate': ['mean'],
+        'precision_excl_discoveries': ['mean'],
     }).round(3)
     
     summary.columns = ['_'.join(col).strip() for col in summary.columns.values]
-    
-    # NEW: Adjusted aggregate score (uses adjusted_f1 instead of f1)
+
+    # Composite score mirrors evaluation/scripts/evaluate_outputs.py's
+    # WEIGHT_* constants (Layer 1 recall + Layer 2 value accuracy + Layer 4
+    # fabrication-adjusted precision + internal confidence as a lightweight
+    # proxy for schema/structural quality in this per-run legacy view).
+    # Falls back to field_coverage_recall when value_partial_credit_score is NaN
+    # for every run of a model (i.e. no values-level GT available at all).
+    value_component = summary['value_partial_credit_score_mean']
+    value_component = value_component.fillna(summary['field_coverage_recall_mean'])
     summary['aggregate_score'] = (
-        summary['completeness_mean'] * 0.4 +
-        summary['adjusted_f1_mean'] * 0.4 +
-        summary['overall_confidence_mean'] * 0.2
+        summary['field_coverage_recall_mean'] * 0.30 +
+        value_component * 0.35 +
+        summary['precision_excl_discoveries_mean'].fillna(summary['field_coverage_precision_mean']) * 0.15 +
+        summary['overall_confidence_mean'] * 0.20
     ).round(3)
-    
-    # Also keep original score for comparison
-    summary['original_score'] = (
-        summary['completeness_mean'] * 0.4 +
-        summary['f1_score_mean'] * 0.4 +
-        summary['overall_confidence_mean'] * 0.2
-    ).round(3)
-    
+
     summary = summary.sort_values('aggregate_score', ascending=False)
     return summary
 
@@ -205,15 +223,15 @@ def plot_model_rankings(summary: pd.DataFrame, output_dir: Path):
     for i, v in enumerate(summary['completeness_mean']):
         ax2.text(v + 0.01, i, f'{v:.3f}', va='center', fontsize=10)
     
-    # Plot 3: F1 Score
+    # Plot 3: Layer 1 recall (= completeness for flat GT field-name lists)
     ax3 = axes[2]
-    ax3.barh(y_pos, summary['f1_score_mean'], color=colors, edgecolor='black', linewidth=0.8)
+    ax3.barh(y_pos, summary['field_coverage_recall_mean'], color=colors, edgecolor='black', linewidth=0.8)
     ax3.set_yticks(y_pos)
     ax3.set_yticklabels(display_names, fontweight='bold')
-    ax3.set_xlabel('F1 Score', fontweight='bold')
-    ax3.set_title('Correctness (F1 Score)', fontweight='bold')
+    ax3.set_xlabel('Field Coverage Recall', fontweight='bold')
+    ax3.set_title('GT Field-Name Coverage (Layer 1)', fontweight='bold')
     ax3.invert_yaxis()
-    for i, v in enumerate(summary['f1_score_mean']):
+    for i, v in enumerate(summary['field_coverage_recall_mean']):
         ax3.text(v + 0.01, i, f'{v:.3f}', va='center', fontsize=10)
     
     plt.tight_layout()
@@ -225,7 +243,7 @@ def plot_model_rankings(summary: pd.DataFrame, output_dir: Path):
 
 def plot_model_comparison_heatmap(df: pd.DataFrame, output_dir: Path):
     """模型指标热图"""
-    metrics = ['completeness', 'f1_score', 'precision', 'recall', 'overall_confidence']
+    metrics = ['completeness', 'field_coverage_f1', 'field_coverage_precision', 'field_coverage_recall', 'overall_confidence']
     
     model_data = df.groupby('model')[metrics].mean()
     model_data.index = [MODEL_DISPLAY_NAMES.get(m, m) for m in model_data.index]
@@ -268,7 +286,7 @@ def plot_document_comparison(df: pd.DataFrame, output_dir: Path):
     doc_stats = df.groupby(['model', 'document_id']).agg({
         'n_fields_extracted': 'mean',
         'completeness': 'mean',
-        'f1_score': 'mean',
+        'field_coverage_f1': 'mean',
     }).reset_index()
     
     documents = sorted(df['document_id'].unique())
@@ -299,7 +317,7 @@ def plot_document_comparison(df: pd.DataFrame, output_dir: Path):
     ax2 = axes[1]
     for i, doc in enumerate(documents):
         doc_data = doc_stats[doc_stats['document_id'] == doc]
-        values = [doc_data[doc_data['model'] == m]['f1_score'].values[0] 
+        values = [doc_data[doc_data['model'] == m]['field_coverage_f1'].values[0] 
                   if len(doc_data[doc_data['model'] == m]) > 0 else 0 
                   for m in models]
         ax2.bar(x + i*width, values, width, label=doc.title(), edgecolor='black', linewidth=0.8)
@@ -351,7 +369,7 @@ def plot_runtime_comparison(summary: pd.DataFrame, output_dir: Path):
 
 def plot_metric_correlation(df: pd.DataFrame, output_dir: Path):
     """指标相关性热图"""
-    metrics = ['completeness', 'f1_score', 'precision', 'recall', 
+    metrics = ['completeness', 'field_coverage_f1', 'field_coverage_precision', 'field_coverage_recall', 
                'overall_confidence', 'n_fields_extracted', 'runtime_seconds']
     
     corr_matrix = df[metrics].corr()
@@ -390,9 +408,9 @@ def plot_precision_recall_tradeoff(df: pd.DataFrame, output_dir: Path):
     fig, ax = plt.subplots(figsize=(10, 8))
     
     model_stats = df.groupby('model').agg({
-        'precision': 'mean',
-        'recall': 'mean',
-        'f1_score': 'mean'
+        'field_coverage_precision': 'mean',
+        'field_coverage_recall': 'mean',
+        'field_coverage_f1': 'mean'
     }).reset_index()
     
     for _, row in model_stats.iterrows():
@@ -400,9 +418,9 @@ def plot_precision_recall_tradeoff(df: pd.DataFrame, output_dir: Path):
         display_name = MODEL_DISPLAY_NAMES.get(model, model)
         color = MODEL_COLORS.get(model, '#7f8c8d')
         
-        ax.scatter(row['recall'], row['precision'], s=row['f1_score']*500, 
+        ax.scatter(row['field_coverage_recall'], row['field_coverage_precision'], s=row['field_coverage_f1']*500, 
                    c=color, alpha=0.7, edgecolors='black', linewidth=1.5)
-        ax.annotate(display_name, (row['recall'], row['precision']), 
+        ax.annotate(display_name, (row['field_coverage_recall'], row['field_coverage_precision']), 
                    textcoords="offset points", xytext=(5, 5), fontsize=10, fontweight='bold')
     
     ax.set_xlabel('Recall', fontsize=12, fontweight='bold')
@@ -427,8 +445,8 @@ def plot_fields_vs_quality(df: pd.DataFrame, output_dir: Path):
     
     model_stats = df.groupby('model').agg({
         'n_fields_extracted': 'mean',
-        'precision': 'mean',
-        'f1_score': 'mean'
+        'field_coverage_precision': 'mean',
+        'field_coverage_f1': 'mean'
     }).reset_index()
     
     # Plot 1: Fields vs Precision
@@ -437,9 +455,9 @@ def plot_fields_vs_quality(df: pd.DataFrame, output_dir: Path):
         model = row['model']
         display_name = MODEL_DISPLAY_NAMES.get(model, model)
         color = MODEL_COLORS.get(model, '#7f8c8d')
-        ax1.scatter(row['n_fields_extracted'], row['precision'], s=150, 
+        ax1.scatter(row['n_fields_extracted'], row['field_coverage_precision'], s=150, 
                    c=color, alpha=0.8, edgecolors='black', linewidth=1.5)
-        ax1.annotate(display_name, (row['n_fields_extracted'], row['precision']), 
+        ax1.annotate(display_name, (row['n_fields_extracted'], row['field_coverage_precision']), 
                     textcoords="offset points", xytext=(5, 5), fontsize=9)
     
     ax1.set_xlabel('Average Fields Extracted', fontweight='bold')
@@ -452,9 +470,9 @@ def plot_fields_vs_quality(df: pd.DataFrame, output_dir: Path):
         model = row['model']
         display_name = MODEL_DISPLAY_NAMES.get(model, model)
         color = MODEL_COLORS.get(model, '#7f8c8d')
-        ax2.scatter(row['n_fields_extracted'], row['f1_score'], s=150, 
+        ax2.scatter(row['n_fields_extracted'], row['field_coverage_f1'], s=150, 
                    c=color, alpha=0.8, edgecolors='black', linewidth=1.5)
-        ax2.annotate(display_name, (row['n_fields_extracted'], row['f1_score']), 
+        ax2.annotate(display_name, (row['n_fields_extracted'], row['field_coverage_f1']), 
                     textcoords="offset points", xytext=(5, 5), fontsize=9)
     
     ax2.set_xlabel('Average Fields Extracted', fontweight='bold')
@@ -513,15 +531,15 @@ def plot_confidence_analysis(df: pd.DataFrame, output_dir: Path):
     ax3 = axes[1, 0]
     model_stats = df.groupby('model').agg({
         'overall_confidence': 'mean',
-        'f1_score': 'mean'
+        'field_coverage_f1': 'mean'
     }).reset_index()
     for _, row in model_stats.iterrows():
         model = row['model']
         display_name = MODEL_DISPLAY_NAMES.get(model, model)
         color = MODEL_COLORS.get(model, '#7f8c8d')
-        ax3.scatter(row['overall_confidence'], row['f1_score'], s=200, 
+        ax3.scatter(row['overall_confidence'], row['field_coverage_f1'], s=200, 
                    c=color, alpha=0.8, edgecolors='black', linewidth=1.5)
-        ax3.annotate(display_name, (row['overall_confidence'], row['f1_score']), 
+        ax3.annotate(display_name, (row['overall_confidence'], row['field_coverage_f1']), 
                     textcoords="offset points", xytext=(5, 5), fontsize=9)
     ax3.set_xlabel('Overall Confidence (Self-Assessment)', fontweight='bold')
     ax3.set_ylabel('F1 Score (Actual Quality)', fontweight='bold')
@@ -536,7 +554,7 @@ def plot_confidence_analysis(df: pd.DataFrame, output_dir: Path):
     ax4 = axes[1, 1]
     model_stats2 = df.groupby('model').agg({
         'critic_confidence': 'mean',
-        'f1_score': 'mean',
+        'field_coverage_f1': 'mean',
         'total_retries': 'mean'
     }).reset_index()
     
@@ -546,9 +564,9 @@ def plot_confidence_analysis(df: pd.DataFrame, output_dir: Path):
         color = MODEL_COLORS.get(model, '#7f8c8d')
         # Size based on retries
         size = 100 + row['total_retries'] * 50
-        ax4.scatter(row['critic_confidence'], row['f1_score'], s=size, 
+        ax4.scatter(row['critic_confidence'], row['field_coverage_f1'], s=size, 
                    c=color, alpha=0.8, edgecolors='black', linewidth=1.5)
-        ax4.annotate(display_name, (row['critic_confidence'], row['f1_score']), 
+        ax4.annotate(display_name, (row['critic_confidence'], row['field_coverage_f1']), 
                     textcoords="offset points", xytext=(5, 5), fontsize=9)
     ax4.set_xlabel('Critic Confidence', fontweight='bold')
     ax4.set_ylabel('F1 Score', fontweight='bold')
@@ -564,78 +582,84 @@ def plot_confidence_analysis(df: pd.DataFrame, output_dir: Path):
     print(f"  ✅ Saved {filename}")
 
 
-def plot_adjusted_vs_original(df: pd.DataFrame, output_dir: Path):
-    """对比原始 vs 调整后的评估指标"""
+def plot_field_coverage_vs_value_accuracy(df: pd.DataFrame, output_dir: Path):
+    """
+    对比 Layer 1 (field-name coverage) vs Layer 2 (true value accuracy) vs
+    Layer 4 (evidence-grounded novel-field classification).
+
+    Replaces the old confidence-based "adjusted vs original" comparison.
+    Field-name coverage alone dramatically overstates quality (a field can be
+    "present" with a wrong value); the pilot validation for this redesign
+    showed field-coverage F1 of 0.22-0.61 vs true value-partial-credit scores
+    of only 0.08-0.21 on the same runs -- this plot makes that gap visible
+    per model instead of collapsing it into a single opaque number.
+    """
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
-    
-    # Model stats
+
     model_stats = df.groupby('model').agg({
-        'f1_score': 'mean',
-        'adjusted_f1': 'mean',
-        'precision': 'mean',
-        'adjusted_precision': 'mean',
-        'high_conf_excess': 'mean',
-        'low_conf_excess': 'mean',
-        'discovery_bonus': 'mean',
+        'field_coverage_f1': 'mean',
+        'value_partial_credit_score': 'mean',
+        'row_alignment_f1': 'mean',
+        'discovery_rate': 'mean',
+        'untracked_insight_rate': 'mean',
+        'precision_excl_discoveries': 'mean',
+        'unsupported_fabrication_count': 'mean',
     }).reset_index()
     model_stats['model_display'] = model_stats['model'].map(lambda m: MODEL_DISPLAY_NAMES.get(m, m))
-    model_stats = model_stats.sort_values('adjusted_f1', ascending=True)
-    
-    # Plot 1: F1 vs Adjusted F1
-    ax1 = axes[0, 0]
+    model_stats = model_stats.sort_values('field_coverage_f1', ascending=True)
+
     x = np.arange(len(model_stats))
     width = 0.35
-    ax1.barh(x - width/2, model_stats['f1_score'], width, label='Original F1', color='#e74c3c', alpha=0.7)
-    ax1.barh(x + width/2, model_stats['adjusted_f1'], width, label='Adjusted F1', color='#27ae60', alpha=0.7)
+
+    # Plot 1: Field coverage F1 (Layer 1) vs true value accuracy (Layer 2)
+    ax1 = axes[0, 0]
+    ax1.barh(x - width/2, model_stats['field_coverage_f1'], width,
+             label='Field Coverage F1 (name only)', color='#e74c3c', alpha=0.7)
+    ax1.barh(x + width/2, model_stats['value_partial_credit_score'], width,
+             label='Value Accuracy (Layer 2, values-GT docs only)', color='#27ae60', alpha=0.7)
     ax1.set_yticks(x)
     ax1.set_yticklabels(model_stats['model_display'], fontweight='bold')
-    ax1.set_xlabel('F1 Score', fontweight='bold')
-    ax1.set_title('Original vs Adjusted F1 Score', fontweight='bold')
+    ax1.set_xlabel('Score', fontweight='bold')
+    ax1.set_title('Field-Name Coverage vs True Value Accuracy', fontweight='bold')
     ax1.legend(loc='lower right')
     ax1.set_xlim(0, 1.1)
-    
-    # Add improvement annotation
-    for i, (orig, adj) in enumerate(zip(model_stats['f1_score'], model_stats['adjusted_f1'])):
-        diff = adj - orig
-        if diff > 0:
-            ax1.annotate(f'+{diff:.2f}', (adj + 0.02, i), fontsize=9, color='green', fontweight='bold')
-    
-    # Plot 2: Precision vs Adjusted Precision
+
+    # Plot 2: Structural correctness (Layer 3)
     ax2 = axes[0, 1]
-    ax2.barh(x - width/2, model_stats['precision'], width, label='Original Precision', color='#e74c3c', alpha=0.7)
-    ax2.barh(x + width/2, model_stats['adjusted_precision'], width, label='Adjusted Precision', color='#27ae60', alpha=0.7)
+    colors = [MODEL_COLORS.get(m, '#7f8c8d') for m in model_stats['model']]
+    ax2.barh(x, model_stats['row_alignment_f1'], color=colors, edgecolor='black', linewidth=0.8)
     ax2.set_yticks(x)
     ax2.set_yticklabels(model_stats['model_display'], fontweight='bold')
-    ax2.set_xlabel('Precision', fontweight='bold')
-    ax2.set_title('Original vs Adjusted Precision', fontweight='bold')
-    ax2.legend(loc='lower right')
+    ax2.set_xlabel('Row Alignment F1', fontweight='bold')
+    ax2.set_title('Structural Correctness (Layer 3, CEAF-style)', fontweight='bold')
     ax2.set_xlim(0, 1.1)
-    
-    # Plot 3: Excess Fields Breakdown
+
+    # Plot 3: Evidence-grounded novel-field rates (Layer 4)
     ax3 = axes[1, 0]
-    ax3.barh(x - width/2, model_stats['high_conf_excess'], width, label='High Conf Excess (≥0.8)', color='#27ae60')
-    ax3.barh(x + width/2, model_stats['low_conf_excess'], width, label='Low Conf Excess (<0.8)', color='#e74c3c')
+    ax3.barh(x - width/2, model_stats['discovery_rate'], width,
+             label='Beneficial Discovery Rate', color='#27ae60')
+    ax3.barh(x + width/2, model_stats['untracked_insight_rate'], width,
+             label='Untracked Insight Rate', color='#f39c12')
     ax3.set_yticks(x)
     ax3.set_yticklabels(model_stats['model_display'], fontweight='bold')
-    ax3.set_xlabel('Number of Excess Fields', fontweight='bold')
-    ax3.set_title('Excess Fields by Confidence Level', fontweight='bold')
+    ax3.set_xlabel('Rate (relative to # GT fields)', fontweight='bold')
+    ax3.set_title('Evidence-Grounded Novel Fields (Layer 4)', fontweight='bold')
     ax3.legend(loc='lower right')
-    
-    # Plot 4: Discovery Bonus
+
+    # Plot 4: Fabrication-adjusted precision
     ax4 = axes[1, 1]
-    colors = [MODEL_COLORS.get(m, '#7f8c8d') for m in model_stats['model']]
-    ax4.barh(x, model_stats['discovery_bonus'], color=colors, edgecolor='black', linewidth=0.8)
+    ax4.barh(x, model_stats['precision_excl_discoveries'], color=colors, edgecolor='black', linewidth=0.8)
     ax4.set_yticks(x)
     ax4.set_yticklabels(model_stats['model_display'], fontweight='bold')
-    ax4.set_xlabel('Discovery Bonus (high_conf_excess / GT_fields)', fontweight='bold')
-    ax4.set_title('Potential Discovery Score', fontweight='bold')
-    
-    # Add values
-    for i, v in enumerate(model_stats['discovery_bonus']):
+    ax4.set_xlabel('Precision (excl. beneficial discoveries)', fontweight='bold')
+    ax4.set_title('Fabrication-Adjusted Precision (Layer 4)', fontweight='bold')
+    ax4.set_xlim(0, 1.1)
+
+    for i, v in enumerate(model_stats['precision_excl_discoveries']):
         ax4.text(v + 0.01, i, f'{v:.2f}', va='center', fontsize=10)
-    
+
     plt.tight_layout()
-    filename = f'adjusted_vs_original_{TIMESTAMP}.png'
+    filename = f'field_coverage_vs_value_accuracy_{TIMESTAMP}.png'
     plt.savefig(output_dir / filename, dpi=200, bbox_inches='tight')
     plt.close()
     print(f"  ✅ Saved {filename}")
@@ -650,7 +674,7 @@ def plot_boxplot_comparison(df: pd.DataFrame, output_dir: Path):
     df_plot['model_display'] = df_plot['model'].map(lambda m: MODEL_DISPLAY_NAMES.get(m, m))
     
     # Sort by aggregate score
-    model_order = df_plot.groupby('model_display')['f1_score'].mean().sort_values(ascending=False).index.tolist()
+    model_order = df_plot.groupby('model_display')['field_coverage_f1'].mean().sort_values(ascending=False).index.tolist()
     
     # Completeness
     ax1 = axes[0, 0]
@@ -662,7 +686,7 @@ def plot_boxplot_comparison(df: pd.DataFrame, output_dir: Path):
     
     # F1 Score
     ax2 = axes[0, 1]
-    sns.boxplot(data=df_plot, x='model_display', y='f1_score', order=model_order, ax=ax2, palette='Set2')
+    sns.boxplot(data=df_plot, x='model_display', y='field_coverage_f1', order=model_order, ax=ax2, palette='Set2')
     ax2.set_xlabel('')
     ax2.set_ylabel('F1 Score', fontweight='bold')
     ax2.set_title('F1 Score Distribution', fontweight='bold')
@@ -670,7 +694,7 @@ def plot_boxplot_comparison(df: pd.DataFrame, output_dir: Path):
     
     # Precision
     ax3 = axes[1, 0]
-    sns.boxplot(data=df_plot, x='model_display', y='precision', order=model_order, ax=ax3, palette='Set2')
+    sns.boxplot(data=df_plot, x='model_display', y='field_coverage_precision', order=model_order, ax=ax3, palette='Set2')
     ax3.set_xlabel('Model', fontweight='bold')
     ax3.set_ylabel('Precision', fontweight='bold')
     ax3.set_title('Precision Distribution', fontweight='bold')
@@ -696,25 +720,27 @@ def save_summary_table(summary: pd.DataFrame, output_dir: Path):
     display_df = summary.copy()
     display_df.index = [MODEL_DISPLAY_NAMES.get(m, m) for m in display_df.index]
     
-    # Full table with all metrics
-    full_cols = ['aggregate_score', 'original_score', 'completeness_mean', 
-                 'f1_score_mean', 'adjusted_f1_mean', 'precision_mean', 'adjusted_precision_mean',
-                 'recall_mean', 'high_conf_excess_mean', 'low_conf_excess_mean',
-                 'discovery_bonus_mean', 'runtime_seconds_mean', 
-                 'n_fields_extracted_mean', 'completeness_count']
+    # Full table with all layered metrics (see evaluation/scripts/evaluate_outputs.py
+    # WEIGHT_* constants for the composite score's rationale).
+    full_cols = ['aggregate_score', 'completeness_mean',
+                 'field_coverage_f1_mean', 'field_coverage_precision_mean', 'field_coverage_recall_mean',
+                 'value_partial_credit_score_mean', 'row_alignment_f1_mean',
+                 'discovery_rate_mean', 'untracked_insight_rate_mean', 'precision_excl_discoveries_mean',
+                 'runtime_seconds_mean', 'n_fields_extracted_mean', 'completeness_count']
     
     full_df = display_df[[c for c in full_cols if c in display_df.columns]]
-    full_df.columns = ['Adj_Score', 'Orig_Score', 'Complete', 
-                       'F1', 'Adj_F1', 'Prec', 'Adj_Prec',
-                       'Recall', 'Hi_Excess', 'Lo_Excess',
-                       'Discovery', 'Runtime', 'Fields', 'N_Runs']
+    full_df.columns = ['Score', 'Complete',
+                       'FieldCovF1', 'FieldCovPrec', 'FieldCovRecall',
+                       'ValueAcc', 'RowAlignF1',
+                       'DiscoveryRate', 'InsightRate', 'PrecExclDisc',
+                       'Runtime', 'Fields', 'N_Runs']
     
     filename = f'model_rankings_{TIMESTAMP}.csv'
     full_df.to_csv(output_dir / filename)
     print(f"  ✅ Saved {filename}")
     
     print("\n" + "=" * 80)
-    print("📊 Model Rankings (with Adjusted Metrics)")
+    print("📊 Model Rankings (Layered Metrics: Field Coverage / Value Accuracy / Structural / Novel-Field)")
     print("=" * 80)
     print(full_df.to_string())
     
@@ -738,9 +764,13 @@ def save_analysis_summary(df: pd.DataFrame, summary: pd.DataFrame, output_dir: P
                 'display_name': MODEL_DISPLAY_NAMES.get(model, model),
                 'aggregate_score': float(summary.loc[model, 'aggregate_score']),
                 'completeness': float(summary.loc[model, 'completeness_mean']),
-                'f1_score': float(summary.loc[model, 'f1_score_mean']),
-                'precision': float(summary.loc[model, 'precision_mean']),
-                'recall': float(summary.loc[model, 'recall_mean']),
+                'field_coverage_f1': float(summary.loc[model, 'field_coverage_f1_mean']),
+                'field_coverage_precision': float(summary.loc[model, 'field_coverage_precision_mean']),
+                'field_coverage_recall': float(summary.loc[model, 'field_coverage_recall_mean']),
+                'value_partial_credit_score': (
+                    float(summary.loc[model, 'value_partial_credit_score_mean'])
+                    if pd.notna(summary.loc[model, 'value_partial_credit_score_mean']) else None
+                ),
                 'runtime_seconds': float(summary.loc[model, 'runtime_seconds_mean']),
                 'n_fields_extracted': float(summary.loc[model, 'n_fields_extracted_mean']),
                 'n_runs': int(summary.loc[model, 'completeness_count']),
@@ -803,7 +833,7 @@ def main():
     plot_precision_recall_tradeoff(df, figures_dir)
     plot_fields_vs_quality(df, figures_dir)
     plot_confidence_analysis(df, figures_dir)
-    plot_adjusted_vs_original(df, figures_dir)  # NEW
+    plot_field_coverage_vs_value_accuracy(df, figures_dir)
     plot_boxplot_comparison(df, figures_dir)
     
     # Save tables

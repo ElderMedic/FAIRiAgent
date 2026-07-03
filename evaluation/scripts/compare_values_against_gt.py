@@ -42,18 +42,24 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
+# All matching primitives now live in a shared module so this script, the
+# ValueAccuracyEvaluator (Layer 2), StructuralEvaluator (Layer 3), and
+# NovelFieldEvaluator (Layer 4) all use one implementation.
 from evaluation.evaluators._value_matching import (  # noqa: E402
-    MATCH_THRESHOLD,
-    PARTIAL_THRESHOLD,
-    combined_score,
-    disable_semantic_similarity,
-    normalize_tokens as _normalize,
-    score_value_pair,
     semantic_sim,
-    semantic_similarity_available,
     token_f1,
-    warmup_semantic_model,
+    combined_score,
+    normalize_tokens as _normalize,
+    disable_semantic_similarity,
+    semantic_similarity_available,
 )
+
+
+def _get_st_model():
+    """Backwards-compatible shim: warm up / check the shared semantic model."""
+    from evaluation.evaluators import _value_matching as _vm
+
+    return _vm._get_st_model()
 
 
 # ── GT loader ─────────────────────────────────────────────────────────────────
@@ -214,6 +220,9 @@ def align_rows(
 
 # ── per-sheet evaluation ───────────────────────────────────────────────────────
 
+MATCH_THRESHOLD   = 0.75  # semantic/token score >= 0.75 → "match"
+PARTIAL_THRESHOLD = 0.40  # >= 0.40 → "partial"
+
 FieldResult = Dict[str, Any]
 
 
@@ -247,11 +256,10 @@ def evaluate_sheet(
                     or ""
                 )
             field_present = bool(pred_val)
-            detail = score_value_pair(pred_val, gt_val, field_name=field) if pred_val else score_value_pair("", gt_val, field_name=field)
-            score = detail.score
+            score = combined_score(pred_val, gt_val) if pred_val else 0.0
 
             total_fields += 1
-            score_sum += score
+            score_sum    += score
 
             if score >= MATCH_THRESHOLD:
                 status = "match"
@@ -268,15 +276,10 @@ def evaluate_sheet(
                 missing_name_count += 1
 
             fields.append({
-                "field": field,
-                "status": status,
-                "score": round(score, 3),
-                "semantic_score": detail.semantic_score,
-                "token_f1_score": detail.token_f1_score,
-                "semantic_judgment_score": detail.semantic_judgment_score,
-                "rule_score": detail.rule_score,
-                "match_type": detail.match_type,
-                "gt_snippet": gt_val[:60],
+                "field":        field,
+                "status":       status,
+                "score":        round(score, 3),
+                "gt_snippet":   gt_val[:60],
                 "pred_snippet": pred_val[:60] if pred_val else "(not found)",
             })
         row_details.append({"fields": fields})
@@ -346,8 +349,7 @@ def print_report(results: List[Dict[str, Any]], use_semantic: bool) -> None:
     print(f"  Field coverage : {overall_cov:.1%}  "
           f"(field name present regardless of value)")
     if use_semantic:
-        print("  Model: all-MiniLM-L6-v2  thresholds: match≥0.75  partial≥0.35")
-        print("  Score = fuse(rule, max(semantic_sim, token_f1)) per field type")
+        print("  Model: all-MiniLM-L6-v2  thresholds: match≥0.75  partial≥0.40")
     else:
         print("  [note] sentence-transformers unavailable — token-F1 only")
     if not _SCIPY:
@@ -371,13 +373,11 @@ def main():
     if args.no_semantic:
         disable_semantic_similarity(True)
 
-    gt_path = Path(args.gt_path)
-    run_dir = Path(args.run_dir)
+    gt_path  = Path(args.gt_path)
+    run_dir  = Path(args.run_dir)
 
-    use_semantic = semantic_similarity_available()
-    if not args.no_semantic:
-        warmup_semantic_model()
-        use_semantic = semantic_similarity_available()
+    # Warm up model before scoring (prints nothing if unavailable)
+    use_semantic = not args.no_semantic and _get_st_model() is not None
 
     gt_sheets   = load_gt_sheets(gt_path)
     pred_sheets = load_run_sheets(run_dir)

@@ -26,6 +26,9 @@ from evaluation.evaluators import (
     LLMJudgeEvaluator,
     InternalMetricsEvaluator,
     ValueAccuracyEvaluator,
+    StructuralEvaluator,
+    NovelFieldEvaluator,
+    find_source_text,
 )
 from evaluation.analysis.config import (
     EXCLUDED_MODELS,
@@ -63,11 +66,11 @@ def evaluate_single_run(
     with open(eval_result_file, 'r', encoding='utf-8') as f:
         eval_result = json.load(f)
     
-    # Skip if already has NEW confidence-aware correctness metrics
+    # Skip if already has the redesigned (Layer 1-4) metrics
     correctness = eval_result.get('correctness', {})
-    has_adjusted_metrics = 'adjusted_f1' in correctness and correctness.get('adjusted_f1', 0.0) > 0
+    has_new_metrics = 'field_coverage_recall' in correctness
 
-    if has_adjusted_metrics:
+    if has_new_metrics:
         return eval_result
     
     # Get document ID (baselines may use alternate IDs, e.g. hash → canonical)
@@ -135,7 +138,8 @@ def evaluate_single_run(
         traceback.print_exc()
         metrics['completeness'] = {}
     
-    # 2. Correctness (field presence) with confidence-aware metrics
+    # 2. Correctness (Layer 1: field-name coverage only, never checks values)
+    true_positives = 0
     try:
         correctness_result = correctness_eval.evaluate(
             fairifier_output, 
@@ -143,24 +147,56 @@ def evaluate_single_run(
         )
         # Extract summary metrics
         summary = correctness_result.get('summary_metrics', {})
+        true_positives = summary.get('true_positives', 0)
         metrics['correctness'] = {
-            # Original metrics
-            'f1_score': summary.get('f1_score', 0.0),
-            'precision': summary.get('precision', 0.0),
-            'recall': summary.get('recall', 0.0),
+            'field_coverage_f1': summary.get('field_coverage_f1', 0.0),
+            'field_coverage_precision': summary.get('field_coverage_precision', 0.0),
+            'field_coverage_recall': summary.get('field_coverage_recall', 0.0),
             'field_presence_rate': summary.get('field_presence_rate', 0.0),
-            # NEW: Confidence-aware metrics
-            'high_conf_excess': summary.get('high_conf_excess', 0),
-            'low_conf_excess': summary.get('low_conf_excess', 0),
-            'adjusted_precision': summary.get('adjusted_precision', 0.0),
-            'adjusted_f1': summary.get('adjusted_f1', 0.0),
-            'discovery_bonus': summary.get('discovery_bonus', 0.0),
+            # "Has any non-empty value" -- NOT a correctness/value-accuracy
+            # check; see `value_accuracy` (Layer 2) below for that.
+            'gt_field_populated_rate': summary.get('gt_field_populated_rate', 0.0),
         }
     except Exception as e:
         print(f"  ⚠️  Correctness 计算失败: {e}")
         import traceback
         traceback.print_exc()
         metrics['correctness'] = {}
+
+    # 2b. Value accuracy (Layer 2) + structural correctness (Layer 3),
+    # only when a values-level GT file exists for this document.
+    values_gt_path = (
+        Path(__file__).parents[1] / 'datasets' / 'annotated' / 'values'
+        / f'ground_truth_{doc_id}_values.json'
+    )
+    if values_gt_path.exists():
+        try:
+            with open(values_gt_path, 'r', encoding='utf-8') as f:
+                gt_values_doc = json.load(f)
+            value_eval = ValueAccuracyEvaluator()
+            structural_eval = StructuralEvaluator(value_evaluator=value_eval)
+            value_result = value_eval.evaluate(fairifier_output, gt_values_doc)
+            structural_result = structural_eval.evaluate(fairifier_output, gt_values_doc)
+            metrics['value_accuracy'] = value_result.get('summary_metrics', {})
+            metrics['structural'] = structural_result.get('summary_metrics', {})
+        except Exception as e:
+            print(f"  ⚠️  Value accuracy / structural 计算失败: {e}")
+            metrics['value_accuracy'] = {}
+            metrics['structural'] = {}
+
+    # 2c. Novel field classification (Layer 4): evidence-grounded, replaces
+    # the old confidence-based high_conf_excess/adjusted_precision/discovery_bonus.
+    try:
+        novel_field_eval = NovelFieldEvaluator()
+        gt_field_names = {f['field_name'] for f in ground_truth_doc.get('ground_truth_fields', [])}
+        source_text = find_source_text(run_dir)
+        novel_result = novel_field_eval.evaluate(
+            fairifier_output, gt_field_names, source_text=source_text, true_positives=true_positives
+        )
+        metrics['novel_fields'] = novel_result.get('summary_metrics', {})
+    except Exception as e:
+        print(f"  ⚠️  Novel field 分类失败: {e}")
+        metrics['novel_fields'] = {}
     
     # 3. LLM Judge (optional, requires API key)
     if llm_judge_eval:
@@ -265,29 +301,6 @@ def evaluate_single_run(
     except Exception as e:
         print(f"  ⚠️  Internal metrics 计算失败: {e}")
         metrics['internal_metrics'] = {}
-
-    # 5. Value accuracy (Layer 2 — semantic + graded scoring, when values GT exists)
-    values_gt_path = (
-        Path(__file__).parent.parent
-        / "datasets"
-        / "annotated"
-        / "values"
-        / f"ground_truth_{doc_id}_values.json"
-    )
-    if values_gt_path.exists():
-        try:
-            with open(values_gt_path, encoding="utf-8") as f:
-                gt_values_doc = json.load(f)
-            value_eval = ValueAccuracyEvaluator()
-            value_result = value_eval.evaluate(
-                fairifier_output, gt_values_doc, run_dir=run_dir
-            )
-            metrics["value_accuracy"] = value_result.get("summary_metrics", {})
-        except Exception as e:
-            print(f"  ⚠️  Value accuracy 计算失败: {e}")
-            import traceback
-            traceback.print_exc()
-            metrics["value_accuracy"] = {}
     
     # Use canonical document_id in stored/returned payload (matches ground-truth keys)
     eval_result["document_id"] = doc_id

@@ -37,6 +37,7 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from fairifier.output_paths import resolve_metadata_output_read_path
+from evaluation.evaluators import find_source_text
 
 class EvaluationOrchestrator:
     """Orchestrate all evaluations on FAIRiAgent outputs."""
@@ -146,6 +147,9 @@ class EvaluationOrchestrator:
             LLMJudgeEvaluator,
             InternalMetricsEvaluator,
             RetrievalCoverageEvaluator,
+            ValueAccuracyEvaluator,
+            StructuralEvaluator,
+            NovelFieldEvaluator,
         )
 
         # Completeness evaluator
@@ -178,8 +182,35 @@ class EvaluationOrchestrator:
         # Internal metrics evaluator (extracts FAIRiAgent's own confidence scores)
         self.internal_metrics_evaluator = InternalMetricsEvaluator()
         self.retrieval_coverage_evaluator = RetrievalCoverageEvaluator()
-        
+
+        # Layer 2/3/4 evaluators (evaluation-metrics redesign). These require
+        # per-document *value*-level ground truth
+        # (evaluation/datasets/annotated/values/ground_truth_{doc}_values.json),
+        # which is optional/sparser than the field-presence GT used above --
+        # loaded lazily per document in _load_ground_truth_values_doc().
+        self.value_accuracy_evaluator = ValueAccuracyEvaluator()
+        self.structural_evaluator = StructuralEvaluator(value_evaluator=self.value_accuracy_evaluator)
+        self.novel_field_evaluator = NovelFieldEvaluator()
+        self._gt_values_cache: Dict[str, Any] = {}
+
         print("✅ All evaluators initialized")
+
+    def _load_ground_truth_values_doc(self, doc_id: str) -> Any:
+        """Load the value-level GT for one document, if it exists (else None)."""
+        if doc_id in self._gt_values_cache:
+            return self._gt_values_cache[doc_id]
+        values_path = (
+            self.ground_truth_path.parent / 'values' / f'ground_truth_{doc_id}_values.json'
+        )
+        doc = None
+        if values_path.exists():
+            try:
+                with open(values_path, 'r', encoding='utf-8') as f:
+                    doc = json.load(f)
+            except Exception:
+                doc = None
+        self._gt_values_cache[doc_id] = doc
+        return doc
     
     def evaluate_all(self) -> Dict[str, Any]:
         """
@@ -449,13 +480,58 @@ class EvaluationOrchestrator:
             output_dirs
         )
 
+        # 6b. Retrieval coverage (hybrid retrieval / section-map-reduce rollout,
+        # diagnostic only -- not part of the Layer 1-4 aggregate score below).
         print(f"  🔍 Evaluating retrieval coverage metrics...")
         results['retrieval_coverage'] = self.retrieval_coverage_evaluator.evaluate_batch(
             fairifier_outputs,
             output_dirs,
             ground_truth_docs=self.ground_truth_docs,
         )
-        
+
+        # 7. Value accuracy (Layer 2) -- only for docs with values-level GT
+        gt_values_docs = {
+            doc_id: self._load_ground_truth_values_doc(doc_id)
+            for doc_id in fairifier_outputs
+        }
+        gt_values_docs = {k: v for k, v in gt_values_docs.items() if v is not None}
+        if gt_values_docs:
+            print(f"  🔍 Running value accuracy evaluation (Layer 2, {len(gt_values_docs)} docs with values-GT)...")
+            results['value_accuracy'] = self.value_accuracy_evaluator.evaluate_batch(
+                fairifier_outputs, gt_values_docs
+            )
+
+            # 8. Structural / hierarchical evaluation (Layer 3), same GT subset
+            print(f"  🔍 Running structural evaluation (Layer 3)...")
+            results['structural'] = self.structural_evaluator.evaluate_batch(
+                fairifier_outputs, gt_values_docs
+            )
+        else:
+            print(f"  ⏭️  No values-level GT available for this config's documents; skipping Layer 2/3")
+
+        # 9. Novel field classification (Layer 4) -- evidence-grounded, all docs
+        print(f"  🔍 Running novel field classification (Layer 4)...")
+        gt_field_names_by_doc = {
+            doc_id: {f['field_name'] for f in self.ground_truth_docs[doc_id].get('ground_truth_fields', [])}
+            for doc_id in fairifier_outputs
+            if doc_id in self.ground_truth_docs
+        }
+        source_texts_by_doc = {
+            doc_id: find_source_text(output_dirs[doc_id])
+            for doc_id in fairifier_outputs
+            if doc_id in output_dirs
+        }
+        true_positives_by_doc = {
+            doc_id: doc_result['summary_metrics'].get('true_positives', 0)
+            for doc_id, doc_result in results['correctness'].get('per_document', {}).items()
+        }
+        results['novel_fields'] = self.novel_field_evaluator.evaluate_batch(
+            fairifier_outputs,
+            gt_field_names_by_doc,
+            source_texts_by_doc=source_texts_by_doc,
+            true_positives_by_doc=true_positives_by_doc,
+        )
+
         # Compute aggregate score (now includes internal metrics)
         results['aggregate_score'] = self._compute_aggregate_score(results)
         
@@ -463,37 +539,76 @@ class EvaluationOrchestrator:
         
         return results
     
-    def _compute_aggregate_score(self, results: Dict[str, Any]) -> float:
-        """Compute overall aggregate quality score.
+    # Named, documented composite weights (evaluation-metrics redesign).
+    # These intentionally do NOT include the old confidence-based
+    # discovery/fabrication penalty; `precision_excl_discoveries` (Layer 4)
+    # already only penalizes evidence-ungrounded extra fields, so it's a
+    # more defensible substitute for the old "adjusted precision".
+    #
+    # `beneficial_discovery_rate` / `untracked_insight_rate` are intentionally
+    # EXCLUDED from the composite -- they are diagnostic/exploratory signals
+    # ("may inspire researchers"), not first-order quality penalties/bonuses.
+    # If a component's ground truth is unavailable for a given config (e.g.
+    # values-level GT missing for Layer 2/3), its weight is dropped and the
+    # remaining weights are renormalized (see the `sum(weights)` divisor
+    # below), rather than treating the missing component as a zero score.
+    WEIGHT_FIELD_COVERAGE_RECALL = 0.20   # Layer 1: did we find the GT fields at all?
+    WEIGHT_VALUE_ACCURACY = 0.35          # Layer 2: are the extracted values actually correct?
+    WEIGHT_STRUCTURAL_F1 = 0.15           # Layer 3: correct ISA sheet + row placement
+    WEIGHT_SCHEMA_COMPLIANCE = 0.10       # FAIR-DS JSON schema validity
+    WEIGHT_PRECISION_EXCL_DISCOVERIES = 0.20  # Layer 4: fabrication-adjusted precision
 
-        Primary score should reflect ground-truth coverage and GT-field quality.
-        Extra inferred metadata is reported separately and should not be a
-        first-order penalty in the headline metric.
+    def _compute_aggregate_score(self, results: Dict[str, Any]) -> float:
+        """Compute overall aggregate quality score from the layered metrics.
+
+        See the ``WEIGHT_*`` class constants above for the composite's
+        components and rationale. All disaggregated component scores remain
+        available in ``results`` for full transparency; this composite is a
+        single headline number for ranking/sorting, not a replacement for
+        looking at the layers individually.
         """
         scores = []
         weights = []
-        
-        # GT completeness (55%)
-        if 'completeness' in results:
-            comp = results['completeness']['aggregated'].get('mean_overall_completeness', 0.0)
-            scores.append(comp)
-            weights.append(0.55)
-        
-        # GT-only accuracy (35%)
+
+        # Layer 1: field coverage recall (did we find the GT fields at all?)
         if 'correctness' in results:
-            corr = results['correctness']['aggregated'].get('mean_gt_value_accuracy', 0.0)
-            scores.append(corr)
-            weights.append(0.35)
-        
-        # Schema compliance (10%)
+            recall = results['correctness']['aggregated'].get('mean_field_coverage_recall', 0.0)
+            scores.append(recall)
+            weights.append(self.WEIGHT_FIELD_COVERAGE_RECALL)
+
+        # Layer 2: true value accuracy (MUC-style partial credit), when
+        # values-level GT was available for this config's documents.
+        if 'value_accuracy' in results and results['value_accuracy'].get('aggregated'):
+            value_acc = results['value_accuracy']['aggregated'].get('mean_value_partial_credit_score', 0.0)
+            scores.append(value_acc)
+            weights.append(self.WEIGHT_VALUE_ACCURACY)
+
+        # Layer 3: structural correctness -- mean of sheet-placement accuracy
+        # (3a) and CEAF-style row-alignment F1 (3b).
+        if 'structural' in results and results['structural'].get('aggregated'):
+            agg = results['structural']['aggregated']
+            structural = (
+                agg.get('mean_sheet_placement_accuracy', 0.0)
+                + agg.get('mean_row_alignment_f1', 0.0)
+            ) / 2
+            scores.append(structural)
+            weights.append(self.WEIGHT_STRUCTURAL_F1)
+
+        # Schema compliance
         if 'schema_validation' in results:
             schema = results['schema_validation']['aggregated'].get('mean_compliance_rate', 0.0)
             scores.append(schema)
-            weights.append(0.10)
-        
+            weights.append(self.WEIGHT_SCHEMA_COMPLIANCE)
+
+        # Layer 4: fabrication-adjusted precision (TP / (TP + unsupported_fabrication))
+        if 'novel_fields' in results and results['novel_fields'].get('aggregated'):
+            precision_excl = results['novel_fields']['aggregated'].get('mean_precision_excl_discoveries', 0.0)
+            scores.append(precision_excl)
+            weights.append(self.WEIGHT_PRECISION_EXCL_DISCOVERIES)
+
         if not scores:
             return 0.0
-        
+
         return sum(s * w for s, w in zip(scores, weights)) / sum(weights)
     
     def _compute_model_comparison(self, per_model_results: Dict[str, Any]) -> Dict[str, Any]:
@@ -505,11 +620,31 @@ class EvaluationOrchestrator:
         
         # Extract key metrics for each model
         for model_name, results in per_model_results.items():
+            if not results:
+                comparison['metrics'][model_name] = {'aggregate_score': 0.0}
+                continue
+
+            value_acc_agg = results.get('value_accuracy', {}).get('aggregated', {})
+            structural_agg = results.get('structural', {}).get('aggregated', {})
+            novel_agg = results.get('novel_fields', {}).get('aggregated', {})
+
             comparison['metrics'][model_name] = {
                 'aggregate_score': results.get('aggregate_score', 0.0),
                 'completeness': results['completeness']['aggregated'].get('mean_overall_completeness', 0.0),
-                'gt_accuracy': results['correctness']['aggregated'].get('mean_gt_value_accuracy', 0.0),
-                'correctness_f1': results['correctness']['aggregated'].get('mean_f1_score', 0.0),
+                # Layer 1: field-name coverage only (never checks values).
+                'field_coverage_recall': results['correctness']['aggregated'].get('mean_field_coverage_recall', 0.0),
+                'field_coverage_f1': results['correctness']['aggregated'].get('mean_field_coverage_f1', 0.0),
+                'gt_field_populated_rate': results['correctness']['aggregated'].get('mean_gt_field_populated_rate', 0.0),
+                # Layer 2: true value accuracy (only populated when values-GT exists).
+                'value_partial_credit_score': value_acc_agg.get('mean_value_partial_credit_score'),
+                'value_match_rate': value_acc_agg.get('mean_value_match_rate'),
+                # Layer 3: structural/hierarchical correctness.
+                'sheet_placement_accuracy': structural_agg.get('mean_sheet_placement_accuracy'),
+                'row_alignment_f1': structural_agg.get('mean_row_alignment_f1'),
+                # Layer 4: evidence-grounded novel-field classification.
+                'discovery_rate': novel_agg.get('mean_discovery_rate'),
+                'untracked_insight_rate': novel_agg.get('mean_untracked_insight_rate'),
+                'precision_excl_discoveries': novel_agg.get('mean_precision_excl_discoveries'),
                 'schema_compliance': results['schema_validation']['aggregated'].get('mean_compliance_rate', 0.0),
                 'llm_judge_score': results['llm_judge']['aggregated'].get('mean_overall_score', 0.0)
             }
@@ -526,51 +661,66 @@ class EvaluationOrchestrator:
     
     def _compute_correlations(self, per_model_results: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Compute correlations between internal metrics and actual quality.
-        
-        This validates whether FAIRiAgent's internal confidence scores
-        are well-calibrated.
+        Compute calibration diagnostics (Layer 5, fast-follow) between
+        FAIRiAgent's internal (self-reported) confidence and actual quality.
+
+        Uses per-document *mean field confidence* (``internal_metrics``) as
+        the predicted confidence, and per-document true value accuracy
+        (Layer 2's ``value_mean_score``, when values-level GT is available;
+        else Layer 1's ``field_coverage_recall`` as a coarser fallback) as the
+        outcome, then reports Pearson correlation plus proper calibration
+        metrics (ECE, Brier score) via ``evaluation.evaluators.calibration``.
+        A plain correlation coefficient does not tell you whether confidence
+        values are *numerically* trustworthy (e.g. a model that reports 0.95
+        for everything can still correlate if the ranking is right) --
+        ECE/Brier catch that.
         """
-        import numpy as np
         from scipy.stats import pearsonr
-        
+        from evaluation.evaluators import calibration
+
         correlations = {}
-        
+
         for model_name, results in per_model_results.items():
-            # Collect data points
+            if not results:
+                continue
+
             internal_confidences = []
             correctness_scores = []
-            
-            # From correctness evaluation, get per-document data
-            per_doc_correctness = results['correctness'].get('per_document', {})
-            
-            for doc_id, doc_result in per_doc_correctness.items():
-                # Get internal confidence from FAIRiAgent output (if available)
-                # This would need to be loaded from the output files
-                # For now, compute correlation with F1 scores
-                f1 = doc_result['summary_metrics'].get('f1_score', 0.0)
-                semantic_match = doc_result['summary_metrics'].get('semantic_match_rate', 0.0)
-                
-                correctness_scores.append(f1)
-                internal_confidences.append(semantic_match)  # Proxy for internal confidence
-            
+
+            per_doc_internal = results.get('internal_metrics', {}).get('per_document', {})
+            per_doc_value_acc = results.get('value_accuracy', {}).get('per_document', {})
+            per_doc_correctness = results.get('correctness', {}).get('per_document', {})
+
+            for doc_id, doc_internal in per_doc_internal.items():
+                mean_conf = doc_internal.get('field_confidence_stats', {}).get('mean_confidence')
+                if mean_conf is None:
+                    continue
+
+                if doc_id in per_doc_value_acc:
+                    outcome = per_doc_value_acc[doc_id]['summary_metrics'].get('value_mean_score')
+                elif doc_id in per_doc_correctness:
+                    outcome = per_doc_correctness[doc_id]['summary_metrics'].get('field_coverage_recall')
+                else:
+                    outcome = None
+                if outcome is None:
+                    continue
+
+                internal_confidences.append(mean_conf)
+                correctness_scores.append(outcome)
+
             if len(correctness_scores) >= 3:  # Need at least 3 points for correlation
                 try:
                     corr, p_value = pearsonr(internal_confidences, correctness_scores)
-                    correlations[model_name] = {
-                        'confidence_vs_correctness': {
-                            'correlation': corr,
-                            'p_value': p_value,
-                            'n_samples': len(correctness_scores)
-                        }
+                    entry = {
+                        'correlation': corr,
+                        'p_value': p_value,
+                        'n_samples': len(correctness_scores),
                     }
-                except:
-                    correlations[model_name] = {
-                        'confidence_vs_correctness': {
-                            'error': 'Could not compute correlation'
-                        }
-                    }
-        
+                except Exception:
+                    entry = {'error': 'Could not compute correlation'}
+                entry.update(calibration.calibration_report(internal_confidences, correctness_scores))
+                correlations[model_name] = {'confidence_vs_correctness': entry}
+
         return correlations
 
 
