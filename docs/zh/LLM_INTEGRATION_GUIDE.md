@@ -9,6 +9,7 @@ FAIRiAgent 当前支持以下 LLM 提供商：
 - `qwen`
 - `gemini`
 - `anthropic`
+- `zhipu`
 
 不同提供商共享同一套 FAIRiAgent workflow，主要差别在于 API Key、模型名和少量 provider-specific 配置。
 
@@ -81,6 +82,17 @@ FAIRIFIER_LLM_MODEL=claude-sonnet-4-6
 LLM_API_KEY=your_anthropic_api_key
 ```
 
+### Zhipu (GLM)
+
+```bash
+LLM_PROVIDER=zhipu
+FAIRIFIER_LLM_MODEL=glm-5.1
+LLM_API_KEY=your_zhipu_api_key
+
+# 也可以使用别名：
+# ZHIPU_API_KEY=your_zhipu_api_key
+```
+
 ## 安装
 
 先安装项目依赖：
@@ -113,6 +125,7 @@ python run_fairifier.py webui
 - OpenAI
 - Ollama
 - Anthropic
+- Zhipu
 
 ## 推荐设置
 
@@ -134,6 +147,7 @@ python run_fairifier.py webui
 - `qwen`
 - `gemini`
 - `anthropic`
+- `zhipu`
 
 内部还支持两个别名：
 
@@ -155,11 +169,19 @@ python run_fairifier.py webui
 - `LLM_API_KEY`
 - `DASHSCOPE_API_KEY`
 
+### Zhipu API Key 未生效
+
+请设置以下任一变量：
+
+- `LLM_API_KEY`
+- `ZHIPU_API_KEY`
+
 ### base URL 应该怎么理解
 
 - `ollama`：使用 `FAIRIFIER_LLM_BASE_URL`
 - `openai`：可选自定义 base URL，不设置时走官方 API
 - `qwen`：走 Qwen/DashScope 的 OpenAI-compatible 配置路径
+- `zhipu`：走 OpenAI 兼容模式，默认 base URL 已经内置，无需额外配置
 - `gemini` 和 `anthropic`：走官方 SDK/API 路径，不需要自定义 base URL
 
 ## 相关文档

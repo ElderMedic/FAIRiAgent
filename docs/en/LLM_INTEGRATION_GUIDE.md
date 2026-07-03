@@ -9,6 +9,7 @@ FAIRiAgent supports the following LLM providers:
 - `qwen`
 - `gemini`
 - `anthropic`
+- `zhipu`
 
 The same workflow can be used across providers. The main differences are how API keys and model names are configured.
 
@@ -80,6 +81,17 @@ FAIRIFIER_LLM_MODEL=claude-sonnet-4-6
 LLM_API_KEY=your_anthropic_api_key
 ```
 
+### Zhipu (GLM)
+
+```bash
+LLM_PROVIDER=zhipu
+FAIRIFIER_LLM_MODEL=glm-5.1
+LLM_API_KEY=your_zhipu_api_key
+
+# Optional fallback alias used by the app:
+# ZHIPU_API_KEY=your_zhipu_api_key
+```
+
 ## Install Requirements
 
 Install the project dependencies first:
@@ -112,6 +124,7 @@ Supported LLM providers (configure via `.env` or the web UI where exposed):
 - OpenAI
 - Ollama
 - Anthropic
+- Zhipu
 
 ## Recommended Defaults
 
@@ -133,6 +146,7 @@ Use one of:
 - `qwen`
 - `gemini`
 - `anthropic`
+- `zhipu`
 
 Aliases normalized internally:
 
@@ -154,11 +168,19 @@ Set one of:
 - `LLM_API_KEY`
 - `DASHSCOPE_API_KEY`
 
+### Zhipu API key not found
+
+Set one of:
+
+- `LLM_API_KEY`
+- `ZHIPU_API_KEY`
+
 ### Base URL confusion
 
 - `ollama`: uses `FAIRIFIER_LLM_BASE_URL`
 - `openai`: optional custom base URL, otherwise official API
 - `qwen`: uses Qwen/DashScope-compatible endpoint handling
+- `zhipu`: uses OpenAI-compatible endpoint with default base URL built-in
 - `gemini` and `anthropic`: official SDK/API path, no custom base URL needed
 
 ## Related Pages

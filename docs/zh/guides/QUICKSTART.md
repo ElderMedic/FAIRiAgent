@@ -35,6 +35,11 @@ FAIR_DS_API_URL=http://localhost:8083
 
 **常见 provider 示例：**
 ```bash
+# Zhipu (GLM)
+LLM_PROVIDER=zhipu
+FAIRIFIER_LLM_MODEL=glm-5.1
+LLM_API_KEY=your_zhipu_api_key
+
 # Qwen
 LLM_PROVIDER=qwen
 FAIRIFIER_LLM_MODEL=qwen-flash

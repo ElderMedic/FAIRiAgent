@@ -316,6 +316,8 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
             return "gemini"
         if value == "claude":
             return "anthropic"
+        if value in ("zhipu", "zhipuai", "glm"):
+            return "zhipu"
         return value
 
     # Ensure correct model name is used
@@ -331,6 +333,8 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
             config_instance.llm_model = "gemini-3.1-pro-preview"
         elif requested_provider == "deepseek":
             config_instance.llm_model = "deepseek-v4-pro"
+        elif requested_provider == "zhipu":
+            config_instance.llm_model = "glm-5.2"
         else:
             config_instance.llm_model = "qwen3:30b"
 
@@ -566,6 +570,9 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     # DeepSeek: fallback to DEEPSEEK_API_KEY if LLM_API_KEY not set
     if config_instance.llm_provider == "deepseek" and not config_instance.llm_api_key:
         config_instance.llm_api_key = os.getenv("DEEPSEEK_API_KEY")
+    # Zhipu/GLM: fallback to ZHIPU_API_KEY if LLM_API_KEY not set
+    if config_instance.llm_provider == "zhipu" and not config_instance.llm_api_key:
+        config_instance.llm_api_key = os.getenv("ZHIPU_API_KEY")
     # Gemini: prefer GOOGLE_API_KEY, then GEMINI_API_KEY
     if config_instance.llm_provider == "gemini" and not config_instance.llm_api_key:
         config_instance.llm_api_key = (
@@ -619,6 +626,13 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
             config_instance.llm_base_url = os.getenv("DEEPSEEK_API_BASE_URL")
         elif config_instance.llm_base_url == "http://localhost:11434":
             config_instance.llm_base_url = "https://api.deepseek.com"
+
+    # Zhipu API (OpenAI-compatible)
+    elif config_instance.llm_provider == "zhipu":
+        if os.getenv("ZHIPU_API_BASE_URL"):
+            config_instance.llm_base_url = os.getenv("ZHIPU_API_BASE_URL")
+        elif config_instance.llm_base_url == "http://localhost:11434":
+            config_instance.llm_base_url = "https://open.bigmodel.cn/api/paas/v4"
 
     if os.getenv("LLM_TEMPERATURE"):
         config_instance.llm_temperature = float(os.getenv("LLM_TEMPERATURE"))

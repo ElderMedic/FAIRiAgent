@@ -789,7 +789,7 @@ class LLMHelper:
             max_tokens: Optional output token cap for this call.
         """
         run_config = self._build_run_config()
-        if json_mode and self.provider in {"deepseek", "openai", "qwen"}:
+        if json_mode and self.provider in {"deepseek", "openai", "qwen", "zhipu"}:
             return await self._call_llm_json_object(
                 messages,
                 operation_name,
@@ -1044,6 +1044,7 @@ class LLMHelper:
         - openai: OpenAI API (gpt-4, gpt-3.5-turbo, etc.)
         - qwen: Alibaba Cloud Qwen API (OpenAI-compatible)
         - deepseek: DeepSeek API (OpenAI-compatible, supports thinking mode)
+        - zhipu: Zhipu API (OpenAI-compatible, for GLM models)
         - gemini: Google Gemini API
         - anthropic: Anthropic Claude API
         """
@@ -1113,6 +1114,23 @@ class LLMHelper:
                 timeout=180,
                 max_retries=3,
             )
+        elif self.provider == "zhipu":
+            if ChatOpenAI is None:
+                raise ImportError("langchain_openai not installed. Install with: pip install langchain-openai")
+            if not config.llm_api_key:
+                raise ValueError("LLM_API_KEY or ZHIPU_API_KEY environment variable is required for Zhipu provider")
+            # Zhipu uses OpenAI-compatible API
+            base_url = config.llm_base_url
+            logger.info(f"Initializing Zhipu LLM: {self.model} at {base_url}")
+            return ChatOpenAI(
+                model=self.model,
+                api_key=config.llm_api_key,
+                base_url=base_url,
+                temperature=config.llm_temperature,
+                max_tokens=self._resolved_max_tokens(),
+                timeout=180,
+                max_retries=3,
+            )
         elif self.provider in {"gemini", "google"}:
             if ChatGoogleGenerativeAI is None:
                 raise ImportError(
@@ -1144,7 +1162,7 @@ class LLMHelper:
         else:
             raise ValueError(
                 f"Unsupported LLM provider: {self.provider}. "
-                f"Supported providers: ollama, openai, qwen, deepseek, gemini, anthropic (claude)"
+                f"Supported providers: ollama, openai, qwen, deepseek, zhipu, gemini, anthropic (claude)"
             )
     
     @traceable(name="LLM.ExtractDocumentInfo")
