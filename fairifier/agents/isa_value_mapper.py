@@ -38,6 +38,7 @@ from ..models import FAIRifierState
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..config import config
 from ..utils.isa_order import ISA_LEVEL_ORDER, MULTI_ROW_ISA_LEVELS
+from ..utils.entity_merge import merge_sparse_entity_rows
 from ..tools.isa_structure_tools import create_isa_structure_tools
 from ..skills import load_skill_files, skills_catalog_seed_files
 
@@ -233,6 +234,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
 
         # ── Post-process: normalize, split entities, align columns ───
         matrix = self._split_entities_heuristic(matrix)
+        matrix = merge_sparse_entity_rows(matrix)
         matrix = self._normalize_row_columns(matrix)
         matrix = self._ensure_core_linkage_fields(matrix, state)
         quality = self._compute_matrix_quality(matrix, tool_metrics, tool_issues)
@@ -607,6 +609,27 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         for level, count in missing_link_counts.items():
             if row_counts.get(level, 0) > 0 and count == row_counts[level] and level != "study":
                 issues.append(f"All {level} rows are missing their parent linkage field.")
+        for level in MULTI_ROW_ISA_LEVELS:
+            rows = (matrix.get(level) or {}).get("rows") or []
+            if len(rows) < 2:
+                continue
+            populated = [
+                sum(1 for v in row.values() if v and str(v).strip())
+                for row in rows
+                if isinstance(row, dict)
+            ]
+            if not populated:
+                continue
+            avg_populated = sum(populated) / len(populated)
+            column_count = len((matrix.get(level) or {}).get("columns") or [])
+            sparse_threshold = max(2, int(column_count * 0.25)) if column_count else 2
+            sparse_rows = sum(1 for count in populated if count <= sparse_threshold)
+            if sparse_rows >= max(2, len(rows) // 2) and avg_populated <= sparse_threshold + 1:
+                issues.append(
+                    f"Possible entity over-fragmentation on {level}: "
+                    f"{len(rows)} rows with avg {avg_populated:.1f} populated fields "
+                    f"({sparse_rows} sparse rows)."
+                )
         return {
             "row_counts": row_counts,
             "missing_link_counts": missing_link_counts,
