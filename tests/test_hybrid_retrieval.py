@@ -264,3 +264,21 @@ def test_hybrid_search_returns_hybrid_output_when_shadow_mode_disabled(tmp_path:
         assert hits
     finally:
         cfg.config.retrieval_shadow_mode = old_shadow
+
+
+def test_blend_lexical_first_prefers_lexical_backed_spans():
+    from fairifier.services.source_workspace import _blend_lexical_first_hybrid_output
+
+    lexical = [
+        {"source_id": "s1", "start": 10, "end": 20, "excerpt": "alpha"},
+        {"source_id": "s1", "start": 100, "end": 120, "excerpt": "beta"},
+    ]
+    hybrid = [
+        {"source_id": "s2", "start": 0, "end": 8, "excerpt": "semantic-only"},
+        {"source_id": "s1", "start": 10, "end": 20, "excerpt": "alpha"},
+    ]
+    blended = _blend_lexical_first_hybrid_output(hybrid, lexical, final_limit=2)
+    assert len(blended) == 2
+    assert blended[0]["source_id"] == "s1"
+    assert blended[0]["start"] == 10
+    assert blended[1]["source_id"] == "s2"

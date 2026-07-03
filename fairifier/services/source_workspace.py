@@ -349,6 +349,45 @@ def search_table(
     return matches
 
 
+def _span_key(item: Dict[str, Any]) -> tuple:
+    return (
+        str(item.get("source_id") or ""),
+        int(item.get("start") or 0),
+        int(item.get("end") or 0),
+    )
+
+
+def _blend_lexical_first_hybrid_output(
+    hybrid_merged: List[Dict[str, Any]],
+    lexical_merged: List[Dict[str, Any]],
+    final_limit: int,
+) -> List[Dict[str, Any]]:
+    """Prefer lexical-backed spans in prompt context; fill with reranked hybrid."""
+    if not hybrid_merged:
+        return lexical_merged[:final_limit]
+
+    lexical_keys = {_span_key(hit) for hit in lexical_merged}
+    lexical_backed: List[Dict[str, Any]] = []
+    semantic_only: List[Dict[str, Any]] = []
+    for hit in hybrid_merged:
+        if _span_key(hit) in lexical_keys:
+            lexical_backed.append(hit)
+        else:
+            semantic_only.append(hit)
+
+    blended: List[Dict[str, Any]] = []
+    seen: set = set()
+    for hit in lexical_backed + semantic_only:
+        key = _span_key(hit)
+        if key in seen:
+            continue
+        seen.add(key)
+        blended.append(hit)
+        if len(blended) >= final_limit:
+            break
+    return blended
+
+
 def hybrid_search_sources(
     workspace: SourceWorkspace,
     queries: List[str],
@@ -407,7 +446,9 @@ def hybrid_search_sources(
 
     final_limit = max(1, int(config.retrieval_final_snippets))
     lexical_output = lexical_merged[:final_limit]
-    hybrid_output = hybrid_merged[:final_limit]
+    hybrid_output = _blend_lexical_first_hybrid_output(
+        hybrid_merged, lexical_merged, final_limit
+    )
 
     telemetry.update(
         {
