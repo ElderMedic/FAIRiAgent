@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..config import config
+from .section_field_candidates import (
+    extract_field_candidates_from_section,
+    field_candidate_record_to_dict,
+)
 from .semantic_index import SemanticIndex
 
 logger = logging.getLogger(__name__)
@@ -79,8 +83,17 @@ def evidence_from_section(
     section: Dict[str, Any],
     *,
     produced_by: str = "section_map_reduce",
+    source_meta: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
-    """Create lightweight evidence records from a section outline."""
+    """Create evidence records from a section (field candidates + outline fallback)."""
+    candidates = extract_field_candidates_from_section(
+        section,
+        source_meta=source_meta,
+        produced_by=produced_by,
+    )
+    if candidates:
+        return candidates
+
     text = str(section.get("text") or "")
     if not text.strip():
         return []
@@ -89,7 +102,9 @@ def evidence_from_section(
         {
             "evidence_id": f"{section_id}_outline",
             "packet_id": f"{section_id}_outline",
+            "kind": "evidence",
             "field_candidate": section.get("section_type") or "section",
+            "field_name": str(section.get("section_type") or "section"),
             "value": str(section.get("title") or section_id),
             "evidence_text": text[:1200],
             "section": section.get("title"),
@@ -97,11 +112,11 @@ def evidence_from_section(
             "char_start": section.get("char_start"),
             "char_end": section.get("char_end"),
             "confidence": 0.6,
+            "retrieval_method": "section_map_reduce",
             "provenance": {
                 "agent": produced_by,
                 "strategy": "section_coverage",
             },
             "produced_by": produced_by,
-            "kind": "evidence",
         }
     ]

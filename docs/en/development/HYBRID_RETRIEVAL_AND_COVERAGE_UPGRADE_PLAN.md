@@ -890,7 +890,7 @@ Phase 4 started (2026-07-03):
 |---|---|
 | `FAIRIFIER_RETRIEVAL_SHADOW_MODE=false` default (hybrid in prompt) | ✅ `fairifier/config.py` |
 | DocumentParser chunker section outline → `/workspace/section_outline.md` | ✅ wired from `state["source_sections"]` |
-| Section worker `FieldCandidate` output | ⏳ P1 follow-up |
+| Section worker `FieldCandidate` output | ✅ `section_field_candidates.py` + JSONGenerator merge |
 | LangGraph `Send()` for map-reduce | ⏳ P2 optional |
 | ISAValueMapper reads EvidenceStore | ⏳ P2 optional |
 

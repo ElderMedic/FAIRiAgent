@@ -35,6 +35,7 @@ class FAIRifierState(TypedDict):
     evidence_store: Dict[str, Any]  # Evidence store JSONL metadata
     retrieval_telemetry: Dict[str, Any]  # Hybrid retrieval shadow/compare metrics
     section_coverage: Dict[str, Any]  # Deterministic section coverage report
+    section_field_candidates: List[Dict[str, Any]]  # Map-reduce FieldCandidate payloads
     bio_file_paths: List[str]  # Absolute host paths for BIO_BINARY files (BAM, VCF, FASTQ, h5ad)
     
     # Processing stages

@@ -23,6 +23,7 @@ from ..services.source_workspace import (
     source_role_priority,
 )
 from ..services.semantic_index import SemanticIndex
+from ..services.section_field_candidates import field_candidate_record_to_dict
 from ..utils.llm_helper import get_llm_helper
 from ..utils.document_text import read_document_text
 from ..services.fairds_api_parser import FAIRDSAPIParser
@@ -56,6 +57,7 @@ class FieldCandidate:
     char_start: Optional[int] = None
     char_end: Optional[int] = None
     normalized_value: Optional[str] = None
+    retrieval_method: Optional[str] = None
 
     @property
     def sort_key(self) -> Tuple[int, float, float]:
@@ -610,8 +612,75 @@ class JSONGeneratorAgent(BaseAgent):
         # survives checkpointing and appears in workflow_report.json.
         if state is not None:
             state["retrieval_telemetry"] = dict(retrieval_telemetry)
+            self._merge_section_field_candidates(state, all_candidates)
 
         return "\n".join(lines) if len(lines) > 2 else "", all_candidates
+
+    def _field_candidate_from_payload(self, payload: Dict[str, Any]) -> Optional[FieldCandidate]:
+        field_name = str(payload.get("field_name") or "").strip().lower()
+        value = str(payload.get("value") or "").strip()
+        if not field_name or not value:
+            return None
+        return FieldCandidate(
+            field_name=field_name,
+            value=value,
+            source_id=str(payload.get("source_id") or ""),
+            source_role=str(payload.get("source_role") or "unknown"),
+            relevance_score=float(payload.get("relevance_score") or 0.5),
+            evidence=str(payload.get("evidence") or value),
+            confidence=float(payload.get("confidence") or 0.55),
+            char_start=payload.get("char_start"),
+            char_end=payload.get("char_end"),
+            retrieval_method=str(payload.get("retrieval_method") or "section_map_reduce"),
+        )
+
+    def _merge_section_field_candidates(
+        self,
+        state: FAIRifierState,
+        all_candidates: Dict[str, List[FieldCandidate]],
+    ) -> None:
+        """Fold map-reduce section workers into the shared candidate pool."""
+        payloads = list(state.get("section_field_candidates") or [])
+        if not payloads:
+            return
+
+        seen: set[tuple[str, str, str, int, int]] = set()
+        for existing in all_candidates.values():
+            for candidate in existing:
+                seen.add(
+                    (
+                        candidate.field_name,
+                        candidate.value.lower().strip(),
+                        candidate.source_id,
+                        int(candidate.char_start or -1),
+                        int(candidate.char_end or -1),
+                    )
+                )
+
+        merged_count = 0
+        for payload in payloads:
+            candidate = self._field_candidate_from_payload(payload)
+            if candidate is None:
+                continue
+            marker = (
+                candidate.field_name,
+                candidate.value.lower().strip(),
+                candidate.source_id,
+                int(candidate.char_start or -1),
+                int(candidate.char_end or -1),
+            )
+            if marker in seen:
+                continue
+            seen.add(marker)
+            all_candidates.setdefault(candidate.field_name, []).append(candidate)
+            merged_count += 1
+
+        if merged_count:
+            retrieval_telemetry = state.setdefault("retrieval_telemetry", {})
+            section_stats = retrieval_telemetry.setdefault("section_map_reduce", {})
+            section_stats["field_candidates_merged"] = (
+                int(section_stats.get("field_candidates_merged") or 0) + merged_count
+            )
 
     # -- helpers for _build_field_source_evidence_context ----------------
 
@@ -642,6 +711,7 @@ class JSONGeneratorAgent(BaseAgent):
                 confidence=0.0,  # LLM extracted is 0.0 before reconciliation
                 char_start=m.get("start"),
                 char_end=m.get("end"),
+                retrieval_method=str(m.get("retrieval_channel") or "grep"),
             ))
 
         for m in table_matches:

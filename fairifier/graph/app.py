@@ -1182,6 +1182,7 @@ class FAIRifierLangGraphApp:
                 "evidence_store": {},
                 "retrieval_telemetry": {},
                 "section_coverage": {},
+                "section_field_candidates": [],
                 "bio_file_paths": [],
                 "output_dir": output_dir,
                 "document_info": {},
