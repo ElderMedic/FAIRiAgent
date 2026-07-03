@@ -9,6 +9,7 @@ from .workflow_reliability import WorkflowReliabilityVisualizer
 from .failure_analysis import FailureAnalysisVisualizer
 from .baseline_comparison import BaselineComparisonVisualizer
 from .pass_at_k import PassAtKVisualizer
+from .retrieval_coverage import RetrievalCoverageVisualizer
 
 __all__ = [
     'ModelComparisonVisualizer',
@@ -16,6 +17,7 @@ __all__ = [
     'FailureAnalysisVisualizer',
     'BaselineComparisonVisualizer',
     'PassAtKVisualizer',
+    'RetrievalCoverageVisualizer',
 ]
 
 

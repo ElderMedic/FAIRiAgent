@@ -8,6 +8,7 @@ from .model_performance import ModelPerformanceAnalyzer
 from .workflow_reliability import WorkflowReliabilityAnalyzer
 from .failure_patterns import FailurePatternAnalyzer
 from .pass_at_k import PassAtKAnalyzer, SuccessCriteria, CRITERIA_PRESETS
+from .retrieval_coverage import RetrievalCoverageAnalyzer
 from .significance_tests import (
     BootstrapCIResult,
     FriedmanResult,
@@ -26,6 +27,7 @@ __all__ = [
     'PassAtKAnalyzer',
     'SuccessCriteria',
     'CRITERIA_PRESETS',
+    'RetrievalCoverageAnalyzer',
     'FriedmanResult',
     'WilcoxonResult',
     'McNemarResult',

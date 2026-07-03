@@ -126,25 +126,62 @@ class WorkflowReportGenerator:
         semantic_index = state.get("semantic_index") or {}
         retrieval_telemetry = state.get("retrieval_telemetry") or {}
         field_stats = []
+        hybrid_fields = 0
+        legacy_only_fields = 0
+        semantic_only_fields = 0
+        rerank_skipped = 0
+        rerank_applied = 0
+
         for field_name, stats in retrieval_telemetry.items():
             if not isinstance(stats, dict):
                 continue
+            lexical_hits = int(stats.get("lexical_hit_count") or 0)
+            semantic_hits = int(stats.get("semantic_hit_count") or 0)
+            hybrid_hits = int(stats.get("hybrid_hit_count") or 0)
+            rerank_status = stats.get("rerank_status")
+            if rerank_status == "skipped":
+                rerank_skipped += 1
+            elif rerank_status == "applied":
+                rerank_applied += 1
+            if hybrid_hits > lexical_hits:
+                hybrid_fields += 1
+            if lexical_hits > 0 and semantic_hits == 0:
+                legacy_only_fields += 1
+            if semantic_hits > 0 and lexical_hits == 0:
+                semantic_only_fields += 1
+
             field_stats.append(
                 {
                     "field": field_name,
-                    "lexical_hit_count": stats.get("lexical_hit_count", 0),
-                    "semantic_hit_count": stats.get("semantic_hit_count", 0),
-                    "hybrid_hit_count": stats.get("hybrid_hit_count", 0),
-                    "rerank_status": stats.get("rerank_status"),
+                    "lexical_hit_count": lexical_hits,
+                    "semantic_hit_count": semantic_hits,
+                    "hybrid_hit_count": hybrid_hits,
+                    "rerank_status": rerank_status,
                     "shadow_mode": stats.get("shadow_mode"),
+                    "hybrid_candidate_ids": stats.get("hybrid_candidate_ids", []),
                 }
             )
+
+        semantic_status = semantic_index.get("status", "unknown")
+        qdrant_fallback_used = not bool(semantic_index.get("available", False))
+        rerank_total = rerank_skipped + rerank_applied
+        rerank_timeout_rate = (
+            rerank_skipped / rerank_total if rerank_total > 0 else 0.0
+        )
+
         return {
-            "semantic_index_status": semantic_index.get("status"),
+            "semantic_index_status": semantic_status,
             "semantic_index_available": semantic_index.get("available", False),
             "indexed_chunk_count": semantic_index.get("indexed_chunk_count", 0),
             "chunk_count": semantic_index.get("chunk_count", len(state.get("source_chunks") or [])),
             "section_count": semantic_index.get("section_count", len(state.get("source_sections") or [])),
+            "evidence_items": int((state.get("evidence_store") or {}).get("record_count", 0)),
+            "hybrid_fields": hybrid_fields,
+            "legacy_only_fields": legacy_only_fields,
+            "semantic_only_fields": semantic_only_fields,
+            "rerank_status": "skipped" if rerank_skipped and not rerank_applied else "ok",
+            "rerank_timeout_rate": round(rerank_timeout_rate, 4),
+            "qdrant_fallback_used": qdrant_fallback_used,
             "fields_with_retrieval_telemetry": len(field_stats),
             "field_retrieval_stats": field_stats[:50],
             "evidence_store": state.get("evidence_store", {}),

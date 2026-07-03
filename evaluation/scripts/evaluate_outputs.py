@@ -452,7 +452,8 @@ class EvaluationOrchestrator:
         print(f"  🔍 Evaluating retrieval coverage metrics...")
         results['retrieval_coverage'] = self.retrieval_coverage_evaluator.evaluate_batch(
             fairifier_outputs,
-            output_dirs
+            output_dirs,
+            ground_truth_docs=self.ground_truth_docs,
         )
         
         # Compute aggregate score (now includes internal metrics)

@@ -16,6 +16,7 @@ from ..analyzers import (
     WorkflowReliabilityAnalyzer,
     FailurePatternAnalyzer,
     PassAtKAnalyzer,
+    RetrievalCoverageAnalyzer,
     CRITERIA_PRESETS,
 )
 from ..visualizations import (
@@ -23,6 +24,7 @@ from ..visualizations import (
     WorkflowReliabilityVisualizer,
     FailureAnalysisVisualizer,
     PassAtKVisualizer,
+    RetrievalCoverageVisualizer,
 )
 from ..baseline_comparison import load_agentic_data, load_baseline_data
 from ..visualizations.baseline_comparison import BaselineComparisonVisualizer
@@ -87,6 +89,9 @@ class ReportGenerator:
         self.failure_viz = FailureAnalysisVisualizer(self.figures_dir)
         self.baseline_viz = BaselineComparisonVisualizer(self.figures_dir)
         self.pass_at_k_viz = PassAtKVisualizer(self.figures_dir)
+        self.retrieval_viz = RetrievalCoverageVisualizer(self.figures_dir)
+        self.retrieval_analyzer = RetrievalCoverageAnalyzer()
+        self.retrieval_df = self.retrieval_analyzer.build_document_dataframe(self.loader.evaluation_results)
         
         # Load baseline comparison data (if available)
         self.agentic_data = None
@@ -130,6 +135,7 @@ class ReportGenerator:
         self._generate_model_visualizations()
         self._generate_reliability_visualizations()
         self._generate_failure_visualizations()
+        self._generate_retrieval_visualizations()
         
         # Generate baseline comparisons (if available)
         if self.baseline_data:
@@ -190,6 +196,19 @@ class ReportGenerator:
         self.failure_viz.plot_failure_by_agent(self.reliability_df)
         self.failure_viz.plot_failure_by_document(self.reliability_df)
         self.failure_viz.plot_failure_by_model(self.reliability_df)
+
+    def _generate_retrieval_visualizations(self):
+        """Generate retrieval coverage visualizations when shadow telemetry exists."""
+        if self.retrieval_df.empty:
+            print("\n  ℹ️  Retrieval coverage visualizations skipped (no retrieval_coverage data in runs)")
+            return
+        print("\n  🔎 Retrieval Coverage Visualizations:")
+        self.retrieval_viz.plot_section_coverage_by_document(self.retrieval_df)
+        summary_df = self.retrieval_analyzer.summarize_by_model(self.retrieval_df)
+        self.retrieval_viz.plot_legacy_vs_hybrid_gain(summary_df)
+        summary_df.to_csv(self.tables_dir / "retrieval_coverage_by_model.csv", index=False)
+        self.retrieval_df.to_csv(self.data_dir / "retrieval_coverage_document_level.csv", index=False)
+        print("    ✅ Saved retrieval coverage figures and tables")
     
     def _generate_baseline_comparisons(self):
         """Generate baseline vs agentic comparison visualizations."""

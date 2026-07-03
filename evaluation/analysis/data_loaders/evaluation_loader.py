@@ -332,6 +332,24 @@ class EvaluationDataLoader:
                         'retry_rate': retry_analysis.get('retry_rate', 0.0),
                         'needs_review': retry_analysis.get('needs_human_review', False)
                     }
+
+                    retrieval_per_doc = model_data.get('retrieval_coverage', {}).get('per_document', {})
+                    retrieval_doc = retrieval_per_doc.get(doc_id, {})
+                    retrieval_block = retrieval_doc.get('retrieval_coverage', {})
+                    section_block = retrieval_doc.get('section_coverage', {})
+                    row.update(
+                        {
+                            'retrieval_coverage_score': retrieval_doc.get('coverage_score', 0.0),
+                            'section_coverage_ratio': retrieval_block.get('section_coverage_ratio', 0.0),
+                            'hybrid_gain_fields': retrieval_block.get('fields_with_hybrid_gain', 0),
+                            'semantic_only_fields': retrieval_block.get('fields_with_semantic_only_candidates', 0),
+                            'legacy_only_fields': retrieval_block.get('fields_with_legacy_only_candidates', 0),
+                            'qdrant_fallback_used': retrieval_block.get('qdrant_fallback_used', False),
+                            'rerank_timeout_rate': retrieval_block.get('rerank_timeout_rate', 0.0),
+                            'evidence_store_items': retrieval_block.get('evidence_store_items', 0),
+                            'sections_processed': section_block.get('sections_processed', 0),
+                        }
+                    )
                     
                     rows.append(row)
         

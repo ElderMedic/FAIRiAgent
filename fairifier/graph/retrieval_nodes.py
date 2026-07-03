@@ -6,7 +6,15 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List
 
-from langsmith import traceable
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def decorator(func):
+            return func
+        if args and callable(args[0]):
+            return args[0]
+        return decorator
 
 from ..config import config
 from ..services.chunking import chunk_workspace, serialize_chunking_result
@@ -166,10 +174,21 @@ class SectionMapReduceNode:
         existing_packets = list(state.get("evidence_packets") or [])
         state["evidence_packets"] = existing_packets + new_packets
         state["evidence_store"] = evidence_store.serialize()
+
+        sections_by_type: Dict[str, int] = {}
+        for section in sections[: config.mapreduce_max_sections]:
+            section_type = str(section.get("section_type") or "unknown")
+            sections_by_type[section_type] = sections_by_type.get(section_type, 0) + 1
+
         state["section_coverage"] = {
             "status": "completed",
+            "planned_sections": len(sections),
+            "processed_sections": len(coverage_records),
             "sections_processed": len(coverage_records),
             "sections_total": len(sections),
+            "skipped_duplicate_sections": max(0, len(sections) - len(coverage_records)),
+            "timed_out_sections": 0,
+            "sections_by_type": sections_by_type,
             "evidence_records": len(evidence_store.records()),
             "sections": coverage_records,
         }
