@@ -87,15 +87,25 @@ def test_aggregate_bootstrap_ci_uses_distinct_document_seeds():
     run = {
         "success": True,
         "n_fields_extracted": 12,
-        "completeness": {"required_completeness": 0.8},
-        "correctness": {"f1_score": 0.6},
+        "completeness": {
+            "required_completeness": 0.8,
+            "overall_completeness": 0.8,
+        },
+        "correctness": {
+            "field_coverage_f1": 0.6,
+        },
         "internal_metrics": {"overall_confidence": 0.7},
     }
     fail = {
         "success": False,
         "n_fields_extracted": 0,
-        "completeness": {"required_completeness": 0.0},
-        "correctness": {"f1_score": 0.0},
+        "completeness": {
+            "required_completeness": 0.0,
+            "overall_completeness": 0.0,
+        },
+        "correctness": {
+            "field_coverage_f1": 0.0,
+        },
         "internal_metrics": {"overall_confidence": 0.0},
     }
     analyzer = PassAtKAnalyzer(

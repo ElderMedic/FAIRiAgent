@@ -159,6 +159,7 @@ async def test_generate_complete_metadata_splits_large_batches():
         planner_instruction=None,
         prior_memory_context=None,
         batch_label=None,
+        **kwargs,
     ):
         calls.append([field["name"] for field in selected_fields])
         return [
@@ -210,6 +211,7 @@ async def test_generate_complete_metadata_recursively_splits_failed_batch():
         planner_instruction=None,
         prior_memory_context=None,
         batch_label=None,
+        **kwargs,
     ):
         call_sizes.append(len(selected_fields))
         if len(selected_fields) > 2:

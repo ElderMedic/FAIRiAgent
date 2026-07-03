@@ -2075,6 +2075,12 @@ REQUIREMENTS:
             )
 
         all_metadata: List[Dict[str, Any]] = []
+        established_entities: Dict[str, Dict[str, Dict[str, str]]] = {}
+        field_to_sheet = {
+            str(field.get("name", "")).strip(): str(field.get("isa_sheet", "study")).strip()
+            for field in selected_fields
+            if str(field.get("name", "")).strip()
+        }
         for batch_index, batch in enumerate(batches, start=1):
             batch_label = f"{batch_index}/{len(batches)}"
             logger.info(
@@ -2090,8 +2096,11 @@ REQUIREMENTS:
                 planner_instruction=planner_instruction,
                 prior_memory_context=prior_memory_context,
                 batch_label=batch_label,
+                established_entities=established_entities or None,
             )
-            all_metadata.extend(self._reconcile_metadata_batch(batch, batch_metadata))
+            reconciled = self._reconcile_metadata_batch(batch, batch_metadata)
+            all_metadata.extend(reconciled)
+            self._update_established_entities(reconciled, field_to_sheet, established_entities)
 
         logger.info(
             "Generated metadata for %s fields across %s batch(es)",
@@ -2158,6 +2167,30 @@ REQUIREMENTS:
             + document_text[-keep_end:].lstrip()
         )
 
+    def _update_established_entities(
+        self,
+        metadata: List[Dict[str, Any]],
+        field_to_sheet: Dict[str, str],
+        established_entities: Dict[str, Dict[str, Dict[str, str]]],
+    ) -> None:
+        """Track entity_id labels across batches for cross-batch consistency."""
+        for item in metadata or []:
+            if not isinstance(item, dict):
+                continue
+            field_name = str(item.get("field_name", "")).strip()
+            entity_id = str(item.get("entity_id") or "").strip()
+            if not field_name or not entity_id:
+                continue
+            sheet = field_to_sheet.get(field_name)
+            if sheet not in {"observationunit", "sample", "assay"}:
+                continue
+            value = str(item.get("value") or "").strip()
+            if not value or value.lower() == "not specified":
+                continue
+            established_entities.setdefault(sheet, {}).setdefault(entity_id, {})[
+                field_name
+            ] = value[:120]
+
     def _split_metadata_generation_batches(
         self,
         selected_fields: List[Dict[str, Any]],
@@ -2178,6 +2211,7 @@ REQUIREMENTS:
         planner_instruction: Optional[str] = None,
         prior_memory_context: Optional[str] = None,
         batch_label: Optional[str] = None,
+        established_entities: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None,
     ):
         """Build prompt messages for one metadata-generation batch."""
         system_prompt = """You are an expert at generating FAIR metadata from research documents.
@@ -2211,13 +2245,15 @@ REQUIREMENTS:
 - value: Concise metadata value (< 500 chars) - use summaries, not full text
 - evidence: Brief source location (< 200 chars) - e.g., "Methods section" not full quote
 - confidence: Float 0.0-1.0 (1.0 = explicit, 0.7-0.9 = strong inference, 0.4-0.6 = reasonable inference, 0.0-0.3 = not available)
-- entity_id: optional internal grouping label for multi-row ISA levels. Use the same entity_id across all fields that belong to the same observation unit, sample, or assay row.
+- entity_id: REQUIRED for multi-row ISA levels when the document describes multiple entities. Reuse the same entity_id across ALL fields that belong to the same observation unit, sample, or assay row — this is more important than emitting separate records per field.
+- One assay row = one complete measurement instance under one condition set (not one row per method step or per individual parameter).
 
 **IMPORTANT:**
 - You MUST return a JSON array that covers every field in the input list at least once
 - For multi-row ISA levels (`observationunit`, `sample`, `assay`), repeated `field_name` values are allowed and expected when the document describes multiple entities
-- Do NOT compress multiple entities into one comma-separated or semicolon-separated value when separate entities can be identified
-- Use short, stable entity_id labels such as `exp1_control`, `exp1_zno`, `exp3_mncl2` for multi-row entities
+- When separate entities exist, assign a stable entity_id and reuse it for every field of that entity — do NOT create a new entity_id per field
+- Only use separate entity_id values when the document clearly describes distinct entities (different samples, conditions, or measurement instances)
+- Use short, stable entity_id labels such as `exp1_control`, `enzyme_lcc_wt`, `assay_ph8_37c`
 - Do NOT skip any fields, even if information is limited
 - For investigation/study fields: If not explicitly stated, derive from document title/abstract
 - For fields with limited information, use "not specified" but still include the field
@@ -2288,6 +2324,13 @@ REQUIREMENTS:
         batch_note = ""
         if batch_label:
             batch_note = f"\nCurrent batch: {batch_label}. Only return fields from this batch.\n"
+        if established_entities:
+            batch_note += (
+                "\n**Known entities from prior batches — REUSE these entity_id labels "
+                "when new fields belong to the same entity:**\n"
+                + json.dumps(established_entities, indent=2, ensure_ascii=False)
+                + "\n"
+            )
         prepared_document_text = self._prepare_metadata_document_context(
             document_text,
             selected_fields,
@@ -2316,8 +2359,9 @@ Fields by ISA hierarchy:
 7. **Sample-level fields** ({field_counts.get('sample', 0)} fields): Must generate values from methods or results
 8. **ObservationUnit-level fields** ({field_counts.get('observationunit', 0)} fields): Must generate values from methods or environmental context
 9. If the document excerpt contains "Field-specific source evidence", use matching source_id/span/table row references in the evidence field.
-10. For multi-row ISA levels, add an `entity_id` field to each output object and reuse the same entity_id across related fields for the same row.
-11. Do NOT squeeze multiple entities into a single list-like value if separate rows can be inferred from experiments, treatments, or timepoints.
+10. For multi-row ISA levels, add an `entity_id` to each output object and reuse the same entity_id across all fields for that entity row.
+11. Prefer complete entity rows (many fields sharing one entity_id) over many sparse rows (one field per entity_id).
+12. Do NOT squeeze multiple distinct entities into a single list-like value; use separate records with distinct entity_id values instead.
 
 **For fields where information is not explicitly stated:**
 - Investigation/Study fields: Derive from document title/abstract
@@ -2363,6 +2407,7 @@ REQUIREMENTS:
         planner_instruction: Optional[str] = None,
         prior_memory_context: Optional[str] = None,
         batch_label: Optional[str] = None,
+        established_entities: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None,
     ) -> List[Dict[str, Any]]:
         """Generate one batch of metadata fields with a single LLM call."""
         messages = self._build_metadata_generation_messages(
@@ -2373,6 +2418,7 @@ REQUIREMENTS:
             planner_instruction=planner_instruction,
             prior_memory_context=prior_memory_context,
             batch_label=batch_label,
+            established_entities=established_entities,
         )
 
         try:
@@ -2419,6 +2465,7 @@ REQUIREMENTS:
         planner_instruction: Optional[str] = None,
         prior_memory_context: Optional[str] = None,
         batch_label: Optional[str] = None,
+        established_entities: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None,
     ) -> List[Dict[str, Any]]:
         """Generate metadata, recursively splitting a failing batch when needed."""
         try:
@@ -2430,6 +2477,7 @@ REQUIREMENTS:
                 planner_instruction=planner_instruction,
                 prior_memory_context=prior_memory_context,
                 batch_label=batch_label,
+                established_entities=established_entities,
             )
         except Exception as exc:
             if len(selected_fields) <= 1:
@@ -2462,6 +2510,7 @@ REQUIREMENTS:
                 planner_instruction=planner_instruction,
                 prior_memory_context=prior_memory_context,
                 batch_label=f"{batch_label or '1/1'}-a",
+                established_entities=established_entities,
             )
             right = await self._generate_complete_metadata_with_fallback(
                 document_info=document_info,
@@ -2471,6 +2520,7 @@ REQUIREMENTS:
                 planner_instruction=planner_instruction,
                 prior_memory_context=prior_memory_context,
                 batch_label=f"{batch_label or '1/1'}-b",
+                established_entities=established_entities,
             )
             return left + right
 
