@@ -14,9 +14,208 @@ logger = logging.getLogger(__name__)
 
 _EMBEDDER = None
 _RERANKER = None
-_BGE_QUERY_PREFIX = "query: "
-_BGE_PASSAGE_PREFIX = "passage: "
-_BGE_VECTOR_DIM = 384
+
+
+class EmbeddingClient:
+    def __init__(self, backend: str, model_name: str, base_url: str = "", api_key: str = ""):
+        self.backend = backend
+        self.model_name = model_name
+        self.base_url = base_url
+        self.api_key = api_key
+        self.local_model = None
+
+    def initialize(self):
+        if self.backend == "auto":
+            if self.base_url:
+                try:
+                    import urllib.request
+                    url = f"{self.base_url.rstrip('/')}/api/tags"
+                    req = urllib.request.Request(url, method="GET")
+                    with urllib.request.urlopen(req, timeout=2.0) as response:
+                        if response.status == 200:
+                            self.backend = "ollama"
+                            logger.info("Using Ollama backend for embedding at %s", self.base_url)
+                            return
+                except Exception as e:
+                    logger.warning("Ollama backend check failed at %s: %s. Falling back.", self.base_url, e)
+            
+            if self.api_key:
+                self.backend = "jina_api"
+                logger.info("Using Jina API backend for embedding")
+            else:
+                self.backend = "local"
+                logger.info("Using local SentenceTransformer backend for embedding")
+
+        if self.backend == "local":
+            try:
+                from sentence_transformers import SentenceTransformer
+                self.local_model = SentenceTransformer(self.model_name, trust_remote_code=True)
+            except Exception as exc:
+                logger.error("Failed to load local SentenceTransformer %s: %s", self.model_name, exc)
+                raise exc
+
+    def encode(self, texts: Sequence[str], is_query: bool = False) -> List[List[float]]:
+        if not texts:
+            return []
+
+        prefix = ""
+        if self.backend == "local":
+            if "bge-" in self.model_name.lower():
+                prefix = "passage: " if not is_query else "query: "
+
+        prefixed_texts = [f"{prefix}{text}" for text in texts]
+
+        if self.backend == "ollama":
+            return self._encode_ollama(prefixed_texts)
+        elif self.backend == "jina_api":
+            return self._encode_jina(prefixed_texts)
+        else:
+            if self.local_model is None:
+                raise RuntimeError("Local embedding model not initialized")
+            import numpy as np
+            vectors = self.local_model.encode(prefixed_texts, normalize_embeddings=True, show_progress_bar=False)
+            if isinstance(vectors, np.ndarray):
+                return vectors.tolist()
+            return [v.tolist() if hasattr(v, "tolist") else list(v) for v in vectors]
+
+    def _encode_ollama(self, texts: Sequence[str]) -> List[List[float]]:
+        import json
+        import urllib.request
+        
+        base_url = self.base_url or "http://localhost:11434"
+        url = f"{base_url.rstrip('/')}/api/embed"
+        
+        embeddings = []
+        batch_size = 32
+        for i in range(0, len(texts), batch_size):
+            batch = list(texts[i:i+batch_size])
+            data = {
+                "model": self.model_name,
+                "input": batch
+            }
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(data).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=15.0) as response:
+                    res_data = json.loads(response.read().decode("utf-8"))
+                    batch_embs = res_data.get("embeddings", [])
+                    embeddings.extend(batch_embs)
+            except Exception as exc:
+                logger.error("Ollama embedding API call failed: %s", exc)
+                raise exc
+        return embeddings
+
+    def _encode_jina(self, texts: Sequence[str]) -> List[List[float]]:
+        import json
+        import urllib.request
+        
+        url = "https://api.jina.ai/v1/embeddings"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        
+        embeddings = []
+        batch_size = 32
+        for i in range(0, len(texts), batch_size):
+            batch = list(texts[i:i+batch_size])
+            data = {
+                "model": "jina-embeddings-v3",
+                "task": "retrieval.passage",
+                "dimensions": 1024,
+                "input": batch
+            }
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(data).encode("utf-8"),
+                    headers=headers
+                )
+                with urllib.request.urlopen(req, timeout=15.0) as response:
+                    res_data = json.loads(response.read().decode("utf-8"))
+                    batch_embs = [item.get("embedding") for item in res_data.get("data", [])]
+                    embeddings.extend(batch_embs)
+            except Exception as exc:
+                logger.error("Jina embedding API call failed: %s", exc)
+                raise exc
+        return embeddings
+
+
+class RerankerClient:
+    def __init__(self, backend: str, model_name: str, api_key: str = ""):
+        self.backend = backend
+        self.model_name = model_name
+        self.api_key = api_key
+        self.local_model = None
+
+    def initialize(self):
+        if self.backend == "auto":
+            if self.api_key:
+                self.backend = "jina_api"
+                logger.info("Using Jina API backend for reranker")
+            else:
+                self.backend = "local"
+                logger.info("Using local CrossEncoder backend for reranker")
+
+        if self.backend == "local":
+            try:
+                from sentence_transformers import CrossEncoder
+                self.local_model = CrossEncoder(self.model_name, trust_remote_code=True)
+            except Exception as exc:
+                logger.error("Failed to load local CrossEncoder %s: %s", self.model_name, exc)
+                raise exc
+
+    def predict(self, pairs: List[tuple[str, str]], show_progress_bar: bool = False) -> List[float]:
+        if not pairs:
+            return []
+
+        if self.backend == "jina_api":
+            return self._rerank_jina(pairs)
+        else:
+            if self.local_model is None:
+                raise RuntimeError("Local reranker model not initialized")
+            scores = self.local_model.predict(pairs, show_progress_bar=show_progress_bar)
+            return [float(s) for s in scores]
+
+    def _rerank_jina(self, pairs: List[tuple[str, str]]) -> List[float]:
+        import json
+        import urllib.request
+        
+        if not pairs:
+            return []
+        query = pairs[0][0]
+        documents = [p[1] for p in pairs]
+        
+        url = "https://api.jina.ai/v1/rerank"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        
+        data = {
+            "model": "jina-reranker-v2-base-multilingual",
+            "query": query,
+            "documents": documents,
+            "top_n": len(documents)
+        }
+        
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(data).encode("utf-8"),
+                headers=headers
+            )
+            with urllib.request.urlopen(req, timeout=15.0) as response:
+                res_data = json.loads(response.read().decode("utf-8"))
+                results = res_data.get("results", [])
+                scores_map = {item["index"]: float(item["relevance_score"]) for item in results}
+                return [scores_map.get(i, 0.0) for i in range(len(documents))]
+        except Exception as exc:
+            logger.error("Jina rerank API call failed: %s", exc)
+            raise exc
 
 
 def _get_embedder():
@@ -24,9 +223,13 @@ def _get_embedder():
     if _EMBEDDER is not None:
         return _EMBEDDER
     try:
-        from sentence_transformers import SentenceTransformer
-
-        _EMBEDDER = SentenceTransformer(config.retrieval_embedding_model)
+        _EMBEDDER = EmbeddingClient(
+            backend=config.retrieval_embedding_backend,
+            model_name=config.retrieval_embedding_model,
+            base_url=config.retrieval_embedding_base_url,
+            api_key=config.jina_api_key
+        )
+        _EMBEDDER.initialize()
         return _EMBEDDER
     except Exception as exc:
         logger.warning("Semantic embedder unavailable: %s", exc)
@@ -38,9 +241,12 @@ def _get_reranker():
     if _RERANKER is not None:
         return _RERANKER
     try:
-        from sentence_transformers import CrossEncoder
-
-        _RERANKER = CrossEncoder(config.retrieval_rerank_model)
+        _RERANKER = RerankerClient(
+            backend=config.retrieval_rerank_backend,
+            model_name=config.retrieval_rerank_model,
+            api_key=config.jina_api_key
+        )
+        _RERANKER.initialize()
         return _RERANKER
     except Exception as exc:
         logger.warning("Cross-encoder reranker unavailable: %s", exc)
@@ -48,24 +254,18 @@ def _get_reranker():
 
 
 def _encode_passages(texts: Sequence[str]) -> List[List[float]]:
-    model = _get_embedder()
-    if model is None or not texts:
+    client = _get_embedder()
+    if client is None or not texts:
         return []
-    prefixed = [f"{_BGE_PASSAGE_PREFIX}{text}" for text in texts]
-    vectors = model.encode(prefixed, normalize_embeddings=True, show_progress_bar=False)
-    return [vector.tolist() for vector in vectors]
+    return client.encode(texts, is_query=False)
 
 
 def _encode_query(text: str) -> Optional[List[float]]:
-    model = _get_embedder()
-    if model is None or not text:
+    client = _get_embedder()
+    if client is None or not text:
         return None
-    vector = model.encode(
-        f"{_BGE_QUERY_PREFIX}{text}",
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    )
-    return vector.tolist()
+    res = client.encode([text], is_query=True)
+    return res[0] if res else None
 
 
 class SemanticIndex:
@@ -119,7 +319,7 @@ class SemanticIndex:
                 self._client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=qmodels.VectorParams(
-                        size=_BGE_VECTOR_DIM,
+                        size=config.retrieval_embedding_dims,
                         distance=qmodels.Distance.COSINE,
                     ),
                 )

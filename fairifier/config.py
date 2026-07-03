@@ -139,8 +139,13 @@ class FAIRifierConfig:
     retrieval_rerank_candidates: int = 20
     retrieval_final_snippets: int = 8
     retrieval_rerank_timeout_seconds: float = 5.0
-    retrieval_embedding_model: str = "BAAI/bge-small-en-v1.5"
-    retrieval_rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    retrieval_embedding_model: str = "snowflake-arctic-embed2"
+    retrieval_rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    retrieval_embedding_backend: str = "auto"   # "auto" | "local" | "ollama" | "jina_api"
+    retrieval_embedding_base_url: str = ""      # e.g. "http://bioind4.wur.nl:11434"
+    retrieval_rerank_backend: str = "auto"      # "auto" | "local" | "jina_api"
+    retrieval_embedding_dims: int = 1024        # Snowflake default dimension
+    jina_api_key: str = ""                      # Jina AI key for fallback API calls
     retrieval_near_duplicate_threshold: float = 0.92
     retrieval_qdrant_collection_prefix: str = "run"
     
@@ -490,6 +495,16 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.retrieval_embedding_model = os.getenv("FAIRIFIER_RETRIEVAL_EMBEDDING_MODEL")
     if os.getenv("FAIRIFIER_RETRIEVAL_RERANK_MODEL"):
         config_instance.retrieval_rerank_model = os.getenv("FAIRIFIER_RETRIEVAL_RERANK_MODEL")
+    if os.getenv("FAIRIFIER_RETRIEVAL_EMBEDDING_BACKEND"):
+        config_instance.retrieval_embedding_backend = os.getenv("FAIRIFIER_RETRIEVAL_EMBEDDING_BACKEND")
+    if os.getenv("FAIRIFIER_RETRIEVAL_EMBEDDING_BASE_URL"):
+        config_instance.retrieval_embedding_base_url = os.getenv("FAIRIFIER_RETRIEVAL_EMBEDDING_BASE_URL")
+    if os.getenv("FAIRIFIER_RETRIEVAL_RERANK_BACKEND"):
+        config_instance.retrieval_rerank_backend = os.getenv("FAIRIFIER_RETRIEVAL_RERANK_BACKEND")
+    if os.getenv("FAIRIFIER_RETRIEVAL_EMBEDDING_DIMS"):
+        config_instance.retrieval_embedding_dims = int(os.getenv("FAIRIFIER_RETRIEVAL_EMBEDDING_DIMS"))
+    if os.getenv("FAIRIFIER_JINA_API_KEY"):
+        config_instance.jina_api_key = os.getenv("FAIRIFIER_JINA_API_KEY")
     if os.getenv("FAIRIFIER_RETRIEVAL_NEAR_DUPLICATE_THRESHOLD"):
         config_instance.retrieval_near_duplicate_threshold = float(os.getenv("FAIRIFIER_RETRIEVAL_NEAR_DUPLICATE_THRESHOLD"))
 
