@@ -1,11 +1,22 @@
 # Hybrid Retrieval, Evidence Store, and Deterministic Coverage — Upgrade Plan
 
-> **Status: PROPOSED (v1.5.0 candidate)**
+> **Status: PROPOSED (v1.5.0 candidate) — v2, decisive-default revision**
 > This document supersedes the "no vector RAG" guardrail in
 > [SOURCE_GROUNDING_ARCHITECTURE.md](SOURCE_GROUNDING_ARCHITECTURE.md) for the
 > scope described here. It complements — and does not replace —
 > [UPSTREAM_CANDIDATE_MERGING.md](UPSTREAM_CANDIDATE_MERGING.md), which stays
 > the consensus/reconciliation layer that all new candidate sources feed into.
+>
+> **Revision note:** v1 of this plan hedged every workstream behind a
+> default-`false` flag with a permanent grep-only fallback path, on the theory
+> that this repo's existing guardrail culture favors caution. That is the
+> wrong instinct for this change: once a component (chunking, hybrid
+> retrieval, the Evidence Store, section map-reduce) is implemented and
+> tested, it becomes **the** implementation — ship it default-**on**, and
+> delete the code path it replaces. Flags remain only as ops-level emergency
+> kill-switches (one per major subsystem), never as a permanent two-path
+> maintenance burden. If a workstream isn't good enough to be the default, it
+> isn't good enough to merge.
 
 ---
 
@@ -16,58 +27,71 @@ information**, not just occasional wrong values:
 
 1. **Context truncation** — `extract_document_info()` and
    `generate_complete_metadata()` bound input text to conservative character
-   budgets (`max_doc_context_markdown=200000`, `max_doc_context_text=120000`,
-   per-field budgets in `_prepare_metadata_document_context`). Middle sections
-   of long documents can be dropped entirely.
+   budgets. Middle sections of long documents can be dropped entirely.
 2. **Lexical-only retrieval** — `grep_sources()` / `search_table()` are exact,
-   case-insensitive substring matches (`re.escape(query)`). Paraphrases,
-   synonyms, and field-name mismatches produce **zero hits**, and a field with
-   no hits gets no evidence at all.
+   case-insensitive substring matches. Paraphrases, synonyms, and
+   ontology-synonym field-name mismatches produce **zero hits**.
 3. **Model-judgment-dependent coverage** — the only "read more" mechanism
-   today is the optional DeepAgent inner loop (`DocumentParser`,
-   `KnowledgeRetriever`, `ISAValueMapper`), which is capped at
-   `react_loop_max_iterations=6` / `react_loop_max_tool_calls=18`, is skipped
-   entirely for long Qwen inputs, and delegates to its `section-analyst`
-   subagent **only when the model decides to**. There is no guarantee that
-   every section of a long or multi-file document is ever inspected.
+   today is the optional DeepAgent inner loop, capped at 6 iterations / 18
+   tool calls, which delegates to `section-analyst` **only when the model
+   decides to**. Nothing guarantees every section of a long or multi-file
+   document is ever inspected.
 
-None of this is a bug — it is a deliberate v1.4.0 trade-off (see guardrail:
-*"Do not add vector RAG for this path unless explicitly requested"*). This
-plan implements the requested next step: hybrid (lexical + semantic)
-retrieval, a redesigned evidence substrate, deterministic section coverage,
-and a token-budget policy that is safe to relax because coverage no longer
-depends on one large call succeeding.
+This plan replaces all three with a single decisive architecture: hybrid
+(lexical + semantic, domain-tuned) retrieval, a Qdrant-backed Evidence Store,
+deterministic section coverage via LangGraph `Send()`, and a budget policy
+that is safe to relax because coverage no longer depends on one large call
+succeeding.
 
 ---
 
-## 2. Design principles (carried over from existing guardrails)
+## 2. Design principles
 
-- **Backward-compatible provenance.** Every new candidate — grep, semantic,
-  or map-reduce — must still resolve to a `source_id:char_start-char_end`
-  citation compatible with `SOURCE_REF_PATTERN`
-  (`fairifier/utils/grounding.py`). No parallel citation format.
-- **Feed the existing reconciliation layer, don't replace it.** New candidate
-  sources plug into `FieldCandidate` / `_upstream_reconcile_candidates()`
-  (`UPSTREAM_CANDIDATE_MERGING.md`) as additional inputs, not a competing
-  pipeline.
-- **Deterministic coverage over model-judgment coverage.** Per LangGraph and
-  LangChain deep-agents guidance: *"coverage guaranteed by code, not model
-  judgment"* — the fix for omission is a code-level loop over sections
-  (`Send()` map-reduce), with agentic/DeepAgent delegation used for
-  judgment-heavy tasks (package selection, skill matching), not for
-  guaranteeing that text was read.
-- **Everything is config-gated and falls back to v1.4.0 behavior.** Each
-  workstream ships behind a flag, defaults to *off* until validated on the
-  existing evaluation datasets (earthworm, Haarika+Bhamidipati, BIOREM), and
-  degrades gracefully (semantic index build failure → grep-only; map-reduce
-  timeout → existing single-call path).
-- **Reuse existing infra.** `sentence-transformers` and `qdrant-client` are
-  already dependencies (via `mem0_service.py`). No new vector DB or embedding
-  provider is introduced.
+- **One recommended path per component, not a menu of flags.** Each
+  workstream below names exactly one technology/algorithm choice. No
+  "configurable embedding provider with three fallback backends" — pick the
+  best default and commit.
+- **Backward-compatible provenance, forward-incompatible internals.** Every
+  candidate must still resolve to `source_id:char_start-char_end`
+  (`SOURCE_REF_PATTERN`), so grounding/validation code is untouched. Internal
+  implementations that hybrid retrieval / the Evidence Store supersede are
+  **deleted**, not kept as a parallel "legacy mode."
+- **Deterministic coverage over model-judgment coverage.** Coverage of a
+  document is a property of a code loop (`Send()` map-reduce), not of whether
+  a DeepAgent chose to call a subagent.
+- **Parallelize everything that reads shared, immutable state.** The source
+  workspace is read-only for the duration of a run; any step that only reads
+  it and writes to an isolated output (a candidate list, a subagent
+  response) is a parallelization candidate — see §8.
+- **This is a FAIR/scientific-literature vertical, not a generic agent
+  framework.** Generic RAG advice (any embedding model, any chunk size) is a
+  starting point, not the answer — see §9 for where domain structure
+  (controlled vocabularies, units, paper section semantics, a mostly-static
+  FAIR-DS field catalog) should change the generic playbook.
+- **Reuse existing infra, extract shared code instead of duplicating it.**
+  `sentence-transformers` and Qdrant are already required at deploy time
+  (`docker-compose` starts `qdrant` unconditionally; `mem0_service.py`
+  already implements auto-start-local-Qdrant-if-missing). That connection
+  logic gets **extracted into a shared module**, not copy-pasted for a second
+  vector consumer.
 
 ---
 
-## 3. Architecture overview
+## 3. Tech stack decisions (decisive, one per component)
+
+| Component | Decision | Why |
+|---|---|---|
+| **Vector store** | **Qdrant**, one collection per run (`run_{session_id}`), dropped when the run finalizes. No in-memory/numpy fallback path. | Already mandatory infra in `docker-compose` (started unconditionally, independent of `MEM0_ENABLED`). Qdrant natively combines **payload filtering + ANN search in one query**, so structured fields (`source_id`, `char_start`, `char_end`, `field_hints`, `produced_by`) live in the payload — no second SQL/document store needed. |
+| **Qdrant connection/lifecycle code** | Extract `_try_auto_start_qdrant`, `_docker_available`, health-check logic from `mem0_service.py` into `fairifier/services/qdrant_client.py`; both `mem0_service.py` and the new semantic index import from there. | Avoids duplicating connection/retry logic for a second Qdrant consumer; one place to fix connection bugs. |
+| **Chunk/query embedding model** | **`BAAI/bge-small-en-v1.5`** (local, CPU-friendly, asymmetric `query:`/`passage:` prefixing fits "field-name query → document-passage" retrieval), run via `sentence-transformers`, already a project dependency. | Strong general+technical-text retrieval performance, small enough for CPU inference at run time (no GPU dependency introduced), asymmetric prefixing is a better fit than a symmetric model for this query/passage shape. Domain-tuned scientific embeddings (SPECTER2, BioBERT-based) are evaluated in §9.2 as a **follow-up swap of this one config value**, not a second code path. |
+| **Chunker** | Heading-aware split of MinerU Markdown (fallback: fixed ~450-token window, 15% overlap, for headerless text), implemented once in `fairifier/services/chunking.py`. | MinerU output already preserves `#`/`##` structure; reuse it instead of re-deriving section boundaries twice (chunker + `analyze_document_outline`, see §6). |
+| **Fusion** | Reciprocal Rank Fusion (RRF, `k=60`) combining lexical (`grep_sources`) and semantic ranks. | No score-calibration problem between BM25-like lexical hits and cosine similarity; standard, well-validated choice. |
+| **Rerank** | **`cross-encoder/ms-marco-MiniLM-L-6-v2`**, always applied to the fused top-20 before truncating to the final top-K per field. On by default — it is a small CPU cross-encoder (milliseconds per pair, batched), not a latency risk worth gating behind a flag. | Precision matters most exactly where lexical and semantic disagree; reranking the small fused candidate set is cheap enough to always run. |
+| **Evidence Store persistence** | Same Qdrant collection as the chunk index (different payload `kind: "chunk" \| "evidence"`), not a separate database. | One store, one query surface, one lifecycle to manage per run. |
+
+---
+
+## 4. Architecture overview
 
 ```mermaid
 flowchart TD
@@ -76,103 +100,74 @@ flowchart TD
         B --> SW[source_workspace/*]
     end
 
-    subgraph NEW_INDEX["NEW: Chunk + Semantic Index"]
-        SW --> CH[chunker.py section-aware chunks]
-        CH --> EMB[semantic_index.py embeddings]
-        EMB --> QD[(Qdrant per-run collection\nor local fallback)]
-        CH --> MAN[chunk_manifest.jsonl]
+    subgraph INDEX["Chunk + Semantic Index (new, default-on)"]
+        SW --> CH[chunking.py: section-aware chunks]
+        CH --> EMB[bge-small-en-v1.5 embeddings]
+        EMB --> QD[(Qdrant run_{session_id} collection)]
+        CH --> OUTLINE[section outline\nreplaces analyze_document_outline tool]
     end
 
-    subgraph NEW_MAPREDUCE["NEW: Deterministic Section Map-Reduce"]
-        CH --> PLAN[plan_sections node]
-        PLAN -->|Send x N| WORK[extract_section worker\n(parallel, bounded)]
-        WORK --> RED[reduce_candidates node]
+    subgraph MAPREDUCE["Deterministic Section Map-Reduce (new, default-on)"]
+        OUTLINE --> PLAN[plan_sections]
+        PLAN -->|Send x N, parallel| WORK[extract_section worker]
+        WORK --> RED[reduce_candidates]
     end
 
-    subgraph NEW_EVIDENCE["NEW: Evidence Store"]
-        RED --> ES[(EvidenceStore\nqueryable, embedded)]
+    subgraph EVIDENCE["Evidence Store (new, replaces evidence_packets internals)"]
+        RED --> ES[(Qdrant: evidence payloads)]
         DP[DocumentParser] --> ES
-        JG_HYBRID[hybrid_search_sources] --> ES
+        HYBRID[hybrid_search_sources\n grep + semantic + RRF + rerank] --> ES
     end
 
-    subgraph EXISTING["Existing (unchanged contracts)"]
+    subgraph EXISTING["Existing, unchanged contracts"]
         ES --> UCM[_upstream_reconcile_candidates]
-        UCM --> GEN[generate_complete_metadata]
+        UCM --> GEN[generate_complete_metadata\n now parallel batches]
         GEN --> PC[post-check / SOURCE_REF_PATTERN]
         PC --> OUT[metadata.json]
     end
 
-    QD --> JG_HYBRID
-    SW --> JG_HYBRID
+    QD --> HYBRID
+    SW --> HYBRID
 ```
-
-Four new workstreams (A–D) plug into the existing pipeline without changing
-its public contracts; two adjustment workstreams (E–F) tune existing
-DeepAgent/budget behavior once A–D exist; one workstream (G) updates docs and
-adds the metric needed to prove the fix works.
 
 ---
 
-## 4. Workstream A — Section-aware chunking + semantic index
+## 5. Workstream A — Chunking + semantic index (default-on)
 
-**New files:** `fairifier/services/chunking.py`, `fairifier/services/semantic_index.py`
+**New files:** `fairifier/services/chunking.py`, `fairifier/services/semantic_index.py`,
+`fairifier/services/qdrant_client.py` (shared connection helper, extracted
+from `mem0_service.py`).
 
-### Chunking
+- Chunk every preserved source with exact character offsets, so citations
+  stay `source_NNN:char_start-char_end` — no format change downstream.
+- Build the index once per run, immediately after `source_workspace`
+  materialization in `ReadFileNode`, **as a background task** (see §8 —
+  runs concurrently with `DocumentParser`, since neither depends on the
+  other's output).
+- **Field-catalog embeddings are precomputed once and cached, not per-run**
+  (see §9.3) — the FAIR-DS field/term catalog is close to static across
+  documents, unlike the document text itself.
+- Persist `source_workspace/chunks/chunk_manifest.jsonl` for human debugging
+  (auditability), vectors live only in Qdrant (no numpy-file fallback — if
+  Qdrant is unreachable and auto-start fails, the run logs a warning and
+  **degrades to lexical-only for that run**, exactly like `mem0_service.py`
+  already does for memory; this is a runtime resilience fallback, not a
+  user-facing configuration mode).
 
-- Split each preserved source (`source_workspace/sources/source_*.md`) using
-  a heading-aware strategy first (MinerU output preserves `#`/`##` structure),
-  falling back to a fixed token window (~450 tokens, ~15% overlap) for
-  headerless text.
-- Every chunk keeps **exact character offsets into the original source file**
-  so its citation is `source_NNN:char_start-char_end` — identical format to
-  existing `grep_sources()` output. This is the key compatibility constraint:
-  the grounding regex and `_postcheck_source_grounding()` need zero changes.
-- Persist a manifest parallel to the existing `tables/*.jsonl` convention:
-  `source_workspace/chunks/chunk_manifest.jsonl` — one JSON line per chunk
-  (`chunk_id`, `source_id`, `char_start`, `char_end`, `section_heading`,
-  `source_role`, `token_count`).
-
-```python
-@dataclass
-class SourceChunk:
-    chunk_id: str
-    source_id: str
-    char_start: int
-    char_end: int
-    text: str
-    section_heading: Optional[str]
-    source_role: str
-```
-
-### Semantic index
-
-- Embed chunks with `sentence-transformers` (reuse the model already
-  configured for `mem0` via `MEM0_EMBEDDING_MODEL`, default
-  `all-MiniLM-L6-v2`; allow override via
-  `FAIRIFIER_SEMANTIC_EMBEDDING_MODEL`).
-- Store vectors in a **per-run Qdrant collection** (`run_{session_id}_chunks`,
-  TTL-cleaned like mem0's session scope) when Qdrant is reachable; fall back
-  to an in-process numpy cosine-similarity index
-  (`source_workspace/chunks/vectors.npy` + `chunk_ids.json`) when it is not —
-  mirroring `mem0_service.py`'s existing health-check/fallback pattern so no
-  new hard infra dependency is introduced.
-- Index build happens once per run, right after `source_workspace`
-  materialization, in `ReadFileNode` (or a new lightweight node immediately
-  after it) — not lazily inside JSONGenerator, so both DocumentParser and the
-  map-reduce workers (Workstream C) can use it.
-
-**Config:** `FAIRIFIER_SEMANTIC_INDEX_ENABLED` (default `false` until
-validated), `FAIRIFIER_SEMANTIC_CHUNK_SIZE_TOKENS`,
-`FAIRIFIER_SEMANTIC_CHUNK_OVERLAP_TOKENS`, `FAIRIFIER_SEMANTIC_EMBEDDING_MODEL`,
-`FAIRIFIER_SEMANTIC_TOP_K`.
+**Config (kill-switch only, default on):** `FAIRIFIER_SEMANTIC_INDEX_ENABLED=true`.
 
 ---
 
-## 5. Workstream B — Hybrid retrieval (grep + semantic + RRF + optional rerank)
+## 6. Workstream B — Hybrid retrieval replaces lexical-only retrieval (default-on, old call sites deleted)
 
-**New function:** `hybrid_search_sources()` in `fairifier/services/source_workspace.py`
-(same module as `grep_sources`, so it is a drop-in sibling, not a parallel
-service).
+`hybrid_search_sources()` in `fairifier/services/source_workspace.py` becomes
+the **only** way `JSONGeneratorAgent`, `DocumentParserAgent`, and
+`ISAValueMapperAgent` search source text. `grep_sources()` is not deleted —
+it becomes an internal lexical-signal function called *by*
+`hybrid_search_sources()` — but every current standalone call site that
+called `grep_sources()` directly for field-evidence discovery is **rewritten
+to call `hybrid_search_sources()` instead**, not left as an alternate path
+selectable by a flag.
 
 ```python
 def hybrid_search_sources(
@@ -183,66 +178,38 @@ def hybrid_search_sources(
     *,
     top_k: int = 8,
 ) -> List[FieldCandidate]:
-    lexical_hits = []
-    for q in build_field_search_queries(field_name, description, aliases):
-        lexical_hits.extend(grep_sources(workspace, q))          # existing, unchanged
-
-    semantic_hits = []
-    if config.semantic_index_enabled:
-        query_text = f"{field_name}: {description}"
-        semantic_hits = semantic_search_chunks(workspace, query_text, top_k=top_k * 3)
-
-    fused = reciprocal_rank_fusion([lexical_hits, semantic_hits], k=60)  # RRF, no score calibration needed
-
-    if config.rerank_enabled and fused:
-        fused = cross_encoder_rerank(query_text, fused, top_k=top_k)     # optional, CPU cross-encoder
-
-    return [to_field_candidate(hit, retrieval_method=hit.method) for hit in fused[:top_k]]
+    lexical_hits = [
+        hit for q in build_field_search_queries(field_name, description, aliases)
+        for hit in grep_sources(workspace, q)
+    ]
+    semantic_hits = semantic_search_chunks(
+        workspace, query_text=f"{field_name}: {description}", top_k=top_k * 3
+    )
+    fused = reciprocal_rank_fusion([lexical_hits, semantic_hits], k=60)
+    reranked = cross_encoder_rerank(f"{field_name}: {description}", fused[:20])
+    return [to_field_candidate(hit, retrieval_method=hit.method) for hit in reranked[:top_k]]
 ```
 
-- **Reciprocal Rank Fusion (RRF)** is used to combine lexical and semantic
-  rankings because it needs no score normalization between BM25-like grep
-  hits and cosine similarities — standard practice in 2026 hybrid-RAG
-  pipelines (BM25 + dense + RRF, then optional cross-encoder rerank on the
-  fused top-K).
-- **Cross-encoder rerank** (`cross-encoder/ms-marco-MiniLM-L-6-v2` via
-  `sentence-transformers`, CPU-friendly) is optional and config-gated
-  (`FAIRIFIER_RERANK_ENABLED`) — adds precision for ambiguous fields at the
-  cost of extra latency; default off, enable per-deployment.
-- `FieldCandidate` gains one new observability field:
-  `retrieval_method: Literal["grep", "semantic", "hybrid"]` — used for
-  telemetry and for the evaluation metric in Workstream G, not for grounding
-  logic (grounding still only cares about the `source_id:start-end`
-  citation).
-- **Call sites to update:** `JSONGeneratorAgent._build_field_source_evidence_context()`,
-  `DocumentParserAgent`'s `focused_field_extraction` tool, and
-  `ISAValueMapperAgent`'s grep usage — one shared utility, three integration
-  points, so a synonym missed by grep in one agent doesn't need a separate
-  fix in another.
-- **Fallback:** if `config.semantic_index_enabled` is `false` or index build
-  failed for this run, `hybrid_search_sources()` degrades to exactly today's
-  `grep_sources()` behavior — zero risk to existing deployments.
+- `FieldCandidate` gains `retrieval_method: Literal["grep", "semantic", "hybrid"]`
+  for telemetry (§10), not for branching grounding logic.
+- **Deleted:** the direct `grep_sources(...)` loop inside
+  `JSONGeneratorAgent._build_field_source_evidence_context()` (replaced by
+  one call to `hybrid_search_sources`); the hardcoded PETase-specific
+  `alias_map` dict in `_field_search_queries()` (see §9.4 — replaced by a
+  domain-vocabulary source that generalizes beyond one enzymology dataset).
 
-**Config:** `FAIRIFIER_HYBRID_RETRIEVAL_ENABLED`, `FAIRIFIER_RERANK_ENABLED`,
-`FAIRIFIER_RERANK_MODEL`, `FAIRIFIER_RRF_K` (default 60).
+**Config (kill-switch only, default on):** `FAIRIFIER_HYBRID_RETRIEVAL_ENABLED=true`.
 
 ---
 
-## 6. Workstream C — Evidence Store (replaces the static evidence-packet model)
+## 7. Workstream C — Evidence Store replaces the static evidence-packet model (default-on)
 
-**New file:** `fairifier/services/evidence_store.py`
-
-### Problem with today's design
-
-`evidence_packets` are built **once**, statically, by `DocumentParser` via
-`build_evidence_packets()` / `build_evidence_context()`, capped at N
-packets/chars, and passed downstream as an opaque text blob
-(`fairifier/services/evidence_packets.py`). `source_workspace` is a static
-manifest plus on-demand grep. Neither is queryable, incrementally
-extendable, or shared across agents/subagents — each agent that wants "more
-context" can only re-grep raw text.
-
-### Redesign
+**New file:** `fairifier/services/evidence_store.py`. **Deleted:** the
+internal per-agent, non-queryable list-building logic in
+`fairifier/services/evidence_packets.py` — its **output shape**
+(`build_evidence_context()`'s flat text) is preserved as a thin
+compatibility function so `llm_helper.py` prompts need zero changes, but its
+internals become `EvidenceStore.export_context()`.
 
 ```python
 @dataclass
@@ -252,266 +219,308 @@ class EvidenceItem:
     source_id: str
     char_start: int
     char_end: int
-    field_hints: list[str]        # which field names this likely supports
-    produced_by: str              # "DocumentParser" | "SectionMapReduce" | "hybrid_search" | ...
+    field_hints: list[str]
+    produced_by: str            # "DocumentParser" | "SectionMapReduce" | "hybrid_search"
     confidence: float
-    embedding_id: Optional[str]   # points into the Workstream A index
 
 class EvidenceStore:
     def add(self, items: list[EvidenceItem]) -> None: ...
     def query(self, text: str, top_k: int = 8, field_hint: str | None = None) -> list[EvidenceItem]: ...
-    def export_context(self, max_chars: int) -> str: ...   # backward-compatible flat text for prompts
+    def export_context(self, max_chars: int) -> str: ...   # == today's build_evidence_context() shape
 ```
 
-- Backed by the **same semantic index** as Workstream A — every evidence
-  item any agent produces (DocumentParser's packets, map-reduce workers'
-  spans, hybrid-search hits, JSONGenerator's reconciled candidates) becomes
-  queryable by any other agent, instead of disjoint per-agent structures.
-  This is the in-run analogue of what `mem0` already does across runs — the
-  gap `mem0_service.py` explicitly leaves open ("not document RAG") is now
-  filled for the *current* document.
-- `EvidenceStore.export_context()` reimplements today's
-  `build_evidence_context()` output shape exactly, so existing prompts in
-  `llm_helper.py` need no changes — this is purely an internal upgrade of
-  how the text is assembled, not a new prompt contract.
-- `source_workspace.md`'s inventory gains a **section outline**, produced by
-  promoting DocumentParser's existing (optional, tool-gated)
-  `analyze_document_outline` to a **deterministic step run once during
-  ingestion**, so section boundaries exist before any agent runs and can
-  drive Workstream D's fan-out.
+- Backed by the same Qdrant collection as Workstream A (payload `kind:
+  "evidence"`). Every evidence item any agent or map-reduce worker produces
+  becomes queryable by every other agent in the same run — closing the gap
+  `mem0_service.py` explicitly leaves open ("not document RAG") for the
+  *current* document.
+- `source_workspace.md`'s inventory gains the section outline produced once
+  by the chunker (Workstream A) — `DocumentParser`'s optional,
+  tool-gated `analyze_document_outline` tool is **deleted**; outline
+  computation is not something a model should "decide" to do, it is a
+  deterministic prerequisite for Workstream D's fan-out.
 
-**Config:** `FAIRIFIER_EVIDENCE_STORE_ENABLED` (defaults to mirroring
-`FAIRIFIER_SEMANTIC_INDEX_ENABLED`; store still works — as a plain list — when
-the semantic index is off, just without similarity queries).
+**Config (kill-switch only, default on):** `FAIRIFIER_EVIDENCE_STORE_ENABLED=true`.
 
 ---
 
-## 7. Workstream D — Deterministic section-level map-reduce (the actual fix for omissions)
+## 8. Workstream D — Deterministic section map-reduce + parallelization (default-on)
 
-This is the workstream that directly addresses "遗漏信息" (missed
-information): coverage becomes a property of **code**, not of whether a
-DeepAgent decided to call `section-analyst`.
+### 8.1 Why `Send()`, not DeepAgent dynamic subagents, for coverage
 
-### Why LangGraph `Send()` instead of DeepAgent dynamic subagents
+| Approach | Coverage guarantee |
+|---|---|
+| **LangGraph `Send()` map-reduce** | Deterministic — a `for section in sections` router always fans out one `Send` per section |
+| **DeepAgent dynamic subagents** (`task()` from an interpreter script) | Model-authored orchestration — usually complete, but still one model decision away from guaranteed |
 
-Both are valid per current LangChain/LangGraph guidance:
+`Send()` map-reduce is the coverage mechanism (this workstream). DeepAgent
+subagents stay the mechanism for *judgment* tasks (which packages, which
+skills apply) — see §8.3.
 
-| Approach | Coverage guarantee | Fits this repo's guardrail culture |
-|---|---|---|
-| **LangGraph `Send()` map-reduce** | Deterministic — a `for section in sections` router always fans out one `Send` per section | Yes — testable, budgeted, same style as existing `apply_budget_guardrails`, explicit fallback semantics |
-| **DeepAgents dynamic subagents** (`CodeInterpreterMiddleware` + `task()`, triggered by phrasing a request as a "workflow") | Model-authored orchestration code — usually complete, but still one more model decision away from guaranteed | Complementary for judgment-heavy steps (see Workstream E), riskier as the *sole* coverage mechanism |
+### 8.2 Graph shape
 
-**Recommendation:** use `Send()`-based map-reduce as the primary, guaranteed
-coverage mechanism (this workstream); keep DeepAgent subagents for
-judgment tasks (package/skill selection) as today, optionally upgraded with
-dynamic subagents later (Workstream E) as a complementary flexibility layer,
-not a replacement.
-
-### Graph shape
-
-New subgraph inserted after `ReadFileNode`, before `OrchestrateNode` (or as
-its own graph node `SectionExtractNode` that `OrchestrateNode` awaits before
-`DocumentParser`):
+New subgraph runs after `ReadFileNode`, before `OrchestrateNode`:
 
 ```python
 def plan_sections(state: FAIRifierState) -> dict:
-    chunks = state["source_chunks"]                    # from Workstream A
-    sections = merge_small_chunks_into_sections(
-        chunks, max_sections=config.mapreduce_max_sections
-    )
-    return {"pending_sections": sections}
+    return {"pending_sections": merge_small_chunks_into_sections(
+        state["source_chunks"], max_sections=config.mapreduce_max_sections
+    )}
 
 def route_to_workers(state: FAIRifierState) -> list[Send]:
-    return [
-        Send("extract_section", {"section": s, "fairds_field_catalog_summary": state["field_catalog_summary"]})
-        for s in state["pending_sections"]
-    ]
+    return [Send("extract_section", {"section": s}) for s in state["pending_sections"]]
 
 async def extract_section(payload: dict) -> dict:
-    # Small, focused LLM call: ONE section + a compact FAIR-DS field catalog summary.
-    # No document-wide context needed here — this is what keeps per-call cost bounded
-    # even as global budgets (Workstream F) are relaxed.
-    candidates = await llm_helper.extract_section_candidates(
-        payload["section"], payload["fairds_field_catalog_summary"]
-    )
-    return {"section_candidates": candidates}           # reducer key uses Annotated[list, operator.add]
+    candidates = await llm_helper.extract_section_candidates(payload["section"])
+    return {"section_candidates": candidates}   # Annotated[list, operator.add] accumulator
 
 def reduce_candidates(state: FAIRifierState) -> dict:
-    evidence_store.add(state["section_candidates"])      # -> Workstream C
+    evidence_store.add(state["section_candidates"])
     return {}
-
-graph.add_node("plan_sections", plan_sections)
-graph.add_node("extract_section", extract_section)
-graph.add_node("reduce_candidates", reduce_candidates)
-graph.add_conditional_edges("plan_sections", route_to_workers, ["extract_section"])
-graph.add_edge("extract_section", "reduce_candidates")
 ```
 
-- `state["section_candidates"]` uses LangGraph's standard map-reduce
-  accumulator pattern (`Annotated[list, operator.add]`) so parallel worker
-  outputs merge safely without manual locking.
-- Each `extract_section` candidate still carries `source_id:char_start-char_end`
-  (known exactly from the chunker), so it plugs directly into
-  `_upstream_reconcile_candidates()` as a "Layer 0" candidate — no changes
-  needed to the existing consensus-scoring logic in
-  `UPSTREAM_CANDIDATE_MERGING.md`.
-- **Bounded concurrency + graceful partial failure:** cap parallel workers
-  (reuse the same 5-worker pattern already used in
-  `evaluation/scripts/run_batch_evaluation.py`), and treat a failed/timed-out
-  section worker as "zero candidates from that section" rather than failing
-  the whole run — consistent with the existing Critic
-  ESCALATE-but-continue philosophy.
-- **Cost control / applicability gate:** skip this subgraph entirely for
-  short documents that already fit comfortably in the existing single-call
-  budget (`len(document_text) <= config.mapreduce_min_doc_chars`), since
-  map-reduce trades higher total token cost for guaranteed coverage — only
-  worth it once truncation risk is real.
+- Bounded concurrency (reuse the existing 5-worker pattern from
+  `evaluation/scripts/run_batch_evaluation.py`); a failed/timed-out section
+  worker contributes zero candidates rather than failing the run (same
+  philosophy as Critic's ESCALATE-but-continue).
+- **Applicability gate stays** (`FAIRIFIER_MAPREDUCE_MIN_DOC_CHARS`): this is
+  not a hedge, it's a cost optimization — short documents that already fit
+  the single-call budget skip map-reduce because there is nothing for it to
+  fix.
+- Each candidate still carries `source_id:char_start-char_end`, feeding
+  directly into the existing `_upstream_reconcile_candidates()`.
 
-**Config:** `FAIRIFIER_MAPREDUCE_ENABLED` (default `false` until validated),
-`FAIRIFIER_MAPREDUCE_MIN_DOC_CHARS` (skip below this size),
-`FAIRIFIER_MAPREDUCE_MAX_SECTIONS`, `FAIRIFIER_MAPREDUCE_MAX_PARALLEL_WORKERS`,
-`FAIRIFIER_MAPREDUCE_WORKER_TIMEOUT_S`.
+### 8.3 Parallelization inventory — what is safe to run concurrently and why
 
----
+The pipeline has real sequential dependencies (Planner needs merged
+`document_info`; `KnowledgeRetriever` needs `document_info`; `JSONGenerator`
+needs selected fields; `ISAValueMapper` needs generated fields) — those stay
+sequential. Everything below reads only shared **immutable** state
+(`source_workspace` does not change during a run) and writes to an isolated
+output, so it is safe to parallelize with no state conflicts:
 
-## 8. Workstream E — Deeper subagent integration (judgment tasks, not coverage)
+| Work item | Current behavior | Change | Mechanism |
+|---|---|---|---|
+| **Section map-reduce workers** (§8.2) | N/A (new) | Parallel by construction | LangGraph `Send()` |
+| **Chunk/semantic index build** vs. **`DocumentParser`** | Sequential (index build doesn't exist yet) | Run concurrently — index build only needs `source_workspace`, not `document_info` | `asyncio.gather` at the `ReadFileNode` → `OrchestrateNode` boundary |
+| **`generate_complete_metadata` batches** (`fairifier/utils/llm_helper.py`) | `for batch in batches: await ...` — **strictly sequential despite batches being logically independent** | `asyncio.gather` over batches, bounded by a per-provider concurrency semaphore | Each batch reads the same read-only `document_context`, writes to a disjoint field subset — no conflict |
+| **Field-level hybrid search** across `knowledge_items` in `_build_field_source_evidence_context()` | Sequential `for field in knowledge_items` loop | Batch the semantic-embedding step (one `encode()` call for all field queries — more efficient than parallel async dispatch for a local CPU model) + `asyncio.gather` for any remaining per-field LLM calls | Local embedding models benefit from **batched encode, not async fan-out**; only genuinely async (network/LLM) steps should use `asyncio.gather` |
+| **`KnowledgeRetriever`'s per-ISA-sheet optional-field selection** | One `field-selector` subagent, dispatched at the model's discretion, sheet-by-sheet or not at all | Explicitly dispatch one `field-selector` call per ISA sheet (investigation/study/observationunit/sample/assay) **in parallel** — each sheet's optional-field choice is independent given the already-selected package set | DeepAgent's documented behavior: "the main agent can issue several `task` calls in a single turn to run them in parallel" — make this explicit in the system prompt instead of leaving it to chance |
+| **`_normalize_candidates_with_llm`** | Already a single batched call | No change needed | Already correct |
 
-Once Workstreams A–D exist, extend the *existing* DeepAgent inner loops
-rather than introduce a second orchestration system:
+**Not parallelized, and why:** `DocumentParser → BioMetadataAgent → Planner`
+stays sequential — `Planner` consumes the *merged* `document_info` including
+bio-tool-recovered fields, so `BioMetadataAgent` must complete first.
+`KnowledgeRetriever → JSONGenerator → ISAValueMapper` stays sequential for
+the same reason (each consumes the previous step's structured output).
+Critic retries are inherently sequential (evaluate, then maybe redo).
 
-1. **Raise inner-loop budgets.** `react_loop_max_iterations` /
-   `react_loop_max_tool_calls` are currently hard-clamped in
-   `apply_budget_guardrails()` (`config.py`) to 6 / 18 regardless of
-   configured value. Replace the fixed clamp with a **document-size-aware**
-   ceiling (e.g., scale with estimated section count from Workstream A, up to
-   a higher hard ceiling) — see Workstream F for the paired budget policy.
-2. **Give existing subagents (`section-analyst`, `package-selector`,
-   `field-selector`) read/write access to the Evidence Store** (Workstream
-   C) instead of returning results only into the parent DeepAgent's turn
-   context. This means a retry that rebuilds the parent loop does not lose
-   evidence a subagent already found — it persists in the store.
-3. **Optional (higher risk, Phase 2): adopt dynamic/programmatic
-   subagents.** LangChain's `CodeInterpreterMiddleware` lets a deep agent
-   dispatch `section-analyst` over a full outline from a short orchestration
-   script (loops/branches/parallel batches) instead of one `task` tool call
-   at a time, when the request is phrased as a "workflow". This is
-   complementary flexibility for DocumentParser/KnowledgeRetriever's
-   judgment calls (e.g., "which sections need bio tools"), not a
-   replacement for Workstream D's deterministic guarantee — the
-   `for section in sections: Send(...)` graph-level loop is still what
-   proves every section was visited, because it does not depend on the
-   model choosing to write correct orchestration code.
-4. **Keep `ISAValueMapper`'s cardinality-gate fallback.** Its
-   `_CARDINALITY_CAP` deterministic-heuristic fallback for high-entity-count
-   documents remains a valid safety net; it should read from the (now
-   richer) Evidence Store so the heuristic path also benefits from
-   Workstream D's coverage.
+### 8.4 Budget relaxation (paired with, not independent of, §8.2)
+
+Because coverage no longer depends on one large call succeeding, the
+existing conservative constants become safe to raise **as part of shipping
+this workstream**, not as a separately-gated follow-up:
+
+- Replace the hardcoded `max_doc_context_markdown=200000` /
+  `max_doc_context_text=120000` and the `min(..., 200000)` clamp in
+  `apply_budget_guardrails()` with a **model-context-aware** budget
+  (`resolve_doc_context_budget()`: configured LLM context window minus
+  reserved output tokens).
+- Replace the hardcoded `react_loop_max_iterations=6` /
+  `react_loop_max_tool_calls=18` clamps with a document-size-aware ceiling
+  (scale with estimated section count from Workstream A).
+- Add per-phase token/cost/latency telemetry to `workflow_report.json` so the
+  relaxed budgets are observable, not just larger numbers hoped to be fine.
+
+**Config (kill-switch only, default on):** `FAIRIFIER_MAPREDUCE_ENABLED=true`,
+`FAIRIFIER_DOC_CONTEXT_BUDGET_MODE=model_aware` (escape hatch:
+`MAX_DOC_CONTEXT_MARKDOWN` / `MAX_DOC_CONTEXT_TEXT` env overrides still work
+for pinning a hard ceiling on a specific deployment).
 
 ---
 
-## 9. Workstream F — Token budget relaxation (paired with, not independent of, D)
+## 9. Domain-specific optimization for the FAIR / scientific-literature vertical
 
-Relaxing budgets *before* Workstream D exists just reproduces today's
-truncation risk at higher cost. Sequenced correctly:
+This system is not a general-purpose agent framework — it targets a fixed
+schema (MIxS/ISA via FAIR-DS), controlled vocabularies (ENVO, OBI, ...), and
+scientific-paper conventions. Generic RAG defaults leave value on the table
+here; the following are vertical-specific changes, not generic RAG hygiene.
 
-- Replace hardcoded conservative constants
-  (`max_doc_context_markdown=200000`, `max_doc_context_text=120000`) with a
-  **model-context-aware budget**: `resolve_doc_context_budget(is_structured_markdown)`
-  computed from the configured LLM's context window minus reserved output
-  tokens, instead of a fixed constant sized for "worst-case cheap model".
-- Remove/raise the artificial ceiling in `apply_budget_guardrails()`
-  (`config_instance.max_doc_context_markdown = min(config_instance.max_doc_context_markdown, 200000)`)
-  **conditionally on `FAIRIFIER_MAPREDUCE_ENABLED=true`** — i.e., only allow
-  larger single-call budgets once the deterministic coverage safety net
-  exists to catch what a still-truncated single call misses.
-- Same conditional relaxation for `metadata_max_context_chars_per_field` and
-  the `react_loop_max_iterations` / `react_loop_max_tool_calls` clamps
-  (Workstream E item 1).
-- **Add telemetry**, not just higher numbers: extend
-  `workflow_report.json` / Critic feedback with per-phase token/cost/latency
-  and the new section-coverage metric (Workstream G) so budget relaxation is
-  validated empirically per model/provider before becoming a default,
-  matching the existing "Verified outcome on the earthworm dataset..." style
-  already used in `SOURCE_GROUNDING_ARCHITECTURE.md`.
+### 9.1 Field-catalog embeddings should be precomputed once, not per run
 
-**Config:** `FAIRIFIER_DOC_CONTEXT_BUDGET_MODE` (`fixed` | `model_aware`,
-default `fixed` until Workstream D ships), reuse existing
-`MAX_DOC_CONTEXT_MARKDOWN` / `MAX_DOC_CONTEXT_TEXT` /
-`REACT_LOOP_MAX_ITERATIONS` / `REACT_LOOP_MAX_TOOL_CALLS` as override escape
-hatches.
+The FAIR-DS field/term catalog changes rarely compared to the documents
+being processed. Embedding every field's name+description on every run (as
+a naive per-run implementation would) is wasted, repeated work specific to
+this vertical's fixed schema.
+
+- Precompute embeddings for the full FAIR-DS field catalog **once**, cached
+  in the same long-lived cache tier as `retrieval_cache.py` uses for FAIR-DS
+  API responses, keyed by `(field_id, catalog_version)`.
+- Invalidate only when the FAIR-DS API package/term catalog version changes.
+- This turns the "embed the query side" cost in `hybrid_search_sources()`
+  into a cache lookup for the field side, leaving only the document-chunk
+  side (Workstream A) as new per-run embedding work.
+
+### 9.2 Prefer retrieval quality validated on this domain's terminology, not a generic MTEB score
+
+`bge-small-en-v1.5` (§3) is the default, but the actual validation must use
+this project's own terminology (enzymology, ecotoxicology, genomics field
+names/units/ontology terms), not a generic benchmark:
+
+- Use the section-coverage recall metric (§10) as the acceptance test for
+  the embedding model choice itself, run against the existing ground-truth
+  datasets (earthworm, Haarika+Bhamidipati, BIOREM) **before** merging §6 —
+  if `bge-small-en-v1.5` underperforms lexical-only on this domain's ground
+  truth, the model choice (not the hybrid-retrieval architecture) is what
+  needs to change.
+- Domain-tuned biomedical/scientific embedding models (e.g. a
+  PubMedBERT/SPECTER2-family sentence encoder) are a candidate **swap of one
+  config value** (`FAIRIFIER_SEMANTIC_EMBEDDING_MODEL`) if the recall metric
+  shows a clear gap — evaluated with the same harness, not added as a second
+  code path.
+
+### 9.3 Ontology/controlled-vocabulary synonyms should drive query expansion, not hardcoded per-field aliases
+
+The current `_field_search_queries()` alias map
+(`fairifier/agents/json_generator.py`) hardcodes synonyms for a narrow set of
+PETase/enzymology fields ("reaction temperature" → "assay temperature",
+"incubation temperature", ...). This does not generalize to the earthworm/
+ecotoxicology/genomics documents the same system also processes, and it is
+exactly the kind of per-domain knowledge that does not belong hardcoded in
+Python.
+
+**Delete the hardcoded `alias_map` dict.** Replace query expansion with two
+sources that already exist or belong in the skill system, not in agent code:
+
+1. **FAIR-DS term synonyms**, when the API/ontology backing a field already
+   carries synonym/definition text — use it directly as additional query
+   variants instead of guessing aliases in code.
+2. **Skill-provided domain vocabularies** — the existing `SKILL.md`
+   mechanism (`fairifier/skills/`) already encodes domain knowledge
+   (genomics skill exists today); add a `field_aliases` section to relevant
+   domain skills (enzymology/plastics-degradation, ecotoxicology, ...) so
+   alias knowledge is **data the skill system loads dynamically**, matching
+   how the rest of the system already treats domain knowledge, not a special
+   case hardcoded only for JSONGenerator.
+
+This also reduces reliance on hardcoded aliases generally: semantic
+retrieval (§6) already recovers many paraphrases without needing an
+explicit alias list — the alias map exists today specifically to compensate
+for lexical-only search, which hybrid retrieval subsumes.
+
+### 9.4 Section-type-aware ranking, not just source-role-aware ranking
+
+`source_role_priority()` today ranks by document role (main manuscript vs.
+table vs. supplement). Scientific papers have a further, well-known internal
+structure that is a strong, cheap prior for *which field types* live where:
+reaction/assay conditions and protocols are reliably in **Methods**;
+measured outcomes (degradation rate, concentrations) are reliably in
+**Results**; study framing (research domain, objectives) is reliably in
+**Abstract/Introduction**.
+
+- Extend the chunker (Workstream A) to tag each chunk with a coarse
+  **section type** (abstract / methods / results / discussion / supplement),
+  derived from the same heading detection already used for chunk
+  boundaries — no new NLP component needed.
+- Use section type as a **ranking boost**, not a hard filter, inside
+  `hybrid_search_sources()`: e.g. boost Methods-section chunks when the
+  field's FAIR-DS `isa_sheet` is `assay`, boost Results-section chunks for
+  measured-outcome fields. This is a domain heuristic generic RAG tuning
+  would not derive on its own, and it is cheap (a lookup table keyed by
+  `isa_sheet`, not a model call).
+
+### 9.5 Quantity/unit fields need a deterministic normalizer, not just better retrieval
+
+Retrieval (lexical, semantic, or hybrid) solves *finding* the right sentence;
+it does not solve *parsing* it correctly. Fields like `reaction temperature`,
+`enzyme loading`, `degradation rate` routinely appear with units, ranges, and
+inconsistent notation ("25–30 °C", "37°C", "310 K") — a domain-specific
+problem this vertical has and a generic agent framework would not need to
+solve.
+
+- Add a deterministic post-retrieval normalizer for quantity-typed FAIR-DS
+  fields (unit parsing/conversion via a library such as `pint`, range
+  handling, scientific-notation normalization) that runs on the
+  `hybrid_search_sources()` output **before** it reaches the LLM generation
+  prompt, alongside the existing `_normalize_candidates_with_llm` step (LLM
+  normalization stays for free-text fields; the deterministic normalizer
+  specifically targets quantity fields where unit correctness is checkable
+  without an LLM).
+- This directly reduces a class of value-level errors (wrong unit, silently
+  dropped range) that neither better retrieval nor better prompting fixes on
+  its own.
 
 ---
 
-## 10. Workstream G — Guardrail, evaluation, and doc updates
+## 10. Evaluation and guardrail updates (must pass before merging, not an eventual A/B)
 
-1. **Update `SOURCE_GROUNDING_ARCHITECTURE.md`.** Replace *"Do not add vector
-   RAG for this path unless explicitly requested"* with a scoped statement:
-   semantic retrieval is now allowed **only** as an additional ranking signal
-   inside `hybrid_search_sources()`, fused via RRF with existing lexical
-   grep, and only for field-evidence discovery — FAIR-DS schema retrieval and
-   full-table scans stay deterministic/API-backed as before.
-2. **New evaluation metric: section-coverage recall.** Today's metrics
-   (`docs/en/EVALUATION_METHODOLOGY.md`) measure field presence/precision,
-   not whether the source text supporting a ground-truth field was ever
-   inspected. Add a metric that checks, per ground-truth field, whether *any*
-   candidate (from grep, semantic search, or map-reduce) cites a source span
-   overlapping the annotated evidence location — this is the metric that
-   actually proves Workstream D reduces omissions, as opposed to only
-   changing field-presence counts.
-3. **A/B rollout on existing datasets** (earthworm, Haarika+Bhamidipati,
-   BIOREM holdout) comparing: field coverage, section-coverage recall,
-   hallucination rate (Critic faithfulness + `ungrounded_high_confidence_fields`),
-   token cost, and latency — before flipping any default flag to `true`.
+1. **Update `SOURCE_GROUNDING_ARCHITECTURE.md`**: replace the "no vector RAG"
+   guardrail with a description of the shipped hybrid architecture and its
+   scope (FAIR-DS schema retrieval and full-table scans remain
+   deterministic/API-backed, unchanged).
+2. **New metric: section-coverage recall.** For each ground-truth field, does
+   *any* candidate (lexical, semantic, or map-reduce) cite a source span
+   overlapping the annotated evidence location? This is the metric that
+   proves the omission problem is actually fixed, as opposed to only moving
+   field-presence counts. Implemented in
+   `evaluation/analysis/analyzers/` alongside the existing field-presence
+   analyzer.
+3. **Acceptance bar before merging Workstreams B/D as default-on**: run the
+   full harness against earthworm / Haarika+Bhamidipati / BIOREM and require
+   section-coverage recall and field coverage to both improve (or hold)
+   versus the v1.4.0 baseline, with hallucination indicators
+   (`ungrounded_high_confidence_fields`, Critic faithfulness score) not
+   regressing. This is a one-time PR gate, not a standing feature-flag
+   rollout.
 
 ---
 
-## 11. Rollout sequencing (technical dependencies, not calendar estimates)
+## 11. Code deleted or replaced by this plan
+
+Explicit list so the migration does not leave two parallel implementations:
+
+| Removed | Replaced by |
+|---|---|
+| Direct `grep_sources()` loop in `JSONGeneratorAgent._build_field_source_evidence_context()` | `hybrid_search_sources()` |
+| Hardcoded PETase `alias_map` dict in `_field_search_queries()` | FAIR-DS term synonyms + skill-provided `field_aliases` (§9.3) |
+| `DocumentParser`'s optional `analyze_document_outline` tool | Deterministic chunker-produced section outline (Workstream A), computed once during ingestion |
+| Internal list-building logic in `evidence_packets.py` | `EvidenceStore` (output shape of `build_evidence_context()` preserved as a compatibility wrapper) |
+| Sequential `for batch in batches: await ...` loop in `generate_complete_metadata()` | `asyncio.gather` with bounded concurrency |
+| Fixed `max_doc_context_markdown` / `max_doc_context_text` / `react_loop_max_iterations` / `react_loop_max_tool_calls` clamps in `apply_budget_guardrails()` | Model-context-aware / section-count-aware dynamic budgets |
+
+---
+
+## 12. Implementation sequencing (dependency order, not calendar or flag phases)
 
 ```
-Phase 1 (additive, default OFF, no behavior change when disabled)
-  A. chunking.py + semantic_index.py
-  B. hybrid_search_sources() wired into JSONGenerator/DocumentParser/ISAValueMapper
-     — grep-only fallback if semantic index unavailable
-  Tests: chunk offset correctness, RRF fusion determinism, FieldCandidate
-  shape unchanged, grounding regex still matches new citations.
-
-Phase 2 (backward-compatible internal refactor)
-  C. EvidenceStore replacing internals of build_evidence_context/build_evidence_packets
-     — export_context() output byte-for-byte compatible with today's prompts.
-  Tests: store round-trip, existing prompt/evidence tests unchanged.
-
-Phase 3 (the coverage fix — still default OFF)
-  D. Send()-based section map-reduce subgraph, gated by document-length threshold.
-  G.2 section-coverage recall metric.
-  A/B evaluation on earthworm / Haarika+Bhamidipati / BIOREM before enabling by default.
-
-Phase 4 (gated on Phase 3 evaluation results)
-  E. Raise DeepAgent budgets + shared Evidence Store access for subagents;
-     optional dynamic/programmatic subagents for judgment tasks.
-  F. Model-context-aware budget relaxation, conditional on MAPREDUCE_ENABLED.
-  G.1 Guardrail doc update to reflect the new default posture.
+1. qdrant_client.py (extracted shared connection helper) — needed by 2 and 4
+2. chunking.py + semantic_index.py — needed by 3, 4, 5
+3. hybrid_search_sources() — needs 2; replaces grep-only call sites immediately (§11)
+4. EvidenceStore — needs 1, 2; replaces evidence_packets internals immediately (§11)
+5. Send()-based section map-reduce subgraph — needs 2, 4
+6. Parallelization changes (§8.3) — independent of 1-5, can land anytime, no shared-state conflicts
+7. Domain optimizations (§9) — 9.1/9.3 can land alongside 3; 9.4 needs 2; 9.5 needs 3
+8. Budget relaxation (§8.4) — lands together with 5, not before
+9. Evaluation harness updates (§10) — needed to gate 3 and 5 before they're merged as default-on
 ```
 
-Each phase ships independently reviewable and testable; Phase 1–2 carry no
-runtime-behavior risk (flags default off, fallback paths identical to
-v1.4.0); Phase 3 is where the actual omission-reduction claim gets measured;
-Phase 4 only relaxes cost/latency-sensitive knobs once Phase 3 data justifies
-it.
+Steps 1–4 and 6 carry minimal behavioral risk (additive capability, old code
+removed only once the new path's tests pass). Step 5 is where the coverage
+claim is actually made and must clear the §10 acceptance bar. Step 8 is
+intentionally sequenced with step 5, not before it.
 
 ---
 
-## 12. Open questions / explicit non-goals
+## 13. Explicit non-goals
 
 - **Not replacing FAIR-DS schema retrieval or full-table scans** with vector
   search — both already work deterministically and are out of scope.
-- **Not introducing a new vector database.** Reuses the Qdrant instance and
-  `sentence-transformers` dependency already present for `mem0_service.py`.
-- **Not making map-reduce mandatory.** It is a cost/coverage trade-off gated
-  by document length; short, well-structured documents should continue to
-  use the existing single-call path unchanged.
-- **Open for follow-up design:** exact section-merging heuristic (how small
-  chunks get grouped into "sections" for Workstream D so section count stays
-  bounded for very fragmented MinerU output), and whether
-  `extract_section` candidates should be typed identically to
-  `FieldCandidate` or need a lighter-weight intermediate type before
-  reconciliation.
+- **Not introducing a second vector database or embedding provider** —
+  Qdrant + `sentence-transformers` only (§3).
+- **Not making map-reduce run on every document regardless of size** — the
+  length-based applicability gate (§8.2) is a cost optimization, not an
+  uncertainty hedge.
+- **Open for follow-up design:** exact section-merging heuristic bounding
+  section count for fragmented MinerU output; whether `extract_section`
+  candidates need a lighter intermediate type before reconciliation or can
+  be `FieldCandidate` directly.

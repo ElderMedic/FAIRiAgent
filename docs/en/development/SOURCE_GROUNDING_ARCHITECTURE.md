@@ -187,8 +187,11 @@ Suggested scope for the next development phase:
   design is agentic source search over preserved files and external FAIR-DS
   tools.  **Update:** hybrid (lexical + semantic) retrieval and deterministic
   section-coverage map-reduce have been explicitly requested and scoped in
-  [HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md](HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md)
-  (status: proposed, phased, flag-gated).  Until that plan's Phase 1 lands,
-  this guardrail still applies to any change made outside that plan's scope.
+  [HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md](HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md).
+  That plan ships as the **default, single implementation** once merged
+  (its own §10 acceptance bar gates the merge, not a runtime feature flag) —
+  it is not a permanent opt-in alternative to `grep_sources()`-only search.
+  Until it lands, this guardrail still applies to any change made outside
+  that plan's scope.
 - Keep single-file behavior compatible by treating it as a one-source workspace.
 - Avoid broad refactors in `langgraph_app.py`; prefer focused helpers and tests.
