@@ -114,6 +114,8 @@ nodes:
         checks:
           - "All high-confidence fields have been attempted for ISA term mapping."
           - "Sheets (investigation, study, assay, dataFile) are all represented in the output matrix."
+          - "Multi-row sheets (observationunit, sample, assay) have one row per distinct entity, not one sparse row per field."
+          - "Average populated fields per row is reasonable; flag over-fragmentation when many rows carry only 1-3 cells."
       faithfulness:
         checks:
           - "Mapped values are traceable to the retrieved_knowledge vocabulary, not invented."
@@ -122,6 +124,7 @@ nodes:
         checks:
           - "Suggest specific ontology terms (OBI, EFO, NCIT) for fields that failed to map."
           - "Identify sheets with zero mapped terms so the planner can re-focus retrieval."
+          - "When rows look fragmented, recommend merging fields that share the same sample/condition into one entity_id."
 
   bio_metadata_agent:
     accept_threshold: 0.70

@@ -114,6 +114,30 @@ class StructuralEvaluator:
     # 3b. Row alignment (CEAF-style)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _avg_populated_fields(rows: List[Dict[str, str]]) -> float:
+        if not rows:
+            return 0.0
+        counts = [
+            sum(1 for v in row.values() if v and str(v).strip())
+            for row in rows
+        ]
+        return sum(counts) / len(counts)
+
+    @staticmethod
+    def _row_preview(row: Dict[str, str], *, max_fields: int = 6) -> Dict[str, str]:
+        populated = {
+            k: (str(v)[:80] if v else "")
+            for k, v in row.items()
+            if v and str(v).strip()
+        }
+        if len(populated) <= max_fields:
+            return populated
+        keys = sorted(populated.keys())[:max_fields]
+        preview = {k: populated[k] for k in keys}
+        preview["_truncated"] = f"+{len(populated) - max_fields} more fields"
+        return preview
+
     def evaluate_row_alignment(
         self,
         sheet_name: str,
@@ -126,21 +150,59 @@ class StructuralEvaluator:
                 "sheet": sheet_name,
                 "gt_rows": 0,
                 "pred_rows": len(pred_rows),
+                "row_count_ratio": 0.0 if not pred_rows else float("inf"),
                 "row_alignment_recall": 1.0,
                 "row_alignment_precision": 1.0 if not pred_rows else 0.0,
                 "row_alignment_f1": 1.0 if not pred_rows else 0.0,
+                "diagnostics": {
+                    "avg_fields_per_gt_row": 0.0,
+                    "avg_fields_per_pred_row": self._avg_populated_fields(pred_rows),
+                    "unmatched_gt_rows": [],
+                    "unmatched_pred_rows": [
+                        self._row_preview(row) for row in pred_rows
+                    ],
+                    "low_confidence_alignments": [],
+                    "fragmentation_hint": "no_gt_rows",
+                },
                 "matched_pairs": [],
             }
 
         pairs = self.value_evaluator.align_rows(gt_rows, pred_rows, sheet_overrides)
 
         acceptable_pairs: List[Tuple[Dict[str, str], Dict[str, str]]] = []
+        low_confidence_alignments: List[Dict[str, Any]] = []
         for gt_row, pred_row in pairs:
             if pred_row is None:
                 continue
             sim = self.value_evaluator._row_similarity(gt_row, pred_row, sheet_overrides)
             if sim >= ROW_ALIGNMENT_THRESHOLD:
                 acceptable_pairs.append((gt_row, pred_row))
+                if sim < ROW_ALIGNMENT_THRESHOLD + 0.15:
+                    low_confidence_alignments.append({
+                        "similarity": round(sim, 4),
+                        "gt_row_preview": self._row_preview(gt_row),
+                        "pred_row_preview": self._row_preview(pred_row),
+                    })
+            else:
+                low_confidence_alignments.append({
+                    "similarity": round(sim, 4),
+                    "below_threshold": True,
+                    "gt_row_preview": self._row_preview(gt_row),
+                    "pred_row_preview": self._row_preview(pred_row),
+                })
+
+        acceptable_gt_ids = {id(g) for g, _ in acceptable_pairs}
+        acceptable_pred_ids = {id(p) for _, p in acceptable_pairs}
+        unmatched_gt_rows = [
+            self._row_preview(gt_row)
+            for gt_row in gt_rows
+            if id(gt_row) not in acceptable_gt_ids
+        ]
+        unmatched_pred_rows = [
+            self._row_preview(row)
+            for row in pred_rows
+            if id(row) not in acceptable_pred_ids
+        ]
 
         recall = len(acceptable_pairs) / len(gt_rows) if gt_rows else 1.0
         precision = len(acceptable_pairs) / len(pred_rows) if pred_rows else 0.0
@@ -149,15 +211,36 @@ class StructuralEvaluator:
             if (precision + recall) > 0
             else 0.0
         )
+        row_count_ratio = (
+            len(pred_rows) / len(gt_rows) if gt_rows else 0.0
+        )
+        avg_gt = self._avg_populated_fields(gt_rows)
+        avg_pred = self._avg_populated_fields(pred_rows)
+        fragmentation_hint = "ok"
+        if row_count_ratio > 1.5 and precision < 0.7:
+            fragmentation_hint = "over_fragmentation"
+        elif row_count_ratio < 0.5 and recall < 0.7:
+            fragmentation_hint = "over_merging"
+        elif f1 < 0.3 and row_count_ratio <= 1.2:
+            fragmentation_hint = "structural_granularity_mismatch"
 
         return {
             "sheet": sheet_name,
             "gt_rows": len(gt_rows),
             "pred_rows": len(pred_rows),
+            "row_count_ratio": round(row_count_ratio, 4),
             "acceptable_alignments": len(acceptable_pairs),
             "row_alignment_recall": round(recall, 4),
             "row_alignment_precision": round(precision, 4),
             "row_alignment_f1": round(f1, 4),
+            "diagnostics": {
+                "avg_fields_per_gt_row": round(avg_gt, 2),
+                "avg_fields_per_pred_row": round(avg_pred, 2),
+                "unmatched_gt_rows": unmatched_gt_rows[:20],
+                "unmatched_pred_rows": unmatched_pred_rows[:20],
+                "low_confidence_alignments": low_confidence_alignments[:20],
+                "fragmentation_hint": fragmentation_hint,
+            },
             "_matched_pairs": acceptable_pairs,  # internal use only, not serialized by caller
         }
 
@@ -168,6 +251,7 @@ class StructuralEvaluator:
     ) -> Dict[str, float]:
         """Layer-2-style scoring, restricted to already-aligned (acceptable) row pairs."""
         total, match_count, partial_count = 0, 0, 0
+        missing_count, wrong_count = 0, 0
         score_sum = 0.0
         for gt_row, pred_row in pairs:
             for field, gt_val in gt_row.items():
@@ -177,6 +261,7 @@ class StructuralEvaluator:
                 pred_val = pred_row.get(field) or pred_row.get(normalise_field_name(field), "")
                 total += 1
                 if not pred_val:
+                    missing_count += 1
                     continue
                 score = match_value(pred_val, gt_val, match_type=mt)
                 score_sum += score
@@ -186,11 +271,15 @@ class StructuralEvaluator:
                     match_count += 1
                 elif status == "partial":
                     partial_count += 1
+                else:
+                    wrong_count += 1
         return {
             "n_fields": total,
             "mean_score": score_sum / total if total else 0.0,
             "value_match_rate": match_count / total if total else 0.0,
             "value_partial_credit_score": (match_count + 0.5 * partial_count) / total if total else 0.0,
+            "missing_field_rate": missing_count / total if total else 0.0,
+            "wrong_value_rate": wrong_count / total if total else 0.0,
         }
 
     # ------------------------------------------------------------------
@@ -246,8 +335,10 @@ class StructuralEvaluator:
                 if (row_alignment_precision + row_alignment_recall) > 0
                 else 0.0
             )
+            row_count_ratio = total_pred / total_gt if total_gt else 0.0
         else:
             row_alignment_recall = row_alignment_precision = row_alignment_f1 = 1.0
+            row_count_ratio = 0.0
 
         value_accuracy_given_correct_structure = self._value_accuracy_within_pairs(
             all_acceptable_pairs
@@ -261,13 +352,21 @@ class StructuralEvaluator:
                 "row_alignment_recall": round(row_alignment_recall, 4),
                 "row_alignment_precision": round(row_alignment_precision, 4),
                 "row_alignment_f1": round(row_alignment_f1, 4),
+                "row_count_ratio": round(row_count_ratio, 4),
                 "value_accuracy_given_correct_structure": round(
                     value_accuracy_given_correct_structure["mean_score"], 4
                 ),
                 "value_match_rate_given_correct_structure": round(
                     value_accuracy_given_correct_structure["value_match_rate"], 4
                 ),
+                "missing_field_rate_given_correct_structure": round(
+                    value_accuracy_given_correct_structure["missing_field_rate"], 4
+                ),
+                "wrong_value_rate_given_correct_structure": round(
+                    value_accuracy_given_correct_structure["wrong_value_rate"], 4
+                ),
             },
+            "value_accuracy_given_correct_structure_detail": value_accuracy_given_correct_structure,
         }
 
     def evaluate_batch(
@@ -294,7 +393,10 @@ class StructuralEvaluator:
             "row_alignment_recall",
             "row_alignment_precision",
             "row_alignment_f1",
+            "row_count_ratio",
             "value_accuracy_given_correct_structure",
+            "missing_field_rate_given_correct_structure",
+            "wrong_value_rate_given_correct_structure",
         ]
         agg = {}
         for key in keys:
