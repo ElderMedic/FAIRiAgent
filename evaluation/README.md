@@ -128,58 +128,101 @@ evaluation/
 
 ## Evaluation Metrics
 
-The framework uses layered metrics. **Layer 1** measures field presence (GT coverage); **Layer 2** measures value accuracy with semantic grading.
-
-### Layer 1 — Field presence / completeness
-
-Headline metrics (extra/non-GT fields are **not** penalized):
-
-| Metric | Meaning |
-|--------|---------|
-| `overall_completeness` / `field_coverage_recall` | Fraction of GT field names present in output |
-| `required_completeness` | Coverage of required GT fields |
-| `recommended_completeness` | Coverage of recommended GT fields |
-| `missing_fields` | GT field names absent from output |
-
-Diagnostic only: `field_coverage_precision`, `field_coverage_f1` (penalize extras — use only when comparing strict precision).
-
-### Layer 2 — Value accuracy (semantic + graded scoring)
-
-When per-document values ground truth exists (`datasets/annotated/values/ground_truth_{doc_id}_values.json`), Layer 2 compares **values** row-by-row (Hungarian alignment) using continuous scores in `[0, 1]`.
-
-**Headline:** `value_mean_score` (= `value_partial_credit_score`) — mean per-field score.
-
-**Semantic judgment** (explicit, not binary):
-
-| Sub-score | Meaning |
-|-----------|---------|
-| `semantic_score` | Cosine similarity via `all-MiniLM-L6-v2` |
-| `token_f1_score` | Token-level F1 (SQuAD-style) |
-| `semantic_judgment_score` | `max(semantic_score, token_f1_score)` |
-| `rule_score` | Type-aware rules (exact, identifier, numeric tolerance, categorical) |
-| Final `score` | `max(rule_score, semantic_judgment_score)` for most types; categorical stays strict |
-
-Status bins (diagnostic): `match` ≥ 0.75, `partial` ≥ 0.35, else `wrong` / `missing`.
-
-Run standalone value comparison:
-
-```bash
-python scripts/compare_values_against_gt.py \
-  datasets/annotated/values/ground_truth_petase_10_1038_s41586-020-2149-4_values.json \
-  runs/.../petase_10_1038_s41586-020-2149-4/run_1
-```
-
-Use `--no-semantic` to disable sentence-transformers (token-F1 + rules only).
-
-**Evaluator:** `ValueAccuracyEvaluator` — wired into `add_evaluation_metrics.py` as `value_accuracy` in `eval_result.json`.
-
-Legacy aggregate metrics still available:
-
-- **Correctness**: Precision, recall, F1 of extracted field names (confidence-aware variants)
+The framework evaluates:
+- **Completeness / Layer 1 (metadata extraction headline)**: What fraction of GT field *names* were extracted -- see **Layer 1 headline metrics** below; extra (non-GT) fields are **not** penalized at this layer
+- **Correctness (Layer 1, diagnostic)**: `field_coverage_precision` / `field_coverage_f1` -- optional diagnostics for output cleanliness, not the metadata-extraction headline
+- **Value Accuracy (Layer 2)**: Whether extracted field *values* actually match ground truth
+- **Structural/Hierarchical F1 (Layer 3)**: Whether fields/rows are placed in the correct ISA sheet and correctly aligned to distinct real-world entities
+- **Novel Field Classification (Layer 4)**: Evidence-grounded classification of non-GT fields (beneficial discovery / domain insight / unsupported fabrication)
 - **LLM Judge Score**: Internal quality assessment from critic agent
 - **Workflow Reliability**: Completion rates, retry rates, failure patterns
 - **Runtime**: Time taken for extraction
-- **Pass@k**: Probability of successful extraction in k attempts
+- **Pass@k**: Probability of successful extraction in k attempts (similar to SWE-agent benchmark)
+
+### Layer 1 headline metrics (metadata extraction)
+
+For **metadata extraction** benchmarking, Layer 1 is settled on **GT coverage
+only** -- how much of the annotated field list was extracted. Extra fields
+(beyond GT) reflect generalization, not failure, and are **not** subtracted
+from the headline score.
+
+**Report these as Layer 1 headline numbers:**
+
+| Metric | Formula | Use |
+|---|---|---|
+| `overall_completeness` | `\|extracted ∩ GT\| / \|GT\|` (unique field names) | Primary headline -- same numerator/denominator as recall |
+| `required_completeness` | required GT fields covered / total required | Mandatory-field coverage |
+| `recommended_completeness` | recommended GT fields covered / total recommended | Recommended-field coverage |
+| `field_coverage_recall` | `TP / (TP + FN)` on field **names** | Same as `overall_completeness` when GT is a flat field-name list |
+| `missing_fields` / `missing_required_fields` | lists from `CompletenessEvaluator` | Which GT names were not extracted |
+| `gt_field_populated_rate` | GT fields with any non-empty value / total GT | Fill rate (not value correctness) |
+
+**Diagnostic only (do not use as metadata-extraction headline):**
+
+| Metric | Why diagnostic |
+|---|---|
+| `field_coverage_precision` | Penalizes every non-GT field name (`TP / (TP+FP)`) |
+| `field_coverage_f1` | Harmonic mean of recall and precision -- dominated by precision when many extras exist |
+
+Pass@k presets (`moderate` / `strict` / `very_strict`) gate on **completeness /
+recall**, not F1 or precision. Layers 2-4 remain available for value/structure/
+fabrication audits when needed.
+
+### Layer 2 headline metrics (value accuracy)
+
+Layer 2 scores **how similar each extracted value is to GT**, on a continuous
+0-1 scale per field. Semantically close but not identical strings (different
+ID formats, paraphrased titles, shorthand enzyme names) receive **partial
+credit** via graded scorers in ``evaluation/evaluators/_value_matching.py`` --
+they are not forced into binary right/wrong except for strict controlled
+vocabulary (``categorical``) fields.
+
+**Report these as Layer 2 headline numbers:**
+
+| Metric | Use |
+|---|---|
+| `value_mean_score` / `value_partial_credit_score` | Mean per-field match score (primary headline; identical formulas) |
+| `match_count` / `partial_count` / `wrong_count` / `missing_count` | Diagnostic bins (thresholds 0.75 / 0.35) |
+
+**Diagnostic:** `value_match_rate` (fraction with score ≥ 0.75 only).
+
+### Metrics Glossary (evaluation-metrics redesign, 2026-07)
+
+This benchmark's metrics are split into independent layers so that "did we
+find the field name", "is the value correct", "is it in the right place",
+and "is this extra field legitimate" are never silently conflated into one
+opaque score. For every metric below: **name**, **exact formula**, **what
+layer/aspect it measures**, and **how non-GT fields are treated**.
+
+| Metric | Formula | Layer / What it measures | Non-GT fields |
+|---|---|---|---|
+| `field_coverage_precision` | `TP / (TP + FP)` on field **names** | Layer 1 **diagnostic** -- output cleanliness | Counted as FP (name-level only) |
+| `field_coverage_recall` | `TP / (TP + FN)` on field **names** | Layer 1 **headline** -- GT field-name coverage | n/a |
+| `field_coverage_f1` | harmonic mean of the two above | Layer 1 **diagnostic** | n/a |
+| `gt_field_populated_rate` | (GT fields with any non-empty value) / (total GT fields) | Layer 1 -- **NOT** a correctness check, just "is it non-empty" (renamed from the old, misleading `gt_value_accuracy`) | n/a |
+| `value_mean_score` | mean of `match_value(pred, gt, match_type)` per GT-populated field, type-aware; **continuous** in [0, 1] | Layer 2 **headline** -- graded value similarity (not binned right/wrong) | Not applicable (GT-populated fields only) |
+| `value_match_rate` | `match_count / n_gt_populated_fields` (score ≥ 0.75 threshold) | Layer 2 diagnostic -- strict "full match" rate | Not applicable |
+| `value_partial_credit_score` | same as `value_mean_score` (mean per-field score) | Layer 2 headline alias -- proportional partial credit | Not applicable |
+| `sheet_placement_accuracy` | fraction of extracted fields whose `(field_name, isa_sheet)` matches GT | Layer 3a -- structural placement only, no value check | Fields not in GT for any sheet are excluded from this check |
+| `row_alignment_recall` / `_precision` / `_f1` | CEAF-style (Hungarian-algorithm) optimal 1:1 GT-row ↔ predicted-row matching, then recall/precision/F1 over matched pairs | Layer 3b -- did the agent recognize the right *number* of distinct entities (didn't merge/split samples)? | Unmatched predicted rows count against precision |
+| `value_accuracy_given_correct_structure` | Layer-2 value scoring recomputed only within correctly-aligned row pairs | Layer 3 diagnostic -- isolates value errors from alignment errors | n/a |
+| `discovery_rate` | (evidence-grounded, in-FAIR-DS-vocabulary non-GT fields) / (# GT fields) | Layer 4 -- **not penalized**; genuinely useful novel fields | n/a |
+| `untracked_insight_rate` | (evidence-grounded, out-of-vocabulary non-GT fields) / (# GT fields) | Layer 4 -- neutral; candidates for future schema/package extension ("may inspire researchers") | n/a |
+| `precision_excl_discoveries` | `TP / (TP + unsupported_fabrication_count)` | Layer 4 -- fabrication-adjusted precision; **only** ungrounded extra fields are penalized, not all extras | Grounded extras excluded from the penalty; ungroundable (no source text available) excluded from both numerator and denominator |
+| `ece` / `brier_score` | Expected Calibration Error / Brier score of self-reported field confidence vs. Layer-2 correctness | Layer 5 (fast-follow) -- confidence calibration diagnostic, not a quality score | n/a |
+| `aggregate_score` | weighted sum of field-coverage recall (20%) + value accuracy (35%) + structural F1 (15%) + schema compliance (10%) + fabrication-adjusted precision (20%); see `WEIGHT_*` constants in `evaluation/scripts/evaluate_outputs.py` | Composite headline ranking number -- **not** a replacement for looking at the layers individually | `discovery_rate`/`untracked_insight_rate` are intentionally excluded from the composite (diagnostic only) |
+
+**What replaced what:** the old `gt_value_accuracy` (`correctness_evaluator.py`)
+only checked whether a GT field had *any* non-empty value -- it never
+compared the value against ground truth, despite being weighted 35% of the
+old aggregate score. It is now `gt_field_populated_rate` (Layer 1, clearly
+labeled as non-correctness) with real value comparison moved to
+`value_accuracy_evaluator.py` (Layer 2). The old confidence-based
+`adjusted_precision`/`high_conf_excess`/`discovery_bonus` (exempting extra
+fields from the precision penalty based on the model's own self-reported
+confidence) is replaced by `novel_field_evaluator.py`'s evidence-grounded
+classification (Layer 4), since self-reported confidence is not a
+defensible signal for whether an extra field is actually legitimate.
 
 ### Retrieval Coverage Metrics (hybrid rollout)
 
@@ -231,6 +274,35 @@ python scripts/calculate_pass_at_k.py \
   --preset moderate \
   --output analysis/output/pass_at_k_report.md
 ```
+
+### Ablation methodology recommendation (compute-normalized baseline comparison)
+
+Layers 1-4 measure extraction *quality*; they do not by themselves attribute
+quality gains to the multi-agent architecture. 2026 multi-agent-vs-single-agent
+evaluation literature (e.g. "Single-Agent LLMs Outperform Multi-Agent Systems
+on Multi-Hop Reasoning Under Equal Thinking Token Budgets"; "Do More Agents
+Help? Controlled and Protocol-Aligned Evaluation of LLM Agent Workflows";
+MASEval) converges on one finding: reported MAS gains are frequently
+artifacts of **unnormalized compute/token/retry budget**, not the
+architecture itself. The existing baseline-vs-agentic comparison
+(`evaluation/archive/docs/BASELINE_VS_AGENTIC_COMPARISON.md`; agentic
+~500s/run with up to 5 retries vs. baseline ~15s/run, one shot) is exactly
+the kind of comparison that literature would flag as confounded.
+
+**Recommendation for the next baseline-vs-agentic re-run** (methodology
+only -- no new evaluator code needed beyond what Layers 1-4 plus existing
+`workflow_report.json` runtime/token logging already produce):
+
+1. Report quality **per unit of compute** alongside raw quality numbers --
+   e.g. `value_partial_credit_score` per LLM call, per 1K tokens, or per
+   second of wall-clock time.
+2. Where feasible, add a **compute-matched single-agent control** (e.g.
+   single-shot extraction with self-consistency/majority-voting sampled to
+   roughly the same token/latency budget as the agentic pipeline) as a
+   second baseline arm, so the "agentic architecture helps" claim survives a
+   compute-normalization challenge, not just a "more filled-in fields"
+   challenge.
+
 
 ## Analysis Outputs
 

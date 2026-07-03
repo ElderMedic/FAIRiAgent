@@ -897,6 +897,34 @@ Phase 4 started (2026-07-03):
 Shadow comparison runs still force `FAIRIFIER_RETRIEVAL_SHADOW_MODE=true` via
 `evaluation/config/env.evaluation.shadow` and `run_retrieval_shadow_pilot.py`.
 
+### 10.3 Phase 4 A/B — shadow vs hybrid-in-prompt (2026-07-03)
+
+Configs: `evaluation/config/env.evaluation.phase4` +
+`deepseek_v4-flash_v1.4.0_fairds8090_localpkg_phase4.env` (`shadow=false`) vs
+post-fix shadow batch `workflow_postfix/` (`shadow=true`). Same 3-doc subset,
+deepseek-v4-flash, FAIR-DS :8090.
+
+| Document | Shadow overall | Phase4 overall | Δ | Required (both) | Phase4 telemetry fields |
+|---|---:|---:|---:|---|---:|
+| `earthworm` | 81.0% | 78.6% | −2.4% | 100% | 81 |
+| `petase_10_1038_s41586-020-2149-4` | 94.4% | 88.9% | −5.6% | 100% | 150 |
+| `petase_10_1002_anie_202218390` | 90.3% | 87.1% | −3.2% | 100% | 137 |
+
+| Run | Aggregate score |
+|---|---:|
+| Shadow (lexical in prompt) | **0.897** |
+| Phase4 (hybrid in prompt) | **0.864** |
+
+**Interpretation:** Hybrid-in-prompt is **technically active** (`shadow_env=false`,
+telemetry 81–150 fields vs 4–5 under shadow). Required-field completeness held at
+100% on all docs. Overall completeness and aggregate score **did not improve** on
+this 3-doc slice — likely LLM variance plus noisier semantic snippets entering
+the prompt budget. **Do not treat Phase 4 as a quality win yet**; keep shadow
+configs for regression runs and tune rerank/snippet budget before declaring
+default switch complete.
+
+Artifacts: `evaluation/runs/shadow_gate_20260703/workflow_phase4_hybrid_on/`
+
 ---
 
 ## 11. Code migration plan: deprecate, default-switch, then delete

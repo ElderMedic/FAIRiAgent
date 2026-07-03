@@ -127,7 +127,13 @@ Numbers in parentheses = number of expected rows (for multi-row sheets).
 
 ## Credibility Tiers and Manuscript Roles
 
-The 10 annotated documents differ in (a) source provenance — peer-reviewed paper vs. template/proposal — and (b) annotation traceability — whether each ground-truth row carries an `_evidence` string back to a specific span of the source. For the manuscript, this matters because the headline claims (Hierarchical-F1, Pass@k, ablation McNemar) must rest on ground truth that an external reviewer would accept.
+The 10 annotated documents differ in (a) source provenance — peer-reviewed paper vs. template/proposal — and (b) annotation traceability — whether each ground-truth row carries an `_evidence` string back to a specific span of the source. For the manuscript, this matters because the headline claims (Structural/Hierarchical F1, Pass@k, ablation McNemar) must rest on ground truth that an external reviewer would accept.
+
+> **Structural/Hierarchical F1, precisely defined:** this is *not* a single opaque number. It is `StructuralEvaluator` (Layer 3, `evaluation/evaluators/structural_evaluator.py`), reported as two independently-computed sub-metrics plus their combination -- see the Metrics Glossary in `evaluation/README.md` for exact formulas:
+> - **3a. Sheet-placement accuracy** -- did each extracted field land on the correct ISA sheet (`investigation`/`study`/`sample`/`observationunit`/`assay`), independent of its value?
+> - **3b. Row-alignment F1** -- CEAF-style (Hungarian-algorithm) optimal one-to-one matching between predicted and ground-truth rows for multi-row sheets, reported as `row_alignment_recall`/`row_alignment_precision`/`row_alignment_f1`. This catches merged/split-entity failures (e.g. 3 samples collapsed into 1 row) that a flat field-name F1 cannot see.
+>
+> This requires the per-document *value*-level ground truth under `values/ground_truth_{document_id}_values.json` (see "`values/ground_truth_{id}_values.json` (per-dataset)" below for its schema) -- not just the `ground_truth_fields` field-presence GT used for Layer 1. Documents without a matching `values/` file are skipped for Layer 2/3 and only scored on Layer 1 (field-name coverage).
 
 The audit results (2026-05-07) are below.
 
