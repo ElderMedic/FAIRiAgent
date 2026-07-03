@@ -265,10 +265,10 @@ class BatchEvaluationRunner:
             Dict mapping document_id -> list of results (one per repeat)
         """
         # Load env files for os.environ (printed below and inherited by subprocess).
-        # Both use override=True: the *last* file wins on duplicate keys — load shared
-        # base first, then model-specific config so LLM_* settings apply per config.
-        load_dotenv(self.env_file, override=True)
+        # Model config first (LLM provider/model), then evaluation env overrides
+        # rollout flags such as FAIRIFIER_RETRIEVAL_SHADOW_MODE and tuned budgets.
         load_dotenv(config_path, override=True)
+        load_dotenv(self.env_file, override=True)
         
         provider = os.getenv('LLM_PROVIDER', 'unknown')
         model = os.getenv('FAIRIFIER_LLM_MODEL', 'unknown')

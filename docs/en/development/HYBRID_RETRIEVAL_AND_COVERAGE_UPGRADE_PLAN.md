@@ -925,6 +925,53 @@ default switch complete.
 
 Artifacts: `evaluation/runs/shadow_gate_20260703/workflow_phase4_hybrid_on/`
 
+### 10.4 Phase 4 tuning — lexical-priority blend + tighter budget (2026-07-03)
+
+**Code:** `_blend_lexical_first_hybrid_output()` in `source_workspace.py` — when
+hybrid hits feed the prompt, lexical-backed spans rank before semantic-only spans.
+**Eval harness fix:** `run_batch_evaluation.py` now loads model config first, then
+`env.evaluation.*`, so `FAIRIFIER_RETRIEVAL_SHADOW_MODE` is controlled by the env file
+(not duplicated in model configs).
+
+**Tuned parameters** (`env.evaluation.phase4_tuned` / `shadow_tuned`):
+
+| Parameter | Default | Tuned |
+|---|---:|---:|
+| `FAIRIFIER_RETRIEVAL_FINAL_SNIPPETS` | 8 | 5 |
+| `FAIRIFIER_METADATA_MAX_EVIDENCE_SNIPPETS_PER_FIELD` | 5 | 3 |
+| `FAIRIFIER_RETRIEVAL_RERANK_CANDIDATES` | 20 | 12 |
+| `FAIRIFIER_RETRIEVAL_SEMANTIC_MAX_HITS` | 24 | 16 |
+
+**Fair A/B** (same commit, same tuned budget; only `shadow_mode` differs via env):
+
+| Document | Shadow tuned overall | Phase4 tuned overall | Δ |
+|---|---:|---:|---:|
+| `earthworm` | 81.0% | 81.0% | 0.0% |
+| `petase_10_1038_s41586-020-2149-4` | 86.1% | 72.2% | −13.9% |
+| `petase_10_1002_anie_202218390` | 74.2% | 90.3% | +16.1% |
+
+| Run | Mean overall completeness | Multi-layer aggregate |
+|---|---:|---:|
+| Shadow postfix (§10.2 baseline) | **88.6%** | 0.897 |
+| Phase4 hybrid-on (§10.3, untuned) | 84.9% | 0.864 |
+| Shadow tuned v2 | 80.4% | 0.652 |
+| Phase4 tuned | 81.2% | 0.652 |
+
+**Interpretation:** Tuning + lexical-priority did **not** close the gap to the §10.2
+shadow baseline on this 3-doc slice; mean completeness remains below both prior runs.
+PETase docs show high LLM variance (one up, one down between arms). Required-field
+completeness dropped to 86% on PETase in tuned runs (vs 100% in §10.2/10.3) — treat as
+run variance, not a retrieval regression. **Phase 4 quality gate for hybrid-in-prompt
+is still not passed**; keep `FAIRIFIER_RETRIEVAL_SHADOW_MODE=true` in regression envs
+until a larger slice or map-reduce section workers improve recall.
+
+Artifacts:
+- `evaluation/runs/shadow_gate_20260703/workflow_shadow_tuned_v2/` (shadow control)
+- `evaluation/runs/shadow_gate_20260703/workflow_phase4_tuned/` (hybrid in prompt)
+
+**Next (P1):** Section worker → `FieldCandidate` output; re-run tuned A/B on ≥8 docs
+when `ground_truth_filtered.json` is rebuilt.
+
 ---
 
 ## 11. Code migration plan: deprecate, default-switch, then delete
