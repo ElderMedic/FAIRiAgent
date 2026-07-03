@@ -28,6 +28,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from .state import FAIRifierState, ProcessingStatus
 from .nodes import ReadFileNode, OrchestrateNode, FinalizeNode
+from .retrieval_nodes import IndexSourcesNode, SectionMapReduceNode
 from ..agents.base import BaseAgent
 from ..agents.document_parser import DocumentParserAgent
 from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
@@ -975,10 +976,14 @@ class FAIRifierLangGraphApp:
         """Build LangGraph workflow with Orchestrator-style coordination."""
         workflow = StateGraph(FAIRifierState)
         workflow.add_node("read_file", ReadFileNode(self))
+        workflow.add_node("index_sources", IndexSourcesNode(self))
+        workflow.add_node("section_map_reduce", SectionMapReduceNode(self))
         workflow.add_node("orchestrate", OrchestrateNode(self))
         workflow.add_node("finalize", FinalizeNode(self))
         workflow.set_entry_point("read_file")
-        workflow.add_edge("read_file", "orchestrate")
+        workflow.add_edge("read_file", "index_sources")
+        workflow.add_edge("index_sources", "section_map_reduce")
+        workflow.add_edge("section_map_reduce", "orchestrate")
         workflow.add_edge("orchestrate", "finalize")
         workflow.add_edge("finalize", END)
         return workflow
@@ -1171,6 +1176,12 @@ class FAIRifierLangGraphApp:
                 "document_conversion": {},
                 "input_documents": [],
                 "source_workspace": {},
+                "source_chunks": [],
+                "source_sections": [],
+                "semantic_index": {},
+                "evidence_store": {},
+                "retrieval_telemetry": {},
+                "section_coverage": {},
                 "bio_file_paths": [],
                 "output_dir": output_dir,
                 "document_info": {},

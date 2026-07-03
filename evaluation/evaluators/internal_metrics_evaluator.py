@@ -121,6 +121,12 @@ class InternalMetricsEvaluator:
                 'needs_human_review': execution_summary.get('needs_human_review', False),
                 'workflow_status': workflow_report.get('workflow_status', 'unknown')
             }
+
+            retrieval_metrics = workflow_report.get('retrieval_metrics') or {}
+            section_coverage = workflow_report.get('section_coverage') or {}
+            if retrieval_metrics or section_coverage:
+                result['retrieval_metrics'] = retrieval_metrics
+                result['section_coverage'] = section_coverage
             
             # Agents execution details - record all agents, not just those with retries
             agents_executed = execution_summary.get('agents_executed', {})

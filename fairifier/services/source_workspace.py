@@ -347,3 +347,83 @@ def search_table(
                         if len(matches) >= match_limit:
                             return matches
     return matches
+
+
+def hybrid_search_sources(
+    workspace: SourceWorkspace,
+    queries: List[str],
+    *,
+    semantic_index: Optional[Any] = None,
+    source_ids: Optional[List[str]] = None,
+    telemetry: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Hybrid lexical + semantic retrieval with RRF fusion and optional rerank."""
+    from .semantic_index import reciprocal_rank_fusion, rerank_hits
+
+    if not queries:
+        return []
+
+    telemetry = telemetry if telemetry is not None else {}
+    lexical_lists: List[List[Dict[str, Any]]] = []
+    semantic_lists: List[List[Dict[str, Any]]] = []
+
+    max_queries = max(1, int(config.retrieval_lexical_max_queries))
+    lexical_limit = max(1, int(config.retrieval_lexical_max_hits))
+    semantic_limit = max(1, int(config.retrieval_semantic_max_hits))
+
+    for query in queries[:max_queries]:
+        lexical_hits = grep_sources(
+            workspace,
+            query,
+            source_ids=source_ids,
+            context_chars=config.source_grep_context_chars,
+            max_results=lexical_limit,
+        )
+        for hit in lexical_hits:
+            hit["retrieval_channel"] = "lexical"
+            hit["_query"] = query
+        lexical_lists.append(lexical_hits)
+
+        if (
+            config.hybrid_retrieval_enabled
+            and semantic_index is not None
+            and getattr(semantic_index, "is_available", lambda: False)()
+        ):
+            semantic_hits = semantic_index.search(query, limit=semantic_limit)
+            for hit in semantic_hits:
+                hit["_query"] = query
+            semantic_lists.append(semantic_hits)
+
+    lexical_merged = reciprocal_rank_fusion(lexical_lists) if lexical_lists else []
+    hybrid_merged = lexical_merged
+    rerank_status = "not_run"
+
+    if config.hybrid_retrieval_enabled and semantic_lists:
+        hybrid_merged = reciprocal_rank_fusion([lexical_merged, *semantic_lists])
+        primary_query = queries[0]
+        rerank_pool = hybrid_merged[: max(1, int(config.retrieval_rerank_candidates))]
+        hybrid_merged = rerank_hits(primary_query, rerank_pool)
+        rerank_status = hybrid_merged[0].get("rerank_status", "applied") if hybrid_merged else "skipped"
+
+    final_limit = max(1, int(config.retrieval_final_snippets))
+    lexical_output = lexical_merged[:final_limit]
+    hybrid_output = hybrid_merged[:final_limit]
+
+    telemetry.update(
+        {
+            "lexical_hit_count": len(lexical_merged),
+            "semantic_hit_count": sum(len(items) for items in semantic_lists),
+            "hybrid_hit_count": len(hybrid_merged),
+            "rerank_status": rerank_status,
+            "shadow_mode": bool(config.retrieval_shadow_mode),
+            "queries_used": queries[:max_queries],
+        }
+    )
+
+    if config.retrieval_shadow_mode:
+        telemetry["hybrid_candidate_ids"] = [
+            f"{item.get('source_id')}:{item.get('start')}-{item.get('end')}"
+            for item in hybrid_output
+        ]
+        return lexical_output
+    return hybrid_output

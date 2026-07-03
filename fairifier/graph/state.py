@@ -29,6 +29,12 @@ class FAIRifierState(TypedDict):
     output_dir: Optional[str]  # Output directory for artifacts (including MinerU)
     input_documents: List[Dict[str, Any]]  # Normalized input units for per-file parsing
     source_workspace: Dict[str, Any]  # Paths for source manifest, source files, and table indexes
+    source_chunks: List[Dict[str, Any]]  # Chunk manifest entries for hybrid retrieval
+    source_sections: List[Dict[str, Any]]  # Section outline for map-reduce coverage
+    semantic_index: Dict[str, Any]  # Per-run Qdrant collection metadata
+    evidence_store: Dict[str, Any]  # Evidence store JSONL metadata
+    retrieval_telemetry: Dict[str, Any]  # Hybrid retrieval shadow/compare metrics
+    section_coverage: Dict[str, Any]  # Deterministic section coverage report
     bio_file_paths: List[str]  # Absolute host paths for BIO_BINARY files (BAM, VCF, FASTQ, h5ad)
     
     # Processing stages

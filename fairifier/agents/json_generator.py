@@ -16,11 +16,13 @@ from ..config import config
 from ..services.evidence_packets import build_evidence_context
 from ..services.source_workspace import (
     grep_sources,
+    hybrid_search_sources,
     load_source_workspace,
     rank_source_entries,
     search_table,
     source_role_priority,
 )
+from ..services.semantic_index import SemanticIndex
 from ..utils.llm_helper import get_llm_helper
 from ..utils.document_text import read_document_text
 from ..services.fairds_api_parser import FAIRDSAPIParser
@@ -275,6 +277,7 @@ class JSONGeneratorAgent(BaseAgent):
             field_evidence_context, all_candidates = self._build_field_source_evidence_context(
                 state.get("source_workspace", {}) or {},
                 knowledge_items,
+                state=state,
             )
             # Store candidates in state so _generate_with_llm or postcheck can access them
             state["_field_candidates"] = all_candidates
@@ -454,6 +457,8 @@ class JSONGeneratorAgent(BaseAgent):
         self,
         source_workspace: Dict[str, Any],
         knowledge_items: List[Dict[str, Any]],
+        *,
+        state: Optional[FAIRifierState] = None,
     ) -> Tuple[str, Dict[str, List[FieldCandidate]]]:
         """Search preserved sources for per-field candidate evidence.
 
@@ -487,6 +492,14 @@ class JSONGeneratorAgent(BaseAgent):
 
         all_candidates: Dict[str, List[FieldCandidate]] = {}
 
+        semantic_index = None
+        if state and config.hybrid_retrieval_enabled:
+            semantic_meta = state.get("semantic_index") or {}
+            if semantic_meta.get("available"):
+                semantic_index = SemanticIndex(state.get("session_id") or "default")
+                semantic_index.connect()
+        retrieval_telemetry = state.setdefault("retrieval_telemetry", {}) if state else {}
+
         for field in knowledge_items:
             field_name = str(field.get("name") or field.get("field_name") or "").strip()
             description = str(field.get("description") or "").strip()
@@ -498,19 +511,35 @@ class JSONGeneratorAgent(BaseAgent):
             # -- Collect raw text matches --------------------------------
             raw_text_matches: List[Dict[str, Any]] = []
             seen_text: set = set()
-            for query in queries:
-                for match in grep_sources(
+            if config.hybrid_retrieval_enabled:
+                field_telemetry: Dict[str, Any] = {}
+                hybrid_hits = hybrid_search_sources(
                     workspace,
-                    query,
-                    context_chars=config.source_grep_context_chars,
-                    max_results=config.source_max_search_results,
-                ):
+                    queries,
+                    semantic_index=semantic_index,
+                    telemetry=field_telemetry,
+                )
+                retrieval_telemetry[field_name_lower] = field_telemetry
+                for match in hybrid_hits:
                     marker = (match.get("source_id"), match.get("start"), match.get("end"))
                     if marker in seen_text:
                         continue
                     seen_text.add(marker)
-                    match["_query"] = query
                     raw_text_matches.append(match)
+            else:
+                for query in queries:
+                    for match in grep_sources(
+                        workspace,
+                        query,
+                        context_chars=config.source_grep_context_chars,
+                        max_results=config.source_max_search_results,
+                    ):
+                        marker = (match.get("source_id"), match.get("start"), match.get("end"))
+                        if marker in seen_text:
+                            continue
+                        seen_text.add(marker)
+                        match["_query"] = query
+                        raw_text_matches.append(match)
 
             # De-duplicate overlapping text spans from the same source.
             raw_text_matches = self._dedup_overlapping_text_spans(raw_text_matches)

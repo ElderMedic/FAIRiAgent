@@ -84,7 +84,7 @@ def discover_structured_artifacts(parse_dir: Path, doc_stem: str) -> Dict[str, P
     return artifacts
 
 
-def load_content_list_v2(path: Path, *, max_blocks: int = 500) -> List[Dict[str, Any]]:
+def load_content_list_v2(path: Path, *, max_blocks: Optional[int] = 500) -> List[Dict[str, Any]]:
     """Load content_list_v2 blocks for source-grounding metadata."""
     raw = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(raw, list):
@@ -96,8 +96,13 @@ def load_content_list_v2(path: Path, *, max_blocks: int = 500) -> List[Dict[str,
     else:
         return []
 
+    if max_blocks is not None and max_blocks > 0:
+        block_iter = blocks[:max_blocks]
+    else:
+        block_iter = blocks
+
     normalized: List[Dict[str, Any]] = []
-    for block in blocks[:max_blocks]:
+    for block in block_iter:
         if not isinstance(block, dict):
             continue
         entry: Dict[str, Any] = {
@@ -105,6 +110,7 @@ def load_content_list_v2(path: Path, *, max_blocks: int = 500) -> List[Dict[str,
             "text": block.get("text") or block.get("content") or "",
             "page_idx": block.get("page_idx"),
             "bbox": block.get("bbox"),
+            "text_level": block.get("text_level"),
         }
         if block.get("img_path"):
             entry["img_path"] = block["img_path"]

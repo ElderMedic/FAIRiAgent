@@ -145,6 +145,7 @@ class EvaluationOrchestrator:
             OntologyEvaluator,
             LLMJudgeEvaluator,
             InternalMetricsEvaluator,
+            RetrievalCoverageEvaluator,
         )
 
         # Completeness evaluator
@@ -176,6 +177,7 @@ class EvaluationOrchestrator:
         
         # Internal metrics evaluator (extracts FAIRiAgent's own confidence scores)
         self.internal_metrics_evaluator = InternalMetricsEvaluator()
+        self.retrieval_coverage_evaluator = RetrievalCoverageEvaluator()
         
         print("✅ All evaluators initialized")
     
@@ -443,6 +445,12 @@ class EvaluationOrchestrator:
         # 6. Internal Metrics (from FAIRiAgent workflow)
         print(f"  🔍 Extracting internal metrics from FAIRiAgent workflow...")
         results['internal_metrics'] = self.internal_metrics_evaluator.evaluate_batch(
+            fairifier_outputs,
+            output_dirs
+        )
+
+        print(f"  🔍 Evaluating retrieval coverage metrics...")
+        results['retrieval_coverage'] = self.retrieval_coverage_evaluator.evaluate_batch(
             fairifier_outputs,
             output_dirs
         )

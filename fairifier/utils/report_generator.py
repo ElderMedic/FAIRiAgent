@@ -38,6 +38,8 @@ class WorkflowReportGenerator:
             "workflow_status": state.get("status", "unknown"),
             "execution_summary": self._generate_execution_summary(state),
             "quality_metrics": self._generate_quality_metrics(state),
+            "retrieval_metrics": self._generate_retrieval_metrics(state),
+            "section_coverage": state.get("section_coverage", {}),
             "field_analysis": self._analyze_fields(state, metadata_json_path),
             "duplicate_check": self._check_duplicates(state, metadata_json_path),
             "retry_analysis": self._analyze_retries(state),
@@ -118,6 +120,35 @@ class WorkflowReportGenerator:
                 }
 
         return quality
+
+    def _generate_retrieval_metrics(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Summarize hybrid retrieval telemetry and semantic index status."""
+        semantic_index = state.get("semantic_index") or {}
+        retrieval_telemetry = state.get("retrieval_telemetry") or {}
+        field_stats = []
+        for field_name, stats in retrieval_telemetry.items():
+            if not isinstance(stats, dict):
+                continue
+            field_stats.append(
+                {
+                    "field": field_name,
+                    "lexical_hit_count": stats.get("lexical_hit_count", 0),
+                    "semantic_hit_count": stats.get("semantic_hit_count", 0),
+                    "hybrid_hit_count": stats.get("hybrid_hit_count", 0),
+                    "rerank_status": stats.get("rerank_status"),
+                    "shadow_mode": stats.get("shadow_mode"),
+                }
+            )
+        return {
+            "semantic_index_status": semantic_index.get("status"),
+            "semantic_index_available": semantic_index.get("available", False),
+            "indexed_chunk_count": semantic_index.get("indexed_chunk_count", 0),
+            "chunk_count": semantic_index.get("chunk_count", len(state.get("source_chunks") or [])),
+            "section_count": semantic_index.get("section_count", len(state.get("source_sections") or [])),
+            "fields_with_retrieval_telemetry": len(field_stats),
+            "field_retrieval_stats": field_stats[:50],
+            "evidence_store": state.get("evidence_store", {}),
+        }
     
     def _analyze_fields(
         self,

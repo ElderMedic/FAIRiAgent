@@ -119,6 +119,30 @@ class FAIRifierConfig:
     table_full_scan_enabled: bool = True
     table_search_max_rows: int = 5000
     table_search_max_matches: int = 50
+
+    # Hybrid retrieval + semantic index (v1.5)
+    semantic_index_enabled: bool = True
+    hybrid_retrieval_enabled: bool = True
+    evidence_store_enabled: bool = True
+    mapreduce_enabled: bool = True
+    retrieval_shadow_mode: bool = True  # shadow/compare before default switch
+    chunk_target_tokens: int = 384
+    chunk_hard_cap_tokens: int = 448
+    section_target_tokens: int = 2400
+    section_soft_cap_tokens: int = 3200
+    mapreduce_max_workers: int = 5
+    mapreduce_max_sections: int = 80
+    retrieval_rrf_k: int = 60
+    retrieval_lexical_max_queries: int = 10
+    retrieval_lexical_max_hits: int = 20
+    retrieval_semantic_max_hits: int = 24
+    retrieval_rerank_candidates: int = 20
+    retrieval_final_snippets: int = 8
+    retrieval_rerank_timeout_seconds: float = 5.0
+    retrieval_embedding_model: str = "BAAI/bge-small-en-v1.5"
+    retrieval_rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    retrieval_near_duplicate_threshold: float = 0.92
+    retrieval_qdrant_collection_prefix: str = "run"
     
     # Processing limits
     max_document_size_mb: int = 50
@@ -415,6 +439,56 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.table_search_max_rows = int(os.getenv("FAIRIFIER_TABLE_SEARCH_MAX_ROWS"))
     if os.getenv("FAIRIFIER_TABLE_SEARCH_MAX_MATCHES"):
         config_instance.table_search_max_matches = int(os.getenv("FAIRIFIER_TABLE_SEARCH_MAX_MATCHES"))
+
+    def _env_bool(name: str) -> Optional[bool]:
+        raw = os.getenv(name)
+        if raw is None:
+            return None
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+
+    for env_name, attr in (
+        ("FAIRIFIER_SEMANTIC_INDEX_ENABLED", "semantic_index_enabled"),
+        ("FAIRIFIER_HYBRID_RETRIEVAL_ENABLED", "hybrid_retrieval_enabled"),
+        ("FAIRIFIER_EVIDENCE_STORE_ENABLED", "evidence_store_enabled"),
+        ("FAIRIFIER_MAPREDUCE_ENABLED", "mapreduce_enabled"),
+        ("FAIRIFIER_RETRIEVAL_SHADOW_MODE", "retrieval_shadow_mode"),
+    ):
+        value = _env_bool(env_name)
+        if value is not None:
+            setattr(config_instance, attr, value)
+    if os.getenv("FAIRIFIER_CHUNK_TARGET_TOKENS"):
+        config_instance.chunk_target_tokens = int(os.getenv("FAIRIFIER_CHUNK_TARGET_TOKENS"))
+    if os.getenv("FAIRIFIER_CHUNK_HARD_CAP_TOKENS"):
+        config_instance.chunk_hard_cap_tokens = int(os.getenv("FAIRIFIER_CHUNK_HARD_CAP_TOKENS"))
+    if os.getenv("FAIRIFIER_SECTION_TARGET_TOKENS"):
+        config_instance.section_target_tokens = int(os.getenv("FAIRIFIER_SECTION_TARGET_TOKENS"))
+    if os.getenv("FAIRIFIER_SECTION_SOFT_CAP_TOKENS"):
+        config_instance.section_soft_cap_tokens = int(os.getenv("FAIRIFIER_SECTION_SOFT_CAP_TOKENS"))
+    if os.getenv("FAIRIFIER_MAPREDUCE_MAX_WORKERS"):
+        config_instance.mapreduce_max_workers = int(os.getenv("FAIRIFIER_MAPREDUCE_MAX_WORKERS"))
+    if os.getenv("FAIRIFIER_MAPREDUCE_MAX_SECTIONS"):
+        config_instance.mapreduce_max_sections = int(os.getenv("FAIRIFIER_MAPREDUCE_MAX_SECTIONS"))
+    if os.getenv("FAIRIFIER_RETRIEVAL_RRF_K"):
+        config_instance.retrieval_rrf_k = int(os.getenv("FAIRIFIER_RETRIEVAL_RRF_K"))
+    if os.getenv("FAIRIFIER_RETRIEVAL_LEXICAL_MAX_QUERIES"):
+        config_instance.retrieval_lexical_max_queries = int(os.getenv("FAIRIFIER_RETRIEVAL_LEXICAL_MAX_QUERIES"))
+    if os.getenv("FAIRIFIER_RETRIEVAL_LEXICAL_MAX_HITS"):
+        config_instance.retrieval_lexical_max_hits = int(os.getenv("FAIRIFIER_RETRIEVAL_LEXICAL_MAX_HITS"))
+    if os.getenv("FAIRIFIER_RETRIEVAL_SEMANTIC_MAX_HITS"):
+        config_instance.retrieval_semantic_max_hits = int(os.getenv("FAIRIFIER_RETRIEVAL_SEMANTIC_MAX_HITS"))
+    if os.getenv("FAIRIFIER_RETRIEVAL_RERANK_CANDIDATES"):
+        config_instance.retrieval_rerank_candidates = int(os.getenv("FAIRIFIER_RETRIEVAL_RERANK_CANDIDATES"))
+    if os.getenv("FAIRIFIER_RETRIEVAL_FINAL_SNIPPETS"):
+        config_instance.retrieval_final_snippets = int(os.getenv("FAIRIFIER_RETRIEVAL_FINAL_SNIPPETS"))
+    if os.getenv("FAIRIFIER_RETRIEVAL_RERANK_TIMEOUT_SECONDS"):
+        config_instance.retrieval_rerank_timeout_seconds = float(os.getenv("FAIRIFIER_RETRIEVAL_RERANK_TIMEOUT_SECONDS"))
+    if os.getenv("FAIRIFIER_RETRIEVAL_EMBEDDING_MODEL"):
+        config_instance.retrieval_embedding_model = os.getenv("FAIRIFIER_RETRIEVAL_EMBEDDING_MODEL")
+    if os.getenv("FAIRIFIER_RETRIEVAL_RERANK_MODEL"):
+        config_instance.retrieval_rerank_model = os.getenv("FAIRIFIER_RETRIEVAL_RERANK_MODEL")
+    if os.getenv("FAIRIFIER_RETRIEVAL_NEAR_DUPLICATE_THRESHOLD"):
+        config_instance.retrieval_near_duplicate_threshold = float(os.getenv("FAIRIFIER_RETRIEVAL_NEAR_DUPLICATE_THRESHOLD"))
+
     if os.getenv("FAIRIFIER_CROSS_LAYER_MAX_RESTARTS"):
         config_instance.cross_layer_max_restarts = int(
             os.getenv("FAIRIFIER_CROSS_LAYER_MAX_RESTARTS")
