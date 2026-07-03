@@ -223,16 +223,18 @@ def _get_embedder():
     if _EMBEDDER is not None:
         return _EMBEDDER
     try:
-        _EMBEDDER = EmbeddingClient(
+        client = EmbeddingClient(
             backend=config.retrieval_embedding_backend,
             model_name=config.retrieval_embedding_model,
             base_url=config.retrieval_embedding_base_url,
-            api_key=config.jina_api_key
+            api_key=config.jina_api_key,
         )
-        _EMBEDDER.initialize()
+        client.initialize()
+        _EMBEDDER = client
         return _EMBEDDER
     except Exception as exc:
         logger.warning("Semantic embedder unavailable: %s", exc)
+        _EMBEDDER = None
         return None
 
 
@@ -241,15 +243,17 @@ def _get_reranker():
     if _RERANKER is not None:
         return _RERANKER
     try:
-        _RERANKER = RerankerClient(
+        client = RerankerClient(
             backend=config.retrieval_rerank_backend,
             model_name=config.retrieval_rerank_model,
-            api_key=config.jina_api_key
+            api_key=config.jina_api_key,
         )
-        _RERANKER.initialize()
+        client.initialize()
+        _RERANKER = client
         return _RERANKER
     except Exception as exc:
         logger.warning("Cross-encoder reranker unavailable: %s", exc)
+        _RERANKER = None
         return None
 
 
@@ -257,15 +261,23 @@ def _encode_passages(texts: Sequence[str]) -> List[List[float]]:
     client = _get_embedder()
     if client is None or not texts:
         return []
-    return client.encode(texts, is_query=False)
+    try:
+        return client.encode(texts, is_query=False)
+    except Exception as exc:
+        logger.warning("Passage embedding failed; falling back to lexical retrieval: %s", exc)
+        return []
 
 
 def _encode_query(text: str) -> Optional[List[float]]:
     client = _get_embedder()
     if client is None or not text:
         return None
-    res = client.encode([text], is_query=True)
-    return res[0] if res else None
+    try:
+        res = client.encode([text], is_query=True)
+        return res[0] if res else None
+    except Exception as exc:
+        logger.warning("Query embedding failed; falling back to lexical retrieval: %s", exc)
+        return None
 
 
 class SemanticIndex:
@@ -289,7 +301,10 @@ class SemanticIndex:
         self._status = "uninitialized"
 
     def is_available(self) -> bool:
-        return self._available and self._client is not None
+        return self._available and self._client is not None and self._status == "ready"
+
+    def embedder_ready(self) -> bool:
+        return _get_embedder() is not None
 
     def status(self) -> str:
         return self._status
@@ -340,6 +355,7 @@ class SemanticIndex:
         vectors = _encode_passages(texts)
         if not vectors:
             self._status = "embedder_unavailable"
+            self._available = False
             return 0
 
         from qdrant_client.http import models as qmodels
@@ -424,13 +440,15 @@ class SemanticIndex:
         return len(points)
 
     def serialize(self) -> Dict[str, Any]:
+        ready = self.is_available() and self.embedder_ready()
         return {
             "session_id": self.session_id,
             "collection_name": self.collection_name,
             "host": self.host,
             "port": self.port,
             "status": self._status,
-            "available": self.is_available(),
+            "available": ready,
+            "embedder_ready": self.embedder_ready(),
         }
 
 

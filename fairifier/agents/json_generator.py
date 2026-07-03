@@ -498,9 +498,10 @@ class JSONGeneratorAgent(BaseAgent):
         semantic_index = None
         if state and config.hybrid_retrieval_enabled:
             semantic_meta = state.get("semantic_index") or {}
-            if semantic_meta.get("available"):
-                semantic_index = SemanticIndex(state.get("session_id") or "default")
-                semantic_index.connect()
+            if semantic_meta.get("available") and semantic_meta.get("embedder_ready", True):
+                candidate_index = SemanticIndex(state.get("session_id") or "default")
+                if candidate_index.connect() and candidate_index.embedder_ready():
+                    semantic_index = candidate_index
         retrieval_telemetry = state.setdefault("retrieval_telemetry", {}) if state else {}
 
         for field in knowledge_items:
