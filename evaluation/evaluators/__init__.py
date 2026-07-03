@@ -9,6 +9,7 @@ from .ontology_evaluator import OntologyEvaluator
 from .llm_judge_evaluator import LLMJudgeEvaluator
 from .internal_metrics_evaluator import InternalMetricsEvaluator
 from .retrieval_coverage_evaluator import RetrievalCoverageEvaluator
+from .value_accuracy_evaluator import ValueAccuracyEvaluator
 
 __all__ = [
     'CompletenessEvaluator',
@@ -18,5 +19,6 @@ __all__ = [
     'LLMJudgeEvaluator',
     'InternalMetricsEvaluator',
     'RetrievalCoverageEvaluator',
+    'ValueAccuracyEvaluator',
 ]
 

@@ -28,7 +28,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import string
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -41,89 +40,20 @@ try:
 except ImportError:
     _SCIPY = False
 
-# ── sentence-transformers semantic similarity ─────────────────────────────────
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
-_ST_MODEL = None
-_ST_AVAILABLE = False
-_ST_DISABLED = False
-
-
-def _get_st_model():
-    global _ST_MODEL, _ST_AVAILABLE
-    if _ST_DISABLED:
-        _ST_AVAILABLE = False
-        return None
-    if _ST_MODEL is not None:
-        return _ST_MODEL
-    try:
-        from sentence_transformers import SentenceTransformer
-        _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
-        _ST_AVAILABLE = True
-    except Exception:
-        _ST_AVAILABLE = False
-    return _ST_MODEL
-
-
-def semantic_sim(a: str, b: str) -> float:
-    """Cosine similarity in [0,1] using all-MiniLM-L6-v2; fallback 0.0."""
-    model = _get_st_model()
-    if model is None or not a.strip() or not b.strip():
-        return 0.0
-    try:
-        embs = model.encode([a, b], convert_to_numpy=True, normalize_embeddings=True)
-        return float(np.clip(float(embs[0] @ embs[1]), 0.0, 1.0))
-    except Exception:
-        return 0.0
-
-
-# ── token-F1 (SQuAD-style) ───────────────────────────────────────────────────
-
-def _normalize(text: str) -> List[str]:
-    text = text.lower()
-    text = text.translate(str.maketrans("", "", string.punctuation))
-    return [t for t in text.split() if t]
-
-
-_STOPWORDS = frozenset({"the", "a", "an", "is", "are", "was", "were", "be", "been",
-                        "and", "or", "of", "in", "to", "for", "with", "on", "at",
-                        "by", "from", "as", "not", "no", "n/a", "na", "unknown"})
-
-
-def token_f1(pred: str, gt: str) -> Tuple[float, float, float]:
-    """Token-level precision, recall, F1."""
-    p_toks = [t for t in _normalize(pred) if t not in _STOPWORDS]
-    g_toks = [t for t in _normalize(gt)   if t not in _STOPWORDS]
-    if not g_toks:
-        return (1.0, 1.0, 1.0) if not p_toks else (0.0, 1.0, 0.0)
-    if not p_toks:
-        return (0.0, 0.0, 0.0)
-    common = set(p_toks) & set(g_toks)
-    if not common:
-        return (0.0, 0.0, 0.0)
-    prec = len(common) / len(p_toks)
-    rec  = len(common) / len(g_toks)
-    f1   = 2 * prec * rec / (prec + rec)
-    return (prec, rec, f1)
-
-
-def combined_score(pred: str, gt: str) -> float:
-    """
-    Best-of semantic similarity and token-F1.
-
-    For short / numeric values (≤ 3 tokens) token-F1 is more reliable.
-    For longer values, semantic similarity captures paraphrases.
-    """
-    _, _, tf1 = token_f1(pred, gt)
-    gt_toks = _normalize(gt)
-    if not gt_toks:
-        return tf1
-    # Short values: use token-F1 directly
-    if len(gt_toks) <= 3:
-        return tf1
-    # Long values: take max(semantic, token_f1) so we don't penalise
-    # well-phrased paraphrases that happen to share fewer tokens.
-    sim = semantic_sim(pred, gt)
-    return max(sim, tf1)
+from evaluation.evaluators._value_matching import (  # noqa: E402
+    MATCH_THRESHOLD,
+    PARTIAL_THRESHOLD,
+    combined_score,
+    disable_semantic_similarity,
+    normalize_tokens as _normalize,
+    score_value_pair,
+    semantic_sim,
+    semantic_similarity_available,
+    token_f1,
+    warmup_semantic_model,
+)
 
 
 # ── GT loader ─────────────────────────────────────────────────────────────────
@@ -284,9 +214,6 @@ def align_rows(
 
 # ── per-sheet evaluation ───────────────────────────────────────────────────────
 
-MATCH_THRESHOLD   = 0.75  # semantic/token score >= 0.75 → "match"
-PARTIAL_THRESHOLD = 0.40  # >= 0.40 → "partial"
-
 FieldResult = Dict[str, Any]
 
 
@@ -320,10 +247,11 @@ def evaluate_sheet(
                     or ""
                 )
             field_present = bool(pred_val)
-            score = combined_score(pred_val, gt_val) if pred_val else 0.0
+            detail = score_value_pair(pred_val, gt_val, field_name=field) if pred_val else score_value_pair("", gt_val, field_name=field)
+            score = detail.score
 
             total_fields += 1
-            score_sum    += score
+            score_sum += score
 
             if score >= MATCH_THRESHOLD:
                 status = "match"
@@ -340,10 +268,15 @@ def evaluate_sheet(
                 missing_name_count += 1
 
             fields.append({
-                "field":        field,
-                "status":       status,
-                "score":        round(score, 3),
-                "gt_snippet":   gt_val[:60],
+                "field": field,
+                "status": status,
+                "score": round(score, 3),
+                "semantic_score": detail.semantic_score,
+                "token_f1_score": detail.token_f1_score,
+                "semantic_judgment_score": detail.semantic_judgment_score,
+                "rule_score": detail.rule_score,
+                "match_type": detail.match_type,
+                "gt_snippet": gt_val[:60],
                 "pred_snippet": pred_val[:60] if pred_val else "(not found)",
             })
         row_details.append({"fields": fields})
@@ -413,7 +346,8 @@ def print_report(results: List[Dict[str, Any]], use_semantic: bool) -> None:
     print(f"  Field coverage : {overall_cov:.1%}  "
           f"(field name present regardless of value)")
     if use_semantic:
-        print("  Model: all-MiniLM-L6-v2  thresholds: match≥0.75  partial≥0.40")
+        print("  Model: all-MiniLM-L6-v2  thresholds: match≥0.75  partial≥0.35")
+        print("  Score = fuse(rule, max(semantic_sim, token_f1)) per field type")
     else:
         print("  [note] sentence-transformers unavailable — token-F1 only")
     if not _SCIPY:
@@ -435,15 +369,15 @@ def main():
     args = parser.parse_args()
 
     if args.no_semantic:
-        global _ST_AVAILABLE, _ST_DISABLED
-        _ST_AVAILABLE = False
-        _ST_DISABLED = True
+        disable_semantic_similarity(True)
 
-    gt_path  = Path(args.gt_path)
-    run_dir  = Path(args.run_dir)
+    gt_path = Path(args.gt_path)
+    run_dir = Path(args.run_dir)
 
-    # Warm up model before scoring (prints nothing if unavailable)
-    use_semantic = not args.no_semantic and _get_st_model() is not None
+    use_semantic = semantic_similarity_available()
+    if not args.no_semantic:
+        warmup_semantic_model()
+        use_semantic = semantic_similarity_available()
 
     gt_sheets   = load_gt_sheets(gt_path)
     pred_sheets = load_run_sheets(run_dir)

@@ -755,7 +755,7 @@ FAIRIFIER_HYBRID_RETRIEVAL_ENABLED=true
 FAIRIFIER_EVIDENCE_STORE_ENABLED=true
 FAIRIFIER_MAPREDUCE_ENABLED=true
 FAIRIFIER_RETRIEVAL_SHADOW_MODE=true   # comparison stage only
-FAIRIFIER_RERANK_TIMEOUT_SECONDS=5
+FAIRIFIER_RETRIEVAL_RERANK_TIMEOUT_SECONDS=5
 FAIRIFIER_MAPREDUCE_MAX_PARALLEL_WORKERS=5
 ```
 
@@ -763,7 +763,130 @@ FAIRIFIER_MAPREDUCE_MAX_PARALLEL_WORKERS=5
 `FAIRIFIER_MAPREDUCE_MAX_PARALLEL_WORKERS` controls within-document section
 worker concurrency. Document workers × section workers can multiply API
 pressure, so the evaluation README should warn users to reduce one when
-increasing the other.
+   increasing the other.
+
+### 10.2 Phase 3 local shadow gate (2026-07-03)
+
+Status: **pass** — retrieval stack validated end-to-end, including per-field
+telemetry in `workflow_report.json`. Two real bugs were found and fixed while
+verifying the gate (see below); both are now covered by regression tests.
+
+**Subset tested** (`ground_truth_shadow_gate.json`, 3 documents):
+
+| Document | Retrieval pilot hybrid gain | Section coverage | Qdrant fallback | Overall completeness (post-fix workflow) | Required completeness |
+|---|---:|---:|---:|---:|---:|
+| `earthworm` | 12/12 queries | 43/43 | 0% | 81.0% | 100% |
+| `petase_10_1038_s41586-020-2149-4` | 12/12 | 74/74 | 0% | 94.4% | 100% |
+| `petase_10_1002_anie_202218390` | 12/12 | 40/40 | 0% | 90.3% | 100% |
+
+**Post-fix full workflow batch** (`workflow_postfix/`, 2026-07-03): all 3
+documents completed successfully with field evidence wired correctly.
+Aggregate evaluation score **0.897**. Mean overall completeness **88.6%**;
+**required fields 100%** on all three. Hybrid retrieval telemetry confirmed
+per document (`fields_with_hybrid_gain` 4–5, `section_coverage_ratio` 1.0,
+`qdrant_fallback_used` false).
+
+The earlier `workflow/` batch (pre field-name fix) is retained for comparison
+only; do not use its completeness numbers as the gate baseline.
+
+**Bugs found and fixed during this gate (both pre-existing on `main`, not
+introduced by this branch, but they blocked verifying hybrid retrieval's own
+telemetry):**
+
+1. **`retrieval_telemetry` merge into LangGraph state.** LangGraph merges
+   returned state top-level keys only; `_build_field_source_evidence_context`
+   mutated a nested dict without ever reassigning
+   `state["retrieval_telemetry"]`. Fixed by reassigning at the end of
+   `JSONGeneratorAgent._build_field_source_evidence_context`. Covered by
+   `test_json_generator_persists_retrieval_telemetry_on_state`.
+2. **Field-identity key mismatch (root cause of `fields_with_retrieval_telemetry
+   == 0` even after fix 1).** `_build_field_source_evidence_context` resolved
+   field name/description via `field.get("name")` / `field.get("field_name")`
+   / `field.get("description")`, but `state["retrieved_knowledge"]` items
+   (as written by `KnowledgeRetrieverAgent.execute()`) actually use
+   `term` / `definition` / `metadata` keys. Every item was silently skipped
+   (`if not field_name: continue`), so **field-specific source evidence was
+   never injected into the JSONGenerator/ISAValueMapper prompt** on `main`
+   either — this predates hybrid retrieval. Fixed by resolving field
+   name/description from `term`/`definition`/`metadata.name`/
+   `metadata.definition` as well. Covered by
+   `test_field_source_evidence_context_reads_knowledge_retriever_item_shape`.
+   Confirmed end-to-end: re-running `earthworm` after both fixes produced
+   `fields_with_retrieval_telemetry: 4`, `hybrid_fields: 4`,
+   `semantic_hit_count` far exceeding `lexical_hit_count` per field, and a
+   higher `json_generation`/`isa_value_mapping` confidence than the pre-fix
+   run.
+3. **Unrelated hardening**: `FAIRDSAPIParser._infer_data_type` crashed with
+   `TypeError: argument of type 'NoneType' is not iterable` when a FAIR-DS
+   term has `"syntax": null` (`term.get("syntax", "")` does not apply the
+   default when the key is present with an explicit `null`). Fixed with
+   `term.get("syntax") or ""`. Covered by
+   `test_extract_field_info_null_syntax_does_not_raise`.
+4. **Prompt budget stopped telemetry collection early.** When
+   `metadata_max_context_chars_per_field` was exhausted,
+   `_build_field_source_evidence_context` used `break`, so hybrid search +
+   telemetry ran for only the first few fields that fit in the prompt budget.
+   Fixed by continuing the loop after budget exhaustion (telemetry and
+   candidates still collected; only prompt lines are truncated). Covered by
+   `test_field_evidence_telemetry_not_truncated_by_prompt_budget`.
+
+**Artifacts** (local, gitignored under `evaluation/runs/`):
+
+- `evaluation/runs/shadow_gate_20260703/retrieval_pilot/*/shadow_comparison.json`
+- `evaluation/runs/shadow_gate_20260703/workflow/` — pre-fix workflow outputs (historical)
+- `evaluation/runs/shadow_gate_20260703/workflow_postfix/` — **authoritative post-fix 3-doc batch**
+- `evaluation/runs/shadow_gate_20260703/workflow_fieldname_fix/` — earthworm single-doc confirmation
+
+**Reproducible config** (not committed secrets):
+
+- `evaluation/config/env.evaluation.shadow`
+- `evaluation/config/model_configs/deepseek_v4-flash_v1.4.0_fairds8083_localpkg_shadow.env`
+- `evaluation/datasets/annotated/ground_truth_shadow_gate.json`
+
+Local FAIR-DS was run from source on port **8090** (not 8083) during this
+session because a Cursor-internal process was already bound to `127.0.0.1:8083`
+and `[::1]:8083` on this machine, causing connection resets. Both env files
+above now point at `:8090`; adjust back to `:8083` (or whatever is free) on a
+different machine.
+
+**Commands:**
+
+```bash
+# Prerequisites (subset GT + raw sources; FAIR-DS on :8090, Qdrant on :6335)
+python evaluation/scripts/run_retrieval_shadow_pilot.py --check-only \
+  --ground-truth evaluation/datasets/annotated/ground_truth_shadow_gate.json
+
+# Retrieval-only compare (no LLM)
+python evaluation/scripts/run_retrieval_shadow_pilot.py \
+  --document-id earthworm \
+  --ground-truth evaluation/datasets/annotated/ground_truth_shadow_gate.json \
+  --output-dir evaluation/runs/shadow_gate_YYYYMMDD/retrieval_pilot/earthworm
+
+# Full workflow shadow batch
+python evaluation/scripts/run_batch_evaluation.py \
+  --env-file evaluation/config/env.evaluation.shadow \
+  --model-configs evaluation/config/model_configs/deepseek_v4-flash_v1.4.0_fairds8083_localpkg_shadow.env \
+  --ground-truth evaluation/datasets/annotated/ground_truth_shadow_gate.json \
+  --output-dir evaluation/runs/shadow_gate_YYYYMMDD/workflow \
+  --include-documents earthworm petase_10_1038_s41586-020-2149-4 petase_10_1002_anie_202218390
+```
+
+**Gate checklist:**
+
+| Criterion | Result |
+|---|---|
+| `section_coverage_ratio` ↑ on long docs | ✅ earthworm 100% |
+| Retrieval pilot `queries_with_hybrid_gain` > 0 | ✅ 36/36 across 3 docs |
+| `qdrant_fallback_rate` acceptable | ✅ 0% |
+| Completeness vs baseline non-regression | ✅ required 100% all docs; mean overall 88.6% (post-fix batch) |
+| `workflow_report.retrieval_metrics.field_retrieval_stats` populated | ✅ confirmed (`fields_with_retrieval_telemetry` > 0; budget fix ensures all fields) |
+| Fast unit suite (`run_tests.py fast`) | ✅ 619 passed, 1 pre-existing unrelated failure, 1 skipped |
+
+**Remaining before Phase 4 (`FAIRIFIER_RETRIEVAL_SHADOW_MODE=false`):**
+
+1. DocumentParser chunker outline wiring (Phase 4 P1).
+2. Optional: expand subset to full Tier-A+B benchmark (8 docs) when
+   `ground_truth_filtered.json` is rebuilt locally.
 
 ---
 

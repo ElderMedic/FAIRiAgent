@@ -25,6 +25,7 @@ from evaluation.evaluators import (
     CorrectnessEvaluator,
     LLMJudgeEvaluator,
     InternalMetricsEvaluator,
+    ValueAccuracyEvaluator,
 )
 from evaluation.analysis.config import (
     EXCLUDED_MODELS,
@@ -264,6 +265,29 @@ def evaluate_single_run(
     except Exception as e:
         print(f"  ⚠️  Internal metrics 计算失败: {e}")
         metrics['internal_metrics'] = {}
+
+    # 5. Value accuracy (Layer 2 — semantic + graded scoring, when values GT exists)
+    values_gt_path = (
+        Path(__file__).parent.parent
+        / "datasets"
+        / "annotated"
+        / "values"
+        / f"ground_truth_{doc_id}_values.json"
+    )
+    if values_gt_path.exists():
+        try:
+            with open(values_gt_path, encoding="utf-8") as f:
+                gt_values_doc = json.load(f)
+            value_eval = ValueAccuracyEvaluator()
+            value_result = value_eval.evaluate(
+                fairifier_output, gt_values_doc, run_dir=run_dir
+            )
+            metrics["value_accuracy"] = value_result.get("summary_metrics", {})
+        except Exception as e:
+            print(f"  ⚠️  Value accuracy 计算失败: {e}")
+            import traceback
+            traceback.print_exc()
+            metrics["value_accuracy"] = {}
     
     # Use canonical document_id in stored/returned payload (matches ground-truth keys)
     eval_result["document_id"] = doc_id

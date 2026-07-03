@@ -128,15 +128,60 @@ evaluation/
 
 ## Evaluation Metrics
 
-The framework evaluates:
-- **Completeness**: How many fields are extracted vs. ground truth
-- **Correctness**: Precision, recall, and F1-score of extracted fields
+The framework uses layered metrics. **Layer 1** measures field presence (GT coverage); **Layer 2** measures value accuracy with semantic grading.
+
+### Layer 1 — Field presence / completeness
+
+Headline metrics (extra/non-GT fields are **not** penalized):
+
+| Metric | Meaning |
+|--------|---------|
+| `overall_completeness` / `field_coverage_recall` | Fraction of GT field names present in output |
+| `required_completeness` | Coverage of required GT fields |
+| `recommended_completeness` | Coverage of recommended GT fields |
+| `missing_fields` | GT field names absent from output |
+
+Diagnostic only: `field_coverage_precision`, `field_coverage_f1` (penalize extras — use only when comparing strict precision).
+
+### Layer 2 — Value accuracy (semantic + graded scoring)
+
+When per-document values ground truth exists (`datasets/annotated/values/ground_truth_{doc_id}_values.json`), Layer 2 compares **values** row-by-row (Hungarian alignment) using continuous scores in `[0, 1]`.
+
+**Headline:** `value_mean_score` (= `value_partial_credit_score`) — mean per-field score.
+
+**Semantic judgment** (explicit, not binary):
+
+| Sub-score | Meaning |
+|-----------|---------|
+| `semantic_score` | Cosine similarity via `all-MiniLM-L6-v2` |
+| `token_f1_score` | Token-level F1 (SQuAD-style) |
+| `semantic_judgment_score` | `max(semantic_score, token_f1_score)` |
+| `rule_score` | Type-aware rules (exact, identifier, numeric tolerance, categorical) |
+| Final `score` | `max(rule_score, semantic_judgment_score)` for most types; categorical stays strict |
+
+Status bins (diagnostic): `match` ≥ 0.75, `partial` ≥ 0.35, else `wrong` / `missing`.
+
+Run standalone value comparison:
+
+```bash
+python scripts/compare_values_against_gt.py \
+  datasets/annotated/values/ground_truth_petase_10_1038_s41586-020-2149-4_values.json \
+  runs/.../petase_10_1038_s41586-020-2149-4/run_1
+```
+
+Use `--no-semantic` to disable sentence-transformers (token-F1 + rules only).
+
+**Evaluator:** `ValueAccuracyEvaluator` — wired into `add_evaluation_metrics.py` as `value_accuracy` in `eval_result.json`.
+
+Legacy aggregate metrics still available:
+
+- **Correctness**: Precision, recall, F1 of extracted field names (confidence-aware variants)
 - **LLM Judge Score**: Internal quality assessment from critic agent
 - **Workflow Reliability**: Completion rates, retry rates, failure patterns
 - **Runtime**: Time taken for extraction
-- **Pass@k**: Probability of successful extraction in k attempts (similar to SWE-agent benchmark)
+- **Pass@k**: Probability of successful extraction in k attempts
 
-### Planned Retrieval Coverage Metrics
+### Retrieval Coverage Metrics (hybrid rollout)
 
 The hybrid retrieval / section-map-reduce upgrade plan
 (`docs/en/development/HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md`) adds a
@@ -144,12 +189,11 @@ retrieval-focused evaluation layer that complements field presence metrics.
 The goal is to measure whether the system actually *found* the source spans
 needed for values, not only whether a field appears in `metadata.json`.
 
-Planned additions:
-
-- `RetrievalCoverageEvaluator` in `evaluation/evaluators/`
-- retrieval and section-coverage telemetry parsed from `workflow_report.json`
-- optional detailed evidence analysis from `source_workspace/evidence_store.jsonl`
-- `retrieval_coverage` analyzer/visualization under `evaluation/analysis/`
+**Implemented:** `RetrievalCoverageEvaluator`, `evaluation/analysis/analyzers/retrieval_coverage.py`,
+`evaluation/scripts/run_retrieval_shadow_pilot.py`, and env knobs in
+`evaluation/config/env.evaluation.template`. Local shadow-gate repro configs:
+`env.evaluation.shadow` + `deepseek_v4-flash_v1.4.0_fairds8083_localpkg_shadow.env`
+(see plan §10.2).
 
 Core metrics:
 

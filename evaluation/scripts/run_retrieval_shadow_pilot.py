@@ -32,12 +32,11 @@ from fairifier.services.source_workspace import (
 )
 
 
-def missing_prerequisites() -> List[str]:
+def missing_prerequisites(ground_truth_path: Path) -> List[str]:
     missing: List[str] = []
-    gt = ROOT / "evaluation/datasets/annotated/ground_truth_filtered.json"
+    if not ground_truth_path.is_file():
+        missing.append(str(ground_truth_path))
     raw_root = ROOT / "evaluation/datasets/raw"
-    if not gt.is_file():
-        missing.append(str(gt))
     if not raw_root.is_dir() or not any(raw_root.iterdir()):
         missing.append("evaluation/datasets/raw/{document_id}/paper.pdf or paper.md")
     return missing
@@ -187,9 +186,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    missing = missing_prerequisites()
+    missing = missing_prerequisites(args.ground_truth)
     if missing:
-        print("Missing data for full evaluation gate:")
+        print("Missing prerequisites:")
         for item in missing:
             print(f"  - {item}")
         print("\nRetrieval-only pilot can still run if you pass a local markdown via a populated raw/ folder.")
@@ -197,7 +196,7 @@ def main() -> int:
             return 2
 
     if args.check_only:
-        print("Prerequisites look sufficient for batch evaluation layout.")
+        print(f"Prerequisites look sufficient (ground truth: {args.ground_truth}).")
         return 0
 
     field_queries = load_field_queries(args.ground_truth, args.document_id, limit=args.field_limit)

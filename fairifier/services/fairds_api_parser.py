@@ -368,7 +368,7 @@ class FAIRDSAPIParser:
         elif term.get("date"):
             return "date"
         
-        syntax = term.get("syntax", "")
+        syntax = term.get("syntax") or ""
         if "{number}" in syntax or "{float}" in syntax:
             return "number"
         elif "{date}" in syntax:

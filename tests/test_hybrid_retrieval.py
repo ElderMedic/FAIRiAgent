@@ -73,3 +73,142 @@ def test_hybrid_search_sources_lexical_fallback_without_semantic_index(tmp_path:
     assert hits
     assert any("Wadden Sea" in (hit.get("excerpt") or "") for hit in hits)
     assert telemetry.get("lexical_hit_count", 0) >= 1
+
+
+def test_json_generator_persists_retrieval_telemetry_on_state(tmp_path: Path):
+    """LangGraph requires top-level reassignment; nested dict mutation is not enough."""
+    from fairifier.agents.json_generator import JSONGeneratorAgent
+
+    workspace = build_source_workspace(
+        [
+            SourceRecord(
+                source_id="source_001",
+                path="paper.md",
+                method="direct_read",
+                content="The sampling site was Wadden Sea with elevation 2 m.",
+                content_type="markdown",
+            )
+        ],
+        tmp_path,
+    )
+    workspace_meta = {
+        "root_dir": str(workspace.root_dir),
+        "manifest_path": str(workspace.manifest_path),
+        "summary_path": str(workspace.summary_path),
+        "source_paths": {sid: str(path) for sid, path in workspace.source_paths.items()},
+        "table_paths": {},
+    }
+    state = {
+        "session_id": "test_telemetry",
+        "semantic_index": {"available": False, "status": "unavailable"},
+        "retrieval_telemetry": {},
+    }
+    agent = JSONGeneratorAgent()
+    knowledge_items = [{"field_name": "elevation", "name": "elevation", "description": "site elevation"}]
+    agent._build_field_source_evidence_context(workspace_meta, knowledge_items, state=state)
+    assert state["retrieval_telemetry"]
+    assert "elevation" in state["retrieval_telemetry"]
+    assert state["retrieval_telemetry"]["elevation"].get("lexical_hit_count", 0) >= 0
+
+
+def test_field_source_evidence_context_reads_knowledge_retriever_item_shape(tmp_path: Path):
+    """`state["retrieved_knowledge"]` items use `term`/`definition`/`metadata`
+    keys (see KnowledgeRetrieverAgent.execute), not `name`/`field_name`/
+    `description`. The field-evidence search must resolve field identity from
+    the real shape, or every item is silently skipped and
+    `retrieval_telemetry` stays empty even though hybrid search succeeds."""
+    from fairifier.agents.json_generator import JSONGeneratorAgent
+
+    workspace = build_source_workspace(
+        [
+            SourceRecord(
+                source_id="source_001",
+                path="paper.md",
+                method="direct_read",
+                content="The sampling site was Wadden Sea with elevation 2 m.",
+                content_type="markdown",
+            )
+        ],
+        tmp_path,
+    )
+    workspace_meta = {
+        "root_dir": str(workspace.root_dir),
+        "manifest_path": str(workspace.manifest_path),
+        "summary_path": str(workspace.summary_path),
+        "source_paths": {sid: str(path) for sid, path in workspace.source_paths.items()},
+        "table_paths": {},
+    }
+    state = {
+        "session_id": "test_telemetry_real_shape",
+        "semantic_index": {"available": False, "status": "unavailable"},
+        "retrieval_telemetry": {},
+    }
+    agent = JSONGeneratorAgent()
+    knowledge_items = [
+        {
+            "term": "elevation",
+            "definition": "Elevation of the sampling site above sea level",
+            "source": "FAIR-DS-API",
+            "ontology_uri": None,
+            "confidence": 0.95,
+            "metadata": {"name": "elevation", "definition": "site elevation"},
+        }
+    ]
+    context, _ = agent._build_field_source_evidence_context(
+        workspace_meta, knowledge_items, state=state
+    )
+    assert state["retrieval_telemetry"], (
+        "retrieval_telemetry stayed empty — field name/description was not "
+        "resolved from the KnowledgeRetriever item shape"
+    )
+    assert "elevation" in state["retrieval_telemetry"]
+    assert "Wadden Sea" in context or "elevation" in context.lower()
+
+
+def test_field_evidence_telemetry_not_truncated_by_prompt_budget(tmp_path: Path):
+    """Prompt char budget must not stop hybrid telemetry for later fields."""
+    from fairifier.agents.json_generator import JSONGeneratorAgent
+    from fairifier import config as cfg
+
+    workspace = build_source_workspace(
+        [
+            SourceRecord(
+                source_id="source_001",
+                path="paper.md",
+                method="direct_read",
+                content="The sampling site was Wadden Sea with elevation 2 m.",
+                content_type="markdown",
+            )
+        ],
+        tmp_path,
+    )
+    workspace_meta = {
+        "root_dir": str(workspace.root_dir),
+        "manifest_path": str(workspace.manifest_path),
+        "summary_path": str(workspace.summary_path),
+        "source_paths": {sid: str(path) for sid, path in workspace.source_paths.items()},
+        "table_paths": {},
+    }
+    state = {
+        "session_id": "test_telemetry_budget",
+        "semantic_index": {"available": False, "status": "unavailable"},
+        "retrieval_telemetry": {},
+    }
+    agent = JSONGeneratorAgent()
+    knowledge_items = [
+        {
+            "term": f"field_{i}",
+            "definition": f"description for field {i}",
+            "metadata": {"name": f"field_{i}"},
+        }
+        for i in range(5)
+    ]
+    old_budget = cfg.config.metadata_max_context_chars_per_field
+    try:
+        cfg.config.metadata_max_context_chars_per_field = 50
+        agent._build_field_source_evidence_context(
+            workspace_meta, knowledge_items, state=state
+        )
+        assert len(state["retrieval_telemetry"]) == len(knowledge_items)
+    finally:
+        cfg.config.metadata_max_context_chars_per_field = old_budget

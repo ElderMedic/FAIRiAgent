@@ -137,6 +137,21 @@ class TestFAIRDSAPIParser:
         assert result["isa_sheet"] == "assay"
         assert result["sheet"] == "Assay"
 
+    def test_extract_field_info_null_syntax_does_not_raise(self):
+        """Live FAIR-DS packages can return `syntax: null`; must not crash `_infer_data_type`."""
+        field = {
+            "label": "custom field",
+            "packageName": "petase_enzyme_engineering",
+            "requirement": "RECOMMENDED",
+            "term": {
+                "label": "custom field",
+                "syntax": None,
+                "definition": "A field with no syntax pattern",
+            },
+        }
+        result = FAIRDSAPIParser.extract_field_info(field)
+        assert result["data_type"] == "string"
+
     def test_extract_field_info_minimal(self):
         """Test extracting field information with minimal data."""
         field = {

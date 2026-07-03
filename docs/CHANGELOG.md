@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.0.3] - 2026-07-03 – Hybrid retrieval shadow gate fixes
+
+### Fixed
+
+- **Field evidence context**: resolve field name/description from `KnowledgeRetriever` item shape (`term`/`definition`/`metadata`); field-specific source evidence was silently skipped on `main`.
+- **`retrieval_telemetry`**: top-level LangGraph state reassignment so per-field hybrid metrics appear in `workflow_report.json`.
+- **Prompt budget**: continue hybrid telemetry collection after char budget exhaustion (was `break` after ~4 fields).
+- **`FAIRDSAPIParser`**: handle FAIR-DS terms with `"syntax": null` without crashing KnowledgeRetriever.
+
+### Added
+
+- Phase 3 local shadow gate documentation and regression tests in `tests/test_hybrid_retrieval.py` / `tests/test_fairds_api_parser.py`.
+- **`ValueAccuracyEvaluator`**: shared value-matching helpers for Layer 2 GT value scoring.
+
+---
+
 ## [1.5.0] - 2026-05-03 – DeepSeek Provider, BioMetadataAgent Pipeline, and Evaluation Hardening
 
 ### Added

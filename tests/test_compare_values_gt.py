@@ -5,7 +5,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from evaluation.scripts import compare_values_against_gt as compare_mod
 from evaluation.scripts.compare_values_against_gt import (
     _normalize,
     token_f1,
@@ -13,6 +12,10 @@ from evaluation.scripts.compare_values_against_gt import (
     evaluate_sheet,
     load_gt_sheets,
     load_run_sheets,
+)
+from evaluation.evaluators._value_matching import (
+    disable_semantic_similarity,
+    semantic_similarity_available,
 )
 
 
@@ -214,17 +217,17 @@ class TestLoadRunSheets:
 
 class TestNoSemanticMode:
     def test_disabled_semantic_short_circuits_model_load(self, monkeypatch):
-        compare_mod._ST_MODEL = None
-        compare_mod._ST_AVAILABLE = False
-        compare_mod._ST_DISABLED = True
+        from evaluation.evaluators import _value_matching as vm
+
+        vm._ST_MODEL = None
+        vm._ST_AVAILABLE = False
+        disable_semantic_similarity(True)
 
         def _boom():
             raise AssertionError("SentenceTransformer should not be loaded")
 
-        monkeypatch.setattr(compare_mod, "_get_st_model", _boom)
+        monkeypatch.setattr(vm, "_get_st_model", _boom)
         try:
-            # Replicate main() behavior after parsing --no-semantic.
-            use_semantic = not True and compare_mod._get_st_model() is not None
-            assert use_semantic is False
+            assert semantic_similarity_available() is False
         finally:
-            compare_mod._ST_DISABLED = False
+            disable_semantic_similarity(False)

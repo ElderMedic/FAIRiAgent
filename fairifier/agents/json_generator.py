@@ -491,6 +491,7 @@ class JSONGeneratorAgent(BaseAgent):
         total = sum(len(line) for line in lines)
 
         all_candidates: Dict[str, List[FieldCandidate]] = {}
+        prompt_budget_exhausted = False
 
         semantic_index = None
         if state and config.hybrid_retrieval_enabled:
@@ -501,8 +502,20 @@ class JSONGeneratorAgent(BaseAgent):
         retrieval_telemetry = state.setdefault("retrieval_telemetry", {}) if state else {}
 
         for field in knowledge_items:
-            field_name = str(field.get("name") or field.get("field_name") or "").strip()
-            description = str(field.get("description") or "").strip()
+            field_metadata = field.get("metadata") or {}
+            field_name = str(
+                field.get("name")
+                or field.get("field_name")
+                or field.get("term")
+                or field_metadata.get("name")
+                or ""
+            ).strip()
+            description = str(
+                field.get("description")
+                or field.get("definition")
+                or field_metadata.get("definition")
+                or ""
+            ).strip()
             if not field_name:
                 continue
             queries = self._field_search_queries(field_name, description)
@@ -577,14 +590,26 @@ class JSONGeneratorAgent(BaseAgent):
             if not ranked_snippets:
                 continue
 
+            if prompt_budget_exhausted:
+                continue
+
             snippets = ranked_snippets[:max_snippets]
             block = [f"\nField: {field_name}", *snippets]
             block_text = "\n".join(block)
             if total + len(block_text) > budget:
-                lines.append("\n[... field-specific source evidence truncated by configurable metadata budget ...]")
-                break
+                if not prompt_budget_exhausted:
+                    lines.append(
+                        "\n[... field-specific source evidence truncated by configurable metadata budget ...]"
+                    )
+                    prompt_budget_exhausted = True
+                continue
             lines.append(block_text)
             total += len(block_text)
+
+        # LangGraph state merges top-level keys only; reassign so telemetry
+        # survives checkpointing and appears in workflow_report.json.
+        if state is not None:
+            state["retrieval_telemetry"] = dict(retrieval_telemetry)
 
         return "\n".join(lines) if len(lines) > 2 else "", all_candidates
 
