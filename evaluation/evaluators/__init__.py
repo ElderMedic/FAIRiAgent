@@ -10,6 +10,9 @@ from .llm_judge_evaluator import LLMJudgeEvaluator
 from .internal_metrics_evaluator import InternalMetricsEvaluator
 from .retrieval_coverage_evaluator import RetrievalCoverageEvaluator
 from .value_accuracy_evaluator import ValueAccuracyEvaluator
+from .structural_evaluator import StructuralEvaluator
+from .novel_field_evaluator import NovelFieldEvaluator, find_source_text
+from . import calibration
 
 __all__ = [
     'CompletenessEvaluator',
@@ -19,6 +22,10 @@ __all__ = [
     'LLMJudgeEvaluator',
     'InternalMetricsEvaluator',
     'RetrievalCoverageEvaluator',
+    # Evaluation-metrics redesign (Layers 2-4 + calibration fast-follow)
     'ValueAccuracyEvaluator',
+    'StructuralEvaluator',
+    'NovelFieldEvaluator',
+    'find_source_text',
+    'calibration',
 ]
-
