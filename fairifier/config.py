@@ -126,6 +126,7 @@ class FAIRifierConfig:
     evidence_store_enabled: bool = True
     mapreduce_enabled: bool = True
     retrieval_shadow_mode: bool = False  # Phase 4: hybrid results in prompt; set true for shadow compare
+    retrieval_prompt_adaptive_lexical: bool = True  # Use lexical snippets in prompt when available; hybrid only on lexical miss
     chunk_target_tokens: int = 384
     chunk_hard_cap_tokens: int = 448
     section_target_tokens: int = 2400
@@ -139,12 +140,12 @@ class FAIRifierConfig:
     retrieval_rerank_candidates: int = 20
     retrieval_final_snippets: int = 8
     retrieval_rerank_timeout_seconds: float = 5.0
-    retrieval_embedding_model: str = "snowflake-arctic-embed2"
-    retrieval_rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    retrieval_embedding_model: str = "BAAI/bge-small-en-v1.5"
+    retrieval_rerank_model: str = "BAAI/bge-reranker-base"
     retrieval_embedding_backend: str = "auto"   # "auto" | "local" | "ollama" | "jina_api"
     retrieval_embedding_base_url: str = ""      # e.g. "http://bioind4.wur.nl:11434"
     retrieval_rerank_backend: str = "auto"      # "auto" | "local" | "jina_api"
-    retrieval_embedding_dims: int = 1024        # Snowflake default dimension
+    retrieval_embedding_dims: int = 384
     jina_api_key: str = ""                      # Jina AI key for fallback API calls
     retrieval_near_duplicate_threshold: float = 0.92
     retrieval_qdrant_collection_prefix: str = "run"
@@ -461,6 +462,7 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         ("FAIRIFIER_EVIDENCE_STORE_ENABLED", "evidence_store_enabled"),
         ("FAIRIFIER_MAPREDUCE_ENABLED", "mapreduce_enabled"),
         ("FAIRIFIER_RETRIEVAL_SHADOW_MODE", "retrieval_shadow_mode"),
+        ("FAIRIFIER_RETRIEVAL_PROMPT_ADAPTIVE_LEXICAL", "retrieval_prompt_adaptive_lexical"),
     ):
         value = _env_bool(env_name)
         if value is not None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, Dict
 
 from fairifier.services.chunking import chunk_source_text, infer_section_type
 from fairifier.services.semantic_index import reciprocal_rank_fusion
@@ -240,6 +241,37 @@ def test_format_section_outline_markdown_includes_section_metadata():
     assert "methods" in outline
     assert "Total sections: 2" in outline
     assert "source_001" in outline
+
+
+def test_hybrid_search_returns_lexical_when_adaptive_and_lexical_hits(tmp_path: Path):
+    from fairifier import config as cfg
+
+    workspace = build_source_workspace(
+        [
+            SourceRecord(
+                source_id="source_001",
+                path="paper.md",
+                method="direct_read",
+                content="The sampling site was Wadden Sea with elevation 2 m.",
+                content_type="markdown",
+            )
+        ],
+        tmp_path,
+    )
+    old_shadow = cfg.config.retrieval_shadow_mode
+    old_adaptive = cfg.config.retrieval_prompt_adaptive_lexical
+    try:
+        cfg.config.retrieval_shadow_mode = False
+        cfg.config.retrieval_prompt_adaptive_lexical = True
+        telemetry: Dict[str, Any] = {}
+        hits = hybrid_search_sources(
+            workspace, ["Wadden Sea"], semantic_index=None, telemetry=telemetry
+        )
+        assert hits
+        assert telemetry.get("prompt_mode") == "lexical_preferred"
+    finally:
+        cfg.config.retrieval_shadow_mode = old_shadow
+        cfg.config.retrieval_prompt_adaptive_lexical = old_adaptive
 
 
 def test_hybrid_search_returns_hybrid_output_when_shadow_mode_disabled(tmp_path: Path):

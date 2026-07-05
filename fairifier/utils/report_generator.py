@@ -158,6 +158,7 @@ class WorkflowReportGenerator:
                     "hybrid_hit_count": hybrid_hits,
                     "rerank_status": rerank_status,
                     "shadow_mode": stats.get("shadow_mode"),
+                    "prompt_mode": stats.get("prompt_mode"),
                     "hybrid_candidate_ids": stats.get("hybrid_candidate_ids", []),
                 }
             )

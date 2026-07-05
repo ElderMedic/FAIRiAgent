@@ -238,6 +238,43 @@ def _get_embedder():
         return None
 
 
+def _resolve_embedding_vector_size() -> Optional[int]:
+    """Return the embedder's actual vector width, falling back to config."""
+    configured = int(config.retrieval_embedding_dims or 0) or None
+    client = _get_embedder()
+    if client is None:
+        return configured
+    try:
+        vectors = client.encode(["dimension_probe"], is_query=True)
+        if vectors and vectors[0]:
+            actual = len(vectors[0])
+            if configured and configured != actual:
+                logger.warning(
+                    "FAIRIFIER_RETRIEVAL_EMBEDDING_DIMS=%s but embedder returns %s; using actual width",
+                    configured,
+                    actual,
+                )
+            return actual
+    except Exception as exc:
+        logger.warning("Embedding dimension probe failed: %s", exc)
+    return configured
+
+
+def _collection_vector_size(client: Any, collection_name: str) -> Optional[int]:
+    try:
+        info = client.get_collection(collection_name)
+        vectors = info.config.params.vectors
+        if hasattr(vectors, "size"):
+            return int(vectors.size)
+        if isinstance(vectors, dict):
+            for params in vectors.values():
+                if hasattr(params, "size"):
+                    return int(params.size)
+    except Exception as exc:
+        logger.debug("Could not read vector size for %s: %s", collection_name, exc)
+    return None
+
+
 def _get_reranker():
     global _RERANKER
     if _RERANKER is not None:
@@ -329,12 +366,27 @@ class SemanticIndex:
             from qdrant_client import QdrantClient
             from qdrant_client.http import models as qmodels
 
+            vector_size = _resolve_embedding_vector_size()
+            if not vector_size:
+                self._status = "embedder_unavailable"
+                return False
+
             self._client = QdrantClient(host=self.host, port=self.port, timeout=10.0)
+            if self._client.collection_exists(self.collection_name):
+                existing_size = _collection_vector_size(self._client, self.collection_name)
+                if existing_size and existing_size != vector_size:
+                    logger.warning(
+                        "Recreating Qdrant collection %s (dim %s -> %s)",
+                        self.collection_name,
+                        existing_size,
+                        vector_size,
+                    )
+                    self._client.delete_collection(self.collection_name)
             if not self._client.collection_exists(self.collection_name):
                 self._client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=qmodels.VectorParams(
-                        size=config.retrieval_embedding_dims,
+                        size=vector_size,
                         distance=qmodels.Distance.COSINE,
                     ),
                 )

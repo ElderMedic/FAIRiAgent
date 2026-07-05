@@ -972,6 +972,86 @@ Artifacts:
 **Next (P1):** Section worker → `FieldCandidate` output; re-run tuned A/B on ≥8 docs
 when `ground_truth_filtered.json` is rebuilt.
 
+### 10.5 Root-cause analysis + adaptive lexical prompt (2026-07-05)
+
+**Why Phase 4 hybrid-in-prompt lowered metrics (not just LLM variance):**
+
+1. **Semantic noise in prompt budget** — On `earthworm`, 50 telemetry fields had lexical
+   hits for 38; hybrid-in-prompt still injected ~20 semantic-only spans via
+   `_blend_lexical_first_hybrid_output()`. LLM saw tangentially related excerpts →
+   **extra_fields explosion** (e.g. PETase Nature: 106 vs 61 extra fields in shadow).
+2. **Pre-reconciled semantic injection** — Upstream reconcile promoted semantic-only
+   candidates to “High Confidence” lines even when grep/lexical evidence existed for
+   the same field, steering the LLM toward wrong values.
+3. **Embedder instability (8-doc batch)** — Caching a failed embedder client
+   (`932e1e7` fix) plus `snowflake-arctic-embed2` / 1024-dim defaults caused
+   `Local embedding model not initialized` → JSONGenerator abort, 0/8 metadata.json.
+   Defaults reverted to `BAAI/bge-small-en-v1.5` / 384 dims; Ollama path unchanged in
+   eval envs.
+
+**Architectural fix (code, not param-only tuning):**
+
+| Change | Location | Effect |
+|---|---|---|
+| `retrieval_prompt_adaptive_lexical=true` (default) | `config.py`, `hybrid_search_sources()` | Prompt uses **lexical snippets when any lexical hit exists** (matches shadow on ~76% of fields); hybrid rerank only on **lexical miss** (~24%) |
+| `prompt_mode` telemetry | `hybrid_search_sources()` | `lexical_preferred` \| `semantic_fallback` \| `shadow_lexical` |
+| Skip semantic pre-reconcile when lexical pool non-empty | `json_generator.py` | Stops spurious “High Confidence” injections |
+| Stable embedding defaults | `config.py` | bge-small 384-dim baseline when env does not override |
+| Embedder-aware Qdrant vector size | `semantic_index.py` | Probe live embedder width; recreate per-run collection on 384↔768 mismatch |
+
+**Validation run (2026-07-05):** 3-doc shadow gate —
+`evaluation/runs/phase4_adaptive_20260705/`.
+
+| Run | Mean overall completeness | Aggregate | Notes |
+|---|---:|---:|---|
+| Shadow tuned | 83.1% | 0.677 | 3/3 metadata.json |
+| Phase4 tuned (adaptive lexical) | 75.6% | 0.655 | 3/3 metadata.json |
+
+Per-doc Δ (Phase4 − Shadow): earthworm −19.0%, PETase Angew −3.2%,
+PETase Nature 0.0% (but 126 vs 52 extra_fields).
+
+**Critical infra finding:** Both arms logged
+`Vector dimension error: expected dim: 384, got 768` — Qdrant collections were
+created with code default 384 while eval Ollama embedder (`nomic-embed-text-v2-moe`)
+returns 768-d vectors. Semantic index was **dead for both arms** (`hybrid_fields=0`);
+the A/B above compares lexical-only paths with LLM variance, not true hybrid benefit.
+
+**Follow-up fix:** `_resolve_embedding_vector_size()` probes the live embedder and
+recreates per-run Qdrant collections on dim mismatch (`semantic_index.py`).
+
+**Dim-fix A/B (2026-07-05, semantic index active — `hybrid_fields≈35`, `qdrant_fallback_used=false`):**
+
+| Document | Shadow overall | Phase4 adaptive overall | Δ | Shadow extra | Phase4 extra |
+|---|---:|---:|---:|---:|---:|
+| `earthworm` | 81.0% | 81.0% | 0.0% | 29 | 27 |
+| `petase_10_1002_anie_202218390` | 83.9% | 93.5% | +9.6% | 53 | 131 |
+| `petase_10_1038_s41586-020-2149-4` | 91.7% | 88.9% | −2.8% | 117 | 101 |
+
+| Run | Mean overall completeness | Multi-layer aggregate |
+|---|---:|---:|
+| Shadow dim-fix (`workflow_shadow_dimfix/`) | 85.5% | 0.676 |
+| Phase4 adaptive dim-fix (`workflow_phase4_dimfix/`) | **87.8%** | 0.665 |
+
+**Quality gate (completeness): PASSED** — Phase4 mean 87.8% ≥ shadow 85.5% (+2.3 pp).
+Aggregate score still −0.011 (extra_fields on PETase Angew remain high when semantic
+fallback fires). **Default recommendation:** keep adaptive lexical + dim probe;
+monitor extra_fields on semantic-fallback fields in expanded slice.
+
+Artifacts: `evaluation/runs/phase4_adaptive_20260705/workflow_shadow_dimfix/`,
+`workflow_phase4_dimfix/`, smoke `workflow_phase4_dimfix_smoke/`.
+
+**Handover:** See [HYBRID_RETRIEVAL_PHASE4_HANDOVER.md](./HYBRID_RETRIEVAL_PHASE4_HANDOVER.md) for full context, provenance, and next steps for agents/colleagues.
+
+**Service note:** MinerU is **`http://localhost:30000`** (canonical; see `env.example` /
+`fairifier/config.py`). An earlier agent note incorrectly cited `:30001` — never
+authorized. PDF docs without live MinerU use local
+`mineru_*` cache under `evaluation/datasets/raw/`. FAIR-DS `:8090` and Qdrant
+`:6335` OK.
+
+Local expanded subset: `evaluation/datasets/annotated/ground_truth_phase4_ab.json`
+(8 docs, gitignored — regenerate from shadow_gate + biorem.local + values/*).
+Prior 8-doc batch failed pre-embedder-fix: `evaluation/runs/phase4_ab_20260703/`.
+
 ---
 
 ## 11. Code migration plan: deprecate, default-switch, then delete

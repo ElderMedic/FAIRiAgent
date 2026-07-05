@@ -302,8 +302,15 @@ class JSONGeneratorAgent(BaseAgent):
                 ]
                 added = False
                 for fname, cands in pre_reconciled.items():
-                    val = getattr(cands[0], "normalized_value", None) or getattr(cands[0], "value", None)
-                    if cands and val:
+                    if not cands:
+                        continue
+                    primary = cands[0]
+                    if not self._should_inject_pre_reconciled_value(
+                        primary, all_candidates.get(fname, [])
+                    ):
+                        continue
+                    val = getattr(primary, "normalized_value", None) or getattr(primary, "value", None)
+                    if val:
                         reconciled_lines.append(f"- {fname}: {val}")
                         added = True
                 if added:
@@ -793,6 +800,20 @@ class JSONGeneratorAgent(BaseAgent):
                             
         except Exception as e:
             self.log_execution({}, f"Failed to normalize candidates with LLM: {e}", "warning")
+
+    @staticmethod
+    def _should_inject_pre_reconciled_value(
+        primary: FieldCandidate,
+        field_pool: List[FieldCandidate],
+    ) -> bool:
+        """Skip semantic-only pre-reconcile when lexical evidence exists for the field."""
+        method = (primary.retrieval_method or "grep").lower()
+        if method != "semantic":
+            return True
+        return not any(
+            (c.retrieval_method or "grep").lower() in ("grep", "lexical")
+            for c in field_pool
+        )
 
     def _upstream_reconcile_candidates(self, all_candidates: Dict[str, List[FieldCandidate]]) -> Dict[str, List[FieldCandidate]]:
         """

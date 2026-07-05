@@ -466,5 +466,16 @@ def hybrid_search_sources(
             f"{item.get('source_id')}:{item.get('start')}-{item.get('end')}"
             for item in hybrid_output
         ]
+        telemetry["prompt_mode"] = "shadow_lexical"
         return lexical_output
+
+    if config.retrieval_prompt_adaptive_lexical and lexical_merged:
+        telemetry["prompt_mode"] = "lexical_preferred"
+        telemetry["hybrid_candidate_ids"] = [
+            f"{item.get('source_id')}:{item.get('start')}-{item.get('end')}"
+            for item in hybrid_output
+        ]
+        return lexical_output
+
+    telemetry["prompt_mode"] = "semantic_fallback"
     return hybrid_output
