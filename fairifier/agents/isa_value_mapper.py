@@ -42,6 +42,9 @@ from ..utils.entity_merge import merge_sparse_entity_rows
 from ..tools.isa_structure_tools import create_isa_structure_tools
 from ..skills import load_skill_files, skills_catalog_seed_files
 
+# Maximum evidence candidates to surface per field in the seed file.
+_MAX_EVIDENCE_CANDIDATES_PER_FIELD = 5
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────
@@ -96,6 +99,18 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
 
         evidence_packets = state.get("evidence_packets", []) or []
         source_ws = state.get("source_workspace", {}) or {}
+
+        # §4.1 — Load EvidenceStore JSONL to surface section-level FieldCandidates
+        # to ISAValueMapper (previously this layer was invisible to it).
+        evidence_store_meta: Dict[str, Any] = state.get("evidence_store") or {}
+        evidence_summary = self._build_evidence_store_summary(evidence_store_meta)
+        if evidence_summary:
+            self.logger.info(
+                "📂 EvidenceStore: loaded %d field candidates from section-level extraction",
+                evidence_summary.get("field_count", 0),
+            )
+        else:
+            self.logger.debug("EvidenceStore JSONL not available — skipping field evidence backfill")
 
         # Share JSONGenerator's context builders (avoid code duplication).
         # We need a temporary instance just to call the helper methods.
@@ -196,6 +211,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     knowledge_items=knowledge_items,
                     source_workspace=source_ws,
                     document_context=document_context,
+                    evidence_summary=evidence_summary,
                 ),
                 thread_id=f"{state.get('session_id', 'default')}-ivm-inner",
                 state=state,
@@ -209,7 +225,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     self.logger.warning(
                         "ISAValueMapper inner loop returned an empty matrix; using deterministic field fallback"
                     )
-                    matrix = self._build_matrix_heuristic(fields_by_level)
+                    matrix = self._build_matrix_heuristic(fields_by_level, evidence_summary)
                     matrix = self._merge_source_workspace_entity_rows(matrix, source_ws)
             else:
                 matrix = {}
@@ -229,7 +245,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                 )
             except Exception as exc:
                 self.logger.error("ISA value mapping failed: %s", exc)
-                matrix = self._build_matrix_heuristic(fields_by_level)
+                matrix = self._build_matrix_heuristic(fields_by_level, evidence_summary)
                 matrix = self._merge_source_workspace_entity_rows(matrix, source_ws)
 
         # ── Post-process: normalize, split entities, align columns ───
@@ -317,6 +333,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         knowledge_items: List[Dict[str, Any]],
         source_workspace: Dict[str, Any],
         document_context: str,
+        evidence_summary: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Build virtual files for the ISA value-mapping inner loop."""
         seed_files: Dict[str, Any] = {}
@@ -337,6 +354,20 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             context_file = self._maybe_create_file_data(document_context[:12000])
             if context_file is not None:
                 seed_files["/workspace/ivm_context.md"] = context_file
+
+        # §4.1 — Inject EvidenceStore field candidates as a seed file so the
+        # inner agent (and its tools) can cross-reference section-level evidence
+        # when resolving row values.
+        if evidence_summary:
+            evidence_file = self._maybe_create_file_data(
+                json.dumps(evidence_summary, indent=2, ensure_ascii=False)
+            )
+            if evidence_file is not None:
+                seed_files["/workspace/field_evidence_summary.json"] = evidence_file
+                self.logger.debug(
+                    "Injected field_evidence_summary with %d fields into IVM seed files",
+                    len(evidence_summary.get("fields", {})),
+                )
 
         summary_path = source_workspace.get("summary_path")
         if summary_path:
@@ -366,6 +397,69 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             )
         )
         return seed_files
+
+    @staticmethod
+    def _build_evidence_store_summary(
+        evidence_store_meta: Dict[str, Any],
+        max_candidates_per_field: int = _MAX_EVIDENCE_CANDIDATES_PER_FIELD,
+    ) -> Optional[Dict[str, Any]]:
+        """Load evidence_store JSONL and return a compact per-field candidate summary.
+
+        The EvidenceStore JSONL is produced by SectionMapReduceNode and contains
+        FieldCandidate records from section-level extraction.  ISAValueMapper
+        previously had no access to this layer — this summary bridges that gap
+        (Plan §4.1).
+
+        Returns ``None`` if the JSONL path is missing or unreadable.
+        """
+        jsonl_path_str = (evidence_store_meta or {}).get("jsonl_path", "")
+        if not jsonl_path_str:
+            return None
+        jsonl_path = Path(jsonl_path_str)
+        if not jsonl_path.is_file():
+            return None
+
+        fields: Dict[str, List[Dict[str, Any]]] = {}
+        try:
+            with jsonl_path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    field_name = str(record.get("field_name") or "").strip().lower()
+                    if not field_name:
+                        continue
+                    value = str(record.get("value") or "").strip()
+                    if not value:
+                        continue
+                    entry = {
+                        "value": value,
+                        "confidence": float(record.get("confidence") or 0.0),
+                        "retrieval_method": str(record.get("retrieval_method") or "section_map_reduce"),
+                        "source_id": str(record.get("source_id") or ""),
+                        "section": str(record.get("section") or ""),
+                    }
+                    fields.setdefault(field_name, []).append(entry)
+        except OSError:
+            return None
+
+        # Keep top-N by confidence per field.
+        summarised = {
+            fname: sorted(candidates, key=lambda c: -c["confidence"])[:max_candidates_per_field]
+            for fname, candidates in fields.items()
+        }
+        return {
+            "description": (
+                "Section-level FieldCandidate evidence from hybrid retrieval. "
+                "Use these as authoritative row values when JSONGenerator output is missing or uncertain."
+            ),
+            "field_count": len(summarised),
+            "fields": summarised,
+        }
 
     def _structured_matrix_to_dict(
         self,
@@ -789,6 +883,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
     def _build_matrix_heuristic(
         self,
         fields_by_level: Dict[str, List[Dict[str, Any]]],
+        evidence_summary: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """Build a matrix from flat fields WITHOUT LLM (deterministic fallback).
 
@@ -796,7 +891,18 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         model identifies separate samples, observation units, or assays. Use
         that as the authoritative row grouping before falling back to a single
         row per sheet.
+
+        If ``evidence_summary`` is provided (§4.1 EvidenceStore integration),
+        empty cells are back-filled with the highest-confidence candidate from
+        section-level extraction, improving structural row recall.
         """
+        evidence_fields: Dict[str, str] = {}
+        if evidence_summary:
+            for fname, candidates in (evidence_summary.get("fields") or {}).items():
+                if candidates:
+                    # Pick the top-confidence candidate value.
+                    evidence_fields[fname] = candidates[0]["value"]
+
         result: Dict[str, Dict[str, Any]] = {}
         for lvl in ISA_LEVELS:
             fds = fields_by_level.get(lvl, [])
@@ -817,7 +923,11 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     rows_by_entity[entity_id] = {}
                     row_order.append(entity_id)
                 val = f.get("value")
-                rows_by_entity[entity_id][name] = str(val) if val is not None else ""
+                cell_value = str(val) if val is not None else ""
+                # §4.1: back-fill empty cells from evidence store candidates.
+                if not cell_value and name in evidence_fields:
+                    cell_value = evidence_fields[name]
+                rows_by_entity[entity_id][name] = cell_value
 
             rows = [rows_by_entity[eid] for eid in row_order if rows_by_entity[eid]]
             result[lvl] = {
