@@ -805,13 +805,23 @@ class JSONGeneratorAgent(BaseAgent):
     def _should_inject_pre_reconciled_value(
         primary: FieldCandidate,
         field_pool: List[FieldCandidate],
+        lexical_confidence_threshold: float = 0.7,
     ) -> bool:
-        """Skip semantic-only pre-reconcile when lexical evidence exists for the field."""
+        """Decide whether to inject a semantic pre-reconciled value into the LLM prompt.
+
+        A semantic candidate is suppressed only when a *high-confidence* lexical/grep
+        candidate exists for the same field (confidence >= lexical_confidence_threshold).
+        Using any lexical hit (regardless of confidence) was too aggressive and caused
+        valid semantic candidates to be discarded (B10 — petase_anie −9.7 pp).
+        """
         method = (primary.retrieval_method or "grep").lower()
         if method != "semantic":
+            # Non-semantic candidates are always injected.
             return True
+        # Suppress semantic only when a high-confidence lexical/grep candidate exists.
         return not any(
             (c.retrieval_method or "grep").lower() in ("grep", "lexical")
+            and c.confidence >= lexical_confidence_threshold
             for c in field_pool
         )
 

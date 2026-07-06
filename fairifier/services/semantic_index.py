@@ -80,6 +80,7 @@ class EmbeddingClient:
 
     def _encode_ollama(self, texts: Sequence[str]) -> List[List[float]]:
         import json
+        import time
         import urllib.request
         
         base_url = self.base_url or "http://localhost:11434"
@@ -87,25 +88,39 @@ class EmbeddingClient:
         
         embeddings = []
         batch_size = 32
+        max_retries = 3
         for i in range(0, len(texts), batch_size):
             batch = list(texts[i:i+batch_size])
             data = {
                 "model": self.model_name,
                 "input": batch
             }
-            try:
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps(data).encode("utf-8"),
-                    headers={"Content-Type": "application/json"}
-                )
-                with urllib.request.urlopen(req, timeout=15.0) as response:
-                    res_data = json.loads(response.read().decode("utf-8"))
-                    batch_embs = res_data.get("embeddings", [])
-                    embeddings.extend(batch_embs)
-            except Exception as exc:
-                logger.error("Ollama embedding API call failed: %s", exc)
-                raise exc
+            last_exc: Optional[Exception] = None
+            for attempt in range(max_retries):
+                try:
+                    req = urllib.request.Request(
+                        url,
+                        data=json.dumps(data).encode("utf-8"),
+                        headers={"Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(req, timeout=30.0) as response:
+                        res_data = json.loads(response.read().decode("utf-8"))
+                        batch_embs = res_data.get("embeddings", [])
+                        embeddings.extend(batch_embs)
+                    last_exc = None
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < max_retries - 1:
+                        wait = 2.0 * (attempt + 1)
+                        logger.warning(
+                            "Ollama embedding attempt %d/%d failed: %s — retrying in %.1fs",
+                            attempt + 1, max_retries, exc, wait,
+                        )
+                        time.sleep(wait)
+            if last_exc is not None:
+                logger.error("Ollama embedding API call failed after %d attempts: %s", max_retries, last_exc)
+                raise last_exc
         return embeddings
 
     def _encode_jina(self, texts: Sequence[str]) -> List[List[float]]:

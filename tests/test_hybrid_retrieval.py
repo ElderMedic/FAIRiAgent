@@ -314,3 +314,101 @@ def test_blend_lexical_first_prefers_lexical_backed_spans():
     assert blended[0]["source_id"] == "s1"
     assert blended[0]["start"] == 10
     assert blended[1]["source_id"] == "s2"
+
+
+# ---------------------------------------------------------------------------
+# B10: pre-reconcile gate — confidence-weighted skip
+# ---------------------------------------------------------------------------
+
+def _make_candidate(method: str, confidence: float = 0.0) -> "FieldCandidate":
+    from fairifier.agents.json_generator import FieldCandidate
+
+    return FieldCandidate(
+        field_name="test_field",
+        value="some value",
+        source_id="source_001",
+        source_role="main_manuscript",
+        relevance_score=0.9,
+        evidence="test evidence",
+        confidence=confidence,
+        retrieval_method=method,
+    )
+
+
+def test_pre_reconcile_gate_injects_semantic_when_no_lexical_pool():
+    """Semantic candidate should be injected when there are no lexical candidates."""
+    from fairifier.agents.json_generator import JSONGeneratorAgent
+
+    primary = _make_candidate("semantic", confidence=0.0)
+    assert JSONGeneratorAgent._should_inject_pre_reconciled_value(primary, []) is True
+
+
+def test_pre_reconcile_gate_injects_semantic_when_lexical_low_confidence():
+    """Semantic candidate should NOT be suppressed by a low-confidence lexical hit (B10 fix)."""
+    from fairifier.agents.json_generator import JSONGeneratorAgent
+
+    primary = _make_candidate("semantic", confidence=0.0)
+    low_conf_lexical = _make_candidate("grep", confidence=0.3)
+    # Low-confidence lexical → semantic injection should still happen
+    assert JSONGeneratorAgent._should_inject_pre_reconciled_value(primary, [low_conf_lexical]) is True
+
+
+def test_pre_reconcile_gate_suppresses_semantic_when_high_confidence_lexical():
+    """Semantic candidate SHOULD be suppressed when a high-confidence lexical candidate exists."""
+    from fairifier.agents.json_generator import JSONGeneratorAgent
+
+    primary = _make_candidate("semantic", confidence=0.0)
+    high_conf_lexical = _make_candidate("grep", confidence=0.9)
+    assert JSONGeneratorAgent._should_inject_pre_reconciled_value(primary, [high_conf_lexical]) is False
+
+
+def test_pre_reconcile_gate_always_injects_non_semantic():
+    """Non-semantic primary candidates should always be injected regardless of pool."""
+    from fairifier.agents.json_generator import JSONGeneratorAgent
+
+    primary = _make_candidate("grep", confidence=0.9)
+    pool = [_make_candidate("semantic", confidence=0.8)]
+    assert JSONGeneratorAgent._should_inject_pre_reconciled_value(primary, pool) is True
+
+
+# ---------------------------------------------------------------------------
+# B9: Ollama retry logic
+# ---------------------------------------------------------------------------
+
+def test_ollama_retry_succeeds_on_second_attempt(monkeypatch):
+    """_encode_ollama should retry on transient failure and succeed on the next attempt."""
+    import json
+    from fairifier.services.semantic_index import EmbeddingClient
+
+    client = EmbeddingClient(backend="ollama", model_name="test-model", base_url="http://localhost:11434")
+
+    call_count = {"n": 0}
+
+    def fake_urlopen(req, timeout=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise OSError("simulated transient timeout")
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def read(self):
+                return json.dumps({"embeddings": [[0.1, 0.2, 0.3]]}).encode()
+
+        return FakeResponse()
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    # Also patch time.sleep so the test doesn't actually wait
+    import time
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+
+    result = client._encode_ollama(["hello world"])
+    assert result == [[0.1, 0.2, 0.3]]
+    assert call_count["n"] == 2  # failed once, succeeded on second attempt
