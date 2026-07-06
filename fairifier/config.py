@@ -139,6 +139,11 @@ class FAIRifierConfig:
     retrieval_semantic_max_hits: int = 24
     retrieval_rerank_candidates: int = 20
     retrieval_final_snippets: int = 8
+    # Semantic-fallback path controls (prompt_mode="semantic_fallback"):
+    # Cap snippets tighter than the general limit and drop low-scoring hits
+    # to reduce extra_fields noise on documents where lexical retrieval finds nothing.
+    retrieval_semantic_fallback_snippets: int = 4
+    retrieval_semantic_fallback_min_rerank_score: float = 0.0  # 0.0 = disabled; set e.g. 0.3 to filter
     retrieval_rerank_timeout_seconds: float = 5.0
     retrieval_embedding_model: str = "BAAI/bge-small-en-v1.5"
     retrieval_rerank_model: str = "BAAI/bge-reranker-base"
@@ -491,6 +496,10 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.retrieval_rerank_candidates = int(os.getenv("FAIRIFIER_RETRIEVAL_RERANK_CANDIDATES"))
     if os.getenv("FAIRIFIER_RETRIEVAL_FINAL_SNIPPETS"):
         config_instance.retrieval_final_snippets = int(os.getenv("FAIRIFIER_RETRIEVAL_FINAL_SNIPPETS"))
+    if os.getenv("FAIRIFIER_RETRIEVAL_SEMANTIC_FALLBACK_SNIPPETS"):
+        config_instance.retrieval_semantic_fallback_snippets = int(os.getenv("FAIRIFIER_RETRIEVAL_SEMANTIC_FALLBACK_SNIPPETS"))
+    if os.getenv("FAIRIFIER_RETRIEVAL_SEMANTIC_FALLBACK_MIN_RERANK_SCORE"):
+        config_instance.retrieval_semantic_fallback_min_rerank_score = float(os.getenv("FAIRIFIER_RETRIEVAL_SEMANTIC_FALLBACK_MIN_RERANK_SCORE"))
     if os.getenv("FAIRIFIER_RETRIEVAL_RERANK_TIMEOUT_SECONDS"):
         config_instance.retrieval_rerank_timeout_seconds = float(os.getenv("FAIRIFIER_RETRIEVAL_RERANK_TIMEOUT_SECONDS"))
     if os.getenv("FAIRIFIER_RETRIEVAL_EMBEDDING_MODEL"):

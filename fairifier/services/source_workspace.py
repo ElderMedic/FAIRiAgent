@@ -478,4 +478,20 @@ def hybrid_search_sources(
         return lexical_output
 
     telemetry["prompt_mode"] = "semantic_fallback"
-    return hybrid_output
+
+    # Tighten semantic-fallback output to reduce extra_fields noise on documents
+    # where lexical retrieval finds nothing (§10.5 tuning).
+    fallback_limit = max(1, int(config.retrieval_semantic_fallback_snippets))
+    min_score = float(config.retrieval_semantic_fallback_min_rerank_score)
+    fallback_output = hybrid_output
+    if min_score > 0.0:
+        fallback_output = [
+            h for h in fallback_output
+            if (h.get("rerank_score") or 0.0) >= min_score
+        ]
+        if not fallback_output:
+            # All hits filtered — return the top-1 rather than nothing.
+            fallback_output = hybrid_output[:1]
+    fallback_output = fallback_output[:fallback_limit]
+    telemetry["semantic_fallback_snippets"] = len(fallback_output)
+    return fallback_output
