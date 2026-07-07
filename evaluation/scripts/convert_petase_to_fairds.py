@@ -703,7 +703,7 @@ def main():
 
     json_files = sorted([
         f for f in SOURCE_DIR.iterdir()
-        if f.suffix == ".json" or (f.suffix == ".txt" and "acscatal.4c00400" in f.name)
+        if f.suffix == ".json"
     ])
 
     stats = {

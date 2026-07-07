@@ -285,7 +285,6 @@ The PETase domain-specific metadata fields have been mapped to ISA-Tab sheets:
   `petase_enzyme_engineering` FAIR-DS package is proposed to capture these
   domain-specific fields.
 - Not all papers have both main text and supporting information PDFs available.
-- One paper (10.1021/acscatal.4c00400) has a text extraction instead of JSON.
 """
     narrative_path = RAW_DIR / "study_narrative.md"
     narrative_path.write_text(narrative, encoding="utf-8")

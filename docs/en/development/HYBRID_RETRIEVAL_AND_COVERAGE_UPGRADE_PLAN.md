@@ -1114,7 +1114,19 @@ Prior 8-doc batch failed pre-embedder-fix: `evaluation/runs/phase4_ab_20260703/`
 - **B10** — Pre-reconcile gate too aggressive; refine to confidence-weighted skip (not "any lexical candidate").
 - Structural row-align F1 gap (−0.038) — ISAValueMapper needs EvidenceStore integration (Plan §4.1).
 
+### 10.7 Transition to DeepSeek & custom SSH tunnel ports (2026-07-07)
+
+- **GLM-5.1 out of balance**: The Zhipu GLM key (`29cbfec6...`) encountered a `RateLimitError` due to insufficient account balance (Zhipu error 1113). We transitioned to **DeepSeek** (`deepseek-v4-flash` for test runs, and `deepseek-v4-pro` for final evaluation runs).
+- **Stale SSH tunnel workaround**: After the WUR server `bioind4` rebooted, the default forwarded ports (Ollama `11434`, MinerU `30000`, FAIR-DS `8083`) managed by Cursor became stale and threw `Connection reset by peer`.
+  - To bypass, we mapped custom local ports:
+    - Local `11435` $\rightarrow$ Remote `11434` (Ollama)
+    - Local `30005` $\rightarrow$ Remote `30000` (MinerU)
+    - Local `8085` $\rightarrow$ Remote `8083` (FAIR-DS)
+  - Created new model config env files: `deepseek_v4-flash_v1.4.0_tunnel_phase4_tuned.env` and `deepseek_v4-flash_v1.4.0_tunnel_shadow_tuned.env` pointing to these new ports.
+- **Fast unit tests**: Verified local regression tests: 648 passed successfully.
+
 ---
+
 
 ## 11. Code migration plan: deprecate, default-switch, then delete
 
