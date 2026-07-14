@@ -303,19 +303,45 @@ class ReadFileNode:
                 )
 
         text, conversion_info = self._read_single_document_content(document_path, output_dir)
+        records = [
+            SourceRecord(
+                source_id="source_001",
+                path=str(document_path),
+                method=conversion_info.get("method", "unknown"),
+                content=text,
+                content_type=conversion_info.get("content_type", "text"),
+                tables=conversion_info.get("tables", []),
+            )
+        ]
+
+        # Auto-discover supplementary files in the same directory
+        if config.source_workspace_enabled and path.parent.exists():
+            supp_idx = 2
+            for f in sorted(path.parent.iterdir()):
+                if f.is_file() and f != path and not f.name.startswith("."):
+                    suffix = f.suffix.lower()
+                    if suffix in {".xlsx", ".xls", ".csv", ".tsv", ".txt", ".md"}:
+                        try:
+                            supp_text, supp_info = self._read_single_document_content(str(f), output_dir)
+                            records.append(
+                                SourceRecord(
+                                    source_id=f"source_{supp_idx:03d}",
+                                    path=str(f),
+                                    method=supp_info.get("method", "unknown"),
+                                    content=supp_text,
+                                    content_type=supp_info.get("content_type", "text"),
+                                    tables=supp_info.get("tables", []),
+                                )
+                            )
+                            supp_idx += 1
+                            logger.info("🔍 Auto-discovered supplementary source: %s -> source_%03d", f.name, supp_idx - 1)
+                        except Exception as e:
+                            logger.warning("Failed to auto-discover supplementary file %s: %s", f, e)
+
         self._attach_source_workspace(
             conversion_info,
             output_dir=output_dir,
-            records=[
-                SourceRecord(
-                    source_id="source_001",
-                    path=str(document_path),
-                    method=conversion_info.get("method", "unknown"),
-                    content=text,
-                    content_type=conversion_info.get("content_type", "text"),
-                    tables=conversion_info.get("tables", []),
-                )
-            ],
+            records=records,
         )
         return text, conversion_info
 
