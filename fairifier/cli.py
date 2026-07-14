@@ -650,7 +650,9 @@ async def _run_workflow(
             status=status,
             needs_review=needs_review,
             error_count=len(errors),
-            overall_confidence=confidence_scores.get("overall", 0.0),
+            overall_confidence=confidence_scores.get("_aggregate", {}).get(
+                "overall", confidence_scores.get("overall", 0.0)
+            ),
             duration_seconds=round(duration, 2)
         )
         
@@ -825,7 +827,14 @@ def status(project_id: str, verbose: bool):
                     click.echo(f"⏱️  Duration:   {duration_from_log:.1f} seconds")
             
             if confidence_from_log:
-                overall_conf = confidence_from_log.get("overall")
+                # Aggregate overall is logged as "aggregate.overall" (see
+                # _iter_display_confidence_scores); fall back to "overall".
+                overall_key = (
+                    "aggregate.overall"
+                    if "aggregate.overall" in confidence_from_log
+                    else "overall"
+                )
+                overall_conf = confidence_from_log.get(overall_key)
                 if overall_conf is not None:
                     conf_emoji = "🟢" if overall_conf >= 0.8 else "🟡" if overall_conf >= 0.5 else "🔴"
                     click.echo(f"\n{conf_emoji} Confidence: {overall_conf:.2%}")
@@ -833,7 +842,7 @@ def status(project_id: str, verbose: bool):
                     if verbose:
                         click.echo("   Components:")
                         for component, score in sorted(confidence_from_log.items()):
-                            if component != "overall":
+                            if component != overall_key:
                                 click.echo(f"     - {component}: {score:.2%}")
         except IOError as e:
             click.echo(f"⚠️  Could not load processing_log.jsonl: {e}")

@@ -93,11 +93,14 @@ class WorkflowReportGenerator:
             except (json.JSONDecodeError, TypeError):
                 pass
         
+        # Aggregate confidence is stored nested under "_aggregate" by the
+        # finalize node; fall back to top-level keys for backward compatibility.
+        aggregate = confidence_scores.get("_aggregate", {}) or {}
         quality = {
-            "overall_confidence": confidence_scores.get("overall", 0.0),
-            "critic_confidence": confidence_scores.get("critic", 0.0),
-            "structural_confidence": confidence_scores.get("structural", 0.0),
-            "validation_confidence": confidence_scores.get("validation", 0.0),
+            "overall_confidence": aggregate.get("overall", confidence_scores.get("overall", 0.0)),
+            "critic_confidence": aggregate.get("critic", confidence_scores.get("critic", 0.0)),
+            "structural_confidence": aggregate.get("structural", confidence_scores.get("structural", 0.0)),
+            "validation_confidence": aggregate.get("validation", confidence_scores.get("validation", 0.0)),
             "needs_review": state.get("needs_human_review", False)
         }
         
@@ -231,7 +234,6 @@ class WorkflowReportGenerator:
                 "total": len(fields),
                 "confirmed": confirmed,
                 "provisional": provisional,
-                "sample_fields": [f.get("field_name", "") for f in fields[:5]]
             }
         
         return {
@@ -482,11 +484,6 @@ class WorkflowReportGenerator:
                 lines.append(f"{sheet_name.upper()}:")
                 lines.append(f"  Total: {stats.get('total', 0)} fields")
                 lines.append(f"  Confirmed: {stats.get('confirmed', 0)}, Provisional: {stats.get('provisional', 0)}")
-                sample = stats.get("sample_fields", [])
-                if sample:
-                    lines.append(f"  Sample fields: {', '.join(sample[:3])}")
-                    if len(sample) > 3:
-                        lines.append(f"  ... and {len(sample) - 3} more")
             lines.append("")
         
         # Duplicate Check
