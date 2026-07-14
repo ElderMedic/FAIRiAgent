@@ -463,19 +463,33 @@ def preflight_check(
             fairds_status,
         )
         mineru_status = _check_url_reachable(env.get("MINERU_SERVER_URL", ""))
+        mineru_reachable = mineru_status.startswith("reachable")
+        if mineru_reachable:
+            for check in checks:
+                name = str(check.get("name") or "")
+                if not name.startswith("document_mineru_preconverted:"):
+                    continue
+                doc_id = name.split(":", 1)[1]
+                if doc_id not in mineru_missing_by_doc:
+                    continue
+                check["passed"] = True
+                check["detail"] = (
+                    f"{check.get('detail')}; live MinerU reachable at "
+                    f"{env.get('MINERU_SERVER_URL')}"
+                )
         if mineru_missing_by_doc:
             detail = mineru_status
-            if not mineru_status.startswith("reachable"):
+            if not mineru_reachable:
                 detail += "; missing preconverted inputs: " + json.dumps(
                     mineru_missing_by_doc,
                     sort_keys=True,
                 )
             add(
                 "service_reachable:MINERU_SERVER_URL",
-                mineru_status.startswith("reachable"),
+                mineru_reachable,
                 detail,
             )
-            if not mineru_status.startswith("reachable"):
+            if not mineru_reachable:
                 dependency_errors = dependency_errors_for_backend("pipeline")
                 add(
                     "local_mineru_preconvert_dependencies",

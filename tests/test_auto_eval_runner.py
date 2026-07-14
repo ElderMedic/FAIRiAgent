@@ -224,6 +224,57 @@ def test_preflight_service_check_reports_mineru_missing_inputs(tmp_path):
     assert "mineru_service" in blocker_keys
 
 
+def test_preflight_accepts_live_mineru_for_unconverted_input(tmp_path, monkeypatch):
+    runner = _load_runner()
+    doc_path = tmp_path / "paper.pdf"
+    doc_path.write_text("pdf placeholder", encoding="utf-8")
+    ground_truth = tmp_path / "gt.json"
+    ground_truth.write_text(
+        json.dumps(
+            {
+                "documents": [
+                    {
+                        "document_id": "doc_a",
+                        "document_path": str(doc_path),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    model_config = tmp_path / "model.env"
+    model_config.write_text("LLM_PROVIDER=deepseek\n", encoding="utf-8")
+    eval_env = tmp_path / "env.auto"
+    eval_env.write_text(
+        "FAIRIFIER_RETRIEVAL_MODE=auto\n"
+        "FAIRIFIER_AUTO_REPAIR_ENABLED=true\n"
+        "FAIRIFIER_AUTO_REPAIR_APPLY_PATCHES=true\n"
+        "FAIRIFIER_AUTO_REPAIR_CLASSIFIER_SHADOW_ENABLED=true\n"
+        "FAIR_DS_API_URL=http://fairds.test\n"
+        "MINERU_SERVER_URL=http://mineru.test\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner, "_check_url_reachable", lambda url: "reachable")
+
+    report = runner.preflight_check(
+        eval_env=eval_env,
+        model_config=model_config,
+        ground_truth=ground_truth,
+        output_dir=tmp_path / "out",
+        documents=["doc_a"],
+        check_services=True,
+    )
+
+    checks = {check["name"]: check for check in report["checks"]}
+    assert report["passed"] is True
+    assert checks["document_mineru_preconverted:doc_a"]["passed"] is True
+    assert "live MinerU reachable" in checks[
+        "document_mineru_preconverted:doc_a"
+    ]["detail"]
+    assert checks["service_reachable:MINERU_SERVER_URL"]["passed"] is True
+    assert report["summary"]["blocked_requirements"] == []
+
+
 def test_preflight_reports_local_preconvert_dependency_when_mineru_unreachable(
     tmp_path,
     monkeypatch,

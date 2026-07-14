@@ -1,0 +1,250 @@
+{
+  "document_id": "earthworm",
+  "document_source": "Gene expression profile dynamics of earthworms exposed to ZnO and ZnO:Mn nanomaterials (bioRxiv)",
+  "generated_by": "manual review of source document",
+  "generated_at": "2026-05-03",
+  "isa_sheets": {
+    "investigation": {
+      "multi_row": false,
+      "expected_rows": [
+        {
+          "investigation identifier": "",
+          "investigation title": "Gene expression profile dynamics of earthworms exposed to ZnO and ZnO:Mn nanomaterials",
+          "investigation description": "This study investigates the time-dependent gene expression response in earthworms exposed to ZnO nanomaterials and ZnO:Mn multicomponent nanomaterials.",
+          "firstname": "Henk J.",
+          "lastname": "van Lingen",
+          "email address": "hvanling@uoguelph.ca",
+          "orcid": "",
+          "organization": "Wageningen University & Research",
+          "department": "Laboratory of Systems & Synthetic Biology",
+          "_evidence": "Title L1; Authors/affiliations L3-L8; Correspondence email L9; Abstract L12-L13"
+        }
+      ]
+    },
+    "study": {
+      "multi_row": false,
+      "expected_rows": [
+        {
+          "study identifier": "",
+          "study description": "This study investigates the time-dependent gene expression response in earthworms exposed to ZnO nanomaterials and ZnO:Mn multicomponent nanomaterials. Three experiments were performed: Exp1 exposed earthworms to ZnO NM (7 days), Exp2 to ZnO:Mn MCNM (7 days), and Exp3 to ZnO:Mn and MnCl2 (14 days). Transcriptomics via RNA-seq was used to profile gene expression dynamics.",
+          "study title": "Gene expression profile dynamics of earthworms exposed to ZnO and ZnO:Mn nanomaterials",
+          "investigation identifier": "",
+          "_evidence": "Title L1; Abstract L12-L13; Materials and Methods L29-L37; Results and Discussion L78"
+        }
+      ]
+    },
+    "observationunit": {
+      "multi_row": true,
+      "expected_rows": [
+        {
+          "observation unit identifier": "",
+          "observation unit name": "Experiment 1 Control",
+          "observation unit description": "Experiment 1: Control soil (LUFA 2.2, Speyer, Germany), 16 jars, 4 clitellated earthworms (Eisenia fetida, Dutchworms, Oostwold) per jar, sampled on days 2, 3, 4 and 7 from start of exposure.",
+          "study identifier": "",
+          "_evidence": "Materials and Methods L31-L33: experimental design, soil, earthworm supplier, jar counts, sampling schedule"
+        },
+        {
+          "observation unit identifier": "",
+          "observation unit name": "Experiment 1 ZnO",
+          "observation unit description": "Experiment 1: ZnO nanomaterial (Phornano, Korneuburg) treated soil at 850 mg/kg, 16 jars, 4 clitellated earthworms per jar, sampled on days 2, 3, 4 and 7.",
+          "study identifier": "",
+          "_evidence": "Materials and Methods L31-L33: ZnO NM, exposure concentration, jar counts, sampling schedule"
+        },
+        {
+          "observation unit identifier": "",
+          "observation unit name": "Experiment 2 Control",
+          "observation unit description": "Experiment 2: Control soil (LUFA 2.2), 9 jars, 2 clitellated earthworms per jar (avg weight 604 mg), sampled on days 2, 4 and 7.",
+          "study identifier": "",
+          "_evidence": "Materials and Methods L35-L36: identical conditions to Exp1 except jar count, earthworm count, sampling days"
+        },
+        {
+          "observation unit identifier": "",
+          "observation unit name": "Experiment 2 ZnO:Mn",
+          "observation unit description": "Experiment 2: ZnO:Mn multicomponent nanomaterial (Phornano, Korneuburg) treated soil at 850 mg/kg, 9 jars, 2 clitellated earthworms per jar, sampled on days 2, 4 and 7.",
+          "study identifier": "",
+          "_evidence": "Materials and Methods L35-L36: ZnO:Mn MCNM, 9 jars, sampling schedule"
+        },
+        {
+          "observation unit identifier": "",
+          "observation unit name": "Experiment 3 Control for ZnO:Mn",
+          "observation unit description": "Experiment 3: Control soil for ZnO:Mn treatment, 4 jars, 6 clitellated earthworms per jar (avg weight 584 mg, LASEBO, Nijkerk), sampled on day 14 after 24 h depuration.",
+          "study identifier": "",
+          "_evidence": "Materials and Methods L37: Exp3 design, earthworm source (LASEBO), jar counts, depuration, 14-day exposure"
+        },
+        {
+          "observation unit identifier": "",
+          "observation unit name": "Experiment 3 ZnO:Mn",
+          "observation unit description": "Experiment 3: ZnO:Mn MCNM (Phornano, Korneuburg) treated soil at 850 mg/kg, 4 jars, 6 clitellated earthworms per jar, sampled on day 14 after 24 h depuration.",
+          "study identifier": "",
+          "_evidence": "Materials and Methods L37: ZnO:Mn treatment, jar counts, 14-day exposure, depuration"
+        },
+        {
+          "observation unit identifier": "",
+          "observation unit name": "Experiment 3 Control for MnCl2",
+          "observation unit description": "Experiment 3: Control soil for MnCl2 treatment, 4 jars, 6 clitellated earthworms per jar (LASEBO, Nijkerk), sampled on day 14 after 24 h depuration.",
+          "study identifier": "",
+          "_evidence": "Materials and Methods L37: control jars for MnCl2 treatment, jar counts, 14-day exposure"
+        },
+        {
+          "observation unit identifier": "",
+          "observation unit name": "Experiment 3 MnCl2",
+          "observation unit description": "Experiment 3: MnCl2 treated soil at 45 mg Mn/kg soil, 4 jars, 6 clitellated earthworms per jar, sampled on day 14 after 24 h depuration.",
+          "study identifier": "",
+          "_evidence": "Materials and Methods L37: MnCl2 treatment at 45 mg Mn/kg soil, jar counts, 14-day exposure"
+        }
+      ]
+    },
+    "sample": {
+      "multi_row": true,
+      "expected_rows": [
+        {
+          "sample identifier": "",
+          "sample description": "Ground whole earthworm tissue from Experiment 1 control group. One whole earthworm per jar was ground in liquid nitrogen using mortar and pestle.",
+          "sample name": "Exp1 Control ground tissue",
+          "ncbi taxonomy id": "1510822",
+          "scientific name": "Eisenia fetida",
+          "biosafety level": "",
+          "observation unit identifier": "",
+          "collection date": "",
+          "geographic location (country and/or sea)": "The Netherlands",
+          "_evidence": "Scientific name: L31 'ordered as Eisenia fetida'; NCBI taxid 1510822 (common knowledge); Tissue processing L33; Experiment location L5 (Wageningen University & Research, The Netherlands)"
+        },
+        {
+          "sample identifier": "",
+          "sample description": "Ground whole earthworm tissue from Experiment 1 ZnO treatment group. One whole earthworm per jar ground in liquid nitrogen.",
+          "sample name": "Exp1 ZnO ground tissue",
+          "ncbi taxonomy id": "1510822",
+          "scientific name": "Eisenia fetida",
+          "biosafety level": "",
+          "observation unit identifier": "",
+          "collection date": "",
+          "geographic location (country and/or sea)": "The Netherlands",
+          "_evidence": "Scientific name: L31 'ordered as Eisenia fetida'; NCBI taxid 1510822; Tissue processing L33"
+        },
+        {
+          "sample identifier": "",
+          "sample description": "Ground whole earthworm tissue from Experiment 2 control group. One whole earthworm per jar ground in liquid nitrogen.",
+          "sample name": "Exp2 Control ground tissue",
+          "ncbi taxonomy id": "1510822",
+          "scientific name": "Eisenia fetida",
+          "biosafety level": "",
+          "observation unit identifier": "",
+          "collection date": "",
+          "geographic location (country and/or sea)": "The Netherlands",
+          "_evidence": "Scientific name: L35 'ordered as Eisenia fetida'; NCBI taxid 1510822; Exp2 methods L35-L36"
+        },
+        {
+          "sample identifier": "",
+          "sample description": "Ground whole earthworm tissue from Experiment 2 ZnO:Mn treatment group. One whole earthworm per jar ground in liquid nitrogen.",
+          "sample name": "Exp2 ZnO:Mn ground tissue",
+          "ncbi taxonomy id": "1510822",
+          "scientific name": "Eisenia fetida",
+          "biosafety level": "",
+          "observation unit identifier": "",
+          "collection date": "",
+          "geographic location (country and/or sea)": "The Netherlands",
+          "_evidence": "Scientific name: L35 'ordered as Eisenia fetida'; NCBI taxid 1510822; Exp2 methods L35-L36"
+        },
+        {
+          "sample identifier": "",
+          "sample description": "Ground whole earthworm tissue from Experiment 3 control group for ZnO:Mn. One whole earthworm per jar ground in liquid nitrogen.",
+          "sample name": "Exp3 Control-ZnO:Mn ground tissue",
+          "ncbi taxonomy id": "1510822",
+          "scientific name": "Eisenia fetida",
+          "biosafety level": "",
+          "observation unit identifier": "",
+          "collection date": "",
+          "geographic location (country and/or sea)": "The Netherlands",
+          "_evidence": "Scientific name: L37 'ordered as Eisenia fetida'; NCBI taxid 1510822; Exp3 methods L37; Depuration L37"
+        },
+        {
+          "sample identifier": "",
+          "sample description": "Ground whole earthworm tissue from Experiment 3 ZnO:Mn treatment group. One whole earthworm per jar ground in liquid nitrogen.",
+          "sample name": "Exp3 ZnO:Mn ground tissue",
+          "ncbi taxonomy id": "1510822",
+          "scientific name": "Eisenia fetida",
+          "biosafety level": "",
+          "observation unit identifier": "",
+          "collection date": "",
+          "geographic location (country and/or sea)": "The Netherlands",
+          "_evidence": "Scientific name: L37 'ordered as Eisenia fetida'; NCBI taxid 1510822; Exp3 methods L37"
+        },
+        {
+          "sample identifier": "",
+          "sample description": "Ground whole earthworm tissue from Experiment 3 control group for MnCl2. One whole earthworm per jar ground in liquid nitrogen.",
+          "sample name": "Exp3 Control-MnCl2 ground tissue",
+          "ncbi taxonomy id": "1510822",
+          "scientific name": "Eisenia fetida",
+          "biosafety level": "",
+          "observation unit identifier": "",
+          "collection date": "",
+          "geographic location (country and/or sea)": "The Netherlands",
+          "_evidence": "Scientific name: L37 'ordered as Eisenia fetida'; NCBI taxid 1510822; Exp3 control jars L37"
+        },
+        {
+          "sample identifier": "",
+          "sample description": "Ground whole earthworm tissue from Experiment 3 MnCl2 treatment group. One whole earthworm per jar ground in liquid nitrogen.",
+          "sample name": "Exp3 MnCl2 ground tissue",
+          "ncbi taxonomy id": "1510822",
+          "scientific name": "Eisenia fetida",
+          "biosafety level": "",
+          "observation unit identifier": "",
+          "collection date": "",
+          "geographic location (country and/or sea)": "The Netherlands",
+          "_evidence": "Scientific name: L37 'ordered as Eisenia fetida'; NCBI taxid 1510822; MnCl2 treatment 45 mg Mn/kg L37"
+        }
+      ]
+    },
+    "assay": {
+      "multi_row": true,
+      "expected_rows": [
+        {
+          "assay identifier": "",
+          "assay description": "RNA-seq of Experiment 1 and Experiment 2 earthworm tissue samples performed at BMKGene (Muenster, Germany).",
+          "protocol": "RNA extraction with TRIzol kit; RNA concentration measured by Nanodrop2000 spectrophotometer (Thermo), integrity by Agilent2100 Bioanalyzer LabChip GX (Perkin Elmer); poly(A) enriched library prep using Hieff NGS Ultima Dual-mode mRNA Library Prep Kit for Illumina (Yeasen; model:13533ES96) or VAHTS Universal V8 RNA-seq library preparation kit for Illumina (NR605); library inspected by Qsep-400; paired-end 2x150 bp sequencing on Illumina NovaSeq X.",
+          "facility": "BMKGene (Muenster, Germany)",
+          "assay date": "",
+          "sample identifier": "",
+          "forward file": "",
+          "reverse file": "",
+          "platform": "Illumina",
+          "instrument model": "Illumina NovaSeq X",
+          "library source": "TRANSCRIPTOMIC",
+          "library selection": "Poly(A) enrichment",
+          "library strategy": "RNA-Seq",
+          "Volume_µL": "",
+          "Quantity_ng": "",
+          "dilution factor": "",
+          "RAN_Qubit_measured_conc_ng_per_µL": "",
+          "RNA_Qubit_calculuated_conc_ng_per_µL": "",
+          "RQN": "",
+          "QC Note (RQN smaller than 6)": "",
+          "_evidence": "L49-L50: BMKGene provider, TRIzol kit, Nanodrop2000, Agilent2100, library prep kits (Hieff NGS Ultima / VAHTS Universal V8), Qsep-400, Illumina NovaSeq X, PE150"
+        },
+        {
+          "assay identifier": "",
+          "assay description": "RNA-seq of Experiment 3 earthworm tissue samples performed at GENEWIZ Germany GmbH (Leipzig, Germany).",
+          "protocol": "RNA extraction with Qiagen RNeasy Mini kit (Qiagen, Hilden); RNA concentration measured by Qubit 4.0 Fluorometer (Life Technologies), integrity by RNA Kit on Agilent 5300 Fragment Analyzer (Agilent Technologies); poly(A) enriched library prep using NEBNext Ultra II RNA Library Prep Kit for Illumina (NEB, Ipswich, MA); library validated by NGS Kit on Agilent 5300 Fragment Analyzer, quantified by Qubit 4.0; paired-end 2x150 bp sequencing on Illumina NovaSeq 6000.",
+          "facility": "GENEWIZ Germany GmbH (Leipzig, Germany)",
+          "assay date": "",
+          "sample identifier": "",
+          "forward file": "",
+          "reverse file": "",
+          "platform": "Illumina",
+          "instrument model": "Illumina NovaSeq 6000",
+          "library source": "TRANSCRIPTOMIC",
+          "library selection": "Poly(A) enrichment",
+          "library strategy": "RNA-Seq",
+          "Volume_µL": "",
+          "Quantity_ng": "",
+          "dilution factor": "",
+          "RAN_Qubit_measured_conc_ng_per_µL": "",
+          "RNA_Qubit_calculuated_conc_ng_per_µL": "",
+          "RQN": "",
+          "QC Note (RQN smaller than 6)": "",
+          "_evidence": "L51-L53: GENEWIZ provider, Qiagen RNeasy Mini kit, Qubit 4.0 Fluorometer, Agilent 5300 Fragment Analyzer, NEBNext Ultra II RNA Library Prep Kit, Illumina NovaSeq 6000, PE150"
+        }
+      ]
+    }
+  }
+}

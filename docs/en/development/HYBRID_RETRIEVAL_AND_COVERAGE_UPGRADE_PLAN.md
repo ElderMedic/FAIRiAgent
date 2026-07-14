@@ -1129,6 +1129,11 @@ Prior 8-doc batch failed pre-embedder-fix: `evaluation/runs/phase4_ab_20260703/`
   - Created new model config env files: `deepseek_v4-flash_v1.4.0_tunnel_phase4_tuned.env` and `deepseek_v4-flash_v1.4.0_tunnel_shadow_tuned.env` pointing to these new ports.
 - **Fast unit tests**: Verified local regression tests: 648 passed successfully.
 
+> 2026-07-14 runtime update: the forwarding setup was restored on the standard
+> local service ports used by current evaluation configs: FAIR-DS `8083`,
+> MinerU `30005`, Ollama `11434`, and Qdrant `6333`. The custom `8085`, `11435`,
+> and `6335` values above remain historical provenance for the earlier runs.
+
 ### 10.8 Final DeepSeek Pro A/B — Tuned vs Shadow (2026-07-14)
 
 **Runs:** `evaluation/runs/phase4_pro_tuned/` and `evaluation/runs/shadow_pro_tuned/`
