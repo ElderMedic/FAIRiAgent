@@ -50,7 +50,11 @@ from ..services.mineru_client import (
 from ..services.mineru_paths import find_markdown_in_tree
 from ..services import mineru_cache as mineru_cache_service
 from ..services.confidence_aggregator import aggregate_confidence
-from ..services.auto_repair import generate_auto_repair_trace, serialize_auto_repair_trace
+from ..services.auto_repair import (
+    generate_auto_repair_trace,
+    inject_auto_repair_summary,
+    serialize_auto_repair_trace,
+)
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.context_observability import log_context_usage
 from ..utils.document_text import read_document_text
@@ -3435,29 +3439,81 @@ Field semantics for ``plan_tasks``:
 
 
 class AutoRepairNode:
-    """Create deterministic auto-repair candidates without mutating metadata."""
+    """Apply guarded deterministic auto-repair patches and record trace."""
 
     def __init__(self, app=None):
         self.app = app
 
     @traceable(name="AutoRepair", tags=["workflow", "metadata", "repair"])
     async def __call__(self, state: FAIRifierState) -> FAIRifierState:
-        if not state.get("metadata_fields"):
-            state["auto_repair_trace"] = {
+        if not config.auto_repair_enabled:
+            trace = {
                 "mode": "skipped",
                 "summary": {
                     "candidate_count": 0,
                     "skipped_gap_count": 0,
                     "accepted_patch_count": 0,
                     "metadata_mutated": False,
+                    "apply_patches": False,
+                },
+                "notes": ["Auto repair disabled by configuration."],
+            }
+            state["auto_repair_trace"] = trace
+            state.setdefault("artifacts", {})["auto_repair_trace"] = (
+                serialize_auto_repair_trace(trace)
+            )
+            return state
+
+        if not state.get("metadata_fields"):
+            trace = {
+                "mode": "skipped",
+                "summary": {
+                    "candidate_count": 0,
+                    "skipped_gap_count": 0,
+                    "accepted_patch_count": 0,
+                    "metadata_mutated": False,
+                    "apply_patches": False,
                 },
                 "notes": ["No metadata fields available for auto repair analysis."],
             }
+            state["auto_repair_trace"] = trace
+            state.setdefault("artifacts", {})["auto_repair_trace"] = (
+                serialize_auto_repair_trace(trace)
+            )
             return state
 
-        trace = generate_auto_repair_trace(state)
+        try:
+            trace = generate_auto_repair_trace(
+                state,
+                apply_patches=config.auto_repair_apply_patches,
+                min_candidate_confidence=config.auto_repair_min_candidate_confidence,
+                classifier_shadow_predictions=(
+                    state.get("auto_repair_classifier_predictions")
+                    if config.auto_repair_classifier_shadow_enabled
+                    else None
+                ),
+            )
+        except Exception as exc:
+            logger.warning("AutoRepair skipped after internal error: %s", exc)
+            trace = {
+                "mode": "error_fallback",
+                "summary": {
+                    "candidate_count": 0,
+                    "skipped_gap_count": 0,
+                    "accepted_patch_count": 0,
+                    "metadata_mutated": False,
+                    "apply_patches": False,
+                },
+                "notes": [
+                    "Auto repair failed and fell back without mutating metadata.",
+                    str(exc),
+                ],
+            }
         state["auto_repair_trace"] = trace
-        state.setdefault("artifacts", {})["auto_repair_trace"] = serialize_auto_repair_trace(trace)
+        inject_auto_repair_summary(state, trace)
+        state.setdefault("artifacts", {})["auto_repair_trace"] = (
+            serialize_auto_repair_trace(trace)
+        )
 
         summary = trace.get("summary") or {}
         logger.info(

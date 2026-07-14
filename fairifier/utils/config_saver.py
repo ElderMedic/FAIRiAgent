@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 
 from ..config import config
+from ..services.auto_repair_policy import effective_retrieval_mode
 
 
 def collect_runtime_config(
@@ -84,6 +85,18 @@ def collect_runtime_config(
         "disable_api_grounding": config.disable_api_grounding,
         "disable_hard_gate": config.disable_hard_gate,
         "disable_cross_layer_rollback": config.disable_cross_layer_rollback,
+        "retrieval_mode": config.retrieval_mode,
+        "effective_retrieval_mode": effective_retrieval_mode(config),
+        "retrieval_shadow_mode": config.retrieval_shadow_mode,
+        "retrieval_prompt_adaptive_lexical": config.retrieval_prompt_adaptive_lexical,
+        "semantic_index_enabled": config.semantic_index_enabled,
+        "hybrid_retrieval_enabled": config.hybrid_retrieval_enabled,
+        "auto_repair_enabled": config.auto_repair_enabled,
+        "auto_repair_apply_patches": config.auto_repair_apply_patches,
+        "auto_repair_min_candidate_confidence": config.auto_repair_min_candidate_confidence,
+        "auto_repair_classifier_shadow_enabled": (
+            config.auto_repair_classifier_shadow_enabled
+        ),
         "langsmith_api_key": "***MASKED***" if config.langsmith_api_key else None,
         "langsmith_project": config.langsmith_project,
         "langsmith_endpoint": config.langsmith_endpoint,

@@ -155,6 +155,11 @@ class FAIRifierConfig:
     jina_api_key: str = ""                      # Jina AI key for fallback API calls
     retrieval_near_duplicate_threshold: float = 0.92
     retrieval_qdrant_collection_prefix: str = "run"
+    auto_repair_enabled: bool = True
+    auto_repair_apply_patches: bool = True  # False = trace-only fallback; never mutates metadata
+    auto_repair_min_candidate_confidence: float = 0.55
+    # Record classifier predictions when supplied; never controls patches.
+    auto_repair_classifier_shadow_enabled: bool = True
     
     # Processing limits
     max_document_size_mb: int = 50
@@ -534,6 +539,19 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.jina_api_key = os.getenv("FAIRIFIER_JINA_API_KEY")
     if os.getenv("FAIRIFIER_RETRIEVAL_NEAR_DUPLICATE_THRESHOLD"):
         config_instance.retrieval_near_duplicate_threshold = float(os.getenv("FAIRIFIER_RETRIEVAL_NEAR_DUPLICATE_THRESHOLD"))
+    if os.getenv("FAIRIFIER_AUTO_REPAIR_ENABLED"):
+        v = os.getenv("FAIRIFIER_AUTO_REPAIR_ENABLED", "").strip().lower()
+        config_instance.auto_repair_enabled = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_AUTO_REPAIR_APPLY_PATCHES"):
+        v = os.getenv("FAIRIFIER_AUTO_REPAIR_APPLY_PATCHES", "").strip().lower()
+        config_instance.auto_repair_apply_patches = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_AUTO_REPAIR_MIN_CANDIDATE_CONFIDENCE"):
+        config_instance.auto_repair_min_candidate_confidence = float(
+            os.getenv("FAIRIFIER_AUTO_REPAIR_MIN_CANDIDATE_CONFIDENCE")
+        )
+    if os.getenv("FAIRIFIER_AUTO_REPAIR_CLASSIFIER_SHADOW_ENABLED"):
+        v = os.getenv("FAIRIFIER_AUTO_REPAIR_CLASSIFIER_SHADOW_ENABLED", "").strip().lower()
+        config_instance.auto_repair_classifier_shadow_enabled = v in ("1", "true", "yes", "on")
 
     if os.getenv("FAIRIFIER_CROSS_LAYER_MAX_RESTARTS"):
         config_instance.cross_layer_max_restarts = int(

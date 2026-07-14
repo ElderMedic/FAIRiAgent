@@ -42,6 +42,11 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
+from fairifier.output_paths import (  # noqa: E402
+    METADATA_OUTPUT_FILENAME,
+    resolve_metadata_output_read_path,
+)
+
 # All matching primitives now live in a shared module so this script, the
 # ValueAccuracyEvaluator (Layer 2), StructuralEvaluator (Layer 3), and
 # NovelFieldEvaluator (Layer 4) all use one implementation.
@@ -100,9 +105,9 @@ def load_run_sheets(run_dir: Path) -> Dict[str, List[Dict[str, str]]]:
     2. isa_structure.{sheet}.fields flat list (legacy)
     3. metadata_fields list
     """
-    meta_path = run_dir / "metadata.json"
-    if not meta_path.exists():
-        raise FileNotFoundError(f"metadata.json not found in {run_dir}")
+    meta_path = resolve_metadata_output_read_path(run_dir)
+    if meta_path is None:
+        raise FileNotFoundError(f"{METADATA_OUTPUT_FILENAME} not found in {run_dir}")
     with open(meta_path, encoding="utf-8") as f:
         meta = json.load(f)
 

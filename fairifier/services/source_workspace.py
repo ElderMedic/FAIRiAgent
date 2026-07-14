@@ -452,14 +452,15 @@ def hybrid_search_sources(
         hybrid_merged, lexical_merged, final_limit
     )
 
+    retrieval_mode = effective_retrieval_mode(config)
     telemetry.update(
         {
             "lexical_hit_count": len(lexical_merged),
             "semantic_hit_count": sum(len(items) for items in semantic_lists),
             "hybrid_hit_count": len(hybrid_merged),
             "rerank_status": rerank_status,
-            "shadow_mode": bool(config.retrieval_shadow_mode),
-            "retrieval_mode": effective_retrieval_mode(config),
+            "shadow_mode": retrieval_mode == "shadow",
+            "retrieval_mode": retrieval_mode,
             "queries_used": queries[:max_queries],
         }
     )

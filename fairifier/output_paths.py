@@ -7,8 +7,9 @@ still have ``metadata_json.json``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 METADATA_OUTPUT_FILENAME = "metadata.json"
 LEGACY_METADATA_OUTPUT_FILENAME = "metadata_json.json"
@@ -28,6 +29,13 @@ def artifact_output_filename(artifact_name: str) -> str:
         return METADATA_OUTPUT_FILENAME
     ext = _NON_METADATA_ARTIFACT_EXTENSIONS.get(artifact_name, ".json")
     return f"{artifact_name}{ext}"
+
+
+def artifact_content_to_text(content: Any) -> str:
+    """Serialize workflow artifact payloads for CLI/API/evaluation output files."""
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, indent=2, ensure_ascii=False)
 
 
 def metadata_output_write_path(output_dir: Path) -> Path:

@@ -11,6 +11,8 @@ langsmith>=0.1.0
 # Document processing
 PyMuPDF>=1.23.0
 mineru>=3.4.0,<4
+# Local MinerU `pipeline` backend/preconversion additionally requires:
+#   pip install "mineru[pipeline]>=3.4.0,<4"
 rdflib>=7.0.0
 pyshacl>=0.25.0
 

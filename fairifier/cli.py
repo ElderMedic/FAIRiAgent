@@ -14,6 +14,7 @@ import click
 from .graph.langgraph_app import FAIRifierLangGraphApp
 from .config import config
 from .output_paths import (
+    artifact_content_to_text,
     artifact_output_filename,
     metadata_output_write_path,
     resolve_metadata_output_read_path,
@@ -580,14 +581,15 @@ async def _run_workflow(
                 if content:
                     filename = artifact_output_filename(artifact_name)
                     filepath = output_path / filename
+                    text = artifact_content_to_text(content)
                     
                     with open(filepath, 'w', encoding='utf-8') as f:
-                        f.write(content)
+                        f.write(text)
 
-                    size_kb = len(content) / 1024
+                    size_kb = len(text.encode("utf-8")) / 1024
                     click.echo(f"  ✓ {filename} ({size_kb:.1f} KB)")
                     json_logger.info("artifact_saved", filename=filename,
-                                     size_bytes=len(content))
+                                     size_bytes=len(text.encode("utf-8")))
 
         do_syntax = config.validate_output_json and not no_validate_json
         do_fair = (
@@ -1071,11 +1073,12 @@ async def _resume_workflow(
                 if content:
                     filename = artifact_output_filename(artifact_name)
                     filepath = output_path / filename
+                    text = artifact_content_to_text(content)
                     
                     with open(filepath, 'w', encoding='utf-8') as f:
-                        f.write(content)
+                        f.write(text)
                     
-                    size_kb = len(content) / 1024
+                    size_kb = len(text.encode("utf-8")) / 1024
                     click.echo(f"  ✓ {filename} ({size_kb:.1f} KB)")
 
         fairds_xlsx = try_export_fairds_metadata_excel(output_path)
@@ -1174,6 +1177,16 @@ def _check_mineru_preflight() -> tuple[bool, str]:
         return True, "CLI and required endpoints reachable"
     if not health["cli_ok"]:
         return False, f"CLI unavailable ({health.get('cli_version')})"
+    if health.get("dependency_errors"):
+        hint = (
+            f"; install with {health['dependency_install_hint']}"
+            if health.get("dependency_install_hint")
+            else ""
+        )
+        return (
+            False,
+            "missing dependencies: " + ", ".join(health["dependency_errors"]) + hint,
+        )
     if config.mineru_api_url and not health["api"].tcp_reachable:
         return False, f"mineru-api unreachable ({health['api'].message})"
     if health.get("needs_vlm") and not health["vlm"].tcp_reachable:

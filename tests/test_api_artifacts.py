@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 from fairifier.apps.api.routers.v1 import (
     _build_word_entries,
@@ -19,6 +21,7 @@ from fairifier.apps.api.services.runner import (
     _start_full_output_capture,
     _stop_full_output_capture,
     _persist_run_outputs,
+    _serialisable_artifacts,
 )
 from fairifier.apps.api.storage.sqlite_store import (
     SQLiteProjectStore,
@@ -158,6 +161,137 @@ def test_persist_run_outputs_writes_core_downloadable_files(
     assert "processing_completed" in processing_log
     assert "artifact_saved" in processing_log
     assert "workflow_result_summary" in processing_log
+
+
+def test_persist_run_outputs_writes_auto_repair_trace_for_gate(
+    tmp_path,
+):
+    json_logger = JSONLogger(
+        component="test", enable_stdout=False
+    )
+
+    errors = _persist_run_outputs(
+        project_id="proj-auto",
+        result={
+            "artifacts": {
+                "metadata_json": '{"isa_structure": {"study": {"fields": []}}}',
+                "auto_repair_trace": {
+                    "mode": "deterministic_exact_patch",
+                    "summary": {
+                        "accepted_patch_count": 0,
+                        "metadata_mutated": False,
+                    },
+                },
+            }
+        },
+        output_dir=str(tmp_path),
+        json_logger=json_logger,
+    )
+
+    assert errors == []
+    trace = json.loads(
+        (tmp_path / "auto_repair_trace.json").read_text(encoding="utf-8")
+    )
+    assert trace["mode"] == "deterministic_exact_patch"
+    assert trace["summary"]["accepted_patch_count"] == 0
+
+
+def test_persist_run_outputs_exports_fairds_workbook_from_isa_values(
+    tmp_path,
+):
+    json_logger = JSONLogger(
+        component="test", enable_stdout=False
+    )
+    metadata = {
+        "isa_structure": {
+            "study": {
+                "columns": ["study title"],
+                "rows": [{"study title": "fallback"}],
+            }
+        }
+    }
+    isa_values = {
+        "study": {
+            "columns": ["study title"],
+            "rows": [{"study title": "Pea cold stress response"}],
+        }
+    }
+
+    errors = _persist_run_outputs(
+        project_id="proj-fairds",
+        result={
+            "artifacts": {
+                "metadata_json": json.dumps(metadata),
+                "isa_values_json": json.dumps(isa_values),
+            }
+        },
+        output_dir=str(tmp_path),
+        json_logger=json_logger,
+        fair_ds_api_url="",
+    )
+
+    assert errors == []
+    workbook_path = tmp_path / "metadata_fairds.xlsx"
+    assert workbook_path.exists()
+    workbook = load_workbook(workbook_path, data_only=True)
+    try:
+        worksheet = workbook["Study"]
+        headers = [
+            worksheet.cell(1, col).value
+            for col in range(1, worksheet.max_column + 1)
+        ]
+        row = {
+            headers[col - 1]: worksheet.cell(2, col).value
+            for col in range(1, worksheet.max_column + 1)
+        }
+        assert row["study title"] == "Pea cold stress response"
+    finally:
+        workbook.close()
+    log_entries = [
+        json.loads(line)
+        for line in (tmp_path / "processing_log.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    summary = next(
+        entry for entry in log_entries
+        if entry.get("event") == "workflow_result_summary"
+    )
+    assert "metadata.json" in summary["artifact_names"]
+    assert "isa_values_json.json" in summary["artifact_names"]
+    assert "metadata_fairds.xlsx" in summary["artifact_names"]
+    assert summary["artifact_keys"] == ["isa_values_json", "metadata_json"]
+
+
+def test_serialisable_artifacts_falls_back_to_output_filenames():
+    assert _serialisable_artifacts(
+        {
+            "metadata_json": "{}",
+            "auto_repair_trace": "{}",
+            "validation_report": "ok",
+        }
+    ) == [
+        "metadata.json",
+        "auto_repair_trace.json",
+        "validation_report.txt",
+    ]
+
+
+def test_serialisable_artifacts_prefers_actual_output_files(tmp_path):
+    (tmp_path / "metadata.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "metadata_fairds.xlsx").write_bytes(b"xlsx")
+    (tmp_path / "runtime_config.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".hidden").write_text("skip", encoding="utf-8")
+
+    assert _serialisable_artifacts(
+        {"metadata_json": "{}"},
+        output_dir=str(tmp_path),
+    ) == [
+        "metadata.json",
+        "metadata_fairds.xlsx",
+        "runtime_config.json",
+    ]
 
 
 def test_full_output_capture_writes_root_logger_messages(tmp_path):

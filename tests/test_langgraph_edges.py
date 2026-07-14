@@ -1,5 +1,6 @@
 from fairifier.graph.state import FAIRifierState
 from fairifier.graph.edges import route_after_critic, route_after_parser
+from fairifier.graph.app import FAIRifierLangGraphApp
 
 def test_route_after_critic_accept():
     # Setup state with ACCEPT decision
@@ -63,3 +64,13 @@ def test_route_after_parser():
     # Parser output with errors should finalize
     state_error: FAIRifierState = {"errors": ["parsing failed"]}
     assert route_after_parser(state_error) == "finalize"
+
+
+def test_main_workflow_routes_through_auto_repair_before_finalize():
+    app = FAIRifierLangGraphApp.__new__(FAIRifierLangGraphApp)
+    graph = app._build_graph_structure()
+
+    assert "auto_repair" in graph.nodes
+    assert ("orchestrate", "auto_repair") in graph.edges
+    assert ("auto_repair", "finalize") in graph.edges
+    assert ("orchestrate", "finalize") not in graph.edges

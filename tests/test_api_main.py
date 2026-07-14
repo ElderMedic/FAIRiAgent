@@ -80,3 +80,23 @@ def test_project_to_response_confidence_scores_non_dict_becomes_none():
         {"project_id": "p2", "confidence_scores": {"a": 1, "b": "x", "c": 0.5}}
     )
     assert r2.confidence_scores == {"a": 1.0, "c": 0.5}
+
+
+def test_mineru_status_message_includes_dependency_errors():
+    from fairifier.apps.api.routers import v1
+
+    message = v1._build_mineru_status_message(
+        {
+            "cli_ok": True,
+            "cli_version": "mineru 3.4.0",
+            "dependency_errors": ["missing_python_module:doclayout_yolo"],
+            "dependency_install_hint": "pip install 'mineru[pipeline]>=3.4.0,<4'",
+            "api": None,
+            "vlm": None,
+            "needs_vlm": False,
+        }
+    )
+
+    assert "dependencies missing" in message
+    assert "missing_python_module:doclayout_yolo" in message
+    assert "mineru[pipeline]>=3.4.0,<4" in message

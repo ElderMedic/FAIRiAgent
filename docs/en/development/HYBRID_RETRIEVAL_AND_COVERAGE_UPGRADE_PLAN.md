@@ -1108,6 +1108,10 @@ Prior 8-doc batch failed pre-embedder-fix: `evaluation/runs/phase4_ab_20260703/`
 | Expanded 8-doc | Re-run after dim-fix | ✅ Done |
 | Default switch | `shadow_mode=false` in prod | ✅ Code default; ready to push |
 
+> 2026-07-14 update: this historical Phase 4 default-switch gate is superseded
+> by the `auto` retrieval/repair plan in §10.9. Production should no longer be
+> framed as a user-facing Shadow-vs-Tuned default choice.
+
 **Remaining issues for next iteration:**
 
 - **B9** — Concurrent Ollama indexing causes sporadic fallback; add embedder retry / serialise per-doc index build.
@@ -1158,6 +1162,119 @@ Prior 8-doc batch failed pre-embedder-fix: `evaluation/runs/phase4_ab_20260703/`
 #### Key takeaways
 - **Structure vs Quality**: Similar to prior evaluations, lexical prompting with shadow logging (Shadow configuration) has significantly cleaner output structures, yielding a **+11.11%** boost in Schema Compliance and a **+8.91%** boost in Row Alignment F1. However, active hybrid prompt injection (Tuned configuration) provides richer evidence to the generator agent, leading to an **+8.00%** higher qualitative score from the LLM Judge.
 - **Decision Matrix**: If structural consistency and database ingestion (schema compliance) are prioritized, Shadow mode is superior. If semantic enrichment and maximum readability of extracted values are preferred, Tuned mode is superior.
+
+### 10.9 Auto synthesis plan — combine Shadow structure and Tuned semantics (2026-07-14)
+
+**Product decision:** do not ship a user-facing A/B default between Shadow and
+Tuned. FAIRiAgent's production behavior should be a single end-to-end `auto`
+pipeline:
+
+1. Prefer lexical, Shadow-style evidence in prompts when lexical evidence exists.
+2. Use semantic evidence only as targeted fallback for lexical misses or repair
+   gaps.
+3. Apply post-generation deterministic repair only on single-row sheets
+   (`investigation`, `study`) when exact FAIR-DS field-name candidates have
+   non-empty values, provenance, evidence text, sufficient confidence, and pass
+   schema/linkage guards. Keep multi-row sheet repair trace-only until a
+   group-aware row repair can prove alignment.
+4. Keep classifier work in the temporary prototype as shadow/research until it
+   beats deterministic rules on held-out documents without reducing schema or
+   row alignment.
+
+**Implemented runtime contract:**
+
+- `FAIRIFIER_RETRIEVAL_MODE=auto` is the production mode; `shadow` and `tuned`
+  remain compatibility/evaluation modes only.
+- Legacy `FAIRIFIER_RETRIEVAL_SHADOW_MODE` still maps to `shadow`/`tuned` when
+  the new mode env is absent, preserving old repro runs.
+- `AutoRepairNode` runs before finalization and writes `auto_repair_trace.json`
+  on every path: accepted patch, rejected patch, trace-only, skipped, or
+  internal-error fallback.
+- Accepted deterministic patches update `metadata_fields`, `metadata.json`, and
+  single-row `isa_values`/`isa_values_json` when safe. If post-patch metadata
+  validation fails, the node rolls back and records the rejection.
+- Multi-row sheets (`observationunit`, `sample`, `assay`) are rejected by the
+  deterministic patch guard for now, so exact candidates there are preserved in
+  `auto_repair_trace.json` without mutating row-aligned outputs.
+- When patches are accepted, `metadata.json.auto_repair_summary` records a
+  compact accepted-field list and points to the sidecar trace. The main metadata
+  file remains the primary FAIR-DS-facing artifact.
+- Optional classifier predictions supplied by eval/prototype code are recorded
+  only as `classifier_shadow_prediction` entries in `auto_repair_trace.json`
+  when `FAIRIFIER_AUTO_REPAIR_CLASSIFIER_SHADOW_ENABLED=true`; they do not
+  influence patch acceptance.
+
+**Temporary feature workspace:** `evaluation/prototypes/auto_repair_classifier/`
+
+- `build_dataset.py` builds field-level weak labels from paired Shadow/Tuned
+  runs.
+- `train_decision_model.py` evaluates lightweight classifiers, but current weak
+  labels are too sparse for production defaulting.
+- The main pipeline has a shadow-only prediction hook so future full runs can
+  compare model recommendations against deterministic rules without changing
+  metadata results.
+- `run_auto_eval.py` prepares the canonical six-document `auto` eval command,
+  writes generated auto config/env files, and records preflight reports.
+- `preconvert_mineru.py` writes a dry-run/execute plan for target PDFs that
+  need reusable `mineru_<stem>/` Markdown before a service-free auto eval.
+- When live MinerU is unreachable and target PDFs still lack preconverted
+  Markdown, auto eval preflight also checks the local `mineru -b pipeline`
+  fallback import dependencies and reports `mineru_preconvert_dependency`
+  blockers such as `missing_python_module:doclayout_yolo`, with the install
+  hint `pip install 'mineru[pipeline]>=3.4.0,<4'`.
+- Main FAIRiAgent MinerU health now uses the same dependency check. The API
+  system-status endpoint, CLI validation, and `MinerUClient.is_available()`
+  report `pipeline` backends as not ready when required imports are missing,
+  and conversion fails early with the same dependency error instead of running
+  a known-broken CLI command.
+- `merge_gate.py` compares fresh `auto` results against the Shadow/Tuned
+  baselines and validates per-document artifacts.
+
+**Metadata result requirements for merge:**
+
+- `metadata.json`, `workflow_report.json`, `runtime_config.json`,
+  `auto_repair_trace.json`, `isa_values_json.json`, and
+  `metadata_fairds.xlsx` must exist and be parseable for all six target docs.
+- `runtime_config.json` must prove `effective_retrieval_mode=auto`,
+  `auto_repair_enabled=true`, `auto_repair_apply_patches=true`, and explicit
+  `auto_repair_classifier_shadow_enabled` classifier provenance.
+- `auto_repair_trace.json` must prove the repair node ran in
+  `deterministic_exact_patch` mode with `summary.apply_patches=true`; trace-only
+  and error-fallback traces are diagnostics, not merge-ready production
+  evidence.
+- `metadata.json` must pass shared metadata format checks for top-level
+  structure, datatypes, value formats, and source-grounding accounting.
+- If `auto_repair_trace.json` reports accepted patches,
+  `metadata.json.auto_repair_summary.accepted_patch_count` must match the trace.
+- Accepted fields must be materialized in `metadata.json.isa_structure`; for
+  single-row sheets (`investigation`, `study`) they must also appear in the row
+  matrix and `isa_values_json.json`.
+- FAIR-DS Excel export must consume the patched `isa_values_json.json` matrix so
+  `metadata_fairds.xlsx` includes accepted auto repair fields.
+- Aggregate schema compliance, row alignment, sheet placement, precision, and
+  completeness must not regress beyond the merge-gate tolerances relative to
+  Shadow; value match must remain near Tuned.
+
+**Current blocker:** the full `auto` eval has not been produced yet:
+
+- Missing required result:
+  `evaluation/runs/auto_pro_tuned/results/evaluation_results.json`.
+- Current service-aware preflight records local files/config as ready, but
+  `FAIR_DS_API_URL` and `MINERU_SERVER_URL` are unreachable with connection
+  refused. See
+  `evaluation/prototypes/auto_repair_classifier/artifacts/auto_eval_preflight_report.md`.
+- If live MinerU is unavailable, use
+  `mamba run -n FAIRiAgent python evaluation/prototypes/auto_repair_classifier/preconvert_mineru.py`
+  to inspect missing PDF conversions, then add `--execute` only when local
+  MinerU pipeline conversion is acceptable.
+- If readiness reports `mineru_preconvert_dependency`, repair the FAIRiAgent
+  environment first; otherwise local preconversion can fail without producing
+  reusable Markdown even when the MinerU process exits with code 0.
+- `auto_readiness_report.json` includes a `requirements` audit that separates
+  completed local implementation evidence from pending service/full-eval/gate
+  evidence.
+- Until that run exists and `merge_gate.py` passes, the branch is not proven
+  ready to merge as production-default complete.
 
 ---
 

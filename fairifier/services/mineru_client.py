@@ -10,6 +10,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from .mineru_health import (
+    dependency_errors_for_backend,
+    dependency_install_hint_for_backend,
+)
 from .mineru_paths import (
     discover_structured_artifacts,
     find_markdown_in_tree,
@@ -168,6 +172,16 @@ class MinerUClient:
         http_client = "http-client" in self.backend
         if http_client and not self.server_url:
             return False
+        dependency_errors = dependency_errors_for_backend(self.backend)
+        if dependency_errors:
+            install_hint = dependency_install_hint_for_backend(self.backend)
+            logger.warning(
+                "MinerU backend %s missing dependencies: %s%s",
+                self.backend,
+                ", ".join(dependency_errors),
+                f"; install with {install_hint}" if install_hint else "",
+            )
+            return False
         try:
             subprocess.run(
                 [self.cli_path, "--help"],
@@ -226,6 +240,17 @@ class MinerUClient:
         if "http-client" in self.backend and not self.server_url:
             raise MinerUConversionError(
                 "MinerU VLM URL is not configured (MINERU_SERVER_URL / MINERU_VLM_URL)."
+            )
+        dependency_errors = dependency_errors_for_backend(self.backend)
+        if dependency_errors:
+            install_hint = dependency_install_hint_for_backend(self.backend)
+            hint = f" Install with: {install_hint}." if install_hint else ""
+            raise MinerUConversionError(
+                "MinerU backend "
+                f"'{self.backend}' is missing Python dependencies: "
+                + ", ".join(dependency_errors)
+                + "."
+                + hint
             )
 
         src_path = Path(input_path).expanduser().resolve()

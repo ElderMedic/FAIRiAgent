@@ -31,7 +31,8 @@ def normalize_retrieval_mode(value: Any, default: str = "auto") -> str:
 
 def effective_retrieval_mode(config: Any) -> str:
     """Return the active retrieval mode while preserving legacy shadow config."""
-    mode = normalize_retrieval_mode(getattr(config, "retrieval_mode", "auto"))
+    raw_mode = getattr(config, "retrieval_mode", None)
+    mode = str(raw_mode or "").strip().lower()
     if mode in RETRIEVAL_MODES:
         return mode
     if bool(getattr(config, "retrieval_shadow_mode", False)):

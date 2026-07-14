@@ -48,6 +48,8 @@ class FAIRifierState(TypedDict):
     metadata_gap_hints: List[Dict[str, Any]]
     inferred_metadata_extensions: List[Dict[str, Any]]
     auto_repair_trace: Dict[str, Any]
+    # Optional shadow-only classifier predictions by normalized field.
+    auto_repair_classifier_predictions: Dict[str, Any]
     api_capabilities: Dict[str, Any]
     retrieval_cache: Dict[str, Any]
     

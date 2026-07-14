@@ -1,9 +1,10 @@
 """Report generator for workflow execution summary."""
 
 import json
-from typing import Dict, Any, List, Optional
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 
 class WorkflowReportGenerator:
@@ -135,6 +136,10 @@ class WorkflowReportGenerator:
         semantic_only_fields = 0
         rerank_skipped = 0
         rerank_applied = 0
+        retrieval_mode_counts: Counter[str] = Counter()
+        prompt_mode_counts: Counter[str] = Counter()
+        auto_repair_scores: List[float] = []
+        auto_repair_reason_counts: Counter[str] = Counter()
 
         for field_name, stats in retrieval_telemetry.items():
             if not isinstance(stats, dict):
@@ -153,6 +158,20 @@ class WorkflowReportGenerator:
                 legacy_only_fields += 1
             if semantic_hits > 0 and lexical_hits == 0:
                 semantic_only_fields += 1
+
+            retrieval_mode = stats.get("retrieval_mode")
+            if retrieval_mode:
+                retrieval_mode_counts[str(retrieval_mode)] += 1
+            prompt_mode = stats.get("prompt_mode")
+            if prompt_mode:
+                prompt_mode_counts[str(prompt_mode)] += 1
+            try:
+                auto_repair_scores.append(float(stats.get("auto_repair_score") or 0.0))
+            except (TypeError, ValueError):
+                pass
+            reasons = stats.get("auto_repair_reasons") or []
+            if isinstance(reasons, list):
+                auto_repair_reason_counts.update(str(reason) for reason in reasons)
 
             field_stats.append(
                 {
@@ -176,6 +195,23 @@ class WorkflowReportGenerator:
         rerank_timeout_rate = (
             rerank_skipped / rerank_total if rerank_total > 0 else 0.0
         )
+        auto_repair_score_summary: Dict[str, Any] = {
+            "count": len(auto_repair_scores),
+            "min": 0.0,
+            "max": 0.0,
+            "avg": 0.0,
+        }
+        if auto_repair_scores:
+            auto_repair_score_summary.update(
+                {
+                    "min": round(min(auto_repair_scores), 4),
+                    "max": round(max(auto_repair_scores), 4),
+                    "avg": round(
+                        sum(auto_repair_scores) / len(auto_repair_scores),
+                        4,
+                    ),
+                }
+            )
 
         return {
             "semantic_index_status": semantic_status,
@@ -191,6 +227,10 @@ class WorkflowReportGenerator:
             "rerank_timeout_rate": round(rerank_timeout_rate, 4),
             "qdrant_fallback_used": qdrant_fallback_used,
             "fields_with_retrieval_telemetry": len(field_stats),
+            "retrieval_mode_counts": dict(retrieval_mode_counts),
+            "prompt_mode_counts": dict(prompt_mode_counts),
+            "auto_repair_score_summary": auto_repair_score_summary,
+            "auto_repair_reason_counts": dict(auto_repair_reason_counts),
             "field_retrieval_stats": field_stats[:50],
             "evidence_store": state.get("evidence_store", {}),
         }
@@ -479,14 +519,58 @@ class WorkflowReportGenerator:
             lines.append(f"Ungrounded high-confidence fields:{flag}{ungrounded}")
             lines.append("")
 
+        retrieval = report.get("retrieval_metrics") or {}
+        if retrieval:
+            lines.append("RETRIEVAL AND AUTO PROMPTING")
+            lines.append("-" * 80)
+            lines.append(
+                f"Semantic index status:           {retrieval.get('semantic_index_status', 'unknown')}"
+            )
+            lines.append(
+                f"Telemetry fields:                {retrieval.get('fields_with_retrieval_telemetry', 0)}"
+            )
+            retrieval_modes = retrieval.get("retrieval_mode_counts") or {}
+            if retrieval_modes:
+                mode_text = ", ".join(
+                    f"{mode}={count}" for mode, count in sorted(retrieval_modes.items())
+                )
+                lines.append(f"Retrieval modes:                 {mode_text}")
+            prompt_modes = retrieval.get("prompt_mode_counts") or {}
+            if prompt_modes:
+                prompt_text = ", ".join(
+                    f"{mode}={count}" for mode, count in sorted(prompt_modes.items())
+                )
+                lines.append(f"Prompt modes:                    {prompt_text}")
+            score_summary = retrieval.get("auto_repair_score_summary") or {}
+            if score_summary.get("count"):
+                lines.append(
+                    "Auto repair score avg/max:       "
+                    f"{score_summary.get('avg', 0.0):.2f}/"
+                    f"{score_summary.get('max', 0.0):.2f}"
+                )
+            reason_counts = retrieval.get("auto_repair_reason_counts") or {}
+            if reason_counts:
+                reason_text = ", ".join(
+                    f"{reason}={count}" for reason, count in sorted(reason_counts.items())
+                )
+                lines.append(f"Auto repair reasons:             {reason_text}")
+            lines.append("")
+
         auto_repair = report.get("auto_repair_trace") or {}
         auto_summary = auto_repair.get("summary") or {}
         if auto_summary:
             lines.append("AUTO REPAIR TRACE")
             lines.append("-" * 80)
+            lines.append(f"Mode:                            {auto_repair.get('mode', 'unknown')}")
+            lines.append(f"Apply patches:                   {auto_summary.get('apply_patches', False)}")
             lines.append(f"Candidate fields:                {auto_summary.get('candidate_count', 0)}")
             lines.append(f"Skipped gap fields:              {auto_summary.get('skipped_gap_count', 0)}")
             lines.append(f"Accepted patches:                {auto_summary.get('accepted_patch_count', 0)}")
+            lines.append(f"Rejected patches:                {auto_summary.get('rejected_patch_count', 0)}")
+            lines.append(
+                "Classifier shadow predictions:   "
+                f"{auto_summary.get('classifier_shadow_prediction_count', 0)}"
+            )
             lines.append(f"Metadata mutated:                {auto_summary.get('metadata_mutated', False)}")
             lines.append("")
         # Field Analysis

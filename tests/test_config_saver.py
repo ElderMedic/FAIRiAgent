@@ -65,6 +65,22 @@ class TestCollectRuntimeConfig:
         assert config_dict["disable_api_grounding"] == config.disable_api_grounding
         assert config_dict["disable_hard_gate"] == config.disable_hard_gate
         assert config_dict["disable_cross_layer_rollback"] == config.disable_cross_layer_rollback
+        assert config_dict["retrieval_mode"] == config.retrieval_mode
+        assert config_dict["effective_retrieval_mode"] in {"auto", "shadow", "tuned"}
+        assert config_dict["retrieval_shadow_mode"] == config.retrieval_shadow_mode
+        assert config_dict["retrieval_prompt_adaptive_lexical"] == config.retrieval_prompt_adaptive_lexical
+        assert config_dict["semantic_index_enabled"] == config.semantic_index_enabled
+        assert config_dict["hybrid_retrieval_enabled"] == config.hybrid_retrieval_enabled
+        assert config_dict["auto_repair_enabled"] == config.auto_repair_enabled
+        assert config_dict["auto_repair_apply_patches"] == config.auto_repair_apply_patches
+        assert (
+            config_dict["auto_repair_min_candidate_confidence"]
+            == config.auto_repair_min_candidate_confidence
+        )
+        assert (
+            config_dict["auto_repair_classifier_shadow_enabled"]
+            == config.auto_repair_classifier_shadow_enabled
+        )
 
     def test_collect_runtime_config_masks_sensitive_data(self):
         """Test that sensitive data is masked."""
@@ -192,6 +208,9 @@ class TestSaveRuntimeConfig:
         assert "llm_provider" in config_dict
         assert "llm_model" in config_dict
         assert "fair_ds_api_url" in config_dict
+        assert "effective_retrieval_mode" in config_dict
+        assert "auto_repair_apply_patches" in config_dict
+        assert "auto_repair_classifier_shadow_enabled" in config_dict
 
     def test_save_runtime_config_handles_missing_output_dir(self, tmp_path):
         """Test that save_runtime_config creates output directory if needed."""

@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional, TextIO
 
 from ..storage.base import ProjectStore
 from .event_bus import WorkflowEvent, event_bus
-from fairifier.output_paths import artifact_output_filename
+from fairifier.output_paths import artifact_content_to_text, artifact_output_filename
 from fairifier.services.fairds_excel_export import (
     try_export_fairds_metadata_excel,
 )
@@ -338,7 +338,8 @@ def run_workflow_task(
                 "quality_metrics": result.get("quality_metrics", {}),
                 "output_dir": persisted_output_dir,
                 "artifacts": _serialisable_artifacts(
-                    result.get("artifacts", {})
+                    result.get("artifacts", {}),
+                    output_dir=persisted_output_dir,
                 ),
                 "message": (
                     "Run stopped by user"
@@ -538,15 +539,7 @@ def _persist_run_outputs(
                 continue
             artifact_path = output_path / artifact_output_filename(artifact_name)
             try:
-                text = (
-                    content
-                    if isinstance(content, str)
-                    else json.dumps(
-                        content,
-                        indent=2,
-                        ensure_ascii=False,
-                    )
-                )
+                text = artifact_content_to_text(content)
                 artifact_path.write_text(
                     text, encoding="utf-8"
                 )
@@ -564,26 +557,6 @@ def _persist_run_outputs(
                 logger.warning(msg)
                 errors.append(msg)
 
-    json_logger.info(
-        "workflow_result_summary",
-        project_id=project_id,
-        status=result.get("status", "unknown"),
-        needs_human_review=bool(
-            result.get("needs_human_review", False)
-        ),
-        error_count=len(result.get("errors", []) or []),
-        errors_preview=[
-            str(item) for item in (result.get("errors") or [])[:10]
-        ],
-        artifact_names=sorted(artifacts.keys())
-        if isinstance(artifacts, dict)
-        else [],
-        confidence_scores=result.get("confidence_scores", {}),
-        execution_summary=result.get("execution_summary", {}),
-        quality_metrics=result.get("quality_metrics", {}),
-        output_dir=str(output_path),
-    )
-
     full_log_path = output_path / "full_output.log"
     if full_log_path.exists():
         try:
@@ -595,21 +568,6 @@ def _persist_run_outputs(
             )
         except OSError:
             pass
-
-    log_path = output_path / "processing_log.jsonl"
-    try:
-        with log_path.open("w", encoding="utf-8") as fh:
-            for log_entry in json_logger.get_logs():
-                fh.write(
-                    json.dumps(
-                        log_entry, ensure_ascii=False
-                    )
-                    + "\n"
-                )
-    except Exception as exc:
-        msg = f"Failed to save processing_log.jsonl: {exc}"
-        logger.warning(msg)
-        errors.append(msg)
 
     try:
         from fairifier.utils.llm_helper import (
@@ -642,11 +600,79 @@ def _persist_run_outputs(
             size_bytes=fairds_path.stat().st_size,
         )
 
+    json_logger.info(
+        "workflow_result_summary",
+        project_id=project_id,
+        status=result.get("status", "unknown"),
+        needs_human_review=bool(
+            result.get("needs_human_review", False)
+        ),
+        error_count=len(result.get("errors", []) or []),
+        errors_preview=[
+            str(item) for item in (result.get("errors") or [])[:10]
+        ],
+        artifact_names=_serialisable_artifacts(
+            artifacts,
+            output_dir=str(output_path),
+        ),
+        artifact_keys=sorted(artifacts.keys())
+        if isinstance(artifacts, dict)
+        else [],
+        confidence_scores=result.get("confidence_scores", {}),
+        execution_summary=result.get("execution_summary", {}),
+        quality_metrics=result.get("quality_metrics", {}),
+        output_dir=str(output_path),
+    )
+
+    log_path = output_path / "processing_log.jsonl"
+    try:
+        with log_path.open("w", encoding="utf-8") as fh:
+            for log_entry in json_logger.get_logs():
+                fh.write(
+                    json.dumps(
+                        log_entry, ensure_ascii=False
+                    )
+                    + "\n"
+                )
+    except Exception as exc:
+        msg = f"Failed to save processing_log.jsonl: {exc}"
+        logger.warning(msg)
+        errors.append(msg)
+
     return errors
 
 
-def _serialisable_artifacts(artifacts: Any) -> list[str]:
-    """Return artifact names (keys) as a list."""
+def _is_hidden_artifact_path(path: Path) -> bool:
+    return any(part.startswith(".") for part in path.parts)
+
+
+def _serialisable_artifacts(
+    artifacts: Any,
+    output_dir: Optional[str] = None,
+) -> list[str]:
+    """Return artifact filenames visible to project summaries.
+
+    Prefer the files actually written under the run output directory because
+    post-processing creates additional deliverables such as
+    ``runtime_config.json`` and ``metadata_fairds.xlsx`` after the LangGraph
+    artifact dict is produced.
+    """
+    if output_dir:
+        base = Path(output_dir)
+        if base.is_dir():
+            names: list[str] = []
+            for path in sorted(
+                base.rglob("*"),
+                key=lambda p: p.relative_to(base).as_posix(),
+            ):
+                if not path.is_file():
+                    continue
+                rel_path = path.relative_to(base)
+                if _is_hidden_artifact_path(rel_path):
+                    continue
+                names.append(rel_path.as_posix())
+            if names:
+                return names
     if isinstance(artifacts, dict):
-        return list(artifacts.keys())
+        return [artifact_output_filename(name) for name in artifacts.keys()]
     return []
