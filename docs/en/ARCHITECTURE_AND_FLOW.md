@@ -169,8 +169,8 @@ Outputs are saved to `output/<project_id>/`:
 
 ```json
 {
-  "fairifier_version": "V2.0.2",
-  "generated_at": "2026-07-01T18:00:00",
+  "fairifier_version": "V2.1.0",
+  "generated_at": "2026-07-14T18:00:00",
   "document_source": "paper.pdf",
   "overall_confidence": 0.85,
   "metadata": [

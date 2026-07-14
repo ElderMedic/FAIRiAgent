@@ -1,7 +1,7 @@
 # FAIRiAgent Documentation
 
-**Version**: 2.0.2 (Architecture Refactor)  
-**Last Updated**: 2026-07-01
+**Version**: 2.1.0 (Hybrid Retrieval Upgrade)  
+**Last Updated**: 2026-07-14
 
 ---
 

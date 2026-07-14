@@ -1,7 +1,7 @@
 # FAIRiAgent REST API Manual
 
-**Version**: 2.0.2  
-**Last Updated**: 2026-07-01  
+**Version**: 2.1.0  
+**Last Updated**: 2026-07-14  
 **Base path**: `/api/v1`
 
 The FAIRiAgent Web UI is backed by a FastAPI application (`fairifier.apps.api`). All versioned routes live under `/api/v1`. Interactive OpenAPI docs are served at `/docs` on the same host and port as the API.

@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.1.0] - 2026-07-14 – DeepSeek Pro Transition, A/B Evaluation & Merged Hybrid Retrieval
+
+### Added
+- **DeepSeek Pro Integration**: Fully transitioned primary evaluation workflows to DeepSeek Pro (`deepseek-v4-pro` model).
+- **A/B Evaluation Results**: Documented final comparison of **Phase 4 Tuned** vs. **Shadow Tuned** configurations across 6 target datasets, establishing detailed benchmarks for overall aggregate score, completeness, schema compliance, and row alignment.
+- **Section 10.8 in Upgrade Plan**: Formally logged the DeepSeek Pro evaluation results in the Hybrid Retrieval Upgrade Plan.
+
+### Fixed
+- **Confidence Extraction & Display Mapping**: Resolved mismatch in overall confidence scoring where nested `_aggregate.overall` fields were not parsed correctly in CLI output.
+- **Conflict Resolution & Merge**: Merged the hybrid retrieval feature branch cleanly into `main`, passing all 648 unit tests successfully.
+
+---
+
 ## [2.0.4] - 2026-07-03 – Phase 4 hybrid default + DocumentParser outline
 
 ### Changed
