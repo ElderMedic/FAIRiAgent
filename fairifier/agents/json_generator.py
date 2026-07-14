@@ -541,6 +541,7 @@ class JSONGeneratorAgent(BaseAgent):
                     queries,
                     semantic_index=semantic_index,
                     telemetry=field_telemetry,
+                    field_name=field_name,
                 )
                 retrieval_telemetry[field_name_lower] = field_telemetry
                 for match in hybrid_hits:

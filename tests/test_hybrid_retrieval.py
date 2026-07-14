@@ -260,7 +260,9 @@ def test_hybrid_search_returns_lexical_when_adaptive_and_lexical_hits(tmp_path: 
     )
     old_shadow = cfg.config.retrieval_shadow_mode
     old_adaptive = cfg.config.retrieval_prompt_adaptive_lexical
+    old_mode = cfg.config.retrieval_mode
     try:
+        cfg.config.retrieval_mode = "tuned"
         cfg.config.retrieval_shadow_mode = False
         cfg.config.retrieval_prompt_adaptive_lexical = True
         telemetry: Dict[str, Any] = {}
@@ -272,6 +274,7 @@ def test_hybrid_search_returns_lexical_when_adaptive_and_lexical_hits(tmp_path: 
     finally:
         cfg.config.retrieval_shadow_mode = old_shadow
         cfg.config.retrieval_prompt_adaptive_lexical = old_adaptive
+        cfg.config.retrieval_mode = old_mode
 
 
 def test_hybrid_search_returns_hybrid_output_when_shadow_mode_disabled(tmp_path: Path):
@@ -290,12 +293,97 @@ def test_hybrid_search_returns_hybrid_output_when_shadow_mode_disabled(tmp_path:
         tmp_path,
     )
     old_shadow = cfg.config.retrieval_shadow_mode
+    old_mode = cfg.config.retrieval_mode
     try:
+        cfg.config.retrieval_mode = "tuned"
         cfg.config.retrieval_shadow_mode = False
         hits = hybrid_search_sources(workspace, ["Wadden Sea"], semantic_index=None)
         assert hits
     finally:
         cfg.config.retrieval_shadow_mode = old_shadow
+        cfg.config.retrieval_mode = old_mode
+
+
+def test_hybrid_search_auto_mode_prefers_lexical_for_initial_prompt(tmp_path: Path):
+    from fairifier import config as cfg
+
+    workspace = build_source_workspace(
+        [
+            SourceRecord(
+                source_id="source_001",
+                path="paper.md",
+                method="direct_read",
+                content="The sampling site was Wadden Sea with elevation 2 m.",
+                content_type="markdown",
+            )
+        ],
+        tmp_path,
+    )
+    old_mode = cfg.config.retrieval_mode
+    old_shadow = cfg.config.retrieval_shadow_mode
+    try:
+        cfg.config.retrieval_mode = "auto"
+        cfg.config.retrieval_shadow_mode = False
+        telemetry: Dict[str, Any] = {}
+        hits = hybrid_search_sources(
+            workspace,
+            ["Wadden Sea"],
+            semantic_index=None,
+            telemetry=telemetry,
+            field_name="sampling site",
+        )
+        assert hits
+        assert telemetry.get("retrieval_mode") == "auto"
+        assert telemetry.get("prompt_mode") == "auto_lexical"
+    finally:
+        cfg.config.retrieval_mode = old_mode
+        cfg.config.retrieval_shadow_mode = old_shadow
+
+
+def test_auto_prompt_policy_uses_semantic_only_on_lexical_miss():
+    from fairifier.services.auto_repair_policy import auto_prompt_decision
+
+    lexical = auto_prompt_decision(
+        field_name="sample identifier",
+        lexical_hit_count=3,
+        semantic_hit_count=20,
+        mode="auto",
+    )
+    assert lexical["prompt_mode"] == "auto_lexical"
+    assert lexical["use_semantic_fallback"] is False
+
+    missing = auto_prompt_decision(
+        field_name="study title",
+        lexical_hit_count=0,
+        semantic_hit_count=20,
+        mode="auto",
+    )
+    assert missing["prompt_mode"] == "auto_semantic_fallback"
+    assert missing["use_semantic_fallback"] is True
+
+
+def test_retrieval_mode_env_preserves_legacy_shadow_switch(monkeypatch):
+    from fairifier.config import FAIRifierConfig, apply_env_overrides
+
+    cfg = FAIRifierConfig()
+    monkeypatch.setenv("FAIRIFIER_RETRIEVAL_SHADOW_MODE", "true")
+    monkeypatch.delenv("FAIRIFIER_RETRIEVAL_MODE", raising=False)
+    apply_env_overrides(cfg)
+    assert cfg.retrieval_mode == "shadow"
+    assert cfg.retrieval_shadow_mode is True
+
+    cfg = FAIRifierConfig()
+    monkeypatch.setenv("FAIRIFIER_RETRIEVAL_SHADOW_MODE", "false")
+    apply_env_overrides(cfg)
+    assert cfg.retrieval_mode == "tuned"
+    assert cfg.retrieval_shadow_mode is False
+
+    cfg = FAIRifierConfig()
+    monkeypatch.setenv("FAIRIFIER_RETRIEVAL_SHADOW_MODE", "true")
+    monkeypatch.setenv("FAIRIFIER_RETRIEVAL_MODE", "auto")
+    apply_env_overrides(cfg)
+    assert cfg.retrieval_mode == "auto"
+    assert cfg.retrieval_shadow_mode is False
 
 
 def test_blend_lexical_first_prefers_lexical_backed_spans():

@@ -40,6 +40,7 @@ class WorkflowReportGenerator:
             "quality_metrics": self._generate_quality_metrics(state),
             "retrieval_metrics": self._generate_retrieval_metrics(state),
             "section_coverage": state.get("section_coverage", {}),
+            "auto_repair_trace": state.get("auto_repair_trace", {}),
             "field_analysis": self._analyze_fields(state, metadata_json_path),
             "duplicate_check": self._check_duplicates(state, metadata_json_path),
             "retry_analysis": self._analyze_retries(state),
@@ -161,7 +162,10 @@ class WorkflowReportGenerator:
                     "hybrid_hit_count": hybrid_hits,
                     "rerank_status": rerank_status,
                     "shadow_mode": stats.get("shadow_mode"),
+                    "retrieval_mode": stats.get("retrieval_mode"),
                     "prompt_mode": stats.get("prompt_mode"),
+                    "auto_repair_score": stats.get("auto_repair_score"),
+                    "auto_repair_reasons": stats.get("auto_repair_reasons", []),
                     "hybrid_candidate_ids": stats.get("hybrid_candidate_ids", []),
                 }
             )
@@ -474,6 +478,17 @@ class WorkflowReportGenerator:
             flag = "⚠️ " if ungrounded > 0 else "✅ "
             lines.append(f"Ungrounded high-confidence fields:{flag}{ungrounded}")
             lines.append("")
+
+        auto_repair = report.get("auto_repair_trace") or {}
+        auto_summary = auto_repair.get("summary") or {}
+        if auto_summary:
+            lines.append("AUTO REPAIR TRACE")
+            lines.append("-" * 80)
+            lines.append(f"Candidate fields:                {auto_summary.get('candidate_count', 0)}")
+            lines.append(f"Skipped gap fields:              {auto_summary.get('skipped_gap_count', 0)}")
+            lines.append(f"Accepted patches:                {auto_summary.get('accepted_patch_count', 0)}")
+            lines.append(f"Metadata mutated:                {auto_summary.get('metadata_mutated', False)}")
+            lines.append("")
         # Field Analysis
         field_analysis = report.get("field_analysis", {})
         if "error" not in field_analysis:
@@ -565,4 +580,3 @@ class WorkflowReportGenerator:
             f.write(text_report)
         
         return report_path
-

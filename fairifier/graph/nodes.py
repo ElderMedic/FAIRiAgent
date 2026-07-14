@@ -50,6 +50,7 @@ from ..services.mineru_client import (
 from ..services.mineru_paths import find_markdown_in_tree
 from ..services import mineru_cache as mineru_cache_service
 from ..services.confidence_aggregator import aggregate_confidence
+from ..services.auto_repair import generate_auto_repair_trace, serialize_auto_repair_trace
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.context_observability import log_context_usage
 from ..utils.document_text import read_document_text
@@ -3431,6 +3432,41 @@ Field semantics for ``plan_tasks``:
             else:
                 logger.error(f"❌ Unknown decision '{decision}' and no metadata fields - escalating")
                 return "escalate"
+
+
+class AutoRepairNode:
+    """Create deterministic auto-repair candidates without mutating metadata."""
+
+    def __init__(self, app=None):
+        self.app = app
+
+    @traceable(name="AutoRepair", tags=["workflow", "metadata", "repair"])
+    async def __call__(self, state: FAIRifierState) -> FAIRifierState:
+        if not state.get("metadata_fields"):
+            state["auto_repair_trace"] = {
+                "mode": "skipped",
+                "summary": {
+                    "candidate_count": 0,
+                    "skipped_gap_count": 0,
+                    "accepted_patch_count": 0,
+                    "metadata_mutated": False,
+                },
+                "notes": ["No metadata fields available for auto repair analysis."],
+            }
+            return state
+
+        trace = generate_auto_repair_trace(state)
+        state["auto_repair_trace"] = trace
+        state.setdefault("artifacts", {})["auto_repair_trace"] = serialize_auto_repair_trace(trace)
+
+        summary = trace.get("summary") or {}
+        logger.info(
+            "🔧 AutoRepair trace: %s candidates, %s skipped gaps (metadata mutated=%s)",
+            summary.get("candidate_count", 0),
+            summary.get("skipped_gap_count", 0),
+            summary.get("metadata_mutated", False),
+        )
+        return state
 
 
 class FinalizeNode:
