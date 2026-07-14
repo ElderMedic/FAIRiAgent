@@ -1125,6 +1125,40 @@ Prior 8-doc batch failed pre-embedder-fix: `evaluation/runs/phase4_ab_20260703/`
   - Created new model config env files: `deepseek_v4-flash_v1.4.0_tunnel_phase4_tuned.env` and `deepseek_v4-flash_v1.4.0_tunnel_shadow_tuned.env` pointing to these new ports.
 - **Fast unit tests**: Verified local regression tests: 648 passed successfully.
 
+### 10.8 Final DeepSeek Pro A/B — Tuned vs Shadow (2026-07-14)
+
+**Runs:** `evaluation/runs/phase4_pro_tuned/` and `evaluation/runs/shadow_pro_tuned/`
+**Code state:** Finalized transition to DeepSeek Pro (`deepseek-v4-pro` model) across the full 6-document evaluation target.
+
+#### Summary metrics comparison (DeepSeek Pro)
+
+| Metric | Tuned (Phase4) | Shadow | Difference |
+|---|---:|---:|---:|
+| **Aggregate Score** | 0.6172 | **0.6252** | **+0.0079** |
+| **Completeness** | 0.7055 | **0.7155** | **+0.0100** |
+| **Schema Compliance** | 0.7778 | **0.8889** | **+0.1111** |
+| **LLM Judge Score** | **0.8079** | 0.7279 | −0.0800 |
+| **Sheet Placement Accuracy** | 0.9851 | **0.9917** | **+0.0066** |
+| **Row Alignment F1** | 0.4320 | **0.5211** | **+0.0891** |
+| **Precision (excl. Discoveries)** | **1.0000** | 0.9770 | −0.0230 |
+| **Mean Untracked Insight Rate** | 0.2380 | 0.2940 | +0.0560 |
+| **Mean Discovery Rate** | 0.0050 | 0.0050 | 0.0000 |
+
+#### Document-level completeness (recall of ground truth fields)
+
+| Document | Tuned Completeness | Shadow Completeness | Difference |
+|---|---:|---:|---:|
+| `petase_10_1002_anie_202218390` | **93.55%** | **93.55%** | 0.00% |
+| `petase_10_1038_s41586-020-2149-4` | **91.67%** | **91.67%** | 0.00% |
+| `biosensor` | 84.62% | **89.74%** | **+5.12%** |
+| `earthworm` | 80.95% | **83.33%** | **+2.38%** |
+| `pea_cold_stress` | **37.31%** | 35.82% | −1.49% |
+| `sea_cucumber_gut_metagenome` | **35.21%** | **35.21%** | 0.00% |
+
+#### Key takeaways
+- **Structure vs Quality**: Similar to prior evaluations, lexical prompting with shadow logging (Shadow configuration) has significantly cleaner output structures, yielding a **+11.11%** boost in Schema Compliance and a **+8.91%** boost in Row Alignment F1. However, active hybrid prompt injection (Tuned configuration) provides richer evidence to the generator agent, leading to an **+8.00%** higher qualitative score from the LLM Judge.
+- **Decision Matrix**: If structural consistency and database ingestion (schema compliance) are prioritized, Shadow mode is superior. If semantic enrichment and maximum readability of extracted values are preferred, Tuned mode is superior.
+
 ---
 
 
