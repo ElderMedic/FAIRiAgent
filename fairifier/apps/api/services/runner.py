@@ -598,14 +598,8 @@ def _persist_run_outputs(
 
     log_path = output_path / "processing_log.jsonl"
     try:
-        with log_path.open("w", encoding="utf-8") as fh:
-            for log_entry in json_logger.get_logs():
-                fh.write(
-                    json.dumps(
-                        log_entry, ensure_ascii=False
-                    )
-                    + "\n"
-                )
+        from fairifier.utils.json_logger import save_processing_log
+        save_processing_log(log_path, json_logger)
     except Exception as exc:
         msg = f"Failed to save processing_log.jsonl: {exc}"
         logger.warning(msg)
@@ -641,6 +635,7 @@ def _persist_run_outputs(
             filename=fairds_path.name,
             size_bytes=fairds_path.stat().st_size,
         )
+
 
     return errors
 
