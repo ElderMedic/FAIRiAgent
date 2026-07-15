@@ -1359,6 +1359,25 @@ class OrchestrateNode:
                 execution_record["error"] = str(e)
                 state["execution_history"].append(execution_record)
                 
+                # --- START NEW DISK APPEND ---
+                if log_path:
+                    try:
+                        with open(log_path, "a", encoding="utf-8") as f:
+                            f.write(json.dumps({
+                                "event": "critic_evaluation",
+                                "timestamp": datetime.now().isoformat(),
+                                "agent_name": agent_name,
+                                "attempt": attempt,
+                                "start_time": execution_record.get("start_time"),
+                                "end_time": execution_record.get("end_time"),
+                                "success": False,
+                                "error": execution_record.get("error"),
+                                "critic_evaluation": None
+                            }, ensure_ascii=False) + "\n")
+                    except Exception as exc:
+                        logger.warning("Failed to append failed attempt to log: %s", exc)
+                # --- END NEW DISK APPEND ---
+                
                 # On error, try next attempt if available
                 if attempt <= self.max_step_retries:
                     continue
@@ -1470,6 +1489,25 @@ class OrchestrateNode:
                             agent_name,
                             target_agent,
                         )
+
+            # --- START NEW DISK APPEND ---
+            if log_path:
+                try:
+                    with open(log_path, "a", encoding="utf-8") as f:
+                        f.write(json.dumps({
+                            "event": "critic_evaluation",
+                            "timestamp": datetime.now().isoformat(),
+                            "agent_name": agent_name,
+                            "attempt": attempt,
+                            "start_time": last_execution.get("start_time"),
+                            "end_time": last_execution.get("end_time"),
+                            "success": last_execution.get("success"),
+                            "error": last_execution.get("error"),
+                            "critic_evaluation": critic_eval
+                        }, ensure_ascii=False) + "\n")
+                except Exception as exc:
+                    logger.warning("Failed to append critic_evaluation to log: %s", exc)
+            # --- END NEW DISK APPEND ---
 
             # Handle decision
             if decision == "ACCEPT":
