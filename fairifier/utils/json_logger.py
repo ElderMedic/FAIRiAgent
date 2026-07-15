@@ -4,6 +4,7 @@ import json
 import sys
 from datetime import datetime
 from typing import Any, Dict, Optional
+from pathlib import Path
 from enum import Enum
 
 
@@ -156,45 +157,41 @@ def set_logger(logger: JSONLogger) -> None:
     _global_logger = logger
 
 
-def save_processing_log(log_path: "Path", json_logger: JSONLogger) -> None:
+def save_processing_log(log_path: Path, json_logger: JSONLogger) -> None:
     """Safely merge dynamically written events and memory-buffered logs, sort chronologically, and overwrite file."""
-    import json
-    from pathlib import Path
-    
     events = []
     seen = set()
 
     # 1. Read existing events from disk (e.g., dynamically written context_usage, critic_evaluation)
     if log_path.exists():
-        try:
-            with open(log_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        try:
-                            # Parse to ensure it's valid JSON
-                            ev = json.loads(line)
-                            # Re-serialize to canonical string for deduplication
-                            str_ev = json.dumps(ev, ensure_ascii=False)
-                            if str_ev not in seen:
-                                seen.add(str_ev)
-                                events.append(ev)
-                        except json.JSONDecodeError:
-                            pass
-        except OSError:
-            pass
+        with open(log_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        # Parse to ensure it's valid JSON
+                        ev = json.loads(line)
+                        # Re-serialize to canonical string for deduplication
+                        str_ev = json.dumps(ev, ensure_ascii=False, sort_keys=True)
+                        if str_ev not in seen:
+                            seen.add(str_ev)
+                            events.append(ev)
+                    except json.JSONDecodeError:
+                        json_logger.warning("Failed to parse JSON line during log load", line=line)
 
     # 2. Combine with memory-buffered events
     for ev in json_logger.get_logs():
-        str_ev = json.dumps(ev, ensure_ascii=False)
+        str_ev = json.dumps(ev, ensure_ascii=False, sort_keys=True)
         if str_ev not in seen:
             seen.add(str_ev)
             events.append(ev)
             
     # 3. Sort chronologically by timestamp
-    events.sort(key=lambda x: x.get("timestamp", ""))
+    events.sort(key=lambda x: str(x.get("timestamp", "")))
 
-    # 4. Overwrite file with unified, sorted list
-    with open(log_path, "w", encoding="utf-8") as f:
+    # 4. Overwrite file with unified, sorted list (safely)
+    temp_path = log_path.with_suffix(log_path.suffix + ".tmp")
+    with open(temp_path, "w", encoding="utf-8") as f:
         for ev in events:
             f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+    temp_path.replace(log_path)
