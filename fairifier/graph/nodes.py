@@ -1008,6 +1008,17 @@ class OrchestrateNode:
         else:
             self._global_retry_count = value
 
+    def _append_eval_log(self, log_path: str, payload: dict) -> None:
+        """Append an evaluation event to the processing log."""
+        if not log_path:
+            return
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            logger.warning("Failed to append critic_evaluation to log: %s", exc)
+
+
     @traceable(name="Orchestrate", tags=["workflow", "orchestration"])
     async def __call__(self, state: FAIRifierState) -> FAIRifierState:
         """
@@ -1330,21 +1341,17 @@ class OrchestrateNode:
                 
                 # --- START NEW DISK APPEND ---
                 if log_path:
-                    try:
-                        with open(log_path, "a", encoding="utf-8") as f:
-                            f.write(json.dumps({
-                                "event": "critic_evaluation",
-                                "timestamp": datetime.now().isoformat(),
-                                "agent_name": agent_name,
-                                "attempt": attempt,
-                                "start_time": execution_record.get("start_time"),
-                                "end_time": execution_record.get("end_time"),
-                                "success": False,
-                                "error": execution_record.get("error"),
-                                "critic_evaluation": None
-                            }, ensure_ascii=False) + "\n")
-                    except Exception as exc:
-                        logger.warning("Failed to append failed attempt to log: %s", exc)
+                    self._append_eval_log(log_path, {
+                        "event": "critic_evaluation",
+                        "timestamp": datetime.now().isoformat(),
+                        "agent_name": agent_name,
+                        "attempt": attempt,
+                        "start_time": execution_record.get("start_time"),
+                        "end_time": execution_record.get("end_time"),
+                        "success": False,
+                        "error": execution_record.get("error"),
+                        "critic_evaluation": None
+                    })
                 # --- END NEW DISK APPEND ---
                 
                 # On error, try next attempt if available
@@ -1400,6 +1407,18 @@ class OrchestrateNode:
                     "⏹ Stop requested after Critic evaluation for %s; stopping workflow.",
                     agent_name,
                 )
+                if log_path:
+                    self._append_eval_log(log_path, {
+                        "event": "critic_evaluation",
+                        "timestamp": datetime.now().isoformat(),
+                        "agent_name": agent_name,
+                        "attempt": attempt,
+                        "start_time": last_execution.get("start_time"),
+                        "end_time": last_execution.get("end_time"),
+                        "success": last_execution.get("success"),
+                        "error": last_execution.get("error"),
+                        "critic_evaluation": critic_eval
+                    })
                 return self._mark_interrupted_state(state)
             
             feedback_prepared = False
@@ -1451,6 +1470,18 @@ class OrchestrateNode:
                             target_agent,
                             hard_gate.get("summary"),
                         )
+                        if log_path:
+                            self._append_eval_log(log_path, {
+                                "event": "critic_evaluation",
+                                "timestamp": datetime.now().isoformat(),
+                                "agent_name": agent_name,
+                                "attempt": attempt,
+                                "start_time": last_execution.get("start_time"),
+                                "end_time": last_execution.get("end_time"),
+                                "success": last_execution.get("success"),
+                                "error": last_execution.get("error"),
+                                "critic_evaluation": critic_eval
+                            })
                         return state
                     if target_agent != agent_name and self._cross_layer_rollback_is_disabled():
                         logger.info(
@@ -1461,21 +1492,17 @@ class OrchestrateNode:
 
             # --- START NEW DISK APPEND ---
             if log_path:
-                try:
-                    with open(log_path, "a", encoding="utf-8") as f:
-                        f.write(json.dumps({
-                            "event": "critic_evaluation",
-                            "timestamp": datetime.now().isoformat(),
-                            "agent_name": agent_name,
-                            "attempt": attempt,
-                            "start_time": last_execution.get("start_time"),
-                            "end_time": last_execution.get("end_time"),
-                            "success": last_execution.get("success"),
-                            "error": last_execution.get("error"),
-                            "critic_evaluation": critic_eval
-                        }, ensure_ascii=False) + "\n")
-                except Exception as exc:
-                    logger.warning("Failed to append critic_evaluation to log: %s", exc)
+                self._append_eval_log(log_path, {
+                    "event": "critic_evaluation",
+                    "timestamp": datetime.now().isoformat(),
+                    "agent_name": agent_name,
+                    "attempt": attempt,
+                    "start_time": last_execution.get("start_time"),
+                    "end_time": last_execution.get("end_time"),
+                    "success": last_execution.get("success"),
+                    "error": last_execution.get("error"),
+                    "critic_evaluation": critic_eval
+                })
             # --- END NEW DISK APPEND ---
 
             # Handle decision
