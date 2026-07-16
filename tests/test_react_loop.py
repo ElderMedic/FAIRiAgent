@@ -146,6 +146,60 @@ def test_get_react_model_wraps_qwen_with_thinking_disabled(monkeypatch):
     assert captured["max_tokens"] == 65536
 
 
+def test_get_react_model_wraps_deepseek_with_thinking_disabled(monkeypatch):
+    agent = DummyReactAgent("Dummy")
+    agent.llm_helper = Mock(llm="base-llm")
+
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("langchain_openai.ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(config, "llm_provider", "deepseek")
+    monkeypatch.setattr(config, "llm_model", "deepseek-v4-flash")
+    monkeypatch.setattr(config, "llm_api_key", "test-key")
+    monkeypatch.setattr(config, "llm_base_url", "https://api.deepseek.com")
+    monkeypatch.setattr(config, "llm_temperature", 0.2)
+    monkeypatch.setattr(config, "llm_max_tokens", 8000)
+
+    model = agent._get_react_model()
+
+    assert isinstance(model, FakeChatOpenAI)
+    assert captured["model"] == "deepseek-v4-flash"
+    assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert captured["max_tokens"] == 8000
+
+
+def test_get_react_model_wraps_zhipu_with_thinking_disabled(monkeypatch):
+    agent = DummyReactAgent("Dummy")
+    agent.llm_helper = Mock(llm="base-llm")
+
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("langchain_openai.ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(config, "llm_provider", "zhipu")
+    monkeypatch.setattr(config, "llm_model", "glm-4.6")
+    monkeypatch.setattr(config, "llm_api_key", "test-key")
+    monkeypatch.setattr(
+        config, "llm_base_url", "https://open.bigmodel.cn/api/paas/v4"
+    )
+    monkeypatch.setattr(config, "llm_temperature", 0.2)
+    monkeypatch.setattr(config, "llm_max_tokens", 8000)
+
+    model = agent._get_react_model()
+
+    assert isinstance(model, FakeChatOpenAI)
+    assert captured["model"] == "glm-4.6"
+    assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert captured["max_tokens"] == 8000
+
+
 def test_get_react_model_keeps_existing_non_qwen_model(monkeypatch):
     agent = DummyReactAgent("Dummy")
     agent.llm_helper = Mock(llm="base-llm")
@@ -153,6 +207,15 @@ def test_get_react_model_keeps_existing_non_qwen_model(monkeypatch):
     monkeypatch.setattr(config, "llm_provider", "ollama")
 
     assert agent._get_react_model() == "base-llm"
+
+
+def test_get_react_model_passes_through_gemini_and_anthropic(monkeypatch):
+    agent = DummyReactAgent("Dummy")
+
+    for provider in ("gemini", "anthropic"):
+        agent.llm_helper = Mock(llm=f"{provider}-base-llm")
+        monkeypatch.setattr(config, "llm_provider", provider)
+        assert agent._get_react_model() == f"{provider}-base-llm"
 
 
 def test_list_skill_virtual_paths_finds_repo_skills():

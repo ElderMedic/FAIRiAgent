@@ -3,10 +3,17 @@ langchain>=1.0.3
 langchain-community>=0.3.30
 langchain-ollama>=1.0.0
 langchain-openai>=1.0.2
+langchain-anthropic>=0.3.0
+langchain-google-genai>=2.1.0
 langgraph>=1.0.7
 langgraph-checkpoint-sqlite>=1.0.0
 aiosqlite>=0.22.0
 langsmith>=0.1.0
+
+# Agentic ReAct inner-loop framework (deep agents + tool-calling for
+# DocumentParser/KnowledgeRetriever/ISAValueMapper/BioMetadata agents).
+# Without this, all agents silently fall back to the deterministic path.
+deepagents>=0.1.0
 
 # Document processing
 PyMuPDF>=1.23.0

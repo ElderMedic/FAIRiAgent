@@ -497,6 +497,108 @@ def normalize_llm_response_content(content: Any) -> str:
     return text
 
 
+def json_safe_provenance_value(value: Any) -> Any:
+    """Convert arbitrary values into JSON-serializable provenance payloads."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): json_safe_provenance_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe_provenance_value(item) for item in value]
+    return str(value)
+
+
+def serialize_llm_message_content(content: Any) -> Any:
+    """Serialize one message content block without truncation."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        serialized: List[Any] = []
+        for item in content:
+            if isinstance(item, str):
+                serialized.append(item)
+            elif isinstance(item, dict):
+                serialized.append(json_safe_provenance_value(item))
+            else:
+                text = getattr(item, "text", None)
+                if isinstance(text, str):
+                    serialized.append(
+                        {
+                            "type": getattr(item, "type", "text"),
+                            "text": text,
+                        }
+                    )
+                else:
+                    serialized.append(str(item))
+        return serialized
+    if isinstance(content, dict):
+        return json_safe_provenance_value(content)
+
+    text = getattr(content, "text", None) or getattr(content, "content", None)
+    if text is not None:
+        return serialize_llm_message_content(text)
+    return str(content)
+
+
+def serialize_llm_messages(messages: Any) -> List[Dict[str, Any]]:
+    """Serialize LLM input messages for full provenance logging."""
+    if messages is None:
+        return []
+    if isinstance(messages, str):
+        return [{"role": "user", "content": messages}]
+    if not isinstance(messages, list):
+        messages = [messages]
+
+    serialized: List[Dict[str, Any]] = []
+    for msg in messages:
+        if isinstance(msg, dict):
+            role = msg.get("role") or msg.get("type") or "unknown"
+            entry: Dict[str, Any] = {
+                "role": role,
+                "content": serialize_llm_message_content(msg.get("content", "")),
+            }
+            for key in ("name", "tool_call_id"):
+                if msg.get(key):
+                    entry[key] = msg[key]
+            serialized.append(entry)
+            continue
+
+        role = getattr(msg, "type", None)
+        if not role:
+            class_name = msg.__class__.__name__
+            role = (
+                class_name.replace("Message", "").lower()
+                if class_name.endswith("Message")
+                else class_name.lower()
+            )
+
+        entry = {
+            "role": role,
+            "content": serialize_llm_message_content(getattr(msg, "content", "")),
+        }
+        for attr in ("name", "tool_call_id"):
+            value = getattr(msg, attr, None)
+            if value:
+                entry[attr] = value
+        serialized.append(entry)
+
+    return serialized
+
+
+def prompt_length_from_serialized_messages(messages: List[Dict[str, Any]]) -> int:
+    """Compute prompt character length from serialized provenance messages."""
+    total = 0
+    for message in messages:
+        content = message.get("content", "")
+        if isinstance(content, str):
+            total += len(content)
+        else:
+            total += len(json.dumps(content, ensure_ascii=False))
+    return total
+
+
 def _normalize_authors(value: Any) -> List[str]:
     """Normalize author payloads into a list of author names."""
     authors: List[str] = []
@@ -704,11 +806,8 @@ class LLMHelper:
                 logger.warning(f"Could not extract content from LLM result for {operation_name}")
                 return
             
-            # Calculate prompt length
-            prompt_length = 0
-            for msg in messages:
-                if hasattr(msg, 'content') and msg.content:
-                    prompt_length += len(str(msg.content))
+            prompt = serialize_llm_messages(messages)
+            prompt_length = prompt_length_from_serialized_messages(prompt)
             
             # Normalize operation name for consistency
             normalized_operation = operation_name.lower().replace(" ", "_").replace(".", "_")
@@ -716,12 +815,24 @@ class LLMHelper:
             # Append to llm_responses
             self.llm_responses.append({
                 "operation": normalized_operation,
+                "provider": self.provider,
+                "model": self.model,
+                "prompt": prompt,
                 "prompt_length": prompt_length,
                 "response": content,
+                "response_length": len(content),
+                "response_metadata": json_safe_provenance_value(
+                    getattr(result, "response_metadata", None)
+                ),
                 "timestamp": datetime.now().isoformat()
             })
             
-            logger.debug(f"Logged LLM response for operation: {normalized_operation} ({len(content)} chars)")
+            logger.debug(
+                "Logged LLM response for operation: %s (prompt=%s chars, response=%s chars)",
+                normalized_operation,
+                prompt_length,
+                len(content),
+            )
         except Exception as e:
             # Don't fail the entire operation if logging fails
             logger.warning(f"Failed to log LLM response for {operation_name}: {e}")
