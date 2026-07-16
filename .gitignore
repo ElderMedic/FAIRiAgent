@@ -222,7 +222,8 @@ __marimo__/
 .langgraph_api/
 
 # examples
-examples/
+examples/*
+!examples/quickstart/
 
 # Ignore Cursor editor user settings and extension files
 .cursor/
