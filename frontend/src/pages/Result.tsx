@@ -20,6 +20,7 @@ import { buildAppRoute, getWebSession } from '../utils/session';
 import MetadataPreview from '../components/MetadataPreview';
 import AgentHandoffCard from '../components/AgentHandoffCard';
 import AgentMessagesPanel from '../components/AgentMessagesPanel';
+import RetrievalInsights from '../components/RetrievalInsights';
 import { coerceAgentHandoff } from '../types/agentHandoff';
 import './InteriorPages.css';
 
@@ -342,6 +343,12 @@ export default function Result() {
               key={`${projectId}:${session.id}:${session.startedAt}`}
               projectId={projectId}
               session={session}
+            />
+
+            <RetrievalInsights
+              projectId={projectId}
+              session={session}
+              artifacts={artifacts}
             />
 
             {scores.length > 0 && (

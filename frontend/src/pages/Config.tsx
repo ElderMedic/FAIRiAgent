@@ -22,6 +22,7 @@ import {
   type SystemStatus,
 } from '../api/client';
 import { usePageTitle } from '../hooks/usePageTitle';
+import HybridRetrievalFlow from '../components/HybridRetrievalFlow';
 import { buildAppRoute } from '../utils/session';
 import './InteriorPages.css';
 
@@ -96,6 +97,9 @@ function formatDetailValue(value: unknown) {
   if (value === null || value === undefined || value === '') {
     return 'n/a';
   }
+  if (Array.isArray(value)) {
+    return value.length ? value.join(', ') : 'None';
+  }
   return String(value);
 }
 
@@ -109,7 +113,16 @@ function serviceDetailEntries(service: ServiceStatus) {
   const details = service.details || {};
   const preferredKeys: Record<string, string[]> = {
     ollama: ['base_url_reachable', 'default_model_available', 'model_count', 'default_model'],
-    mineru: ['cli_detected', 'server_reachable', 'cli_path', 'backend', 'timeout_seconds'],
+    mineru: [
+      'cli_detected',
+      'cli_version',
+      'backend',
+      'dependency_errors',
+      'dependency_install_hint',
+      'api_reachable',
+      'vlm_reachable',
+      'timeout_seconds',
+    ],
     fair_ds: ['api_root_reachable', 'timeout_seconds', 'last_error'],
     qdrant: ['reachable', 'host', 'port', 'collection'],
     mem0: [
@@ -616,6 +629,23 @@ export default function Config() {
                   </div>
                 </div>
 
+                <div className="config-live-panel retrieval-config-panel">
+                  <div className="page-card__header">
+                    <div>
+                      <p className="page-card__eyebrow">Evidence retrieval</p>
+                      <h3 className="page-card__title">Lexical-first hybrid pipeline</h3>
+                      <p className="page-card__body">
+                        Source files are chunked once. Exact text and table matches lead; semantic search fills misses and falls back safely when Qdrant is unavailable.
+                      </p>
+                    </div>
+                  </div>
+                  <HybridRetrievalFlow
+                    activeConfig={systemStatus?.active_config}
+                    qdrant={systemStatus?.services.find((service) => service.name === 'qdrant')}
+                    compact
+                  />
+                </div>
+
                 {ollamaStartBlockedReason && (
                   <div className="config-alert config-alert--warning">
                     <strong>Start blocked.</strong> {ollamaStartBlockedReason}
@@ -731,6 +761,15 @@ export default function Config() {
                           <p className="config-service-card__body">{service.message}</p>
                           {service.endpoint && (
                             <p className="config-service-card__endpoint">{service.endpoint}</p>
+                          )}
+                          {service.name === 'mineru' && Array.isArray(service.details?.dependency_errors) && service.details.dependency_errors.length > 0 && (
+                            <div className="config-service-callout" role="alert">
+                              <strong>Local pipeline dependency missing</strong>
+                              <span>{service.details.dependency_errors.join(', ')}</span>
+                              {typeof service.details.dependency_install_hint === 'string' && (
+                                <code>{service.details.dependency_install_hint}</code>
+                              )}
+                            </div>
                           )}
                           {serviceSummary(service).length > 0 && (
                             <div className="config-chip-row">

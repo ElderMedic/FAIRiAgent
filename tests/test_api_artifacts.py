@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
 from fairifier.apps.api.routers.v1 import (
+    _build_demo_document_response,
     _build_word_entries,
     _resolve_default_demo_document_key,
     get_artifact,
@@ -327,6 +328,26 @@ def test_default_demo_document_key_falls_back_to_available_sample():
         _resolve_default_demo_document_key(documents)
         == "earthworm_paper"
     )
+
+
+def test_demo_document_response_lists_multi_source_bundle(tmp_path):
+    paper = tmp_path / "paper.md"
+    workbook = tmp_path / "supplement.xlsx"
+    paper.write_text("# Demo", encoding="utf-8")
+    workbook.write_bytes(b"xlsx")
+
+    response = _build_demo_document_response(
+        "multi_source",
+        {
+            "path": paper,
+            "paths": [paper, workbook],
+            "label": "Multi-source demo",
+            "description": "Paper plus workbook",
+        },
+    )
+
+    assert response.filename == "paper.md"
+    assert response.files == ["paper.md", "supplement.xlsx"]
 
 
 def test_memory_cloud_separates_run_and_user_memory(

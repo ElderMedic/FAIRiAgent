@@ -3,6 +3,7 @@ import type { DragEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
+  Database,
   FileText,
   FlaskConical,
   FolderUp,
@@ -28,6 +29,11 @@ const ACCEPTED_MIME = [
   'application/x-zip-compressed',
 ];
 const MAX_FILES = 8;
+const STRUCTURED_EXTENSIONS = new Set(['csv', 'tsv', 'xlsx', 'xls', 'json']);
+
+function fileExtension(name: string): string {
+  return name.split('.').pop()?.toLowerCase() || 'file';
+}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -112,7 +118,7 @@ export default function Upload() {
   };
 
   const handleContinue = () => {
-    if (!files.length && !(hasSampleDocs && sampleDocumentKey) && !(hasSampleDocs && demoMode)) return;
+    if (!files.length && !(hasSampleDocs && demoMode && sampleDocumentKey)) return;
     navigate(buildAppRoute('/config'), {
       state: {
         files: files.length ? files : undefined,
@@ -160,7 +166,7 @@ export default function Upload() {
                     <div className="upload-toggle__copy" id="quick-sample-label">
                       <p className="upload-toggle__title">Quick sample preset</p>
                       <p className="upload-toggle__body">
-                        Use the bundled earthworm paper and move directly into configuration.
+                        Use a bundled public dataset and move directly into configuration.
                       </p>
                     </div>
                     <button
@@ -232,7 +238,7 @@ export default function Upload() {
                   >
                     {demoOptions!.documents.map((doc) => (
                       <option key={doc.key} value={doc.key}>
-                        {doc.label} · {doc.filename}
+                        {doc.label} · {doc.files?.length || 1} source{(doc.files?.length || 1) === 1 ? '' : 's'}
                       </option>
                     ))}
                   </select>
@@ -271,6 +277,41 @@ export default function Upload() {
                 </div>
               ))}
 
+              {(files.length > 0 || (demoMode && sampleDocument)) && (
+                <div className="source-bundle" aria-label="Source bundle composition">
+                  <div className="source-bundle__header">
+                    <div>
+                      <p className="upload-section__label">Source bundle</p>
+                      <p className="upload-section__hint">
+                        Narrative files become searchable chunks; structured files become table evidence.
+                      </p>
+                    </div>
+                    <span className="source-bundle__count">
+                      {files.length || sampleDocument?.files?.length || 1} sources
+                    </span>
+                  </div>
+                  <div className="source-bundle__flow">
+                    {(files.length
+                      ? files.map((file) => file.name)
+                      : sampleDocument?.files || [sampleDocument!.filename]
+                    ).map((name) => {
+                      const structured = STRUCTURED_EXTENSIONS.has(fileExtension(name));
+                      return (
+                        <div key={name} className="source-bundle__source">
+                          {structured ? <Database aria-hidden="true" /> : <FileText aria-hidden="true" />}
+                          <span className="source-bundle__name">{name}</span>
+                          <span className="source-bundle__role">
+                            {structured ? 'Table evidence' : 'Narrative source'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    <ArrowRight className="source-bundle__arrow" aria-hidden="true" />
+                    <div className="source-bundle__destination">Unified source workspace</div>
+                  </div>
+                </div>
+              )}
+
               <div className="upload-section">
                 <label htmlFor="project_name" className="upload-section__label">
                   Project name
@@ -292,7 +333,7 @@ export default function Upload() {
                 <button
                   type="button"
                   onClick={handleContinue}
-                  disabled={!files.length && !(hasSampleDocs && sampleDocumentKey) && !(hasSampleDocs && demoMode)}
+                  disabled={!files.length && !(hasSampleDocs && demoMode && sampleDocumentKey)}
                   className="upload-button upload-button--primary"
                 >
                   Continue to configuration
