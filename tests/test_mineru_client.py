@@ -72,6 +72,39 @@ class TestMinerURuntimeHelpers:
         assert not mineru_backend_requires_vlm_url("pipeline")
         assert not mineru_backend_requires_vlm_url("hybrid-auto-engine")
 
+    def test_pipeline_client_unavailable_when_dependencies_missing(self, monkeypatch):
+        monkeypatch.setattr(
+            "fairifier.services.mineru_client.dependency_errors_for_backend",
+            lambda backend: ["missing_python_module:doclayout_yolo"],
+        )
+        client = MinerUClient(
+            cli_path="mineru",
+            server_url="",
+            backend="pipeline",
+        )
+
+        assert client.is_available() is False
+
+    def test_convert_document_fails_before_cli_when_dependencies_missing(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(
+            "fairifier.services.mineru_client.dependency_errors_for_backend",
+            lambda backend: ["missing_python_module:doclayout_yolo"],
+        )
+        client = MinerUClient(
+            cli_path="mineru",
+            server_url="",
+            backend="pipeline",
+        )
+
+        with pytest.raises(MinerUConversionError) as exc_info:
+            client.convert_document("/missing/input.pdf")
+
+        assert "missing_python_module:doclayout_yolo" in str(exc_info.value)
+        assert "mineru[pipeline]>=3.4.0,<4" in str(exc_info.value)
+
 
 @pytest.fixture
 def mineru_client() -> MinerUClient:

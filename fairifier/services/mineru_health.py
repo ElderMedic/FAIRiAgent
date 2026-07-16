@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import socket
 import subprocess
 from dataclasses import dataclass
@@ -9,6 +10,10 @@ from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
+
+
+PIPELINE_REQUIRED_MODULES = ("doclayout_yolo",)
+PIPELINE_INSTALL_HINT = "pip install 'mineru[pipeline]>=3.4.0,<4'"
 
 
 @dataclass
@@ -74,6 +79,24 @@ def cli_version(cli_path: str, *, timeout: float = 5.0) -> Tuple[bool, str]:
     return False, (completed.stderr or completed.stdout or "version check failed").strip()
 
 
+def dependency_errors_for_backend(backend: str) -> List[str]:
+    """Return missing local Python modules required by a MinerU backend."""
+    if backend != "pipeline":
+        return []
+    return [
+        f"missing_python_module:{module}"
+        for module in PIPELINE_REQUIRED_MODULES
+        if importlib.util.find_spec(module) is None
+    ]
+
+
+def dependency_install_hint_for_backend(backend: str) -> Optional[str]:
+    """Return a concise install hint for missing backend dependencies."""
+    if backend == "pipeline":
+        return PIPELINE_INSTALL_HINT
+    return None
+
+
 def check_endpoint(
     name: str,
     url: Optional[str],
@@ -134,8 +157,12 @@ def summarize_mineru_health(
 
     http_client_backends = ("vlm-http-client", "hybrid-http-client")
     needs_vlm = requires_vlm and any(token in backend for token in http_client_backends)
+    dependency_errors = dependency_errors_for_backend(backend)
+    dependency_install_hint = (
+        dependency_install_hint_for_backend(backend) if dependency_errors else None
+    )
 
-    ready = cli_ok
+    ready = cli_ok and not dependency_errors
     if api_url:
         ready = ready and api_status.tcp_reachable
     if needs_vlm:
@@ -148,4 +175,6 @@ def summarize_mineru_health(
         "api": api_status,
         "vlm": vlm_status,
         "needs_vlm": needs_vlm,
+        "dependency_errors": dependency_errors,
+        "dependency_install_hint": dependency_install_hint,
     }
