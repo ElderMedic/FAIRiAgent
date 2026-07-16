@@ -22,6 +22,14 @@ MODEL_CONFIGS = {
     "qwen3.6-35b": CONFIG_DIR / "ollama_qwen3.6-35b_v1.4.0.env",
     "gemma4-31b":  CONFIG_DIR / "ollama_gemma4-31b_v1.4.0.env",
     "gpt-oss-20b": CONFIG_DIR / "ollama_gpt-oss-20b_v1.5.0.env",
+    # New models (Jul 2026 pull batch)
+    "gemma4-12b":  CONFIG_DIR / "ollama_gemma4-12b_v1.4.0.env",
+    "gemma4-26b":  CONFIG_DIR / "ollama_gemma4-26b_v1.4.0.env",
+    "granite4.1-8b": CONFIG_DIR / "ollama_granite4.1-8b_v1.4.0.env",
+    "lfm2.5-8b":   CONFIG_DIR / "ollama_lfm2.5-8b_v1.4.0.env",
+    "laguna-xs-2.1": CONFIG_DIR / "ollama_laguna-xs-2.1_v1.4.0.env",
+    "nemotron-cascade-2-30b": CONFIG_DIR / "ollama_nemotron-cascade-2-30b_v1.4.0.env",
+    "qwen3-14b":   CONFIG_DIR / "ollama_qwen3-14b_v1.4.0.env",
 }
 
 

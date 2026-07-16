@@ -371,6 +371,7 @@ def process(
             # Reload config after loading env file
             # This ensures each run uses independent configuration
             apply_env_overrides(config_module.config)
+            config_module.apply_budget_guardrails(config_module.config)
         else:
             click.echo(f"⚠️  Could not load .env file: {env_path}", err=True)
             sys.exit(1)
