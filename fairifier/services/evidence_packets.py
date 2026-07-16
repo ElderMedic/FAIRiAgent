@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 
 def _normalize_items(value: Any) -> List[str]:
@@ -97,6 +98,64 @@ def build_evidence_packets(
                 return packets
 
     return packets
+
+
+def evidence_packet_dedupe_key(packet: Dict[str, Any]) -> str:
+    """Stable content key for evidence-packet merge/deduplication.
+
+    Prefer source span + field/value when present; otherwise hash the payload
+    fields that identify the candidate. ``packet_id`` is intentionally ignored
+    so producers can assign their own IDs without defeating dedupe.
+    """
+    source_id = str(packet.get("source_id") or "").strip()
+    char_start = packet.get("char_start")
+    char_end = packet.get("char_end")
+    field = str(
+        packet.get("field_candidate") or packet.get("field_name") or ""
+    ).strip().lower()
+    value = str(packet.get("value") or "").strip().lower()
+    producer = str(
+        packet.get("produced_by")
+        or (packet.get("provenance") or {}).get("agent")
+        or ""
+    ).strip().lower()
+    if source_id and char_start is not None and char_end is not None and field:
+        return f"{producer}|{source_id}|{char_start}|{char_end}|{field}|{value}"
+    digest = hashlib.sha1(
+        "|".join(
+            [
+                producer,
+                field,
+                value,
+                str(packet.get("evidence_text") or "").strip().lower()[:240],
+                str(packet.get("section") or "").strip().lower(),
+                str(packet.get("source_type") or "").strip().lower(),
+            ]
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{producer}|{digest}"
+
+
+def merge_evidence_packets(
+    existing: Sequence[Dict[str, Any]] | None,
+    new_packets: Sequence[Dict[str, Any]] | None,
+) -> List[Dict[str, Any]]:
+    """Merge evidence packets without dropping prior producers.
+
+    Used so DocumentParser can append its structured-extraction packets while
+    preserving SectionMapReduce / BioMetadata packets already in state.
+    """
+    merged: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for packet in list(existing or []) + list(new_packets or []):
+        if not isinstance(packet, dict):
+            continue
+        key = evidence_packet_dedupe_key(packet)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(dict(packet))
+    return merged
 
 
 def build_evidence_context(

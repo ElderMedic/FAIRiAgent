@@ -29,6 +29,7 @@ from ..utils.document_text import read_document_text
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.grounding import SOURCE_REF_PATTERN, SOURCE_TABLE_PATTERN
 from ..utils.isa_order import ISA_LEVEL_ORDER
+from ..utils.isa_matrix_compiler import compile_isa_matrix, matrix_id_for
 
 
 @dataclass
@@ -1436,7 +1437,17 @@ class JSONGeneratorAgent(BaseAgent):
         # ── 2. New-format isa_values: columns×rows matrix ────────────────
         matrix_by_level = self._group_fields_by_isa_sheet(fields)
         matrix_by_level = self._split_entities_heuristic(matrix_by_level)
+        compiled = compile_isa_matrix(matrix_by_level)
+        matrix_by_level = compiled["matrix"]
         matrix_by_level = self._normalize_row_columns(matrix_by_level)
+        # Re-digest after column normalization so matrix_id matches artifacts.
+        matrix_id = matrix_id_for(matrix_by_level)
+        context = state.setdefault("context", {})
+        context["isa_matrix_id"] = matrix_id
+        context["isa_matrix_compiler"] = "json_generator"
+        if "artifacts" not in state:
+            state["artifacts"] = {}
+        state["artifacts"]["isa_matrix_id"] = matrix_id
 
         isa_structure: Dict[str, Any] = {}
         isa_descriptions = {
@@ -1468,6 +1479,7 @@ class JSONGeneratorAgent(BaseAgent):
             "document_source": state.get("document_path", ""),
             "overall_confidence": round(overall_confidence, 3),
             "needs_review": state.get("needs_human_review", False),
+            "isa_matrix_id": matrix_id,
 
             # Packages used (from FAIR-DS API, selected by LLM)
             "packages_used": sorted(list(packages_used)) if packages_used else [],

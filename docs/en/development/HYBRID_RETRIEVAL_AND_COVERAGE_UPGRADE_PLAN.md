@@ -1260,14 +1260,17 @@ pipeline:
   completeness must not regress beyond the merge-gate tolerances relative to
   Shadow; value match must remain near Tuned.
 
-**Current blocker:** the full `auto` eval has not been produced yet:
+**Current status (2026-07-15):** the six-document Auto evaluation exists at
+`evaluation/runs/auto_pro_tuned/results/evaluation_results.json`.
 
-- Missing required result:
-  `evaluation/runs/auto_pro_tuned/results/evaluation_results.json`.
-- Current service-aware preflight records local files/config as ready, but
-  `FAIR_DS_API_URL` and `MINERU_SERVER_URL` are unreachable with connection
-  refused. See
-  `evaluation/prototypes/auto_repair_classifier/artifacts/auto_eval_preflight_report.md`.
+- Auto improves aggregate score, completeness, value matching, precision, and
+  LLM-judged content quality relative to Shadow, while row alignment is close
+  and internal schema compliance is lower.
+- Internal schema compliance is diagnostic; FAIR-DS `/api/upload` validation is
+  the eventual external compatibility gate after structural convergence.
+- Current service-aware preflight reports `MINERU_SERVER_URL` unreachable and
+  two inputs without reusable preconversion; this blocks a fresh reproducible
+  full run, not inspection of the completed six-document artifacts.
 - If live MinerU is unavailable, use
   `mamba run -n FAIRiAgent python evaluation/prototypes/auto_repair_classifier/preconvert_mineru.py`
   to inspect missing PDF conversions, then add `--execute` only when local
@@ -1278,8 +1281,9 @@ pipeline:
 - `auto_readiness_report.json` includes a `requirements` audit that separates
   completed local implementation evidence from pending service/full-eval/gate
   evidence.
-- Until that run exists and `merge_gate.py` passes, the branch is not proven
-  ready to merge as production-default complete.
+- The current metric gate remains conservative and fails on schema/alignment
+  tolerances. §12.1 defines the structural convergence work required before a
+  new production-default decision.
 
 ---
 
@@ -1326,6 +1330,252 @@ Steps 1–4 and 6 carry minimal behavioral risk because they can be validated
 in shadow/wrapper mode. Step 5 is where the coverage claim is actually made
 and must clear the §10 acceptance bar. Step 8 is intentionally sequenced
 after Step 5 telemetry, not before it.
+
+### 12.1 Phase 4 structural convergence: one evidence chain and one ISA matrix
+
+The six-document Auto evaluation shows that retrieval quality and sheet
+structure must be optimized as separate stages. Auto improves value matching
+and LLM-judged content quality, while repeated entity grouping and matrix
+materialization can still create too many or too few rows. The immediate
+priority is therefore to remove conflicting state ownership before changing
+the LangGraph topology.
+
+#### Canonical data flow
+
+```text
+SectionMapReduce ─┐
+DocumentParser ───┼─> EvidenceStore (only writable evidence source)
+BioMetadata ──────┘              |
+                                 v
+FAIR-DS field catalog --> Canonical fields + Entity Registry
+                                 |
+ISAValueMapper --> normalization/link patches
+                                 |
+                     apply patches to canonical fields
+                                 |
+                        ISA Matrix Compiler
+                                 |
+                       Coverage/Structure Audit
+                                 |
+          metadata.json / ISA sidecar / Excel / evaluation
+```
+
+Ownership rules:
+
+1. `EvidenceStore` is the only writable evidence source. SectionMapReduce,
+   DocumentParser, BioMetadata, and hybrid retrieval upsert immutable
+   `EvidenceRecord` objects. `evidence_packets` and
+   `section_field_candidates` are compatibility projections and must never be
+   mutated independently. Stable `evidence_id` is derived from source span,
+   table row, field hint, normalized candidate value, and producer;
+   JSONL/Qdrant parity is checked.
+2. Canonical fields and the Entity Registry are the only writable metadata
+   model. Each field record has a stable `field_id`, raw and normalized value,
+   candidate values, source references, `canonical_entity_id`, and resolution
+   decisions. Entity aliases retain alias type plus raw/normalized identifier.
+3. A single `ISA Matrix Compiler` is the only component allowed to create
+   `columns`/`rows`. JSONGenerator, ISAValueMapper, AutoRepair, export, and
+   evaluation consume that compiler instead of maintaining private builders.
+4. ISAValueMapper emits normalization/link patches keyed by `field_id`; it
+   cannot write matrix cells or row identity. Applying a patch preserves
+   `raw_value`, candidate values, source refs, and a reason code before
+   recompiling.
+5. AutoRepair patches canonical fields/registry records and invokes the same
+   compiler. It cannot patch serialized matrix copies independently.
+6. `metadata.json.isa_values`, `metadata.json.isa_structure.columns/rows`,
+   `isa_values_json.json`, Excel export, and Layer 2/3 evaluation are
+   projections of the same compiled matrix. `isa_structure.fields` is a
+   read-only projection of canonical fields, not a separately deduplicated
+   list. Layer 1 completeness plus grounding/provenance evaluators validate the
+   canonical field projection ID; all production evaluators fail closed when
+   the required projection ID or `matrix_id` is missing and never silently
+   fall back to a stale representation.
+
+#### Entity resolution rules
+
+- Explicit identifiers (`sample identifier`, `observation unit identifier`,
+  `assay identifier`, etc.) are the strongest identity signal.
+- Cross-batch `entity_id` values are aliases, not authoritative identities.
+- Normalized explicit identifiers merge only on exact equality within the
+  identity key `(isa_sheet, parent_canonical_entity_id, identifier_type,
+  normalized_identifier)`. Substring matching is prohibited. Different known
+  parents never merge; unknown parents remain unresolved.
+- Identifier normalization is versioned and conservative: Unicode NFKC, trim,
+  internal whitespace collapse, and Unicode `casefold()` only. It never removes
+  punctuation, hyphens, underscores, or numeric boundaries. Collision tests
+  protect identifiers that differ only in those retained characters.
+- Rows with the same scoped explicit identity form one canonical entity.
+  Conflicting cell values become a structured `CandidateValueSet` on that
+  entity and are never silently dropped. If evidence demonstrates that the
+  explicit identifier itself is reused for distinct real entities, the
+  resolver creates a collision group and keeps those entities separate.
+- Distinct non-empty identifiers never merge automatically.
+- Identifier-less fragments never merge solely because they are sparse,
+  non-conflicting, or share a parent. A merge requires a unique strong anchor:
+  the same structured table row, or the same explicit entity source span plus
+  the same parent identity. Ambiguous fragments remain separate and are
+  flagged unresolved.
+- Semicolon/list splitting is allowed only when the source evidence establishes
+  repeated entities through structured rows or equal-length aligned entity
+  lists. Punctuation alone is insufficient; unequal lists remain unresolved
+  and must not repeat the final value to fill missing positions.
+- Conflicts are preserved in provenance and surfaced for review; the compiler
+  must not silently choose one value merely to reduce row count.
+- A conflicting cell is populated only when a deterministic domain rule can
+  select a candidate and records the selected `candidate_id`, decision, and
+  reason code. Otherwise the compiled cell is empty, the field/entity remains
+  `unresolved`, and all candidates remain in provenance. Such unresolved
+  candidates count as eligible evidence not materialized, so the audit cannot
+  hide conflicts by excluding them from recall.
+
+Minimum canonical schemas:
+
+```text
+EvidenceRecord:
+  evidence_id, source_id, char_start, char_end, table_row_id,
+  field_hint, raw_value, normalized_value, producer, retrieval_method
+
+CanonicalField:
+  field_id, field_name, isa_sheet, canonical_entity_id,
+  selected_value, candidate_values: CandidateValue[],
+  confidence, status, resolution_decision, reason_code
+
+CandidateValue:
+  candidate_id, raw_value, normalized_value, source_refs[],
+  confidence, producer, eligibility, status, reason_code
+
+EntityRecord:
+  canonical_entity_id, isa_sheet, parent_canonical_entity_id,
+  aliases[], source_anchors[], collision_group_id,
+  resolution_status, reason_codes[]
+```
+
+An evidence-backed candidate is eligible for materialization only when it has a
+valid source reference, resolves to a selected FAIR-DS field, passes the
+existing grounding/confidence threshold, and is not rejected by deterministic
+type or entity-conflict checks. Ineligible candidates remain in provenance with
+an explicit rejection reason and are excluded from the materialization-recall
+denominator.
+
+#### Deterministic post-compile audit
+
+The audit reports, but does not fabricate repairs for:
+
+- evidence-backed fields that were retrieved but never materialized;
+- missing required/recommended fields;
+- multiple registry entities sharing one normalized explicit identifier;
+- orphaned study/observationunit/sample/assay linkage;
+- suspicious row explosion or collapse;
+- conflicting values within one canonical entity;
+- divergence between serialized artifacts.
+
+Internal JSON schema compliance remains diagnostic. FAIR-DS `/api/upload`
+validation is the eventual external compatibility gate once structural work is
+complete.
+
+#### Implementation and validation sequence
+
+Each behavioral step follows RED → GREEN → refactor and uses the `FAIRiAgent`
+mamba environment.
+
+**Progress (2026-07-16, slimmed):** keep only changes with measured or clear
+bugfix value. Cut premature CanonicalField registry / structure-audit
+artifact writers (no offline metric gain; added unused surface area).
+
+Shipped:
+- DocumentParser merges evidence (no overwrite); EvidenceStore upserts.
+- Exact-ID compile + IVM/AutoRepair projection sync → one `matrix_id` across
+  metadata.json and sidecar; Excel does not re-split a compiled sidecar.
+- Eval prefers sidecar only when `isa_matrix_id` is present.
+- Offline replay script retained for projection A/B only.
+
+Deferred until a fresh LLM run shows need: full entity registry schema,
+patch-only IVM (no private rebuild), coverage audit artifacts.
+
+1. **Characterize current behavior and capture future replay fixtures**
+   - Add tests that document current JSONGenerator/ISAValueMapper/AutoRepair/
+     Excel/evaluator projections without endorsing their divergence.
+   - Add a versioned compiler-input fixture schema and persist immutable
+     `metadata_fields`, EvidenceRecords, entity aliases, source refs, and
+     conflicting candidates in new workflow runs. Existing six-document
+     outputs remain useful for output-level replay but cannot reconstruct
+     candidates already discarded upstream.
+   - Every fixture stores `schema_version`, `compiler_version`, input digest,
+     baseline artifact/config/commit identifiers, and expected `matrix_id`.
+2. **Evidence preservation** ✅ (partial — packet merge + store upsert)
+   - Add a failing test proving DocumentParser currently overwrites
+     SectionMapReduce packets.
+   - Implement EvidenceStore upsert/deduplication and make
+     `evidence_packets` plus `section_field_candidates` read-only compatibility
+     projections.
+   - Verify parser, retrieval, and multi-source tests.
+3. **Canonical registry schema and pure entity resolver**
+   - Add failing tests for stable IDs, exact identifier equality, input-order
+     invariance, idempotence, conflict preservation, and unresolved
+     identifier-less fragments.
+   - Implement the pure resolver without document- or benchmark-specific rules.
+4. **Pure ISA Matrix Compiler**
+   - Add contract tests for deterministic sheet/column/row ordering,
+     semicolon/list constraints, linkage materialization, and zero field loss.
+   - Extract grouping, constrained splitting, resolution, normalization, and
+     linkage into a focused module.
+5. **Migrate producers and consumers one boundary at a time**
+   - Route JSONGenerator to canonical fields/registry, then compiler projection.
+   - Change ISAValueMapper to emit patches and recompile.
+   - Change AutoRepair to patch canonical records and recompile.
+   - Remove Excel's independent entity splitting.
+   - Make Layer 2/3 evaluation consume only the canonical projection.
+   - At each boundary, require shadow projection parity before removing the old
+     path.
+6. **Repair and artifact synchronization**
+   - Add a failing test showing an accepted canonical repair must appear
+     identically in metadata JSON, ISA JSON, and Excel input.
+   - Recompile after repair rather than patching matrix copies.
+7. **Coverage/structure audit**
+   - Add deterministic tests for evidence-not-materialized, duplicate IDs,
+     orphan linkage, row explosion/collapse, and artifact divergence.
+   - Persist audit findings and compiler decisions in workflow provenance.
+8. **Offline replay before new LLM runs**
+   - Replay output-level transformations against existing six-document
+     artifacts and compiler-level transformations against versioned canonical
+     fixtures captured by the new workflow.
+   - Re-run Layer 2/3 evaluation and compare per-sheet row counts, alignment,
+     value accuracy given correct structure, and field completeness.
+   - Reject any rule that improves aggregate alignment by deleting
+     evidence-backed values or collapsing conflicting entities.
+9. **Incremental workflow validation**
+   - Run targeted unit/integration tests, then the full fast suite.
+   - Run a three-document workflow slice only after offline replay passes.
+   - Run the six-document Auto evaluation only after the three-document slice
+     preserves completeness/value metrics and improves or stabilizes structure.
+
+#### Phase acceptance criteria
+
+- one canonical `matrix_id` across metadata JSON, ISA JSON, export manifest, and
+  evaluation input. `matrix_id` is SHA-256 over deterministic JSON with
+  canonical sheet/column/row ordering, UTF-8 Unicode, and explicit empty-value
+  rules; Excel is read back to cells, requirement display suffixes
+  (`(M)/(R)/(O)`) are removed from headers, and styles are ignored before
+  digest verification;
+- the baseline is fixed by run artifact path, git commit, model config, runtime
+  config, ground-truth version, and evaluator version in the replay manifest;
+- per-document required completeness must not regress from that fixed baseline;
+- evidence-backed field materialization recall is 100%;
+- valid source-reference retention is 100%;
+- conflicting candidate retention and decision provenance are 100%;
+- no aggregate completeness decrease greater than 0.01 and no aggregate value
+  partial-credit decrease greater than 0.03 versus the selected baseline;
+- row alignment and sheet placement are stable or improved within 0.03 and
+  0.01 aggregate tolerance respectively;
+- per-document completeness may not decrease by more than 0.03, value
+  partial-credit by more than 0.05, or row alignment F1 by more than 0.10;
+- no alignment gain is accepted when it is achieved by deleting
+  evidence-backed fields or conflicting entities;
+- every document reports unresolved entity count and reason-code distribution;
+- every merge, split, conflict, and unresolved fragment has machine-readable
+  provenance;
+- no document-title, DOI, filename, or benchmark-specific branching exists in
+  production code.
 
 ---
 

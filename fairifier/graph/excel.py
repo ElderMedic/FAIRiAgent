@@ -480,13 +480,20 @@ def try_export_fairds_metadata_excel(
         )
         return None
 
-    # Prefer dedicated matrix file; fall back to isa_structure.
+    # Prefer dedicated compiled matrix (§12.1). Do not re-split when the
+    # sidecar already carries columns×rows — that matrix is the sole projection.
     isa_values_path = Path(output_dir) / "isa_values_json.json"
+    fill_structure: Dict[str, Any]
+    used_compiled_sidecar = False
     try:
         with open(isa_values_path, encoding="utf-8") as fh:
             isa_values = json.load(fh)
-        if isinstance(isa_values, dict):
-            fill_structure = split_entities_in_isa_structure(isa_values)
+        if isinstance(isa_values, dict) and any(
+            isinstance(block, dict) and (block.get("columns") or block.get("rows"))
+            for block in isa_values.values()
+        ):
+            fill_structure = isa_values
+            used_compiled_sidecar = True
         else:
             fill_structure = split_entities_in_isa_structure(isa_structure)
     except (OSError, json.JSONDecodeError):
@@ -506,10 +513,12 @@ def try_export_fairds_metadata_excel(
         )
         return None
 
-    # ── Step 1: Entity splitting ───────────────────────────────
-    # Defensive: even if the JSON generator already split entities,
-    # re-apply to catch any remaining semicolons in merged rows.
-    isa_structure = split_entities_in_isa_structure(isa_structure)
+    # Legacy fallback only: when no compiled sidecar was available, keep the
+    # historical defensive split on isa_structure for field-list exports.
+    if not used_compiled_sidecar:
+        isa_structure = split_entities_in_isa_structure(isa_structure)
+    else:
+        isa_structure = fill_structure
 
     # ── Step 2: Generate Excel ─────────────────────────────────
     xlsx_bytes: Optional[bytes] = None

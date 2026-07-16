@@ -2602,7 +2602,16 @@ class OrchestrateNode:
             )
 
             per_source_info = state.get("document_info", {}) or {}
-            per_source_packets = state.get("evidence_packets", []) or []
+            # Prefer packets produced by this DocumentParser call so multi-file
+            # synthesis does not re-copy SectionMapReduce / prior-source packets
+            # that DocumentParser now preserves in state (§12.1).
+            context_packets = (state.get("context") or {}).get(
+                "last_parser_evidence_packets"
+            )
+            if isinstance(context_packets, list) and context_packets:
+                per_source_packets = context_packets
+            else:
+                per_source_packets = state.get("evidence_packets", []) or []
             source_outputs.append(
                 {
                     "source_path": source_path,

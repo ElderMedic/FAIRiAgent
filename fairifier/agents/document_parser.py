@@ -15,7 +15,7 @@ from ..utils.document_text import read_document_text
 from ..models import FAIRifierState
 from ..config import config
 from ..skills import load_skill_files, skills_catalog_seed_files
-from ..services.evidence_packets import build_evidence_packets
+from ..services.evidence_packets import build_evidence_packets, merge_evidence_packets
 from ..services.retrieval_cache import get_cache_bucket
 from ..tools.science_tools import create_science_tools
 from ..tools.bio_tools import create_bio_tools
@@ -461,13 +461,20 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             
             # Store in state directly as dict (without raw_text - it's already in document_content)
             state["document_info"] = doc_info_dict
-            evidence_packets = build_evidence_packets(
+            new_packets = build_evidence_packets(
                 doc_info_dict,
                 text,
                 source_type=self._infer_document_source_type(is_mineru_content, document_path),
                 max_packets=max(config.react_loop_document_parser_target_packets * 2, 12),
             )
+            # Preserve SectionMapReduce / BioMetadata packets already in state
+            # (§12.1): DocumentParser appends; it must not replace prior evidence.
+            prior_packets = list(state.get("evidence_packets") or [])
+            evidence_packets = merge_evidence_packets(prior_packets, new_packets)
             state["evidence_packets"] = evidence_packets
+            context = state.setdefault("context", {})
+            # Multi-file orchestration collects only packets from this parse.
+            context["last_parser_evidence_packets"] = list(new_packets)
             if config.enable_a2a:
                 from ..services.agent_mailbox import AgentMailbox
                 mailbox = AgentMailbox(state)
@@ -476,7 +483,7 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
                 )
                 mailbox.publish_evidence_bundle(
                     from_agent="DocumentParser",
-                    packets=evidence_packets,
+                    packets=new_packets,
                     source_path=document_path,
                     source_type=source_type,
                 )
@@ -487,7 +494,9 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             self.log_execution(state, f"✅ Stored document_info in state with {len(state['document_info'])} fields")
             self.log_execution(
                 state,
-                f"📦 Built {len(evidence_packets)} evidence packets for downstream agents{a2a_note}"
+                f"📦 Built {len(new_packets)} parser packets "
+                f"(merged total {len(evidence_packets)}; prior {len(prior_packets)})"
+                f"{a2a_note}"
             )
             confidence = self._calculate_llm_confidence(doc_info_dict)
             

@@ -759,6 +759,49 @@ def generate_auto_repair_trace(
         elif should_consider:
             skipped.append(record)
 
+    # §12.1: after accepted patches, recompile from one matrix and re-project
+    # so metadata.json / sidecar share a single matrix_id.
+    recompile_info: Dict[str, Any] = {"recompiled": False}
+    if metadata_mutated and apply_patches:
+        try:
+            from ..utils.isa_matrix_projection import (
+                extract_matrix_from_metadata,
+                sync_compiled_matrix_to_state,
+            )
+
+            artifacts = state.setdefault("artifacts", {})
+            matrix: Dict[str, Any] = {}
+            sidecar = artifacts.get("isa_values_json")
+            if sidecar:
+                parsed = json.loads(sidecar) if isinstance(sidecar, str) else sidecar
+                if isinstance(parsed, dict):
+                    matrix = {
+                        sheet: {
+                            "columns": list((block or {}).get("columns") or []),
+                            "rows": list((block or {}).get("rows") or []),
+                        }
+                        for sheet, block in parsed.items()
+                        if isinstance(block, dict)
+                    }
+            if not matrix:
+                meta = artifacts.get("metadata_json")
+                payload = json.loads(meta) if isinstance(meta, str) else meta
+                if isinstance(payload, dict):
+                    matrix = extract_matrix_from_metadata(payload)
+            if matrix:
+                projected = sync_compiled_matrix_to_state(
+                    state,
+                    matrix,
+                    recompile=True,
+                    compiler_tag="auto_repair",
+                )
+                recompile_info = {
+                    "recompiled": True,
+                    "matrix_id": projected.get("matrix_id"),
+                }
+        except Exception as exc:  # noqa: BLE001 — repair must not fail closed on sync
+            recompile_info = {"recompiled": False, "error": str(exc)}
+
     trace = {
         "generated_at": datetime.now().isoformat(),
         "mode": "deterministic_exact_patch",
@@ -776,6 +819,7 @@ def generate_auto_repair_trace(
                 1 for item in candidates
                 if isinstance(item, dict) and item.get("classifier_shadow_prediction")
             ),
+            **recompile_info,
         },
         "candidates": candidates,
         "accepted_patches": accepted_patches,
@@ -790,6 +834,10 @@ def generate_auto_repair_trace(
                 "Deterministic patches are limited to single-row sheets; "
                 "linkage/id fields and multi-row sheets are guarded to avoid "
                 "row-alignment regressions."
+            ),
+            (
+                "After accepted patches, matrices are recompiled and projected "
+                "so metadata.json and isa_values_json share one matrix_id."
             ),
             (
                 "Targeted semantic LLM patching must pass FAIR-DS/ISA guards "
