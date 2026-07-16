@@ -6,6 +6,7 @@ import importlib.util
 import json
 import logging
 import os
+import shutil
 import socket
 import tempfile
 import threading
@@ -94,6 +95,15 @@ DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 SESSION_ID_HEADER = "X-FAIRifier-Session-Id"
 SESSION_STARTED_AT_HEADER = "X-FAIRifier-Session-Started-At"
 _DEMO_DOCUMENTS = {
+    "earthworm_quickstart": {
+        "path": PROJECT_ROOT / "examples" / "quickstart" / "earthworm_4n_paper_bioRxiv.md",
+        "paths": [
+            PROJECT_ROOT / "examples" / "quickstart" / "earthworm_4n_paper_bioRxiv.md",
+            PROJECT_ROOT / "examples" / "quickstart" / "Diagonal_RNAseq_Earthworms.xlsx",
+        ],
+        "label": "Earthworm multi-source quickstart",
+        "description": "Pre-converted paper plus its supplementary RNA-seq workbook; no MinerU conversion required.",
+    },
     "earthworm_paper": {
         "path": PROJECT_ROOT / "examples" / "inputs" / "earthworm_4n_paper_bioRxiv.pdf",
         "label": "Earthworm BioRxiv Paper",
@@ -150,6 +160,11 @@ def _build_demo_document_response(
         filename=path.name,
         description=meta["description"],
         size_bytes=size_bytes,
+        files=[
+            item.name
+            for item in meta.get("paths", [path])
+            if item.is_file()
+        ],
     )
 
 
@@ -581,6 +596,16 @@ def _build_system_status() -> SystemStatusResponse:
         "mem0_llm_provider": fc.mem0_llm_provider,
         "mem0_embedding_provider": fc.mem0_embedding_provider,
         "qdrant_endpoint": f"{fc.mem0_qdrant_host}:{fc.mem0_qdrant_port}",
+        "semantic_index_enabled": fc.semantic_index_enabled,
+        "hybrid_retrieval_enabled": fc.hybrid_retrieval_enabled,
+        "evidence_store_enabled": fc.evidence_store_enabled,
+        "mapreduce_enabled": fc.mapreduce_enabled,
+        "retrieval_shadow_mode": fc.retrieval_shadow_mode,
+        "retrieval_prompt_adaptive_lexical": fc.retrieval_prompt_adaptive_lexical,
+        "retrieval_embedding_backend": fc.retrieval_embedding_backend,
+        "retrieval_embedding_model": fc.retrieval_embedding_model,
+        "retrieval_rerank_backend": fc.retrieval_rerank_backend,
+        "retrieval_rerank_model": fc.retrieval_rerank_model,
     }
 
     return SystemStatusResponse(
@@ -1131,9 +1156,14 @@ async def create_project(
                 detail="Unknown sample_document",
             )
         source_path = doc_meta["path"]
+        demo_paths = [
+            path
+            for path in doc_meta.get("paths", [source_path])
+            if path.is_file()
+        ]
         content = source_path.read_bytes()
         source_filename = source_path.name
-        input_filenames = [source_filename]
+        input_filenames = [path.name for path in demo_paths]
         suffix = source_path.suffix
         max_bytes = fc.max_document_size_mb * 1024 * 1024
         if len(content) > max_bytes:
@@ -1144,13 +1174,19 @@ async def create_project(
                     f"Max size: {fc.max_document_size_mb} MB"
                 ),
             )
-        with tempfile.NamedTemporaryFile(
-            delete=False, suffix=suffix
-        ) as tmp:
-            tmp.write(content)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-            tmp_path = tmp.name
+        if len(demo_paths) > 1:
+            tmp_dir = tempfile.mkdtemp(prefix="fairifier_demo_bundle_")
+            for path in demo_paths:
+                shutil.copy2(path, Path(tmp_dir) / path.name)
+            tmp_path = tmp_dir
+        else:
+            with tempfile.NamedTemporaryFile(
+                delete=False, suffix=suffix
+            ) as tmp:
+                tmp.write(content)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                tmp_path = tmp.name
     else:
         max_bytes = fc.max_document_size_mb * 1024 * 1024
         file_payloads: list[tuple[str, bytes]] = []

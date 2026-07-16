@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ProjectCreate(BaseModel):
@@ -54,6 +54,7 @@ class DemoDocumentResponse(BaseModel):
     filename: str
     description: str
     size_bytes: int
+    files: List[str] = Field(default_factory=list)
 
 
 class DemoOptionsResponse(BaseModel):

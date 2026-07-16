@@ -54,6 +54,7 @@ export interface DemoDocument {
   filename: string;
   description: string;
   size_bytes: number;
+  files?: string[];
 }
 
 export interface DemoOptions {
