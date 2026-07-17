@@ -2,8 +2,8 @@
 
 Henk J. van Lingen, $^{a,*}$  Changlin Ke, $^{a}$  Edoardo Saccenti, $^{a}$  Zoi G. Lada, $^{b}$  Marta Baccaro, $^{c}$  Nico W. van den Brink, $^{c}$  and Maria Suarez-Diez $^{a}$
 
-a) Laboratory of Systems & Synthetic Biology, Wageningen University & Research, Wageningen, The Netherlands  
-b) Department of Chemistry, Laboratory of Applied Molecular Spectroscopy, Institute of Chemical Engineering Sciences (ICEHT), Foundation for Research and Technology-Hellas (FORTH/ICE-HT), University of Patras, Patras, Greece  
+a) Laboratory of Systems & Synthetic Biology, Wageningen University & Research, Wageningen, The Netherlands
+b) Department of Chemistry, Laboratory of Applied Molecular Spectroscopy, Institute of Chemical Engineering Sciences (ICEHT), Foundation for Research and Technology-Hellas (FORTH/ICE-HT), University of Patras, Patras, Greece
 c) Division of Toxicology, Wageningen University & Research, Wageningen, The Netherlands
 
 *) Address correspondence to: hvanling@uoguelph.ca
@@ -70,7 +70,7 @@ Furthermore, a regression-based analysis was performed that used a generalized l
 
 Functional GO enrichment of genes found differentially expressed or selected using regression-based analysis was performed by the hypergeometric function to model the background probability and the Benjamini-Hochberg procedure was used to correct for multiple testing and generate adjusted P-values. Annotated GO terms were downloaded from the KEGG/Gene Ontology database (Kanehisha, 2016). GO enrichment analyses were performed using the clusterProfiler package in R (Wu et al., 2021). R code used for all downstream analysis steps is publicly available at https://git.wur.nl/ssb/publications/gene-expression-profile-dynamics-and-metabolome-of-earthworms-exposed-to-nanomaterials
 
-![](images/a7bf490a54ed3d0c7edb4c0a89827479cff18936d9e8ca88cffde83dfca453ff.jpg)  
+![](images/a7bf490a54ed3d0c7edb4c0a89827479cff18936d9e8ca88cffde83dfca453ff.jpg)
 Figure 1 - Treatments, sampling days and sample sizes in earthworm experiments 1, 2 and 3. Dotted squares with jars indicate incubated earthworms. Earthworms shown outside the dotted squares were sampled as reference worms before the start of the incubation on day 0 in experiments 1 and 2.
 
 # Results and Discussion
@@ -87,43 +87,43 @@ potential of the (possibly mixed) population. Moreover, it allows developing cus
 
 ![](images/affbb95e907dac68d3a79ce820f503dc2e3f70d6ba3f9cb647861a7ac0b6cc72.jpg)
 
-![](images/34de6b34247dc6f8374a1d11cd9faedd33da265a4df542ee4430335820d1d584.jpg)  
+![](images/34de6b34247dc6f8374a1d11cd9faedd33da265a4df542ee4430335820d1d584.jpg)
 Figure 2 - RNA transcript mapping rate per sample to a)  $E.$  andrei and  $E.$  fetida in experiment 1, b)  $E.$  andrei and  $E.$  fetida in experiment 2, and c) to  $E.$  andrei and  $E.$  fetida and a de novo constructed assembly in experiment 3. Dashed lines indicate the inclusion and exclusion regions.
 
 # Differential gene expression analysis
 
 DEG were defined by adjusted P-values less than 0.05 and a threshold fold change greater or less than 1.5 and 1/1.5 (corresponding to 0.585 in log2) for identifying biologically meaningful DEG (Schurch et al., 2016). The number of DEG in earthworms after 2, 3 and 7 days of exposure to ZnO was very limited (Fig. 3a-c). Out of a total of 28,365 genes, the highest number of DEG observed on day 7 was only 61, of which 8 downregulated and 53 upregulated. Given that no control samples taken on day 4 were retained this analysis could not be performed on samples from earthworms exposed to ZnO for 4 days. Instead, samples taken at the different days after exposure were compared to the reference samples taken on Day 0. This comparison showed 63, 120, 1037 and 52 DEG along days 2, 3, 4 and 7, respectively, indicating a sharp peak in gene expression on day 4 of which the majority was downregulated (Fig. 4). Furthermore, in line with the latter observation, comparing the ZnO treated samples taken on day 4 to samples taken on days 2, 3 and 7 also indicated 705, 200 and 282 DEG, respectively (Fig. S10) with the large majority being downregulated. These genes, which were even indicated differentially expressed relative to earthworms samples treated with ZnO taken on days 2, 3 and 7, further indicate a strong temporary gene expression response after 4 days of exposure to ZnO. Nevertheless, some caution needs to be taken given the absence of control samples for day 4. A temporary substantial dysregulation of gene expression declining later in time aligns with peak transcriptional responses after 3 days in enchytraeid (potworms) exposed to  $\mathrm{ZnCl_2}$  (Gomes et al., 2022) and earthworms exposed to silver nanomaterials (Tsyusko et al., 2012).
 
-![](images/5ff82c06a7747e068c8b7c10d4da4362abc0383c66e1670fc76de752edbfd9df.jpg)  
+![](images/5ff82c06a7747e068c8b7c10d4da4362abc0383c66e1670fc76de752edbfd9df.jpg)
 a) ZnO vs control on Day 2
 
-![](images/839f22e5c1220e1c339b8e8ae198b39996eac63e97075efeffb6f92bd273ba2b.jpg)  
+![](images/839f22e5c1220e1c339b8e8ae198b39996eac63e97075efeffb6f92bd273ba2b.jpg)
 b) ZnO vs control on Day 3
 
-![](images/182719122f62acf678455534871a1b823fcd7ce2b46157717ceb091a5ababc6d.jpg)  
+![](images/182719122f62acf678455534871a1b823fcd7ce2b46157717ceb091a5ababc6d.jpg)
 c) ZnO vs control on Day 7
 
-![](images/7da70e80617aff64009f50dd93636329f696b2c04fb6689387d2ca3964297321.jpg)  
+![](images/7da70e80617aff64009f50dd93636329f696b2c04fb6689387d2ca3964297321.jpg)
 d) ZnO:Mn vs control on Day 2
 
-![](images/5e454ced6a8c861ba4dafa210eca0e8149b9626c4f03624174679ec994e9e461.jpg)  
+![](images/5e454ced6a8c861ba4dafa210eca0e8149b9626c4f03624174679ec994e9e461.jpg)
 e) ZnO:Mn vs control on Day 4
 
-![](images/28ab97a8cd35306aa36097bcc5c49a5980f44080c5a863474a90731a865bab14.jpg)  
+![](images/28ab97a8cd35306aa36097bcc5c49a5980f44080c5a863474a90731a865bab14.jpg)
 f) ZnO:Mn vs control on Day 7
 
-![](images/cdba77e62b59b02ab046a1c42905bac5eeb682cd948fd5ee91f4561e339eec60.jpg)  
-g)  $\mathsf{MnCl}_2$  vs control on Day 14  
+![](images/cdba77e62b59b02ab046a1c42905bac5eeb682cd948fd5ee91f4561e339eec60.jpg)
+g)  $\mathsf{MnCl}_2$  vs control on Day 14
 Figure 3 - Volcano plots that represent differential gene expression of transcripts mapped to the  $E.$  andrei reference genome obtained from earthworms exposed to control vs. ZnO treated soil for 2, 3 and 7 days in experiment 1 (a-c), from earthworms exposed to control vs. ZnO:Mn treated soil for 2, 4 and 7 days in experiment 2 (d-f), of transcripts assembled de novo from earthworms exposed to control vs. MnCl $_2$  treated soil and control vs. ZnO:Mn treated for 14 days in experiment 3 (g-h), and of transcripts mapped to the  $E.$  andrei reference genome obtained from earthworms exposed to control vs. ZnO:Mn treated soil for 14 days in experiment 3 (i).
 
-![](images/353f9ef6fd030936a9a2747e704107e33254622b16f9d97e6b25d5f9533c8967.jpg)  
-h) ZnO:Mn vs control on Day 14  
+![](images/353f9ef6fd030936a9a2747e704107e33254622b16f9d97e6b25d5f9533c8967.jpg)
+h) ZnO:Mn vs control on Day 14
 $\log_2$  (fold change)
 
-![](images/e082ead6a8503fa343ad3b57f76dc81f13f8e514430c21b8f56e9b538b9649ec.jpg)  
+![](images/e082ead6a8503fa343ad3b57f76dc81f13f8e514430c21b8f56e9b538b9649ec.jpg)
 i) ZnO:Mn vs control on Day 14
 
-![](images/d317529d16941882ebc6f3ef286dcef4a5f94616f724fccc8c3a9a203d55b07d.jpg)  
+![](images/d317529d16941882ebc6f3ef286dcef4a5f94616f724fccc8c3a9a203d55b07d.jpg)
 Figure 4 - Volcano plots that represent differential gene expression of transcripts mapped to the  $E.$  andrei reference genome for earthworms exposed to ZnO treated soil for 2, 3, 4 and 7 days (a-d) vs. earthworms collected before the start of the exposure on day 0 in experiment 1.
 
 Earthworms exposed to ZnO:Mn had more than 3,000 DEG out of 28,241 after 2 days, of which 1458 downregulated and 1570 upregulated (Fig. 3d). This transcriptional response did not persist as only 213 and 72 DEG were observed on days 4 and 7 from the start of the exposure, respectively (Fig. 3e-f). This temporarily increase in DEG after 4 days of exposure to ZnO and 2 days of exposure to ZnO:Mn may align with other previous temporary increases in differentially expressed genes such as observed after 3 days of potworm exposure to ionic zinc (Gomes et al., 2022) and of earthworm exposure to silver nanomaterials (Tsyusko et al., 2012). Exposing earthworms, which are difficult to identify phenotypically, to MnCl $_2$  or ZnO:Mn for 14 days indicated 1168 (749 downregulated, 419 upregulated) and 681 (291 downregulated, 390 upregulated) out of the 46,834 genes annotated in the de novo assembled transcriptome, respectively (Fig. 3g-h). These DEG were identified using the eleven samples in experiment 3 showing low mapping to the two Eisenia species and were assembled de novo. Although Trinity de novo assembly may be a powerful approach, which was demonstrated previously (e.g. on earthworms exposed to copper; Yu et al., 2022), these DEG may be incomparable to DEG of  $E.\ andrei$  in experiments 1 and 2. However, reads for the two control and two ZnO:Mn treated samples of experiment 3 mapped to the  $E.\ andrei$  reference genome are comparable to gene expression profiles in experiments 1 and 2 by reference genome. These 4 samples indicated only 75 DEG out of 25,984 genes (62 downregulated, 13 upregulated; Fig. 3i).
@@ -132,11 +132,11 @@ Earthworms exposed to ZnO:Mn had more than 3,000 DEG out of 28,241 after 2 days,
 
 ![](images/f0c3b0452e1ee7f50eee347d6cbad007db27360c6b7af82ec1c25947dba661bd.jpg)
 
-![](images/27223ebf49775a034b6ae210c0ea634f826b7733e14db0d693a09023e76a6cf9.jpg)  
+![](images/27223ebf49775a034b6ae210c0ea634f826b7733e14db0d693a09023e76a6cf9.jpg)
 Time Median profile of 544 genes
 
-![](images/e1a64fbc6ec555b9693ecdfbe0436be1e9953685914187563e9fc66d25fcc84f.jpg)  
-Time Median profile of 489 genes  
+![](images/e1a64fbc6ec555b9693ecdfbe0436be1e9953685914187563e9fc66d25fcc84f.jpg)
+Time Median profile of 489 genes
 Figure 5 – Regression-based profiles of median expression for clusters of selected genes obtained from transcripts mapped to the  $E.$  andrei reference genome from earthworms exposed to ZnO vs control soil for 2, 3 and 7 days in experiment 1 (clusters 1A-B), and exposed to ZnO:Mn vs control soil for 2, 4 and 7 days in experiment 2 (clusters 2A-B).
 
 # Gene expression time-dependent analysis
@@ -153,15 +153,15 @@ When considering DEG after 2 days of exposure of earthworms to ZnO:Mn, 54 GO ter
 
 Finally, upregulated and downregulated genes after 14 days of exposure to ZnO:Mn were enriched in 24 and 50 GO-terms, respectively (File S4). Upregulated and downregulated genes after 14 days of exposure to  $\mathrm{MnCl}_2$  were enriched in 66 and 5 GO terms, respectively (File S4). Enriched GO terms among the DEG after 14 days of exposure were associated with no more than 4 genes which suggests these are not systemic effects. These results at the endpoint observation after 14 days of exposure to ZnO and ZnO:Mn nanomaterials and  $\mathrm{MnCl}_2$ , may indicate that the applied materials are rather non-toxic to earthworms, which is in contrast to Ag ions or Ag nanomaterials for which toxicity was observed after 28 days of exposure (Novo et al., 2015).
 
-![](images/938c092fcf00065c95cd1434b4a725ff8a9998933ea7b935d2dee84c54e1cf4c.jpg)  
-Downregulation to ZnO after 4 days  
+![](images/938c092fcf00065c95cd1434b4a725ff8a9998933ea7b935d2dee84c54e1cf4c.jpg)
+Downregulation to ZnO after 4 days
 Figure 6 – Networks of enriched genes (blue circles) and the top 15 gene ontology terms (black circles, size represents the number of genes associated to each enriched GO term) for downregulated genes in earthworms exposed to ZnO for 4 days in experiment 1. Grey edges connect genes to GO terms.
 
-![](images/4375575cd85139cda86f3418ce8644f20b78c82a4468e75a237df081b49f82a2.jpg)  
+![](images/4375575cd85139cda86f3418ce8644f20b78c82a4468e75a237df081b49f82a2.jpg)
 a) Up to ZnO:Mn after 2 days
 
-![](images/51617c1d68c5d6ff451fe52b64c48de6013d3d0949085715e3b0bc84e1dfff42.jpg)  
-b) Down to ZnO:Mn after 2 days  
+![](images/51617c1d68c5d6ff451fe52b64c48de6013d3d0949085715e3b0bc84e1dfff42.jpg)
+b) Down to ZnO:Mn after 2 days
 Figure 7 - Networks of enriched genes (blue circles) and top 15 gene ontology terms (black circles, size represents the number of genes associated to each enriched GO term) for a) downregulated genes in earthworms exposed to ZnO:Mn for 2 days and b) upregulated genes in earthworms exposed to ZnO:Mn for 2 days in experiment 2. Grey edges connect genes to GO terms.
 
 # Conclusion
@@ -190,51 +190,51 @@ During the preparation of this work the author(s) used ChatGPT in order to impro
 
 # References
 
-Aulakh, M.K., Singh, H., Vashisht, A., Kang, T.S., & Sharma, R. (2022). Improved Photoresponse of Sunlight-driven  $\mathrm{Mn^{n+}}$ -ZnO ( $n = 2, 4, 7$ ) Nanostructures: A Study of Oxidative Degradation of Methylene Blue. Topics in Catalysis, 65(19), 1951-1962. https://doi.org/10.1007/s11244-022-01703-5  
-Baccaro, M., Harrison, S., van den Berg, H., Sloot, L., Hermans, D., Cornelis, G., Van Gestel, C.A.M. & Van den Brink, N.W. (2019). Bioturbation of  $\mathrm{Ag_2S}$ -NPs in soil columns by earthworms. Environmental Pollution, 252, 155-162. https://doi.org/10.1016/j.envpol.2019.05.106  
-Baccaro, M., Montano, M.D., Cui, X., Mackevica, A., Lynch, I., von Der Kammer, F., Lodge, R.W., Khlobystov A.N. & van den Brink, N.W. (2022). Influence of dissolution on the uptake of bimetallic nanoparticles Au@Ag-NPs in soil organism Eisenia fetida. Chemosphere, 302, 134909. https://doi.org/10.1016/j.chemosphere.2022.134909  
-Bhambri, A., Dhaunta, N., Patel, S.S., Hardikar, M., Bhatt, A., Srikakulam, N., Shridhar, S., Vellarikkal, S., Pandey, R., Jayarajan, R. and Verma, A. (2018). Large scale changes in the transcriptome of *Eisenia fetida* during regeneration. *PLoS One*, 13(9), e0204234. https://doi.org/10.1371/journal.pone.0204234  
-Buchfink, B., Xie, C., & Huson, D.H. (2015). Fast and sensitive protein alignment using DIAMOND. Nature methods, 12(1), 59-60. https://doi.org/10.1038/nmeth.3176  
-Bushnell, B. (2014). BBMap: A fast, accurate, splice-aware aligner. Available online: https://sourceforge.net/projects/bbmap/  
-Cantalapiedra, C.P., Hernández-Plaza, A., Letunic, I., Bork, P., & Huerta-Cepas, J. (2021). eggNOG-mapper v2: functional annotation, orthology assignments, and domain prediction at the metagenomic scale. Molecular biology and evolution, 38(12), 5825-5829. https://doi.org/10.1093/molbev/msab293  
-Conesa, A., Nueda, M. J., Ferrer, A., & Talón, M. (2006). maSigPro: a method to identify significantly differential expression profiles in time-course microarray experiments. Bioinformatics, 22(9), 1096-1102. https://doi.org/10.1093/bioinformatics/btl056  
-Filipiak, Z.M., & Bednarska, A.J. (2021). Different effects of Zn nanoparticles and ions on growth and cellular respiration in the earthworm Eisenia andrei after long-term exposure. Ecotoxicology, 30(3), 459-469. https://doi.org/10.1007/s10646-021-02360-2  
-Gomes, S.I., de Boer, T.E., van Gestel, C.A., van Straalen, N.M., Soares, A.M., Roelofs, D., & Amorim, M.J. (2022). Molecular mechanisms of zinc toxicity in the potworm Enchytraeus crypticus, analysed by high-throughput gene expression profiling. Science of Total Environment, 825, 153975. http://dx.doi.org/10.1016/j.scitotenv.2022.153975  
-Grabherr, M.G., Haas, B.J., Yassour, M., Levin, J.Z., Thompson, D.A., Amit, I., Adiconis, X., Fan, L., Raychowdhury, R., & Zeng, Q. (2011). Trinity: reconstructing a full-length transcriptome without a genome from RNA-Seq data. Nature biotechnology, 29(7), 644. https://doi.org/10.1038/nbt.1883  
+Aulakh, M.K., Singh, H., Vashisht, A., Kang, T.S., & Sharma, R. (2022). Improved Photoresponse of Sunlight-driven  $\mathrm{Mn^{n+}}$ -ZnO ( $n = 2, 4, 7$ ) Nanostructures: A Study of Oxidative Degradation of Methylene Blue. Topics in Catalysis, 65(19), 1951-1962. https://doi.org/10.1007/s11244-022-01703-5
+Baccaro, M., Harrison, S., van den Berg, H., Sloot, L., Hermans, D., Cornelis, G., Van Gestel, C.A.M. & Van den Brink, N.W. (2019). Bioturbation of  $\mathrm{Ag_2S}$ -NPs in soil columns by earthworms. Environmental Pollution, 252, 155-162. https://doi.org/10.1016/j.envpol.2019.05.106
+Baccaro, M., Montano, M.D., Cui, X., Mackevica, A., Lynch, I., von Der Kammer, F., Lodge, R.W., Khlobystov A.N. & van den Brink, N.W. (2022). Influence of dissolution on the uptake of bimetallic nanoparticles Au@Ag-NPs in soil organism Eisenia fetida. Chemosphere, 302, 134909. https://doi.org/10.1016/j.chemosphere.2022.134909
+Bhambri, A., Dhaunta, N., Patel, S.S., Hardikar, M., Bhatt, A., Srikakulam, N., Shridhar, S., Vellarikkal, S., Pandey, R., Jayarajan, R. and Verma, A. (2018). Large scale changes in the transcriptome of *Eisenia fetida* during regeneration. *PLoS One*, 13(9), e0204234. https://doi.org/10.1371/journal.pone.0204234
+Buchfink, B., Xie, C., & Huson, D.H. (2015). Fast and sensitive protein alignment using DIAMOND. Nature methods, 12(1), 59-60. https://doi.org/10.1038/nmeth.3176
+Bushnell, B. (2014). BBMap: A fast, accurate, splice-aware aligner. Available online: https://sourceforge.net/projects/bbmap/
+Cantalapiedra, C.P., Hernández-Plaza, A., Letunic, I., Bork, P., & Huerta-Cepas, J. (2021). eggNOG-mapper v2: functional annotation, orthology assignments, and domain prediction at the metagenomic scale. Molecular biology and evolution, 38(12), 5825-5829. https://doi.org/10.1093/molbev/msab293
+Conesa, A., Nueda, M. J., Ferrer, A., & Talón, M. (2006). maSigPro: a method to identify significantly differential expression profiles in time-course microarray experiments. Bioinformatics, 22(9), 1096-1102. https://doi.org/10.1093/bioinformatics/btl056
+Filipiak, Z.M., & Bednarska, A.J. (2021). Different effects of Zn nanoparticles and ions on growth and cellular respiration in the earthworm Eisenia andrei after long-term exposure. Ecotoxicology, 30(3), 459-469. https://doi.org/10.1007/s10646-021-02360-2
+Gomes, S.I., de Boer, T.E., van Gestel, C.A., van Straalen, N.M., Soares, A.M., Roelofs, D., & Amorim, M.J. (2022). Molecular mechanisms of zinc toxicity in the potworm Enchytraeus crypticus, analysed by high-throughput gene expression profiling. Science of Total Environment, 825, 153975. http://dx.doi.org/10.1016/j.scitotenv.2022.153975
+Grabherr, M.G., Haas, B.J., Yassour, M., Levin, J.Z., Thompson, D.A., Amit, I., Adiconis, X., Fan, L., Raychowdhury, R., & Zeng, Q. (2011). Trinity: reconstructing a full-length transcriptome without a genome from RNA-Seq data. Nature biotechnology, 29(7), 644. https://doi.org/10.1038/nbt.1883
 Griffith, M., Walker, J.R., Spies, N.C., Ainscough, B.J., & Griffith, O.L. (2015). Informatics for RNA sequencing: a web resource for analysis on the cloud. PLoS Computational Biology, 11(8), e1004393. https://doi.org/10.1371/journal.pcbi.1004393
 
-Hasan, M., Liu, Q., Kanwal, A., Tariq, T., Mustafa, G., Batool, S., & Ghorbanpour, M. (2024). A comparative study on green synthesis and characterization of Mn doped ZnO nanocomposite for antibacterial and photocatalytic applications. Scientific Reports, 14(1), 7528. https://doi.org/10.1038/s41598-024-58393-0  
-Helf, M.J., Fox, B.W., Artyukhin, A.B., Zhang, Y.K., & Schroeder, F.C. (2022). Comparative metabolomics with Metaboseek reveals functions of a conserved fat metabolism pathway in C. elegans. Nature Communications, 13(1), 782. https://doi.org/10.1038/s41467-022-28391-9  
-Huang, J., Xu, Q., Sun, Z. J., Tang, G. L., & Su, Z. Y. (2007). Identifying earthworms through DNA barcodes. Pedobiologia, 51(4), 301-309. https://doi.org/10.1016/j.pedobi.2007.05.003  
-Kanehisa, M., Sato, Y., Kawashima, M., Furumichi, M., & Tanabe, M. (2016). KEGG as a reference resource for gene and protein annotation. *Nucleic acids research*, 44(D1) D457-D462. https://doi.org/10.1093/nar/gkv1070  
-Kim, D., Paggi, J.M., Park, C., Bennett, C., & Salzberg, S.L. (2019). Graph-based genome alignment and genotyping with HISAT2 and HISAT-genotype. Nature Biotechnology, 37(8), 907-915. https://doi.org/10.1038/s41587-019-0201-4  
-Li, W., & Godzik, A. (2006). Cd-hit: a fast program for clustering and comparing large sets of protein or nucleotide sequences. Bioinformatics, 22(13), 1658-1659. https://doi.org/10.1093/bioinformatics/btl158  
-Liao, Y., Smyth, G.K., & Shi, W. (2014). featureCounts: an efficient general purpose program for assigning sequence reads to genomic features. Bioinformatics, 30(7), 923-930. https://doi.org/10.1093/bioinformatics/btt656  
-Love, M.I., Huber, W., & Anders, S. (2014). Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2. Genome Biology, 15(12), 550. https://doi.org/10.1186/s13059-014-0550-8  
-Lu, P.J., Huang, S.C., Chen, Y.P., Chiueh, L.C., & Shih, D.Y.C. (2015). Analysis of titanium dioxide and zinc oxide nanoparticles in cosmetics. Journal of Food and Drug Analysis, 23(3), 587-594. https://doi.org/10.1016/jjfda.2015.02.009  
-NEN-6966: (2005). Milieu: Analyse van geseleerde elementen in water, eluaten en destruaten. Atomaire emissiespectrometrie met inductief gekoppeld plasma (ICP-OES).  
-Novo, M., Lahive, E., Díez-Ortiz, M., Matzke, M., Morgan, A.J., Spurgeon, D.J., Svendsen, C. & Kille, P. (2015). Different routes, same pathways: Molecular mechanisms under silver ion and nanoparticle exposures in the soil sentinel Eisenia fetida. Environmental Pollution, 205, 385-393. http://dx.doi.org/10.1016/j.envpol.2015.07.010  
-Novo, M., Lahive, E., Ortiz, M.D., Spurgeon, D.J., & Kille, P. (2020). Toxicogenomics in a soil sentinel exposure to Zn nanoparticles and ions reveals the comparative role of toxicokinetic and toxicodynamic mechanisms. *Environmental Science: Nano*, 7(5), 1464-1480. https://doi.org/10.1039/C9EN01124B  
-NPR-6425: (1995). Praktijkrichtlijn: Atomaire-emissiespectrometrie met inductief gekoppeld plasma. Algemene richtlijnen.  
+Hasan, M., Liu, Q., Kanwal, A., Tariq, T., Mustafa, G., Batool, S., & Ghorbanpour, M. (2024). A comparative study on green synthesis and characterization of Mn doped ZnO nanocomposite for antibacterial and photocatalytic applications. Scientific Reports, 14(1), 7528. https://doi.org/10.1038/s41598-024-58393-0
+Helf, M.J., Fox, B.W., Artyukhin, A.B., Zhang, Y.K., & Schroeder, F.C. (2022). Comparative metabolomics with Metaboseek reveals functions of a conserved fat metabolism pathway in C. elegans. Nature Communications, 13(1), 782. https://doi.org/10.1038/s41467-022-28391-9
+Huang, J., Xu, Q., Sun, Z. J., Tang, G. L., & Su, Z. Y. (2007). Identifying earthworms through DNA barcodes. Pedobiologia, 51(4), 301-309. https://doi.org/10.1016/j.pedobi.2007.05.003
+Kanehisa, M., Sato, Y., Kawashima, M., Furumichi, M., & Tanabe, M. (2016). KEGG as a reference resource for gene and protein annotation. *Nucleic acids research*, 44(D1) D457-D462. https://doi.org/10.1093/nar/gkv1070
+Kim, D., Paggi, J.M., Park, C., Bennett, C., & Salzberg, S.L. (2019). Graph-based genome alignment and genotyping with HISAT2 and HISAT-genotype. Nature Biotechnology, 37(8), 907-915. https://doi.org/10.1038/s41587-019-0201-4
+Li, W., & Godzik, A. (2006). Cd-hit: a fast program for clustering and comparing large sets of protein or nucleotide sequences. Bioinformatics, 22(13), 1658-1659. https://doi.org/10.1093/bioinformatics/btl158
+Liao, Y., Smyth, G.K., & Shi, W. (2014). featureCounts: an efficient general purpose program for assigning sequence reads to genomic features. Bioinformatics, 30(7), 923-930. https://doi.org/10.1093/bioinformatics/btt656
+Love, M.I., Huber, W., & Anders, S. (2014). Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2. Genome Biology, 15(12), 550. https://doi.org/10.1186/s13059-014-0550-8
+Lu, P.J., Huang, S.C., Chen, Y.P., Chiueh, L.C., & Shih, D.Y.C. (2015). Analysis of titanium dioxide and zinc oxide nanoparticles in cosmetics. Journal of Food and Drug Analysis, 23(3), 587-594. https://doi.org/10.1016/jjfda.2015.02.009
+NEN-6966: (2005). Milieu: Analyse van geseleerde elementen in water, eluaten en destruaten. Atomaire emissiespectrometrie met inductief gekoppeld plasma (ICP-OES).
+Novo, M., Lahive, E., Díez-Ortiz, M., Matzke, M., Morgan, A.J., Spurgeon, D.J., Svendsen, C. & Kille, P. (2015). Different routes, same pathways: Molecular mechanisms under silver ion and nanoparticle exposures in the soil sentinel Eisenia fetida. Environmental Pollution, 205, 385-393. http://dx.doi.org/10.1016/j.envpol.2015.07.010
+Novo, M., Lahive, E., Ortiz, M.D., Spurgeon, D.J., & Kille, P. (2020). Toxicogenomics in a soil sentinel exposure to Zn nanoparticles and ions reveals the comparative role of toxicokinetic and toxicodynamic mechanisms. *Environmental Science: Nano*, 7(5), 1464-1480. https://doi.org/10.1039/C9EN01124B
+NPR-6425: (1995). Praktijkrichtlijn: Atomaire-emissiespectrometrie met inductief gekoppeld plasma. Algemene richtlijnen.
 Nueda, M.J., Tarazona, S., & Conesa, A. (2014). Next maSigPro: updating maSigPro bioconductor package for RNA-seq time series. Bioinformatics, 30(18), 2598-2602. https://doi.org/10.1093/bioinformatics/btu333
 
-Okonechnikov, K., Conesa, A., & García-Alcalde, F. (2015). Qualimap 2: advanced multisample quality control for high-throughput sequencing data. Bioinformatics, 32(2), 292-294. https://doi.org/10.1093/bioinformatics/btv566  
-Özgür, Ü., Hofstetter, D., & Morkoc, H. (2010). ZnO devices and applications: a review of current status and future prospects. Proceedings of the IEEE, 98(7), 1255-1268. https://doi.org/10.1109/JPROC.2010.2044550  
-Papadiamantis, A.G., Mavrogiorgis, A., Papatzelos, S., Mintis, D., Melagraki, G., Lynch, I., & Afantitis, A. (2024). A systematic review on the state-of-the-art and research gaps regarding inorganic and carbon-based multicomponent and high-aspect ratio nanomaterials. Computational and Structural Biotechnology Journal, 25, 211-229. https://doi.org/10.1016/j.csbj.2024.10.020  
-Patro, R., Duggal, G., Love, M.I., Irizarry, R.A., & Kingsford, C. (2017). Salmon provides fast and bias-aware quantification of transcript expression. Nature methods, 14(4), 417-419. https://doi.org/10.1038/nmeth.4197  
-Persaud I., Raghavendra, A.J., Paruthi, A., Alsaleh, N.B., Minarchick, V.C., Roede, J.R., & Brown, J.M. (2020). Defect-induced electronic states amplify the cellular toxicity of ZnO nanoparticles. Nanotoxicology, 14, 145-161. https://doi.org/10.1080/17435390.2019.1668067  
-Prashanth, G.K., Dileep, M.S., Gadewar, M., Ghosh, M.K., Rao, S., Giresha, A.S., & Mutthuraju, M. (2024). Zinc Oxide Nanostructures: Illuminating the Potential in Biomedical Applications: a Brief Overview. BioNanoScience, 1-21. https://doi.org/10.1007/s12668-024-01366-4  
-Römbke, J., Aira, M., Backeljau, T., Breugelmans, K., Dominguez, J., Funke, E. & Pfenninger, M. (2016). DNA barcoding of earthworms (Eisenia fetida/andrei complex) from 28 ecotoxicological test laboratories. Applied Soil Ecology, 104, 3-11. https://doi.org/10.1016/j.apsoil.2015.02.010  
-Safaei-Ghomi, J., & Ghasemzadeh, M.A. (2017). Zinc oxide nanoparticle promoted highly efficient one pot three-component synthesis of 2, 3-disubstituted benzofurans. Arabian Journal of Chemistry, 10, S1774-S1780. https://doi.org/10.1016/j.arabjc.2013.06.030  
-Samarasinghe, S.V.A.C., Krishnan, K., Aitken, R.J., Naidu, R., & Megharaj, M. (2023). Chronic effects of  $\mathrm{TiO}_2$  and  $\mathrm{ZnO}$  nanoparticles to earthworm Eisenia fetida. Environmental Chemistry and Ecotoxicology, 5, 129-134. https://doi.org/10.1016/j.enceco.2023.04.001  
-Schurch N.J., Schofield, P., Gierli'nski, M., Cole, C., Sherstnev, A., Singh, V., et al. (2016). How many biological replicates are needed in an RNA-seq experiment and which differential expression tool should you use? RNA 22, 839-851. https://doi.org/10.1261/rna.053959.115  
-Serpone, N., Dondi, D., & Albini, A. (2007). Inorganic and organic UV filters: Their role and efficacy in sunscreens and suncare products. Inorganica Chimica Acta, 360(3), 794-802. https://doi.org/10.1016/j.ica.2005.12.057  
+Okonechnikov, K., Conesa, A., & García-Alcalde, F. (2015). Qualimap 2: advanced multisample quality control for high-throughput sequencing data. Bioinformatics, 32(2), 292-294. https://doi.org/10.1093/bioinformatics/btv566
+Özgür, Ü., Hofstetter, D., & Morkoc, H. (2010). ZnO devices and applications: a review of current status and future prospects. Proceedings of the IEEE, 98(7), 1255-1268. https://doi.org/10.1109/JPROC.2010.2044550
+Papadiamantis, A.G., Mavrogiorgis, A., Papatzelos, S., Mintis, D., Melagraki, G., Lynch, I., & Afantitis, A. (2024). A systematic review on the state-of-the-art and research gaps regarding inorganic and carbon-based multicomponent and high-aspect ratio nanomaterials. Computational and Structural Biotechnology Journal, 25, 211-229. https://doi.org/10.1016/j.csbj.2024.10.020
+Patro, R., Duggal, G., Love, M.I., Irizarry, R.A., & Kingsford, C. (2017). Salmon provides fast and bias-aware quantification of transcript expression. Nature methods, 14(4), 417-419. https://doi.org/10.1038/nmeth.4197
+Persaud I., Raghavendra, A.J., Paruthi, A., Alsaleh, N.B., Minarchick, V.C., Roede, J.R., & Brown, J.M. (2020). Defect-induced electronic states amplify the cellular toxicity of ZnO nanoparticles. Nanotoxicology, 14, 145-161. https://doi.org/10.1080/17435390.2019.1668067
+Prashanth, G.K., Dileep, M.S., Gadewar, M., Ghosh, M.K., Rao, S., Giresha, A.S., & Mutthuraju, M. (2024). Zinc Oxide Nanostructures: Illuminating the Potential in Biomedical Applications: a Brief Overview. BioNanoScience, 1-21. https://doi.org/10.1007/s12668-024-01366-4
+Römbke, J., Aira, M., Backeljau, T., Breugelmans, K., Dominguez, J., Funke, E. & Pfenninger, M. (2016). DNA barcoding of earthworms (Eisenia fetida/andrei complex) from 28 ecotoxicological test laboratories. Applied Soil Ecology, 104, 3-11. https://doi.org/10.1016/j.apsoil.2015.02.010
+Safaei-Ghomi, J., & Ghasemzadeh, M.A. (2017). Zinc oxide nanoparticle promoted highly efficient one pot three-component synthesis of 2, 3-disubstituted benzofurans. Arabian Journal of Chemistry, 10, S1774-S1780. https://doi.org/10.1016/j.arabjc.2013.06.030
+Samarasinghe, S.V.A.C., Krishnan, K., Aitken, R.J., Naidu, R., & Megharaj, M. (2023). Chronic effects of  $\mathrm{TiO}_2$  and  $\mathrm{ZnO}$  nanoparticles to earthworm Eisenia fetida. Environmental Chemistry and Ecotoxicology, 5, 129-134. https://doi.org/10.1016/j.enceco.2023.04.001
+Schurch N.J., Schofield, P., Gierli'nski, M., Cole, C., Sherstnev, A., Singh, V., et al. (2016). How many biological replicates are needed in an RNA-seq experiment and which differential expression tool should you use? RNA 22, 839-851. https://doi.org/10.1261/rna.053959.115
+Serpone, N., Dondi, D., & Albini, A. (2007). Inorganic and organic UV filters: Their role and efficacy in sunscreens and suncare products. Inorganica Chimica Acta, 360(3), 794-802. https://doi.org/10.1016/j.ica.2005.12.057
 Shao Y., Wang X.B., Zhang J.J., Li M.L., Wu S.S., Ma X.Y., Wang X., Zhao H.F., Li Y., Zhu H.H., Irwin D.M., Wang D.P., Zhang G.J., Ruan J., Wu D.D. (2020). Genome and single-cell RNA-sequencing of the earthworm Eisenia andrei identifies cellular mechanisms underlying regeneration. Nature Communication, 11(1):2656. https://doi.org/10.1038/s41467-020-16454-8
 
-Singh, K., Malla, M.A., Kumar, A., & Yadav, S. (2024). Biological monitoring of Soil pollution caused by two different Zinc species using earthworms. *Environmental Science and Pollution Research*, 31:57789-57803. https://doi.org/10.1007/s11356-024-34900-8  
-Tsyusko, O.V., Hardas, S.S., Shoults-Wilson, W.A., Starnes, C.P., Joice, G., Butterfield, D.A., & Unrine, J.M. (2012). Short-term molecular-level effects of silver nanoparticle exposure on the earthworm, Eisenia fetida. *Environmental Pollution*, 171, 249-255. https://doi.org/10.1016/j.envpol.2012.08.003  
-Van Lingen, H.J., E. Saccenti, M. Suarez-Diez, M. Baccaro & N.W. van den Brink. (2025). Predicting uptake and elimination kinetics of chemicals in invertebrates: A technical note on residual variance modeling. Computational Toxicology 33, 100337. https://doi.org/10.1016/j.comtox.2024.100337  
-Wu, T., Hu, E., Xu, S., Chen, M., Guo, P., Dai, Z., Feng, T., Zhou, L., Tang, W., Zhan, L., Fu, X., Liu, S., Bo, X. and Yu, G. (2021). clusterProfiler 4.0: A universal enrichment tool for interpreting omics data. The Innovation, 2(3):100141 https://doi.org/10.1016/j.xinn.2021.100141  
-Yu, W., Zhang, Y., & Sang, W. (2022). Integration of transcriptomic and metabolomic reveals metabolic pathway alteration in earthworms (Eisenia fetida) under copper exposure. Comparative Biochemistry and Physiology Part C: Toxicology & Pharmacology, 260, 109400. https://doi.org/10.1016/j.cbpc.2022.109400  
-Zhang, F., Wang, Z., Peijnenburg, W.J., & Vijver, M.G. (2022). Review and prospects on the ecotoxicity of mixtures of nanoparticles and hybrid nanomaterials. Environmental Science & Technology, 56(22), 15238-15250. https://doi.org/10.1021/acs.est.2c03333  
+Singh, K., Malla, M.A., Kumar, A., & Yadav, S. (2024). Biological monitoring of Soil pollution caused by two different Zinc species using earthworms. *Environmental Science and Pollution Research*, 31:57789-57803. https://doi.org/10.1007/s11356-024-34900-8
+Tsyusko, O.V., Hardas, S.S., Shoults-Wilson, W.A., Starnes, C.P., Joice, G., Butterfield, D.A., & Unrine, J.M. (2012). Short-term molecular-level effects of silver nanoparticle exposure on the earthworm, Eisenia fetida. *Environmental Pollution*, 171, 249-255. https://doi.org/10.1016/j.envpol.2012.08.003
+Van Lingen, H.J., E. Saccenti, M. Suarez-Diez, M. Baccaro & N.W. van den Brink. (2025). Predicting uptake and elimination kinetics of chemicals in invertebrates: A technical note on residual variance modeling. Computational Toxicology 33, 100337. https://doi.org/10.1016/j.comtox.2024.100337
+Wu, T., Hu, E., Xu, S., Chen, M., Guo, P., Dai, Z., Feng, T., Zhou, L., Tang, W., Zhan, L., Fu, X., Liu, S., Bo, X. and Yu, G. (2021). clusterProfiler 4.0: A universal enrichment tool for interpreting omics data. The Innovation, 2(3):100141 https://doi.org/10.1016/j.xinn.2021.100141
+Yu, W., Zhang, Y., & Sang, W. (2022). Integration of transcriptomic and metabolomic reveals metabolic pathway alteration in earthworms (Eisenia fetida) under copper exposure. Comparative Biochemistry and Physiology Part C: Toxicology & Pharmacology, 260, 109400. https://doi.org/10.1016/j.cbpc.2022.109400
+Zhang, F., Wang, Z., Peijnenburg, W.J., & Vijver, M.G. (2022). Review and prospects on the ecotoxicity of mixtures of nanoparticles and hybrid nanomaterials. Environmental Science & Technology, 56(22), 15238-15250. https://doi.org/10.1021/acs.est.2c03333
 Zhu, Y., Wu, X., Liu, Y., Zhang, J., & Lin, D. (2020). Integration of transcriptomics and metabolomics reveals the responses of earthworms to the long-term exposure of  $\mathrm{TiO_2}$  nanoparticles in soil. Science of The Total Environment, 719, 137492. https://doi.org/10.1016/j.scitotenv.2020.137492

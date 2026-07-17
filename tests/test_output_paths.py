@@ -9,9 +9,10 @@ from fairifier.output_paths import (
 )
 
 
-def test_artifact_output_filename_maps_auto_repair_trace_to_json_sidecar():
+def test_artifact_output_filename_maps_json_sidecars():
     assert artifact_output_filename("metadata_json") == "metadata.json"
     assert artifact_output_filename("validation_report") == "validation_report.txt"
+    assert artifact_output_filename("runtime_config") == "runtime_config.json"
     assert artifact_output_filename("auto_repair_trace") == "auto_repair_trace.json"
 
 
@@ -21,11 +22,13 @@ def test_artifact_content_to_text_preserves_strings_and_serializes_objects():
     text = artifact_content_to_text(
         {
             "mode": "deterministic_exact_patch",
-            "summary": {"accepted_patch_count": 0},
+            "summary": {"accepted_patch_count": 0, "artifact_count": 2},
         }
     )
 
-    assert json.loads(text)["summary"]["accepted_patch_count"] == 0
+    payload = json.loads(text)
+    assert payload["summary"]["accepted_patch_count"] == 0
+    assert payload["summary"]["artifact_count"] == 2
     assert "\n  " in text
 
 

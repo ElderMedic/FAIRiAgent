@@ -19,6 +19,7 @@ from fairifier.apps.api.routers.v1 import (
     router,
 )
 from fairifier.apps.api.services.runner import (
+    _serialisable_artifacts,
     _start_full_output_capture,
     _stop_full_output_capture,
     _persist_run_outputs,
@@ -34,6 +35,36 @@ SESSION_HEADERS = {
     "X-FAIRifier-Session-Id": "11111111-1111-4111-8111-111111111111",
     "X-FAIRifier-Session-Started-At": "2026-04-01T10:00:00+00:00",
 }
+
+
+def test_serialisable_artifacts_falls_back_to_output_filenames():
+    assert _serialisable_artifacts(
+        {
+            "metadata_json": "{}",
+            "runtime_config": "{}",
+            "validation_report": "ok",
+        }
+    ) == [
+        "metadata.json",
+        "runtime_config.json",
+        "validation_report.txt",
+    ]
+
+
+def test_serialisable_artifacts_prefers_actual_output_files(tmp_path):
+    (tmp_path / "metadata.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "metadata_fairds.xlsx").write_bytes(b"xlsx")
+    (tmp_path / "runtime_config.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".hidden").write_text("skip", encoding="utf-8")
+
+    assert _serialisable_artifacts(
+        {"metadata_json": "{}"},
+        output_dir=str(tmp_path),
+    ) == [
+        "metadata.json",
+        "metadata_fairds.xlsx",
+        "runtime_config.json",
+    ]
 
 
 def test_list_artifacts_includes_nested_files_and_downloads(
