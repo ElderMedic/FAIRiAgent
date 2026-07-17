@@ -38,7 +38,7 @@ from ..models import FAIRifierState
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..config import config
 from ..utils.isa_order import ISA_LEVEL_ORDER, MULTI_ROW_ISA_LEVELS
-from ..utils.entity_merge import merge_sparse_entity_rows
+from ..utils.isa_matrix_projection import sync_compiled_matrix_to_state
 from ..tools.isa_structure_tools import create_isa_structure_tools
 from ..skills import load_skill_files, skills_catalog_seed_files
 
@@ -250,18 +250,18 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
 
         # ── Post-process: normalize, split entities, align columns ───
         matrix = self._split_entities_heuristic(matrix)
-        matrix = merge_sparse_entity_rows(matrix)
         matrix = self._normalize_row_columns(matrix)
         matrix = self._ensure_core_linkage_fields(matrix, state)
+        # Single projection: compile once, write sidecar + metadata.json together.
+        projected = sync_compiled_matrix_to_state(
+            state,
+            matrix,
+            recompile=True,
+            compiler_tag="isa_value_mapper",
+        )
+        matrix = projected["matrix"]
         quality = self._compute_matrix_quality(matrix, tool_metrics, tool_issues)
         state["isa_value_quality"] = quality
-
-        # ── Store in state ───────────────────────────────────────────
-        if "artifacts" not in state:
-            state["artifacts"] = {}
-        state["artifacts"]["isa_values_json"] = json.dumps(
-            matrix, indent=2, ensure_ascii=False
-        )
 
         total_rows = sum(len(s["rows"]) for s in matrix.values())
         total_cells = sum(

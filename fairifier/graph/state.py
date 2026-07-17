@@ -47,6 +47,9 @@ class FAIRifierState(TypedDict):
     selected_packages: List[str]
     metadata_gap_hints: List[Dict[str, Any]]
     inferred_metadata_extensions: List[Dict[str, Any]]
+    auto_repair_trace: Dict[str, Any]
+    # Optional shadow-only classifier predictions by normalized field.
+    auto_repair_classifier_predictions: Dict[str, Any]
     api_capabilities: Dict[str, Any]
     retrieval_cache: Dict[str, Any]
     
@@ -56,7 +59,7 @@ class FAIRifierState(TypedDict):
     needs_human_review: bool
     
     # Output (JSON only)
-    artifacts: Dict[str, str]  # Only contains metadata_json and validation_report
+    artifacts: Dict[str, str]  # metadata_json plus sidecar reports/traces
     
     # Human-in-the-loop and execution tracking
     human_interventions: Dict[str, Dict[str, Any]]  # {step_id: {feedback, context_updates}}

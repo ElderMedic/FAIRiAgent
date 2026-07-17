@@ -60,10 +60,37 @@ def safe_load_dotenv(*args, **kwargs):
 dotenv.load_dotenv = safe_load_dotenv
 
 from fairifier.output_paths import (
+    FAIRDS_METADATA_EXCEL_FILENAME,
     LEGACY_METADATA_OUTPUT_FILENAME,
     METADATA_OUTPUT_FILENAME,
     resolve_metadata_output_read_path,
 )
+
+
+AUTO_RESUME_REQUIRED_ARTIFACTS = (
+    "workflow_report.json",
+    "runtime_config.json",
+    "auto_repair_trace.json",
+    "isa_values_json.json",
+    FAIRDS_METADATA_EXCEL_FILENAME,
+)
+
+
+def _is_auto_retrieval_mode() -> bool:
+    return str(os.getenv("FAIRIFIER_RETRIEVAL_MODE") or "").strip().lower() == "auto"
+
+
+def missing_resume_artifacts(run_dir: Path, *, auto_mode: bool) -> List[str]:
+    """Return artifacts that must exist before reusing a prior successful run."""
+    missing: List[str] = []
+    if resolve_metadata_output_read_path(run_dir) is None:
+        missing.append(METADATA_OUTPUT_FILENAME)
+    if auto_mode:
+        missing.extend(
+            name for name in AUTO_RESUME_REQUIRED_ARTIFACTS
+            if not (run_dir / name).exists()
+        )
+    return missing
 
 
 class BatchEvaluationRunner:
@@ -439,17 +466,18 @@ class BatchEvaluationRunner:
                 with open(eval_result_file, 'r', encoding='utf-8') as f:
                     eval_data = json.load(f)
                 if eval_data.get('success', False):
-                    metadata_json_path = resolve_metadata_output_read_path(doc_output_dir)
-                    if metadata_json_path is None:
-                        found_metadata = []
-                        for _name in (METADATA_OUTPUT_FILENAME, LEGACY_METADATA_OUTPUT_FILENAME):
-                            found_metadata.extend(doc_output_dir.rglob(_name))
-                        if found_metadata:
-                            metadata_json_path = found_metadata[0]
-                    
-                    if metadata_json_path and metadata_json_path.exists():
+                    missing_artifacts = missing_resume_artifacts(
+                        doc_output_dir,
+                        auto_mode=_is_auto_retrieval_mode(),
+                    )
+                    if not missing_artifacts:
                         print(f"   Run {run_idx}: Already completed successfully (skipping execution)")
                         return eval_data
+                    print(
+                        "   Run "
+                        f"{run_idx}: Previous success missing required artifacts "
+                        f"({', '.join(missing_artifacts)}); rerunning"
+                    )
             except Exception as e:
                 pass
         

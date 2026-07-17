@@ -20,6 +20,7 @@ except ImportError:
 
 from ..config import config
 from ..services.chunking import chunk_workspace, serialize_chunking_result
+from ..services.evidence_packets import merge_evidence_packets
 from ..services.evidence_store import EvidenceStore, evidence_from_section
 from ..services.section_field_candidates import field_candidate_record_to_dict
 from ..services.semantic_index import SemanticIndex
@@ -197,7 +198,7 @@ class SectionMapReduceNode:
                 section_field_candidates.extend(result.get("field_candidates") or [])
 
         existing_packets = list(state.get("evidence_packets") or [])
-        state["evidence_packets"] = existing_packets + new_packets
+        state["evidence_packets"] = merge_evidence_packets(existing_packets, new_packets)
         state["section_field_candidates"] = (
             list(state.get("section_field_candidates") or []) + section_field_candidates
         )

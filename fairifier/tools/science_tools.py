@@ -159,9 +159,99 @@ def create_science_tools(
         ]
         return {"success": True, "data": data, "error": None}
 
+    @tool
+    def fetch_external_url(url: str) -> Dict[str, Any]:
+        """Fetch content of a web link or URL and extract readable text."""
+        if not url.startswith(("http://", "https://")):
+            return {"success": False, "data": None, "error": "Invalid URL protocol"}
+        try:
+            response = requests.get(url, timeout=10, headers={"User-Agent": "FAIRiAgent/2.1.0"})
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "")
+            if "application/json" in content_type:
+                try:
+                    return {"success": True, "data": response.json(), "error": None}
+                except Exception:
+                    pass
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(response.content, "html.parser")
+            for script in soup(["script", "style"]):
+                script.decompose()
+            text = soup.get_text(separator="\n")
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            clean_text = "\n".join(chunk for chunk in chunks if chunk)
+            max_len = 15000
+            if len(clean_text) > max_len:
+                clean_text = clean_text[:max_len] + "\n\n[... content truncated due to size limit ...]"
+            return {"success": True, "data": clean_text, "error": None}
+        except Exception as e:
+            return {"success": False, "data": None, "error": str(e)}
+
+    @tool
+    def query_ncbi_accession(accession_id: str, db: str = "biosample") -> Dict[str, Any]:
+        """Query NCBI Entrez API for metadata associated with an accession ID (e.g. biosample, sra, gds, nucleotide)."""
+        term = accession_id.strip()
+        search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+        success, payload, error = _safe_get_json(
+            search_url,
+            params={"db": db, "term": term, "retmode": "json"},
+            cache_store=cache_store,
+        )
+        if not success:
+            return {"success": False, "data": None, "error": f"NCBI Search failed: {error}"}
+        id_list = payload.get("esearchresult", {}).get("idlist", [])
+        if not id_list:
+            return {"success": False, "data": None, "error": f"No NCBI records found for term '{term}' in db '{db}'"}
+        uid = id_list[0]
+        summary_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+        success_sum, payload_sum, error_sum = _safe_get_json(
+            summary_url,
+            params={"db": db, "id": uid, "retmode": "json"},
+            cache_store=cache_store,
+        )
+        if not success_sum:
+            return {"success": False, "data": None, "error": f"NCBI Summary failed: {error_sum}"}
+        result = payload_sum.get("result", {}).get(uid, {})
+        return {"success": True, "data": result, "error": None}
+
+    @tool
+    def query_ena_accession(accession_id: str) -> Dict[str, Any]:
+        """Query EBI ENA (European Nucleotide Archive) portal API for run/sample details by accession ID."""
+        term = accession_id.strip()
+        success, payload, error = _safe_get_json(
+            "https://www.ebi.ac.uk/ena/portal/api/search",
+            params={
+                "result": "read_run",
+                "query": f'run_accession="{term}" OR sample_accession="{term}" OR study_accession="{term}" OR experiment_accession="{term}"',
+                "format": "json",
+                "fields": "run_accession,sample_accession,experiment_accession,study_accession,scientific_name,instrument_model,library_layout,fastq_ftp,fastq_galaxy,submitted_ftp,library_name,library_source,library_selection,library_strategy"
+            },
+            cache_store=cache_store,
+        )
+        if not success or not payload:
+            success, payload, error = _safe_get_json(
+                "https://www.ebi.ac.uk/ena/portal/api/search",
+                params={
+                    "result": "sample",
+                    "query": f'sample_accession="{term}" OR secondary_sample_accession="{term}"',
+                    "format": "json",
+                    "fields": "sample_accession,scientific_name,tax_id,country,location"
+                },
+                cache_store=cache_store,
+            )
+        if not success:
+            return {"success": False, "data": None, "error": f"ENA Search failed: {error}"}
+        if not payload:
+            return {"success": False, "data": None, "error": f"No ENA records found for '{term}'"}
+        return {"success": True, "data": payload, "error": None}
+
     return [
         search_ontology_term,
         resolve_doi_metadata,
         search_literature,
         search_similar_papers,
+        fetch_external_url,
+        query_ncbi_accession,
+        query_ena_accession,
     ]

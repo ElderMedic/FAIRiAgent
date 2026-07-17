@@ -75,7 +75,10 @@ class ReactLoopMixin:
         # - Qwen (DashScope): rejects tool_choice with thinking enabled
         # - DeepSeek: reasoning_content must be passed back across turns,
         #   which deepagents does not support
-        if config.llm_provider not in ("qwen", "deepseek"):
+        # - Zhipu (GLM-4.5+): OpenAI-compatible endpoint with the same
+        #   "thinking" extra_body contract and multi-turn reasoning_content
+        #   propagation gap as DeepSeek
+        if config.llm_provider not in ("qwen", "deepseek", "zhipu"):
             return base_model
 
         try:
@@ -89,7 +92,7 @@ class ReactLoopMixin:
 
         # Deep agents use multi-turn tool calling which is incompatible
         # with thinking/reasoning modes. Disable per-provider:
-        if config.llm_provider == "deepseek":
+        if config.llm_provider in ("deepseek", "zhipu"):
             extra_body = {"thinking": {"type": "disabled"}}
         else:
             extra_body = {"enable_thinking": False}

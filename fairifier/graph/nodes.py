@@ -50,6 +50,11 @@ from ..services.mineru_client import (
 from ..services.mineru_paths import find_markdown_in_tree
 from ..services import mineru_cache as mineru_cache_service
 from ..services.confidence_aggregator import aggregate_confidence
+from ..services.auto_repair import (
+    generate_auto_repair_trace,
+    inject_auto_repair_summary,
+    serialize_auto_repair_trace,
+)
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.context_observability import log_context_usage
 from ..utils.document_text import read_document_text
@@ -2597,7 +2602,16 @@ class OrchestrateNode:
             )
 
             per_source_info = state.get("document_info", {}) or {}
-            per_source_packets = state.get("evidence_packets", []) or []
+            # Prefer packets produced by this DocumentParser call so multi-file
+            # synthesis does not re-copy SectionMapReduce / prior-source packets
+            # that DocumentParser now preserves in state (§12.1).
+            context_packets = (state.get("context") or {}).get(
+                "last_parser_evidence_packets"
+            )
+            if isinstance(context_packets, list) and context_packets:
+                per_source_packets = context_packets
+            else:
+                per_source_packets = state.get("evidence_packets", []) or []
             source_outputs.append(
                 {
                     "source_path": source_path,
@@ -3496,6 +3510,93 @@ Field semantics for ``plan_tasks``:
             else:
                 logger.error(f"❌ Unknown decision '{decision}' and no metadata fields - escalating")
                 return "escalate"
+
+
+class AutoRepairNode:
+    """Apply guarded deterministic auto-repair patches and record trace."""
+
+    def __init__(self, app=None):
+        self.app = app
+
+    @traceable(name="AutoRepair", tags=["workflow", "metadata", "repair"])
+    async def __call__(self, state: FAIRifierState) -> FAIRifierState:
+        if not config.auto_repair_enabled:
+            trace = {
+                "mode": "skipped",
+                "summary": {
+                    "candidate_count": 0,
+                    "skipped_gap_count": 0,
+                    "accepted_patch_count": 0,
+                    "metadata_mutated": False,
+                    "apply_patches": False,
+                },
+                "notes": ["Auto repair disabled by configuration."],
+            }
+            state["auto_repair_trace"] = trace
+            state.setdefault("artifacts", {})["auto_repair_trace"] = (
+                serialize_auto_repair_trace(trace)
+            )
+            return state
+
+        if not state.get("metadata_fields"):
+            trace = {
+                "mode": "skipped",
+                "summary": {
+                    "candidate_count": 0,
+                    "skipped_gap_count": 0,
+                    "accepted_patch_count": 0,
+                    "metadata_mutated": False,
+                    "apply_patches": False,
+                },
+                "notes": ["No metadata fields available for auto repair analysis."],
+            }
+            state["auto_repair_trace"] = trace
+            state.setdefault("artifacts", {})["auto_repair_trace"] = (
+                serialize_auto_repair_trace(trace)
+            )
+            return state
+
+        try:
+            trace = generate_auto_repair_trace(
+                state,
+                apply_patches=config.auto_repair_apply_patches,
+                min_candidate_confidence=config.auto_repair_min_candidate_confidence,
+                classifier_shadow_predictions=(
+                    state.get("auto_repair_classifier_predictions")
+                    if config.auto_repair_classifier_shadow_enabled
+                    else None
+                ),
+            )
+        except Exception as exc:
+            logger.warning("AutoRepair skipped after internal error: %s", exc)
+            trace = {
+                "mode": "error_fallback",
+                "summary": {
+                    "candidate_count": 0,
+                    "skipped_gap_count": 0,
+                    "accepted_patch_count": 0,
+                    "metadata_mutated": False,
+                    "apply_patches": False,
+                },
+                "notes": [
+                    "Auto repair failed and fell back without mutating metadata.",
+                    str(exc),
+                ],
+            }
+        state["auto_repair_trace"] = trace
+        inject_auto_repair_summary(state, trace)
+        state.setdefault("artifacts", {})["auto_repair_trace"] = (
+            serialize_auto_repair_trace(trace)
+        )
+
+        summary = trace.get("summary") or {}
+        logger.info(
+            "🔧 AutoRepair trace: %s candidates, %s skipped gaps (metadata mutated=%s)",
+            summary.get("candidate_count", 0),
+            summary.get("skipped_gap_count", 0),
+            summary.get("metadata_mutated", False),
+        )
+        return state
 
 
 class FinalizeNode:

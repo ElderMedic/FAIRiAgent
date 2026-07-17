@@ -18,10 +18,12 @@ langgraph = ">=1.0.7,<3"
 langchain = ">=1.0.3,<3"
 langchain-community = ">=0.3.30"
 langchain-openai = ">=1.0.2"
+langchain-anthropic = ">=0.3.0"
 langchain-google-genai = ">=2.1.0"
+beautifulsoup4 = ">=4.12.0"
 # Document processing
 pymupdf = ">=1.23.0"
-mineru = ">=1.0.0"
+mineru = ">=3.4.0,<4"
 # RDF and semantic web
 rdflib = ">=7.0.0"
 pyshacl = ">=0.25.0"
@@ -51,8 +53,6 @@ storage = ["sqlalchemy", "asyncpg", "minio"]
 monitoring = ["structlog", "prometheus-client"]
 # Optional observability (Langfuse tracing alongside LangSmith)
 observability = ["langfuse"]
-# Optional science/research enrichment tools
-science = ["habanero", "ols-py", "pyeuropepmc", "pyalex", "semanticscholar", "biopython"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"

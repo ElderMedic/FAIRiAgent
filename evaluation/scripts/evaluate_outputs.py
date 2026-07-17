@@ -421,6 +421,23 @@ class EvaluationOrchestrator:
                     fairifier_outputs[doc_id] = json.load(f)
                     # Store the output directory for this document (to load workflow_report.json)
                     output_dirs[doc_id] = metadata_file.parent
+
+                    # Prefer compiled sidecar only when metadata carries
+                    # isa_matrix_id (new sync path). Older runs stay on
+                    # metadata.json.isa_values to avoid silent regressions.
+                    sidecar = metadata_file.parent / "isa_values_json.json"
+                    if fairifier_outputs[doc_id].get("isa_matrix_id") and sidecar.is_file():
+                        try:
+                            with open(sidecar, "r", encoding="utf-8") as sf:
+                                canonical = json.load(sf)
+                            if isinstance(canonical, dict) and any(
+                                isinstance(block, dict)
+                                and ("columns" in block or "rows" in block)
+                                for block in canonical.values()
+                            ):
+                                fairifier_outputs[doc_id]["isa_values"] = canonical
+                        except (OSError, json.JSONDecodeError):
+                            pass
                     
                     # Print status message
                     status_msg = "fully successful"

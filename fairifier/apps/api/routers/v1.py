@@ -340,6 +340,12 @@ def _build_mineru_status_message(health: dict) -> str:
     if not health.get("cli_ok"):
         return f"CLI unavailable ({health.get('cli_version', 'not found')})"
     parts = [f"CLI {health.get('cli_version', 'ok')}"]
+    dependency_errors = health.get("dependency_errors") or []
+    if dependency_errors:
+        dependency_message = "dependencies missing: " + ", ".join(dependency_errors)
+        if health.get("dependency_install_hint"):
+            dependency_message += f"; install with {health['dependency_install_hint']}"
+        parts.append(dependency_message)
     api = health.get("api")
     vlm = health.get("vlm")
     if api is not None:
@@ -421,6 +427,10 @@ def _build_system_status() -> SystemStatusResponse:
                     "effort": fc.mineru_effort,
                     "cli_detected": mineru_cli_exists,
                     "cli_version": mineru_health.get("cli_version"),
+                    "dependency_errors": mineru_health.get("dependency_errors", []),
+                    "dependency_install_hint": mineru_health.get(
+                        "dependency_install_hint"
+                    ),
                     "api_url": fc.mineru_api_url,
                     "api_reachable": mineru_health["api"].tcp_reachable,
                     "api_http_ok": mineru_health["api"].http_ok,

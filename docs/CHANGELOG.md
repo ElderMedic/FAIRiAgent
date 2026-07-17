@@ -1,5 +1,46 @@
 # Changelog
 
+## [Unreleased] - Auto synthesis and guarded repair gate
+
+### Added
+
+- **`auto` retrieval/repair mode**: production direction is now a single
+  lexical-first, semantic-fallback pipeline instead of a user-facing
+  Shadow-vs-Tuned default choice.
+- **Auto repair prototype workspace**:
+  `evaluation/prototypes/auto_repair_classifier/` contains weak-label dataset
+  building, classifier experiments, trace-compatible prediction export,
+  canonical auto eval preflight/run tooling, MinerU preconversion planning,
+  and a merge gate.
+- **Classifier shadow trace hook**: externally supplied field-level classifier
+  predictions can be recorded in `auto_repair_trace.json` for later ablation;
+  deterministic FAIR-DS guards still own production patch acceptance.
+- **Auto merge evidence gates**: fresh `auto` runs must pass aggregate metric
+  thresholds and per-document artifact validation for `metadata.json`,
+  `workflow_report.json`, `runtime_config.json`, `auto_repair_trace.json`, and
+  `isa_values_json.json`, plus parseable `metadata_fairds.xlsx` workbooks.
+  The gate now rejects trace-only and error-fallback repair traces as
+  non-production merge evidence.
+- **MinerU fallback dependency preflight**: service-aware auto eval preflight
+  now reports `mineru_preconvert_dependency` when live MinerU is unreachable,
+  target PDFs still need conversion, and the local `mineru -b pipeline`
+  fallback is missing imports such as `doclayout_yolo`. The same dependency
+  check is now used by main API/CLI MinerU health and by `MinerUClient` before
+  conversion, with an install hint for `mineru[pipeline]>=3.4.0,<4`.
+
+### Changed
+
+- **Phase 4 default-switch conclusion superseded**: historical
+  `shadow_mode=false` readiness is no longer the production merge criterion;
+  merge readiness now requires a full six-document `auto` run plus
+  `merge_gate.py` pass.
+- **Runtime config provenance**: `runtime_config.json` now records the active
+  retrieval mode, effective mode resolution, auto repair mutation settings, and
+  classifier shadow-trace setting so saved runs can prove whether they used the
+  auto synthesis path.
+- **FAIR-DS export contract**: auto-repaired fields are verified to flow through
+  patched `isa_values_json.json` into `metadata_fairds.xlsx`.
+
 ## [2.1.0] - 2026-07-14 – DeepSeek Pro Transition, A/B Evaluation & Merged Hybrid Retrieval
 
 ### Added

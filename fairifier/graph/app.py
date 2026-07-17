@@ -27,7 +27,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from .state import FAIRifierState, ProcessingStatus
-from .nodes import ReadFileNode, OrchestrateNode, FinalizeNode
+from .nodes import ReadFileNode, OrchestrateNode, AutoRepairNode, FinalizeNode
 from .retrieval_nodes import IndexSourcesNode, SectionMapReduceNode
 from ..agents.base import BaseAgent
 from ..agents.document_parser import DocumentParserAgent
@@ -979,12 +979,14 @@ class FAIRifierLangGraphApp:
         workflow.add_node("index_sources", IndexSourcesNode(self))
         workflow.add_node("section_map_reduce", SectionMapReduceNode(self))
         workflow.add_node("orchestrate", OrchestrateNode(self))
+        workflow.add_node("auto_repair", AutoRepairNode(self))
         workflow.add_node("finalize", FinalizeNode(self))
         workflow.set_entry_point("read_file")
         workflow.add_edge("read_file", "index_sources")
         workflow.add_edge("index_sources", "section_map_reduce")
         workflow.add_edge("section_map_reduce", "orchestrate")
-        workflow.add_edge("orchestrate", "finalize")
+        workflow.add_edge("orchestrate", "auto_repair")
+        workflow.add_edge("auto_repair", "finalize")
         workflow.add_edge("finalize", END)
         return workflow
 
@@ -1210,6 +1212,7 @@ class FAIRifierLangGraphApp:
                 "selected_packages": [],
                 "metadata_gap_hints": [],
                 "inferred_metadata_extensions": [],
+                "auto_repair_trace": {},
                 "api_capabilities": {},
                 "react_scratchpad": None,
                 "agent_messages": [],

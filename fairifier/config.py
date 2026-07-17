@@ -125,7 +125,8 @@ class FAIRifierConfig:
     hybrid_retrieval_enabled: bool = True
     evidence_store_enabled: bool = True
     mapreduce_enabled: bool = True
-    retrieval_shadow_mode: bool = False  # Phase 4: hybrid results in prompt; set true for shadow compare
+    retrieval_mode: str = "auto"  # "auto" | "shadow" | "tuned"
+    retrieval_shadow_mode: bool = False  # Legacy/env compatibility; true maps to retrieval_mode="shadow"
     retrieval_prompt_adaptive_lexical: bool = True  # Use lexical snippets in prompt when available; hybrid only on lexical miss
     chunk_target_tokens: int = 384
     chunk_hard_cap_tokens: int = 448
@@ -154,6 +155,11 @@ class FAIRifierConfig:
     jina_api_key: str = ""                      # Jina AI key for fallback API calls
     retrieval_near_duplicate_threshold: float = 0.92
     retrieval_qdrant_collection_prefix: str = "run"
+    auto_repair_enabled: bool = True
+    auto_repair_apply_patches: bool = True  # False = trace-only fallback; never mutates metadata
+    auto_repair_min_candidate_confidence: float = 0.55
+    # Record classifier predictions when supplied; never controls patches.
+    auto_repair_classifier_shadow_enabled: bool = True
     
     # Processing limits
     max_document_size_mb: int = 50
@@ -461,6 +467,14 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
             return None
         return raw.strip().lower() in ("1", "true", "yes", "on")
 
+    retrieval_mode_env = os.getenv("FAIRIFIER_RETRIEVAL_MODE")
+    if retrieval_mode_env:
+        mode = retrieval_mode_env.strip().lower()
+        if mode in {"auto", "shadow", "tuned"}:
+            config_instance.retrieval_mode = mode
+            config_instance.retrieval_shadow_mode = mode == "shadow"
+
+    shadow_env_value: Optional[bool] = None
     for env_name, attr in (
         ("FAIRIFIER_SEMANTIC_INDEX_ENABLED", "semantic_index_enabled"),
         ("FAIRIFIER_HYBRID_RETRIEVAL_ENABLED", "hybrid_retrieval_enabled"),
@@ -471,7 +485,14 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     ):
         value = _env_bool(env_name)
         if value is not None:
+            if env_name == "FAIRIFIER_RETRIEVAL_SHADOW_MODE" and retrieval_mode_env:
+                shadow_env_value = value
+                continue
             setattr(config_instance, attr, value)
+            if env_name == "FAIRIFIER_RETRIEVAL_SHADOW_MODE":
+                shadow_env_value = value
+    if shadow_env_value is not None and not retrieval_mode_env:
+        config_instance.retrieval_mode = "shadow" if shadow_env_value else "tuned"
     if os.getenv("FAIRIFIER_CHUNK_TARGET_TOKENS"):
         config_instance.chunk_target_tokens = int(os.getenv("FAIRIFIER_CHUNK_TARGET_TOKENS"))
     if os.getenv("FAIRIFIER_CHUNK_HARD_CAP_TOKENS"):
@@ -518,6 +539,19 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.jina_api_key = os.getenv("FAIRIFIER_JINA_API_KEY")
     if os.getenv("FAIRIFIER_RETRIEVAL_NEAR_DUPLICATE_THRESHOLD"):
         config_instance.retrieval_near_duplicate_threshold = float(os.getenv("FAIRIFIER_RETRIEVAL_NEAR_DUPLICATE_THRESHOLD"))
+    if os.getenv("FAIRIFIER_AUTO_REPAIR_ENABLED"):
+        v = os.getenv("FAIRIFIER_AUTO_REPAIR_ENABLED", "").strip().lower()
+        config_instance.auto_repair_enabled = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_AUTO_REPAIR_APPLY_PATCHES"):
+        v = os.getenv("FAIRIFIER_AUTO_REPAIR_APPLY_PATCHES", "").strip().lower()
+        config_instance.auto_repair_apply_patches = v in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_AUTO_REPAIR_MIN_CANDIDATE_CONFIDENCE"):
+        config_instance.auto_repair_min_candidate_confidence = float(
+            os.getenv("FAIRIFIER_AUTO_REPAIR_MIN_CANDIDATE_CONFIDENCE")
+        )
+    if os.getenv("FAIRIFIER_AUTO_REPAIR_CLASSIFIER_SHADOW_ENABLED"):
+        v = os.getenv("FAIRIFIER_AUTO_REPAIR_CLASSIFIER_SHADOW_ENABLED", "").strip().lower()
+        config_instance.auto_repair_classifier_shadow_enabled = v in ("1", "true", "yes", "on")
 
     if os.getenv("FAIRIFIER_CROSS_LAYER_MAX_RESTARTS"):
         config_instance.cross_layer_max_restarts = int(

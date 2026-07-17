@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from ..config import config
+from .auto_repair_policy import auto_prompt_decision, effective_retrieval_mode
 
 
 @dataclass
@@ -395,6 +396,7 @@ def hybrid_search_sources(
     semantic_index: Optional[Any] = None,
     source_ids: Optional[List[str]] = None,
     telemetry: Optional[Dict[str, Any]] = None,
+    field_name: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Hybrid lexical + semantic retrieval with RRF fusion and optional rerank."""
     from .semantic_index import reciprocal_rank_fusion, rerank_hits
@@ -450,34 +452,46 @@ def hybrid_search_sources(
         hybrid_merged, lexical_merged, final_limit
     )
 
+    retrieval_mode = effective_retrieval_mode(config)
     telemetry.update(
         {
             "lexical_hit_count": len(lexical_merged),
             "semantic_hit_count": sum(len(items) for items in semantic_lists),
             "hybrid_hit_count": len(hybrid_merged),
             "rerank_status": rerank_status,
-            "shadow_mode": bool(config.retrieval_shadow_mode),
+            "shadow_mode": retrieval_mode == "shadow",
+            "retrieval_mode": retrieval_mode,
             "queries_used": queries[:max_queries],
         }
     )
 
-    if config.retrieval_shadow_mode:
+    decision = auto_prompt_decision(
+        field_name=field_name or (queries[0] if queries else ""),
+        lexical_hit_count=len(lexical_merged),
+        semantic_hit_count=sum(len(items) for items in semantic_lists),
+        mode=telemetry["retrieval_mode"],
+        adaptive_lexical=bool(config.retrieval_prompt_adaptive_lexical),
+    )
+    telemetry["auto_repair_score"] = decision.get("repair_score", 0)
+    telemetry["auto_repair_reasons"] = decision.get("repair_reasons", [])
+
+    if telemetry["retrieval_mode"] == "shadow":
         telemetry["hybrid_candidate_ids"] = [
             f"{item.get('source_id')}:{item.get('start')}-{item.get('end')}"
             for item in hybrid_output
         ]
-        telemetry["prompt_mode"] = "shadow_lexical"
+        telemetry["prompt_mode"] = decision["prompt_mode"]
         return lexical_output
 
-    if config.retrieval_prompt_adaptive_lexical and lexical_merged:
-        telemetry["prompt_mode"] = "lexical_preferred"
+    if not decision.get("use_semantic_fallback"):
+        telemetry["prompt_mode"] = decision["prompt_mode"]
         telemetry["hybrid_candidate_ids"] = [
             f"{item.get('source_id')}:{item.get('start')}-{item.get('end')}"
             for item in hybrid_output
         ]
         return lexical_output
 
-    telemetry["prompt_mode"] = "semantic_fallback"
+    telemetry["prompt_mode"] = decision["prompt_mode"]
 
     # Tighten semantic-fallback output to reduce extra_fields noise on documents
     # where lexical retrieval finds nothing (§10.5 tuning).

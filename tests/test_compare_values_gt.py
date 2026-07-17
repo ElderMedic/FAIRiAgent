@@ -209,6 +209,21 @@ class TestLoadRunSheets:
         assert "sample" in sheets
         assert sheets["sample"][0].get("species") == "Earthworm"
 
+    def test_legacy_metadata_json_filename(self, tmp_path):
+        meta = {
+            "isa_values": {
+                "study": {
+                    "columns": ["study title"],
+                    "rows": [{"study title": "Legacy output"}],
+                }
+            }
+        }
+        (tmp_path / "metadata_json.json").write_text(
+            __import__("json").dumps(meta), encoding="utf-8"
+        )
+        sheets = load_run_sheets(tmp_path)
+        assert sheets["study"][0].get("study title") == "Legacy output"
+
     def test_missing_metadata_raises(self, tmp_path):
         import pytest
         with pytest.raises(FileNotFoundError):

@@ -1,8 +1,11 @@
 import tempfile
 from pathlib import Path
+
 import pytest
+
 from fairifier.graph.nodes import ReadFileNode
 from fairifier.graph.state import FAIRifierState
+
 
 @pytest.mark.asyncio
 async def test_autodiscover_supplementary_files():
