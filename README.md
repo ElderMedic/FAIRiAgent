@@ -41,7 +41,8 @@ FAIRiAgent is a **multi-agent framework** built with LangGraph and LangChain tha
 *   🔍 **Evidence-based**: Every field includes source evidence, confidence score, and provenance.
 *   🧠 **Intelligent**: LLM-as-Judge critic with rubric-driven quality assessment.
 *   🎨 **Usable**: React Web UI for file upload, configuration, log streaming, and download.
-*   🔧 **Flexible**: Supports local models (Ollama) and cloud providers (OpenAI, Gemini, Qwen, Anthropic).
+*   🔧 **Flexible**: Supports local models (Ollama) and cloud providers (OpenAI, Gemini, Qwen, Anthropic, DeepSeek, Zhipu).
+*   📂 **Multi-source aware**: Auto-discovers adjacent supplements/tables into a source workspace and can visualize hybrid retrieval in the Web UI.
 
 ### 📈 The Problem We Solve
 
@@ -94,10 +95,13 @@ cp env.example .env
 
 ```bash
 # CLI: Process a scientific PDF and extract metadata
-python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf
+mamba run -n FAIRiAgent python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf
+
+# Multi-source quickstart (Markdown paper + Excel supplement; no MinerU required)
+mamba run -n FAIRiAgent python run_fairifier.py process examples/quickstart/earthworm_4n_paper_bioRxiv.md --verbose
 
 # Web UI: Start local web application
-python run_fairifier.py webui
+mamba run -n FAIRiAgent python run_fairifier.py webui
 # Open http://localhost:8000 in your browser
 ```
 
@@ -107,12 +111,15 @@ python run_fairifier.py webui
 
 For detailed guides, architecture diagrams, and developer manuals, please see:
 
-*   [Architecture & Flow](docs/en/ARCHITECTURE_AND_FLOW.md) – Detailed agent nodes, ρ-mechanism rollback, checkpointers.
-*   [LLM Integration Guide](docs/en/LLM_INTEGRATION_GUIDE.md) – Provider configuration (Ollama, OpenAI, Gemini, Qwen, Anthropic).
-*   [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md) – Set up using Docker Compose.
-*   [FAIRiAgent REST API Manual](docs/en/development/FAIRIFIER_API_MANUAL.md) – FastAPI backend manual and SSE event streaming.
-*   [Memory Management Guide](docs/MEMORY_GUIDE.md) – Setup and configure mem0 semantic memory.
-*   [Bilingual Documentation Catalog](docs/README.md) – Core index of English & Chinese documentation.
+*   [Architecture & Flow](docs/en/ARCHITECTURE_AND_FLOW.md) – Agent nodes, ρ-mechanism rollback, checkpointers.
+*   [Source Workspace](docs/en/SOURCE_WORKSPACE.md) – Multi-file inputs, auto-discovery, evidence search.
+*   [LLM Integration Guide](docs/en/LLM_INTEGRATION_GUIDE.md) – Provider configuration (Ollama, OpenAI, Gemini, Qwen, Anthropic, DeepSeek).
+*   [Hybrid Retrieval Upgrade Plan](docs/en/development/HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md) – Hybrid retrieval, auto mode, ISA structural sync (§12.1).
+*   [Changelog](docs/CHANGELOG.md) – Release history (`v2.2.0` current).
+*   [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md) – Docker Compose setup.
+*   [FAIRiAgent REST API Manual](docs/en/development/FAIRIFIER_API_MANUAL.md) – FastAPI backend and SSE streaming.
+*   [Memory Management Guide](docs/MEMORY_GUIDE.md) – mem0 semantic memory.
+*   [Bilingual Documentation Catalog](docs/README.md) – English & Chinese index.
 
 ---
 

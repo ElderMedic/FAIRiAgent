@@ -1478,11 +1478,11 @@ complete.
 Each behavioral step follows RED → GREEN → refactor and uses the `FAIRiAgent`
 mamba environment.
 
-**Progress (2026-07-16, slimmed):** keep only changes with measured or clear
-bugfix value. Cut premature CanonicalField registry / structure-audit
-artifact writers (no offline metric gain; added unused surface area).
+**Progress (2026-07-17):** slim §12.1 path merged to `main` in
+[PR #4](https://github.com/ElderMedic/FAIRiAgent/pull/4) as part of **v2.2.0**.
+Feature branch retired.
 
-Shipped:
+Shipped on `main`:
 - DocumentParser merges evidence (no overwrite); EvidenceStore upserts.
 - Exact-ID compile + IVM/AutoRepair projection sync → one `matrix_id` across
   metadata.json and sidecar; Excel does not re-split a compiled sidecar.

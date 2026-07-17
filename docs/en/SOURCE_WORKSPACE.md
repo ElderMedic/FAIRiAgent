@@ -17,6 +17,14 @@ When `FAIRIFIER_SOURCE_WORKSPACE_ENABLED=true`, each run writes:
 Single-file runs use the same structure with one source. Directory and zip inputs
 create one source per supported file.
 
+## Supplementary Auto-Discovery
+
+When a single manuscript path is provided, FAIRiAgent can scan the parent
+directory for adjacent supported supplements (for example Excel/CSV tables next
+to a Markdown or PDF paper) and register them in the source workspace. The
+earthworm multi-source example under `examples/quickstart/` exercises this path
+without requiring a live MinerU conversion.
+
 ## Multi-file Stability
 
 Before applying the input-file cap, FAIRiAgent prioritizes likely research files:

@@ -159,18 +159,24 @@ local_kb.add_term(LocalTerm(
 ## 6. Output Files & Formats
 
 Outputs are saved to `output/<project_id>/`:
-1. **`metadata.json`**: Standardized FAIR-DS JSON.
-2. **`processing_log.jsonl`**: Real-time structured log events.
-3. **`llm_responses.json`**: Complete record of all LLM requests/responses.
-4. **`runtime_config.json`**: Environment and config variables used in the run.
-5. **`validation_report.txt`**: Shex/validator report.
+1. **`metadata.json`**: Standardized FAIR-DS JSON (includes `isa_values` and
+   `isa_matrix_id` when the ISA matrix compiler ran).
+2. **`isa_values_json.json`**: Compiled ISA columns×rows sidecar; kept in sync
+   with `metadata.json.isa_values` after ISAValueMapper / AutoRepair.
+3. **`processing_log.jsonl`**: Real-time structured log events (including critic
+   evaluations when available).
+4. **`llm_responses.json`**: Complete record of all LLM requests/responses.
+5. **`runtime_config.json`**: Environment and config variables used in the run.
+6. **`auto_repair_trace.json`**: Deterministic repair decisions when auto mode
+   applies patches.
+7. **`validation_report.txt`**: Shex/validator report (optional).
 
 ### Output JSON Schema Example
 
 ```json
 {
-  "fairifier_version": "V2.1.0",
-  "generated_at": "2026-07-14T18:00:00",
+  "fairifier_version": "V2.2.0",
+  "generated_at": "2026-07-17T18:00:00",
   "document_source": "paper.pdf",
   "overall_confidence": 0.85,
   "metadata": [

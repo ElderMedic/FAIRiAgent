@@ -1,45 +1,69 @@
 # Changelog
 
-## [Unreleased] - Auto synthesis and guarded repair gate
+## [Unreleased]
+
+### Planned / in progress
+
+- End-to-end 3/6-document LLM re-evaluation after ISA single-projection sync
+  (offline replay on frozen artifacts showed compile is largely a no-op; metric
+  gains require a fresh workflow run).
+- FAIR-DS `/api/upload` as the external compatibility gate once structural
+  quality is stable.
+
+## [2.2.0] - 2026-07-17 – Multi-source ingest, auto repair, ISA sync & provenance
+
+Merged via GitHub PRs [#3](https://github.com/ElderMedic/FAIRiAgent/pull/3) and
+[#4](https://github.com/ElderMedic/FAIRiAgent/pull/4). Feature branch
+`feature/external-grounding-and-multi-source` retired after merge.
 
 ### Added
 
-- **`auto` retrieval/repair mode**: production direction is now a single
-  lexical-first, semantic-fallback pipeline instead of a user-facing
-  Shadow-vs-Tuned default choice.
-- **Auto repair prototype workspace**:
-  `evaluation/prototypes/auto_repair_classifier/` contains weak-label dataset
-  building, classifier experiments, trace-compatible prediction export,
-  canonical auto eval preflight/run tooling, MinerU preconversion planning,
-  and a merge gate.
-- **Classifier shadow trace hook**: externally supplied field-level classifier
-  predictions can be recorded in `auto_repair_trace.json` for later ablation;
-  deterministic FAIR-DS guards still own production patch acceptance.
-- **Auto merge evidence gates**: fresh `auto` runs must pass aggregate metric
-  thresholds and per-document artifact validation for `metadata.json`,
-  `workflow_report.json`, `runtime_config.json`, `auto_repair_trace.json`, and
-  `isa_values_json.json`, plus parseable `metadata_fairds.xlsx` workbooks.
-  The gate now rejects trace-only and error-fallback repair traces as
-  non-production merge evidence.
-- **MinerU fallback dependency preflight**: service-aware auto eval preflight
-  now reports `mineru_preconvert_dependency` when live MinerU is unreachable,
-  target PDFs still need conversion, and the local `mineru -b pipeline`
-  fallback is missing imports such as `doclayout_yolo`. The same dependency
-  check is now used by main API/CLI MinerU health and by `MinerUClient` before
-  conversion, with an install hint for `mineru[pipeline]>=3.4.0,<4`.
+- **`auto` retrieval/repair mode**: lexical-first, semantic-fallback pipeline as
+  the production direction (replacing a user-facing Shadow-vs-Tuned default).
+- **Auto repair path**: deterministic exact-match patches with FAIR-DS guards;
+  prototype workspace under `evaluation/prototypes/auto_repair_classifier/`
+  (dataset build, classifier shadow export, preflight, merge gate).
+- **Unified processing log**: `save_processing_log` merges CLI/API logs and
+  persists critic evaluations into `processing_log.jsonl`.
+- **Supplementary auto-discovery**: adjacent tables/supplements in the parent
+  directory are discovered into the source workspace.
+- **External science tools**: NCBI/ENA accession helpers and related enrichment
+  tools for organism/accession grounding.
+- **Earthworm multi-source quickstart**:
+  `examples/quickstart/` (Markdown paper + Excel supplement + GT values).
+- **Web UI retrieval visualization**: hybrid / multi-source retrieval insights
+  in Config/Upload/Result pages.
+- **ISA matrix compiler + projection sync**: `compile_isa_matrix` /
+  `sync_compiled_matrix_to_state` keep `metadata.json.isa_values` and
+  `isa_values_json.json` on one `matrix_id`.
+- **Evidence packet merge / EvidenceStore upsert**: DocumentParser no longer
+  overwrites SectionMapReduce packets; store dedupes by stable `evidence_id`.
+- **Offline structural replay**:
+  `evaluation/scripts/replay_structural_convergence.py`.
+- **LLM provenance helpers**: full message serialization for provenance logging;
+  Zhipu deep-agent thinking disabled (same ReAct constraint as DeepSeek).
+- **MinerU fallback dependency preflight**: reports missing pipeline imports
+  when live MinerU is unreachable (`mineru[pipeline]>=3.4.0,<4` hint).
 
 ### Changed
 
-- **Phase 4 default-switch conclusion superseded**: historical
-  `shadow_mode=false` readiness is no longer the production merge criterion;
-  merge readiness now requires a full six-document `auto` run plus
-  `merge_gate.py` pass.
-- **Runtime config provenance**: `runtime_config.json` now records the active
-  retrieval mode, effective mode resolution, auto repair mutation settings, and
-  classifier shadow-trace setting so saved runs can prove whether they used the
-  auto synthesis path.
-- **FAIR-DS export contract**: auto-repaired fields are verified to flow through
-  patched `isa_values_json.json` into `metadata_fairds.xlsx`.
+- **Entity merge**: exact normalized identifier equality only (NFKC + casefold);
+  no substring matching; no identifier-less sparse-only merges.
+- **Excel export**: does not re-split an already compiled ISA sidecar.
+- **Evaluation load path**: prefers compiled sidecar only when `isa_matrix_id`
+  is present (avoids regressing historical runs).
+- **Runtime config provenance**: records retrieval mode, auto-repair settings,
+  and classifier shadow-trace flags.
+- **Merge readiness criterion**: six-document `auto` run + `merge_gate.py`, not
+  the historical `shadow_mode=false` switch alone.
+- **Dependencies**: pin `deepagents`, Anthropic/Gemini LangChain packages, and
+  related runtime deps in `requirements.txt` / `pyproject.toml`.
+
+### Fixed
+
+- Dual ISA matrix ownership (JSONGenerator vs ISAValueMapper vs AutoRepair)
+  reduced by post-compile projection sync.
+- Critic evaluation persistence gaps in processing logs (API/CLI runners).
 
 ## [2.1.0] - 2026-07-14 – DeepSeek Pro Transition, A/B Evaluation & Merged Hybrid Retrieval
 
@@ -623,6 +647,12 @@ python run_fairifier.py process document.pdf
 
 ## Version History
 
+- **v2.2.0** (2026-07-17): Multi-source ingest, auto repair, ISA sync & provenance
+- **v2.1.0** (2026-07-14): DeepSeek Pro transition, A/B evaluation & hybrid retrieval
+- **v2.0.4** (2026-07-03): Phase 4 hybrid default + DocumentParser outline
+- **v1.5.0** (2026-05-03): DeepSeek provider, BioMetadataAgent, evaluation hardening
+- **v1.4.0** (2026-05-02): Source grounding and multi-file provenance
+- **v1.3.0** (2026-03-26): Observability and output validation
 - **v1.2.0** (2026-01-29): mem0 Context Engineering Optimization
 - **v1.1.0** (2026-01-29): mem0 Memory Layer Integration (Initial)
 - **v1.0.0** (2026-01-XX): Initial Release
