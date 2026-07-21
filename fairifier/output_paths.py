@@ -101,5 +101,75 @@ def resolve_isa_values_read_path(output_dir: Path) -> Optional[Path]:
     return None
 
 
+def ensure_output_subdirectories(output_dir: Path) -> None:
+    """Ensure that all 4 functional subdirectories exist under output_dir."""
+    d = Path(output_dir)
+    deliverables_dir(d).mkdir(parents=True, exist_ok=True)
+    logs_dir(d).mkdir(parents=True, exist_ok=True)
+    reports_dir(d).mkdir(parents=True, exist_ok=True)
+    workspace_dir(d).mkdir(parents=True, exist_ok=True)
+
+
+def get_artifact_write_path(output_dir: Path, artifact_name: str) -> Path:
+    """Route workflow artifact payloads into their designated subdirectory."""
+    d = Path(output_dir)
+    if artifact_name in ("metadata_json", "metadata"):
+        return metadata_output_write_path(d)
+    if artifact_name in ("isa_values_json", "isa_values"):
+        return isa_values_output_write_path(d)
+    if artifact_name in ("workflow_report", "workflow_report_json"):
+        return reports_dir(d) / "workflow_report.json"
+    if artifact_name in ("workflow_report_txt", "validation_report"):
+        return reports_dir(d) / "workflow_report.txt"
+    if artifact_name in ("auto_repair_trace", "auto_repair_trace_json"):
+        return reports_dir(d) / "auto_repair_trace.json"
+    if artifact_name == "runtime_config":
+        return reports_dir(d) / "runtime_config.json"
+    if artifact_name == "extracted_document_content":
+        return workspace_dir(d) / "extracted_document_content.txt"
+    if artifact_name == "processing_log":
+        return logs_dir(d) / "processing_log.jsonl"
+    if artifact_name == "llm_responses":
+        return logs_dir(d) / "llm_responses.json"
+    if artifact_name == "full_output":
+        return logs_dir(d) / "full_output.log"
+    filename = artifact_output_filename(artifact_name)
+    return reports_dir(d) / filename
+
+
+def resolve_processing_log_read_path(output_dir: Path) -> Optional[Path]:
+    d = Path(output_dir)
+    primary = logs_dir(d) / "processing_log.jsonl"
+    if primary.exists():
+        return primary
+    flat = d / "processing_log.jsonl"
+    if flat.exists():
+        return flat
+    return None
+
+
+def resolve_full_output_log_read_path(output_dir: Path) -> Optional[Path]:
+    d = Path(output_dir)
+    primary = logs_dir(d) / "full_output.log"
+    if primary.exists():
+        return primary
+    flat = d / "full_output.log"
+    if flat.exists():
+        return flat
+    return None
+
+
+def resolve_runtime_config_read_path(output_dir: Path) -> Optional[Path]:
+    d = Path(output_dir)
+    primary = reports_dir(d) / "runtime_config.json"
+    if primary.exists():
+        return primary
+    flat = d / "runtime_config.json"
+    if flat.exists():
+        return flat
+    return None
+
+
 def run_has_metadata_output(run_dir: Path) -> bool:
     return resolve_metadata_output_read_path(run_dir) is not None
+

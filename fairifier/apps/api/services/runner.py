@@ -14,13 +14,20 @@ from typing import Any, Dict, Optional, TextIO
 
 from ..storage.base import ProjectStore
 from .event_bus import WorkflowEvent, event_bus
-from fairifier.output_paths import artifact_content_to_text, artifact_output_filename
+from fairifier.output_paths import (
+    artifact_content_to_text,
+    artifact_output_filename,
+    ensure_output_subdirectories,
+    get_artifact_write_path,
+    logs_dir,
+)
 from fairifier.services.fairds_excel_export import (
     try_export_fairds_metadata_excel,
 )
 from fairifier.utils.json_logger import JSONLogger
 from fairifier.utils.config_saver import save_runtime_config
 from fairifier.utils.run_control import reset_run_stop_requested
+
 
 logger = logging.getLogger(__name__)
 _CONFIG_OVERRIDE_LOCK = threading.Lock()
@@ -135,9 +142,10 @@ def _start_full_output_capture(
         return None, None, None
 
     output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    log_path = output_path / "full_output.log"
+    ensure_output_subdirectories(output_path)
+    log_path = logs_dir(output_path) / "full_output.log"
     handle = log_path.open("a", encoding="utf-8", buffering=1)
+
     handle.write(f"\n{'=' * 70}\n")
     handle.write(f"Run started at: {datetime.now().isoformat()}\n")
     handle.write(f"Project ID: {project_id}\n")
@@ -530,14 +538,15 @@ def _persist_run_outputs(
 
     errors: list[str] = []
     output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+    ensure_output_subdirectories(output_path)
 
     artifacts = result.get("artifacts", {})
     if isinstance(artifacts, dict):
         for artifact_name, content in artifacts.items():
             if not content:
                 continue
-            artifact_path = output_path / artifact_output_filename(artifact_name)
+            artifact_path = get_artifact_write_path(output_path, artifact_name)
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 text = artifact_content_to_text(content)
                 artifact_path.write_text(
@@ -557,7 +566,7 @@ def _persist_run_outputs(
                 logger.warning(msg)
                 errors.append(msg)
 
-    full_log_path = output_path / "full_output.log"
+    full_log_path = logs_dir(output_path) / "full_output.log"
     if full_log_path.exists():
         try:
             json_logger.info(
@@ -624,7 +633,8 @@ def _persist_run_outputs(
         output_dir=str(output_path),
     )
 
-    log_path = output_path / "processing_log.jsonl"
+    log_path = logs_dir(output_path) / "processing_log.jsonl"
+
     try:
         from fairifier.utils.json_logger import save_processing_log
         save_processing_log(log_path, json_logger)

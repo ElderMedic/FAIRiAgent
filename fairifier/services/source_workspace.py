@@ -96,12 +96,14 @@ def build_source_workspace(
     workspace_dir_name: Optional[str] = None,
 ) -> SourceWorkspace:
     """Materialize source files and a manifest without dropping source content."""
+    from ..output_paths import workspace_dir
     workspace_name = workspace_dir_name or config.source_workspace_dir_name
-    root_dir = Path(output_dir) / workspace_name
+    root_dir = workspace_dir(Path(output_dir)) / workspace_name
     sources_dir = root_dir / "sources"
     tables_dir = root_dir / "tables"
     sources_dir.mkdir(parents=True, exist_ok=True)
     tables_dir.mkdir(parents=True, exist_ok=True)
+
 
     source_paths: Dict[str, Path] = {}
     table_paths: Dict[str, Path] = {}

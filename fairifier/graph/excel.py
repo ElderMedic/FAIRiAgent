@@ -448,6 +448,8 @@ def try_export_fairds_metadata_excel(
     from ..config import config
     from ..output_paths import (
         FAIRDS_METADATA_EXCEL_FILENAME,
+        deliverables_dir,
+        resolve_isa_values_read_path,
         resolve_metadata_output_read_path,
     )
     from ..services.fair_data_station import FAIRDataStationClient
@@ -482,21 +484,24 @@ def try_export_fairds_metadata_excel(
 
     # Prefer dedicated compiled matrix (§12.1). Do not re-split when the
     # sidecar already carries columns×rows — that matrix is the sole projection.
-    isa_values_path = Path(output_dir) / "isa_values_json.json"
+    isa_values_path = resolve_isa_values_read_path(Path(output_dir))
     fill_structure: Dict[str, Any]
     used_compiled_sidecar = False
-    try:
-        with open(isa_values_path, encoding="utf-8") as fh:
-            isa_values = json.load(fh)
-        if isinstance(isa_values, dict) and any(
-            isinstance(block, dict) and (block.get("columns") or block.get("rows"))
-            for block in isa_values.values()
-        ):
-            fill_structure = isa_values
-            used_compiled_sidecar = True
-        else:
+    if isa_values_path and isa_values_path.exists():
+        try:
+            with open(isa_values_path, encoding="utf-8") as fh:
+                isa_values = json.load(fh)
+            if isinstance(isa_values, dict) and any(
+                isinstance(block, dict) and (block.get("columns") or block.get("rows"))
+                for block in isa_values.values()
+            ):
+                fill_structure = isa_values
+                used_compiled_sidecar = True
+            else:
+                fill_structure = split_entities_in_isa_structure(isa_structure)
+        except (OSError, json.JSONDecodeError):
             fill_structure = split_entities_in_isa_structure(isa_structure)
-    except (OSError, json.JSONDecodeError):
+    else:
         fill_structure = split_entities_in_isa_structure(isa_structure)
 
     # Check for fillable content.
@@ -561,7 +566,9 @@ def try_export_fairds_metadata_excel(
         )
         return None
 
-    out = Path(output_dir) / FAIRDS_METADATA_EXCEL_FILENAME
+    out = deliverables_dir(Path(output_dir)) / FAIRDS_METADATA_EXCEL_FILENAME
+    out.parent.mkdir(parents=True, exist_ok=True)
+
     try:
         out.write_bytes(xlsx_bytes)
     except OSError as exc:

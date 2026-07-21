@@ -151,8 +151,10 @@ def save_runtime_config(
     Returns:
         Path to the saved configuration file
     """
-    # Ensure output directory exists
-    output_path.mkdir(parents=True, exist_ok=True)
+    from ..output_paths import reports_dir
+    output_path = Path(output_path)
+    reports_path = reports_dir(output_path)
+    reports_path.mkdir(parents=True, exist_ok=True)
 
     # Collect configuration
     all_config = collect_runtime_config(
@@ -161,8 +163,9 @@ def save_runtime_config(
     )
 
     # Save to JSON file
-    config_file = output_path / "runtime_config.json"
+    config_file = reports_path / "runtime_config.json"
     with open(config_file, 'w', encoding='utf-8') as f:
         json.dump(all_config, f, indent=2, ensure_ascii=False)
 
     return config_file
+

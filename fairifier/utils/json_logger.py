@@ -159,12 +159,20 @@ def set_logger(logger: JSONLogger) -> None:
 
 def save_processing_log(log_path: Path, json_logger: JSONLogger) -> None:
     """Safely merge dynamically written events and memory-buffered logs, sort chronologically, and overwrite file."""
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     events = []
     seen = set()
 
     # 1. Read existing events from disk (e.g., dynamically written context_usage, critic_evaluation)
-    if log_path.exists():
-        with open(log_path, "r", encoding="utf-8") as f:
+    read_path = log_path
+    if not read_path.exists() and log_path.parent.name == "logs":
+        fallback_flat = log_path.parent.parent / log_path.name
+        if fallback_flat.exists():
+            read_path = fallback_flat
+
+    if read_path.exists():
+        with open(read_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -195,3 +203,4 @@ def save_processing_log(log_path: Path, json_logger: JSONLogger) -> None:
         for ev in events:
             f.write(json.dumps(ev, ensure_ascii=False) + "\n")
     temp_path.replace(log_path)
+

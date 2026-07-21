@@ -2962,8 +2962,11 @@ def save_llm_responses(output_path: Path, llm_helper: Optional[LLMHelper] = None
     if llm_helper is None:
         llm_helper = get_llm_helper()
     
-    responses_file = output_path / "llm_responses.json"
+    from fairifier.output_paths import logs_dir
+    responses_file = logs_dir(Path(output_path)) / "llm_responses.json"
+    responses_file.parent.mkdir(parents=True, exist_ok=True)
     with open(responses_file, 'w', encoding='utf-8') as f:
         json.dump(llm_helper.llm_responses, f, indent=2, ensure_ascii=False)
     
     logger.info(f"Saved {len(llm_helper.llm_responses)} LLM responses to {responses_file}")
+

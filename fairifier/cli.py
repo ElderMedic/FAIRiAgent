@@ -16,11 +16,21 @@ from .config import config
 from .output_paths import (
     artifact_content_to_text,
     artifact_output_filename,
+    deliverables_dir,
+    ensure_output_subdirectories,
+    get_artifact_write_path,
+    logs_dir,
     metadata_output_write_path,
+    reports_dir,
+    resolve_full_output_log_read_path,
     resolve_metadata_output_read_path,
+    resolve_processing_log_read_path,
+    resolve_runtime_config_read_path,
+    workspace_dir,
     METADATA_OUTPUT_FILENAME,
     LEGACY_METADATA_OUTPUT_FILENAME,
 )
+
 from .utils.json_logger import get_logger
 from .utils.llm_helper import get_llm_helper, save_llm_responses, check_ollama_model_available
 from .validation import check_metadata_json_output
@@ -130,8 +140,8 @@ def _resolve_project_id(project_id: str) -> Optional[Path]:
         if not subdir.is_dir():
             continue
         
-        runtime_config_file = subdir / "runtime_config.json"
-        if runtime_config_file.exists():
+        runtime_config_file = resolve_runtime_config_read_path(subdir)
+        if runtime_config_file and runtime_config_file.exists():
             try:
                 with open(runtime_config_file, 'r', encoding='utf-8') as f:
                     runtime_config = json.load(f)
@@ -140,6 +150,7 @@ def _resolve_project_id(project_id: str) -> Optional[Path]:
                     return subdir
             except (json.JSONDecodeError, IOError):
                 continue
+
     
     return None
 
@@ -394,6 +405,8 @@ def process(
             output_path = base_output_dir / timestamp
         output_path.mkdir(parents=True, exist_ok=True)
     
+    ensure_output_subdirectories(output_path)
+    
     click.echo("=" * 70)
     click.echo("🚀 FAIRifier - Automated FAIR Metadata Generation")
     click.echo("=" * 70)
@@ -481,6 +494,8 @@ async def _run_workflow(
     if not project_id:
         project_id = f"fairifier_{start_time.strftime('%Y%m%d_%H%M%S')}"
     
+    ensure_output_subdirectories(output_path)
+    
     # Set LangSmith project if provided (for isolation)
     if langsmith_project:
         os.environ["LANGCHAIN_PROJECT"] = langsmith_project
@@ -493,7 +508,7 @@ async def _run_workflow(
     running_file.write_text(str(os.getpid()))
     
     # Set up log file redirection
-    log_file = output_path / "full_output.log"
+    log_file = logs_dir(output_path) / "full_output.log"
     log_handle = open(log_file, 'w', encoding='utf-8', buffering=1)  # Line buffered
     
     # Create a tee-like handler that writes to both console and file
@@ -579,16 +594,16 @@ async def _run_workflow(
             
             for artifact_name, content in artifacts.items():
                 if content:
-                    filename = artifact_output_filename(artifact_name)
-                    filepath = output_path / filename
+                    filepath = get_artifact_write_path(output_path, artifact_name)
+                    filepath.parent.mkdir(parents=True, exist_ok=True)
                     text = artifact_content_to_text(content)
                     
                     with open(filepath, 'w', encoding='utf-8') as f:
                         f.write(text)
 
                     size_kb = len(text.encode("utf-8")) / 1024
-                    click.echo(f"  ✓ {filename} ({size_kb:.1f} KB)")
-                    json_logger.info("artifact_saved", filename=filename,
+                    click.echo(f"  ✓ {filepath.name} ({size_kb:.1f} KB)")
+                    json_logger.info("artifact_saved", filename=filepath.name,
                                      size_bytes=len(text.encode("utf-8")))
 
         do_syntax = config.validate_output_json and not no_validate_json
@@ -615,12 +630,13 @@ async def _run_workflow(
         
         # Save processing log using unified utility to safely merge disk and memory logs
         from fairifier.utils.json_logger import save_processing_log
-        log_file = output_path / "processing_log.jsonl"
+        log_file = logs_dir(output_path) / "processing_log.jsonl"
         try:
             save_processing_log(log_file, json_logger)
             click.echo(f"  ✓ processing_log.jsonl")
         except Exception as exc:
             click.echo(f"  ⚠️  Failed to save processing_log.jsonl: {exc}", err=True)
+
 
         # Save LLM responses for inspection
         try:
@@ -751,9 +767,9 @@ def status(project_id: str, verbose: bool):
     click.echo(section)
     
     # Load runtime_config.json if available
-    runtime_config_file = run_dir / "runtime_config.json"
+    runtime_config_file = resolve_runtime_config_read_path(run_dir)
     runtime_info = {}
-    if runtime_config_file.exists():
+    if runtime_config_file and runtime_config_file.exists():
         try:
             with open(runtime_config_file, 'r', encoding='utf-8') as f:
                 runtime_config = json.load(f)
@@ -786,12 +802,13 @@ def status(project_id: str, verbose: bool):
             pass
     
     # Load processing_log.jsonl if available
-    processing_log_file = run_dir / "processing_log.jsonl"
+    processing_log_file = resolve_processing_log_read_path(run_dir)
     status_from_log = None
     duration_from_log = None
     confidence_from_log = {}
     
-    if processing_log_file.exists() and not is_running:
+    if processing_log_file and processing_log_file.exists() and not is_running:
+
         try:
             with open(processing_log_file, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -1059,15 +1076,15 @@ async def _resume_workflow(
         if artifacts:
             for artifact_name, content in artifacts.items():
                 if content:
-                    filename = artifact_output_filename(artifact_name)
-                    filepath = output_path / filename
+                    filepath = get_artifact_write_path(output_path, artifact_name)
+                    filepath.parent.mkdir(parents=True, exist_ok=True)
                     text = artifact_content_to_text(content)
                     
                     with open(filepath, 'w', encoding='utf-8') as f:
                         f.write(text)
                     
                     size_kb = len(text.encode("utf-8")) / 1024
-                    click.echo(f"  ✓ {filename} ({size_kb:.1f} KB)")
+                    click.echo(f"  ✓ {filepath.name} ({size_kb:.1f} KB)")
 
         fairds_xlsx = try_export_fairds_metadata_excel(output_path)
         if fairds_xlsx is not None:
@@ -1080,11 +1097,13 @@ async def _resume_workflow(
             )
         
         # Save processing log (append mode)
-        processing_log_file = output_path / "processing_log.jsonl"
+        processing_log_file = logs_dir(output_path) / "processing_log.jsonl"
+        processing_log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(processing_log_file, 'a', encoding='utf-8') as f:
             for log_entry in json_logger.get_logs():
                 f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
         click.echo(f"  ✓ processing_log.jsonl (appended)")
+
         
         # Save LLM responses
         try:
