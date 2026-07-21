@@ -999,12 +999,14 @@ async def _resume_workflow(
     """Resume a workflow from its last checkpoint."""
     start_time = datetime.now()
     
+    ensure_output_subdirectories(output_path)
+    
     # Write .running file
     running_file = output_path / ".running"
     running_file.write_text(str(os.getpid()))
     
     # Set up log file (append mode for resume)
-    log_file = output_path / "full_output.log"
+    log_file = resolve_full_output_log_read_path(output_path) or (logs_dir(output_path) / "full_output.log")
     log_handle = open(log_file, 'a', encoding='utf-8', buffering=1)
     log_handle.write(f"\n\n{'='*70}\n")
     log_handle.write(f"Resume started at: {start_time.isoformat()}\n")
@@ -1085,6 +1087,9 @@ async def _resume_workflow(
                     
                     size_kb = len(text.encode("utf-8")) / 1024
                     click.echo(f"  ✓ {filepath.name} ({size_kb:.1f} KB)")
+                    json_logger.info("artifact_saved", filename=filepath.name,
+                                     size_bytes=len(text.encode("utf-8")))
+
 
         fairds_xlsx = try_export_fairds_metadata_excel(output_path)
         if fairds_xlsx is not None:

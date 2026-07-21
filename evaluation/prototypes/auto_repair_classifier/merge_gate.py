@@ -15,12 +15,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from fairifier.output_paths import (
+    deliverables_dir,
+    resolve_auto_repair_trace_read_path,
+    resolve_isa_values_read_path,
+    resolve_metadata_output_read_path,
+    resolve_runtime_config_read_path,
+    resolve_workflow_report_read_path,
+)
 from fairifier.validation.metadata_json_format import (
     validate_field_datatypes,
     validate_json_structure,
     validate_source_grounding,
     validate_value_formats,
 )
+
 
 
 DEFAULT_ROOT = Path("evaluation/prototypes/auto_repair_classifier")
@@ -92,9 +101,12 @@ def discover_model_run_root(run_dir: Path) -> Optional[Path]:
     for child in run_dir.iterdir():
         if not child.is_dir() or child.name in {"results", "outputs", "artifacts"}:
             continue
-        if any(child.glob("*/run_*/metadata.json")) or any(
-            child.glob("*/run_*/metadata_json.json")
+        if (
+            any(child.glob("*/run_*/metadata.json"))
+            or any(child.glob("*/run_*/deliverables/metadata.json"))
+            or any(child.glob("*/run_*/metadata_json.json"))
         ):
+
             model_name_candidates.append(child)
     if len(model_name_candidates) == 1:
         return model_name_candidates[0]
@@ -349,9 +361,12 @@ def validate_fairds_excel_artifact(
     metadata: Dict[str, Any],
     trace: Dict[str, Any],
 ) -> Tuple[str, List[str]]:
-    excel_path = run_dir / FAIRDS_EXCEL_FILENAME
+    excel_path = deliverables_dir(run_dir) / FAIRDS_EXCEL_FILENAME
+    if not excel_path.exists():
+        excel_path = run_dir / FAIRDS_EXCEL_FILENAME
     if not excel_path.exists():
         return "missing", ["metadata_fairds_xlsx_missing"]
+
 
     try:
         from openpyxl import load_workbook
@@ -463,9 +478,7 @@ def validate_auto_artifacts(
             documents.append(record)
             continue
 
-        metadata_path = run_dir / "metadata.json"
-        if not metadata_path.exists():
-            metadata_path = run_dir / "metadata_json.json"
+        metadata_path = resolve_metadata_output_read_path(run_dir) or (run_dir / "metadata.json")
         metadata_ok, metadata_status, metadata = read_json_file(metadata_path)
         record["metadata_json"] = metadata_status
         if not metadata_ok:
@@ -487,16 +500,14 @@ def validate_auto_artifacts(
             if format_report.get("warnings"):
                 record["metadata_json_warnings"] = format_report["warnings"]
 
-        workflow_ok, workflow_status, _workflow = read_json_file(
-            run_dir / "workflow_report.json"
-        )
+        workflow_path = resolve_workflow_report_read_path(run_dir) or (run_dir / "workflow_report.json")
+        workflow_ok, workflow_status, _workflow = read_json_file(workflow_path)
         record["workflow_report"] = workflow_status
         if not workflow_ok:
             record["errors"].append(f"workflow_report_{workflow_status}")
 
-        runtime_ok, runtime_status, runtime_config = read_json_file(
-            run_dir / "runtime_config.json"
-        )
+        runtime_path = resolve_runtime_config_read_path(run_dir) or (run_dir / "runtime_config.json")
+        runtime_ok, runtime_status, runtime_config = read_json_file(runtime_path)
         record["runtime_config"] = runtime_status
         if not runtime_ok:
             record["errors"].append(f"runtime_config_{runtime_status}")
@@ -514,7 +525,8 @@ def validate_auto_artifacts(
                     "auto_repair_classifier_shadow_enabled"
                 )
 
-        trace_ok, trace_status, trace = read_json_file(run_dir / "auto_repair_trace.json")
+        trace_path = resolve_auto_repair_trace_read_path(run_dir) or (run_dir / "auto_repair_trace.json")
+        trace_ok, trace_status, trace = read_json_file(trace_path)
         record["auto_repair_trace"] = trace_status
         if not trace_ok:
             record["errors"].append(f"auto_repair_trace_{trace_status}")
@@ -545,8 +557,9 @@ def validate_auto_artifacts(
                         "metadata_json_auto_repair_summary_count_mismatch"
                     )
 
-        isa_values_path = run_dir / "isa_values_json.json"
+        isa_values_path = resolve_isa_values_read_path(run_dir) or (run_dir / "isa_values.json")
         isa_values_ok, isa_values_status, isa_values = read_json_file(isa_values_path)
+
         record["isa_values_json"] = isa_values_status
         if not isa_values_ok:
             record["errors"].append(f"isa_values_json_{isa_values_status}")

@@ -135,11 +135,13 @@ def _write_auto_artifacts(
     trace_mode="deterministic_exact_patch",
     trace_apply_patches=True,
 ):
+    from fairifier.output_paths import ensure_output_subdirectories, get_artifact_write_path
+
     model_root = run_root / "auto_model"
     for doc_id in doc_ids:
         run_dir = model_root / doc_id / "run_1"
-        run_dir.mkdir(parents=True)
-        (run_dir / "metadata.json").write_text(
+        ensure_output_subdirectories(run_dir)
+        get_artifact_write_path(run_dir, "metadata_json").write_text(
             json.dumps(
                 {
                     "fairifier_version": "Vtest",
@@ -186,9 +188,9 @@ def _write_auto_artifacts(
             ),
             encoding="utf-8",
         )
-        (run_dir / "workflow_report.json").write_text("{}", encoding="utf-8")
+        get_artifact_write_path(run_dir, "workflow_report").write_text("{}", encoding="utf-8")
         if include_runtime_config:
-            (run_dir / "runtime_config.json").write_text(
+            get_artifact_write_path(run_dir, "runtime_config").write_text(
                 json.dumps(
                     {
                         "runtime_info": {"workflow_version": "langgraph"},
@@ -208,7 +210,7 @@ def _write_auto_artifacts(
                 ),
                 encoding="utf-8",
             )
-        (run_dir / "isa_values_json.json").write_text(
+        get_artifact_write_path(run_dir, "isa_values_json").write_text(
             json.dumps(
                 {
                     "study": {
@@ -224,7 +226,7 @@ def _write_auto_artifacts(
             encoding="utf-8",
         )
         if include_trace:
-            (run_dir / "auto_repair_trace.json").write_text(
+            get_artifact_write_path(run_dir, "auto_repair_trace").write_text(
                 json.dumps(
                     {
                         "mode": trace_mode,
@@ -251,6 +253,7 @@ def _write_auto_artifacts(
             )
 
             try_export_fairds_metadata_excel(run_dir, fair_ds_api_url="")
+
 
 
 def test_merge_gate_passes_with_complete_auto_artifacts(tmp_path):
@@ -587,7 +590,8 @@ def test_merge_gate_fails_when_accepted_patch_not_materialized_in_excel(tmp_path
         _doc_scores(6, completeness=0.73, value_match_rate=0.165),
     )
     _write_auto_artifacts(tmp_path, [f"doc_{idx}" for idx in range(6)])
-    for xlsx in tmp_path.glob("auto_model/doc_*/run_1/metadata_fairds.xlsx"):
+    for xlsx in tmp_path.glob("auto_model/doc_*/run_1/**/metadata_fairds.xlsx"):
+
         from openpyxl import load_workbook
 
         workbook = load_workbook(xlsx)

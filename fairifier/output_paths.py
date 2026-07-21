@@ -119,8 +119,11 @@ def get_artifact_write_path(output_dir: Path, artifact_name: str) -> Path:
         return isa_values_output_write_path(d)
     if artifact_name in ("workflow_report", "workflow_report_json"):
         return reports_dir(d) / "workflow_report.json"
-    if artifact_name in ("workflow_report_txt", "validation_report"):
+    if artifact_name in ("workflow_report_txt", "workflow_report_text"):
         return reports_dir(d) / "workflow_report.txt"
+    if artifact_name == "validation_report":
+        return reports_dir(d) / "validation_report.txt"
+
     if artifact_name in ("auto_repair_trace", "auto_repair_trace_json"):
         return reports_dir(d) / "auto_repair_trace.json"
     if artifact_name == "runtime_config":
@@ -170,6 +173,29 @@ def resolve_runtime_config_read_path(output_dir: Path) -> Optional[Path]:
     return None
 
 
+def resolve_workflow_report_read_path(output_dir: Path) -> Optional[Path]:
+    d = Path(output_dir)
+    primary = reports_dir(d) / "workflow_report.json"
+    if primary.exists():
+        return primary
+    flat = d / "workflow_report.json"
+    if flat.exists():
+        return flat
+    return None
+
+
+def resolve_auto_repair_trace_read_path(output_dir: Path) -> Optional[Path]:
+    d = Path(output_dir)
+    primary = reports_dir(d) / "auto_repair_trace.json"
+    if primary.exists():
+        return primary
+    flat = d / "auto_repair_trace.json"
+    if flat.exists():
+        return flat
+    return None
+
+
 def run_has_metadata_output(run_dir: Path) -> bool:
     return resolve_metadata_output_read_path(run_dir) is not None
+
 

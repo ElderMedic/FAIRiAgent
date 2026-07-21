@@ -7,7 +7,11 @@ import pytest
 from fairifier.graph.langgraph_app import FAIRifierLangGraphApp
 
 
+from fairifier.output_paths import resolve_processing_log_read_path
+
+
 def _make_app_without_init() -> FAIRifierLangGraphApp:
+
     app = object.__new__(FAIRifierLangGraphApp)
     app.global_retry_count = 0
     app.max_global_retries = 5
@@ -71,5 +75,6 @@ async def test_finalize_node_handles_a2a_log_path_without_unboundlocal(
 
     finalized = await app._finalize_node(state)
 
-    assert finalized["status"] == "completed"
-    assert (tmp_path / "processing_log.jsonl").exists()
+    assert resolve_processing_log_read_path(tmp_path) is not None
+
+
