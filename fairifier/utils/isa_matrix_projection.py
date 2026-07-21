@@ -70,6 +70,14 @@ def apply_matrix_to_metadata(
         sheet_payload["rows"] = rows
         isa_structure[sheet] = sheet_payload
 
+    for sheet, sheet_payload in isa_structure.items():
+        if isinstance(sheet_payload, dict):
+            fields = sheet_payload.get("fields")
+            if isinstance(fields, list):
+                for field in fields:
+                    if isinstance(field, dict):
+                        field.pop("value", None)
+
     for sheet, block in matrix.items():
         if sheet in isa_values or not isinstance(block, dict):
             continue
@@ -100,8 +108,11 @@ def sync_compiled_matrix_to_state(
         matrix_id = matrix_id_for(matrix)
 
     artifacts = state.setdefault("artifacts", {})
-    artifacts["isa_values_json"] = json.dumps(matrix, indent=2, ensure_ascii=False)
+    matrix_str = json.dumps(matrix, indent=2, ensure_ascii=False)
+    artifacts["isa_values"] = matrix_str
+    artifacts["isa_values_json"] = matrix_str
     artifacts["isa_matrix_id"] = matrix_id
+
 
     metadata_json = artifacts.get("metadata_json")
     if metadata_json:
