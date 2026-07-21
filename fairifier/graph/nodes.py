@@ -38,7 +38,12 @@ from ..agents.json_generator import JSONGeneratorAgent
 from ..agents.isa_value_mapper import ISAValueMapperAgent
 from ..agents.critic import CriticAgent
 from ..config import config
-from ..output_paths import resolve_metadata_output_read_path, METADATA_OUTPUT_FILENAME
+from ..output_paths import (
+    logs_dir,
+    resolve_metadata_output_read_path,
+    METADATA_OUTPUT_FILENAME,
+)
+
 from ..utils.llm_helper import get_llm_helper, normalize_llm_response_content
 from ..utils.report_generator import WorkflowReportGenerator
 from ..utils.run_control import run_stop_requested, reset_run_stop_requested
@@ -1302,10 +1307,11 @@ class OrchestrateNode:
             # processing log so operators can see how state size evolves.
             output_dir = state.get("output_dir")
             log_path = (
-                str(Path(output_dir) / "processing_log.jsonl")
+                str(logs_dir(Path(output_dir)) / "processing_log.jsonl")
                 if output_dir
                 else None
             )
+
             log_context_usage(
                 agent_name=agent_name,
                 state=state,
@@ -3770,9 +3776,12 @@ class FinalizeNode:
         # ── Log A2A messages to processing_log.jsonl ──
         output_dir = state.get("output_dir")
         if output_dir and (state.get("agent_messages") or []):
-            a2a_log_path = str(Path(output_dir) / "processing_log.jsonl")
+            log_file = logs_dir(Path(output_dir)) / "processing_log.jsonl"
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            a2a_log_path = str(log_file)
             try:
                 with open(a2a_log_path, "a", encoding="utf-8") as fp:
+
                     for msg in state["agent_messages"]:
                         record = {
                             "event": "agent_message",

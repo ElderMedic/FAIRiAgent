@@ -1096,13 +1096,15 @@ async def _resume_workflow(
                 size_bytes=fairds_xlsx.stat().st_size,
             )
         
-        # Save processing log (append mode)
-        processing_log_file = logs_dir(output_path) / "processing_log.jsonl"
-        processing_log_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(processing_log_file, 'a', encoding='utf-8') as f:
-            for log_entry in json_logger.get_logs():
-                f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
-        click.echo(f"  ✓ processing_log.jsonl (appended)")
+        # Save processing log using unified utility to safely merge disk and memory logs
+        from fairifier.utils.json_logger import save_processing_log
+        log_file = logs_dir(output_path) / "processing_log.jsonl"
+        try:
+            save_processing_log(log_file, json_logger)
+            click.echo(f"  ✓ processing_log.jsonl")
+        except Exception as exc:
+            click.echo(f"  ⚠️  Failed to save processing_log.jsonl: {exc}", err=True)
+
 
         
         # Save LLM responses
