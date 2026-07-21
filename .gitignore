@@ -259,6 +259,9 @@ docker/fairds_storage/
 # Private manuscript drafts (local only)
 docs/manuscript/
 
+# Local-only development notes (not for GitHub)
+docs/en/development/local/
+
 # Local presentation materials and web app (not for GitHub)
 docs/fairiagent-presentation/
 

@@ -1478,19 +1478,26 @@ complete.
 Each behavioral step follows RED → GREEN → refactor and uses the `FAIRiAgent`
 mamba environment.
 
-**Progress (2026-07-17):** slim §12.1 path merged to `main` in
-[PR #4](https://github.com/ElderMedic/FAIRiAgent/pull/4) as part of **v2.2.0**.
-Feature branch retired.
+**Progress (2026-07-21):** deterministic ``IsaMatrixCompiler`` is now a first-class
+LangGraph node on ``main`` development path:
 
-Shipped on `main`:
-- DocumentParser merges evidence (no overwrite); EvidenceStore upserts.
-- Exact-ID compile + IVM/AutoRepair projection sync → one `matrix_id` across
-  metadata.json and sidecar; Excel does not re-split a compiled sidecar.
-- Eval prefers sidecar only when `isa_matrix_id` is present.
-- Offline replay script retained for projection A/B only.
+``orchestrate → isa_matrix_compiler → auto_repair → finalize``.
 
-Deferred until a fresh LLM run shows need: full entity registry schema,
-patch-only IVM (no private rebuild), coverage audit artifacts.
+The node does not call an LLM; it compiles the best available matrix (sidecar,
+then metadata) and syncs all projections onto one ``matrix_id``. JSONGenerator /
+ISAValueMapper remain field/value producers; the compiler is the graph-level
+authority for ``columns``/``rows`` before repair.
+
+Smoke validation (DeepSeek ``v4-flash``, earthworm md, FAIR-DS ``:8083``,
+deep-agents off): workflow completed with
+``IsaMatrixCompiler`` ``matrix_id`` present; metadata ↔ sidecar rows fully
+aligned (sample/assay/observationunit = 3/3/3). Structural snapshot:
+``row_alignment_f1≈0.59``, ``sheet_placement_accuracy=1.0``,
+``value_accuracy_given_correct_structure≈0.74``. Artifacts under
+``evaluation/runs/isa_compiler_flash_smoke_20260721c/``.
+
+Deferred until a fresh multi-doc LLM eval shows need: demoting IVM to
+patch-only (no private rebuild), full entity registry schema.
 
 1. **Characterize current behavior and capture future replay fixtures**
    - Add tests that document current JSONGenerator/ISAValueMapper/AutoRepair/
