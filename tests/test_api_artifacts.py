@@ -181,13 +181,13 @@ def test_persist_run_outputs_writes_core_downloadable_files(
 
     assert errors == []
     assert (
-        tmp_path / "metadata.json"
+        tmp_path / "deliverables" / "metadata.json"
     ).read_text(encoding="utf-8") == '{"ok": true}'
     assert (
-        tmp_path / "validation_report.txt"
+        tmp_path / "reports" / "validation_report.txt"
     ).read_text(encoding="utf-8") == "looks good"
     processing_log = (
-        tmp_path / "processing_log.jsonl"
+        tmp_path / "logs" / "processing_log.jsonl"
     ).read_text(encoding="utf-8")
     assert "processing_started" in processing_log
     assert "processing_completed" in processing_log
@@ -222,7 +222,7 @@ def test_persist_run_outputs_writes_auto_repair_trace_for_gate(
 
     assert errors == []
     trace = json.loads(
-        (tmp_path / "auto_repair_trace.json").read_text(encoding="utf-8")
+        (tmp_path / "reports" / "auto_repair_trace.json").read_text(encoding="utf-8")
     )
     assert trace["mode"] == "deterministic_exact_patch"
     assert trace["summary"]["accepted_patch_count"] == 0
@@ -263,7 +263,7 @@ def test_persist_run_outputs_exports_fairds_workbook_from_isa_values(
     )
 
     assert errors == []
-    workbook_path = tmp_path / "metadata_fairds.xlsx"
+    workbook_path = tmp_path / "deliverables" / "metadata_fairds.xlsx"
     assert workbook_path.exists()
     workbook = load_workbook(workbook_path, data_only=True)
     try:
@@ -281,7 +281,7 @@ def test_persist_run_outputs_exports_fairds_workbook_from_isa_values(
         workbook.close()
     log_entries = [
         json.loads(line)
-        for line in (tmp_path / "processing_log.jsonl")
+        for line in (tmp_path / "logs" / "processing_log.jsonl")
         .read_text(encoding="utf-8")
         .splitlines()
         if line.strip()
@@ -290,10 +290,11 @@ def test_persist_run_outputs_exports_fairds_workbook_from_isa_values(
         entry for entry in log_entries
         if entry.get("event") == "workflow_result_summary"
     )
-    assert "metadata.json" in summary["artifact_names"]
-    assert "isa_values_json.json" in summary["artifact_names"]
-    assert "metadata_fairds.xlsx" in summary["artifact_names"]
+    assert "deliverables/metadata.json" in summary["artifact_names"]
+    assert "deliverables/isa_values.json" in summary["artifact_names"]
+    assert "deliverables/metadata_fairds.xlsx" in summary["artifact_names"]
     assert summary["artifact_keys"] == ["isa_values_json", "metadata_json"]
+
 
 
 def test_serialisable_artifacts_falls_back_to_output_filenames():

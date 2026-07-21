@@ -156,7 +156,8 @@ class TestSaveRuntimeConfig:
         
         assert config_file.exists()
         assert config_file.name == "runtime_config.json"
-        assert config_file.parent == output_dir
+        assert config_file.parent == output_dir / "reports"
+
 
     def test_save_runtime_config_valid_json(self, tmp_path):
         """Test that saved config is valid JSON."""
@@ -238,9 +239,10 @@ class TestSaveRuntimeConfig:
             output_path=output_dir
         )
         
-        expected_path = output_dir / "runtime_config.json"
+        expected_path = output_dir / "reports" / "runtime_config.json"
         assert config_file == expected_path
         assert str(config_file) == str(expected_path)
+
 
     def test_save_runtime_config_preserves_all_data(self, tmp_path):
         """Test that all collected data is preserved in saved file."""
