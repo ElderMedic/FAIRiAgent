@@ -70,14 +70,6 @@ def apply_matrix_to_metadata(
         sheet_payload["rows"] = rows
         isa_structure[sheet] = sheet_payload
 
-    for sheet, sheet_payload in isa_structure.items():
-        if isinstance(sheet_payload, dict):
-            fields = sheet_payload.get("fields")
-            if isinstance(fields, list):
-                for field in fields:
-                    if isinstance(field, dict):
-                        field.pop("value", None)
-
     for sheet, block in matrix.items():
         if sheet in isa_values or not isinstance(block, dict):
             continue

@@ -65,6 +65,7 @@ def test_sync_compiled_matrix_aligns_metadata_and_sidecar():
     assert len(meta["isa_values"]["sample"]["rows"]) == 1
     assert len(side["sample"]["rows"]) == 1
     assert meta["isa_values"]["sample"]["rows"] == side["sample"]["rows"]
+    assert state["artifacts"]["isa_values"] == state["artifacts"]["isa_values_json"]
 
 
 def test_apply_matrix_to_metadata_preserves_fields_list():
@@ -85,53 +86,6 @@ def test_apply_matrix_to_metadata_preserves_fields_list():
     }
     updated = apply_matrix_to_metadata(payload, matrix, matrix_id="abc")
     assert updated["isa_structure"]["study"]["fields"][0]["field_name"] == "study title"
-    assert "value" not in updated["isa_structure"]["study"]["fields"][0]
+    assert updated["isa_structure"]["study"]["fields"][0]["value"] == "T"
     assert updated["isa_values"]["study"]["rows"][0]["study identifier"] == "ST1"
     assert updated["isa_matrix_id"] == "abc"
-
-
-def test_sync_compiled_matrix_stores_isa_values_artifact_and_strips_field_values():
-    state = {
-        "artifacts": {
-            "metadata_json": json.dumps(
-                {
-                    "isa_structure": {
-                        "study": {
-                            "fields": [
-                                {
-                                    "field_name": "study title",
-                                    "value": "Concrete Study Title",
-                                    "description": "Title of study",
-                                    "confidence": 0.95,
-                                }
-                            ],
-                            "columns": ["study title"],
-                            "rows": [{"study title": "Concrete Study Title"}],
-                        }
-                    }
-                }
-            )
-        },
-        "context": {},
-    }
-    matrix = {
-        "study": {
-            "columns": ["study title"],
-            "rows": [{"study title": "Concrete Study Title"}],
-        }
-    }
-    projected = sync_compiled_matrix_to_state(state, matrix, recompile=True)
-
-    # 1. Stores matrix under artifacts["isa_values"]
-    assert "isa_values" in state["artifacts"]
-    stored_isa_values = json.loads(state["artifacts"]["isa_values"])
-    assert stored_isa_values["study"]["rows"] == [{"study title": "Concrete Study Title"}]
-
-    # 2. metadata_json has field metadata definitions in isa_structure, but individual field entries do NOT include "value"
-    meta = json.loads(state["artifacts"]["metadata_json"])
-    study_field = meta["isa_structure"]["study"]["fields"][0]
-    assert study_field["field_name"] == "study title"
-    assert study_field["description"] == "Title of study"
-    assert study_field["confidence"] == 0.95
-    assert "value" not in study_field
-
