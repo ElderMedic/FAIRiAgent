@@ -27,7 +27,13 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from .state import FAIRifierState, ProcessingStatus
-from .nodes import ReadFileNode, OrchestrateNode, AutoRepairNode, FinalizeNode
+from .nodes import (
+    ReadFileNode,
+    OrchestrateNode,
+    IsaMatrixCompilerNode,
+    AutoRepairNode,
+    FinalizeNode,
+)
 from .retrieval_nodes import IndexSourcesNode, SectionMapReduceNode
 from ..agents.base import BaseAgent
 from ..agents.document_parser import DocumentParserAgent
@@ -979,13 +985,15 @@ class FAIRifierLangGraphApp:
         workflow.add_node("index_sources", IndexSourcesNode(self))
         workflow.add_node("section_map_reduce", SectionMapReduceNode(self))
         workflow.add_node("orchestrate", OrchestrateNode(self))
+        workflow.add_node("isa_matrix_compiler", IsaMatrixCompilerNode(self))
         workflow.add_node("auto_repair", AutoRepairNode(self))
         workflow.add_node("finalize", FinalizeNode(self))
         workflow.set_entry_point("read_file")
         workflow.add_edge("read_file", "index_sources")
         workflow.add_edge("index_sources", "section_map_reduce")
         workflow.add_edge("section_map_reduce", "orchestrate")
-        workflow.add_edge("orchestrate", "auto_repair")
+        workflow.add_edge("orchestrate", "isa_matrix_compiler")
+        workflow.add_edge("isa_matrix_compiler", "auto_repair")
         workflow.add_edge("auto_repair", "finalize")
         workflow.add_edge("finalize", END)
         return workflow

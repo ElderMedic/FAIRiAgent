@@ -70,7 +70,10 @@ def test_main_workflow_routes_through_auto_repair_before_finalize():
     app = FAIRifierLangGraphApp.__new__(FAIRifierLangGraphApp)
     graph = app._build_graph_structure()
 
+    assert "isa_matrix_compiler" in graph.nodes
     assert "auto_repair" in graph.nodes
-    assert ("orchestrate", "auto_repair") in graph.edges
+    assert ("orchestrate", "isa_matrix_compiler") in graph.edges
+    assert ("isa_matrix_compiler", "auto_repair") in graph.edges
     assert ("auto_repair", "finalize") in graph.edges
+    assert ("orchestrate", "auto_repair") not in graph.edges
     assert ("orchestrate", "finalize") not in graph.edges

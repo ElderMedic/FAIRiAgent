@@ -44,6 +44,10 @@ from ..output_paths import (
     METADATA_OUTPUT_FILENAME,
 )
 
+from ..utils.isa_matrix_projection import (
+    extract_matrix_from_metadata,
+    sync_compiled_matrix_to_state,
+)
 from ..utils.llm_helper import get_llm_helper, normalize_llm_response_content
 from ..utils.report_generator import WorkflowReportGenerator
 from ..utils.run_control import run_stop_requested, reset_run_stop_requested
@@ -3516,6 +3520,83 @@ Field semantics for ``plan_tasks``:
             else:
                 logger.error(f"❌ Unknown decision '{decision}' and no metadata fields - escalating")
                 return "escalate"
+
+
+class IsaMatrixCompilerNode:
+    """Deterministic sole writer of ISA columns×rows projections.
+
+    Does not call an LLM. Compiles the best available matrix (sidecar, then
+    metadata.json) with exact-identifier collapse and syncs metadata + sidecar
+    onto one ``matrix_id``.
+    """
+
+    def __init__(self, app=None):
+        self.app = app
+
+    @staticmethod
+    def _load_matrix_from_state(state: FAIRifierState) -> Dict[str, Dict[str, Any]]:
+        artifacts = state.get("artifacts") or {}
+        sidecar = artifacts.get("isa_values_json") or artifacts.get("isa_values")
+        if sidecar:
+            try:
+                parsed = json.loads(sidecar) if isinstance(sidecar, str) else sidecar
+            except (TypeError, json.JSONDecodeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict) and any(
+                isinstance(block, dict) and ("columns" in block or "rows" in block)
+                for block in parsed.values()
+            ):
+                return {
+                    sheet: {
+                        "columns": list((block or {}).get("columns") or []),
+                        "rows": list((block or {}).get("rows") or []),
+                    }
+                    for sheet, block in parsed.items()
+                    if isinstance(block, dict)
+                }
+
+        metadata_json = artifacts.get("metadata_json")
+        if metadata_json:
+            try:
+                payload = (
+                    json.loads(metadata_json)
+                    if isinstance(metadata_json, str)
+                    else metadata_json
+                )
+            except (TypeError, json.JSONDecodeError, ValueError):
+                payload = None
+            if isinstance(payload, dict):
+                matrix = extract_matrix_from_metadata(payload)
+                if matrix:
+                    return matrix
+        return {}
+
+    @traceable(name="IsaMatrixCompiler", tags=["workflow", "metadata", "structure"])
+    async def __call__(self, state: FAIRifierState) -> FAIRifierState:
+        matrix = self._load_matrix_from_state(state)
+        if not matrix:
+            logger.info("IsaMatrixCompiler: no ISA matrix available; skipping")
+            context = state.setdefault("context", {})
+            context["isa_matrix_compiler"] = "isa_matrix_compiler_skipped"
+            return state
+
+        projected = sync_compiled_matrix_to_state(
+            state,
+            matrix,
+            recompile=True,
+            compiler_tag="isa_matrix_compiler",
+        )
+        row_counts = {
+            sheet: len((block or {}).get("rows") or [])
+            for sheet, block in (projected.get("matrix") or {}).items()
+            if isinstance(block, dict)
+        }
+        logger.info(
+            "IsaMatrixCompiler: matrix_id=%s rows=%s",
+            (projected.get("matrix_id") or "")[:12],
+            row_counts,
+        )
+        return state
 
 
 class AutoRepairNode:
