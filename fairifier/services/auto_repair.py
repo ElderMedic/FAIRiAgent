@@ -400,7 +400,7 @@ def _recompute_statistics(payload: Dict[str, Any]) -> None:
     }
 
 
-def _apply_auto_repair_patch(
+def _patch_metadata_json(
     state: Dict[str, Any],
     field_payload: Dict[str, Any],
 ) -> Dict[str, Any]:
