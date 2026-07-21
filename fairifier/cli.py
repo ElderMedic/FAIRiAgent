@@ -582,10 +582,13 @@ async def _run_workflow(
             for error in errors[:5]:  # Show first 5 errors
                 click.echo(f"  - {error}")
         
-        # Save runtime configuration
-        from fairifier.utils.config_saver import save_runtime_config
-        config_file = save_runtime_config(document_path, project_id, output_path)
-        click.echo(f"  ✓ runtime_config.json")
+        # Save runtime configuration (non-fatal: must not block artifact flush)
+        try:
+            from fairifier.utils.config_saver import save_runtime_config
+            save_runtime_config(document_path, project_id, output_path)
+            click.echo(f"  ✓ runtime_config.json")
+        except Exception as e:
+            click.echo(f"  ⚠️  Could not save runtime_config.json: {e}", err=True)
         
         # Save artifacts
         click.echo("\n💾 Saving artifacts...")
