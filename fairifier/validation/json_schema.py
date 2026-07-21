@@ -283,12 +283,22 @@ def validate_isa_structure(
         else:
             fields_list = sheet_data
             flat_dict = {}
+        row0 = {}
+        if isinstance(sheet_data, dict):
+            rows = sheet_data.get("rows", [])
+            if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+                row0 = {str(k).strip().lower(): v for k, v in rows[0].items()}
+
         if isinstance(fields_list, list):
             for item in fields_list:
                 if isinstance(item, dict):
                     name = (item.get("field_name") or item.get("name") or "").strip().lower()
                     if name:
-                        flat_dict[name] = item.get("value", item.get("field_value"))
+                        val = item.get("value", item.get("field_value"))
+                        if val is None and name in row0:
+                            val = row0[name]
+                        flat_dict[name] = val
+
 
         schema = build_isa_schema(sheet_name, sheet_fields, additional_properties=True)
         validator = jsonschema.Draft202012Validator(schema)

@@ -333,13 +333,16 @@ def _patch_flat_sheet_field(sheet_payload: Any, field_payload: Dict[str, Any]) -
         return False
     if not isinstance(fields, list):
         return False
+    clean_payload = deepcopy(field_payload)
+    clean_payload.pop("value", None)
     for idx, field in enumerate(fields):
         if isinstance(field, dict) and normalize_field(_metadata_field_name(field)) == key:
             merged = deepcopy(field)
-            merged.update(field_payload)
+            merged.update(clean_payload)
+            merged.pop("value", None)
             fields[idx] = merged
             return True
-    fields.append(deepcopy(field_payload))
+    fields.append(clean_payload)
     return True
 
 
@@ -368,32 +371,43 @@ def _recompute_statistics(payload: Dict[str, Any]) -> None:
     isa_structure = payload.get("isa_structure")
     if not isinstance(isa_structure, dict):
         return
-    fields_by_sheet: Dict[str, List[Dict[str, Any]]] = {}
-    for sheet, sheet_payload in isa_structure.items():
-        if isinstance(sheet_payload, dict):
-            fields = sheet_payload.get("fields", [])
-        elif isinstance(sheet_payload, list):
-            fields = sheet_payload
-        else:
-            fields = []
-        fields_by_sheet[sheet] = [field for field in fields if isinstance(field, dict)]
-    flat = [field for fields in fields_by_sheet.values() for field in fields]
-    stats = payload.setdefault("statistics", {})
-    if not isinstance(stats, dict):
-        payload["statistics"] = {}
-        stats = payload["statistics"]
-    stats["total_fields"] = len(flat)
-    for sheet in ("investigation", "study", "observationunit", "sample", "assay"):
-        stats[f"{sheet}_fields"] = len(fields_by_sheet.get(sheet, []))
-    stats["confirmed_fields"] = sum(1 for field in flat if field.get("status") == "confirmed")
-    stats["provisional_fields"] = sum(1 for field in flat if field.get("status") == "provisional")
+    total_fields = 0
+    study_fields = 0
+    confirmed_fields = 0
+    provisional_fields = 0
+    for sheet_name, sheet_data in isa_structure.items():
+        if not isinstance(sheet_data, dict):
+            continue
+        fields = sheet_data.get("fields", [])
+        if not isinstance(fields, list):
+            continue
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            total_fields += 1
+            if sheet_name == "study":
+                study_fields += 1
+            conf = field.get("confidence")
+            if isinstance(conf, (int, float)) and conf >= 0.8:
+                confirmed_fields += 1
+            else:
+                provisional_fields += 1
+    payload["statistics"] = {
+        "total_fields": total_fields,
+        "study_fields": study_fields,
+        "confirmed_fields": confirmed_fields,
+        "provisional_fields": provisional_fields,
+    }
 
 
-def _patch_metadata_json(state: Dict[str, Any], field_payload: Dict[str, Any]) -> Dict[str, Any]:
+def _apply_auto_repair_patch(
+    state: Dict[str, Any],
+    field_payload: Dict[str, Any],
+) -> Dict[str, Any]:
     artifacts = state.setdefault("artifacts", {})
     metadata_json = artifacts.get("metadata_json")
     if not metadata_json:
-        return {"metadata_json_patched": False, "reason": "metadata_json_missing"}
+        return {"metadata_json_patched": False, "reason": "no_metadata_json"}
     try:
         payload = (
             json.loads(metadata_json)
@@ -425,7 +439,7 @@ def _patch_metadata_json(state: Dict[str, Any], field_payload: Dict[str, Any]) -
     _recompute_statistics(payload)
     artifacts["metadata_json"] = json.dumps(payload, indent=2, ensure_ascii=False)
 
-    isa_values_json = artifacts.get("isa_values_json")
+    isa_values_json = artifacts.get("isa_values") or artifacts.get("isa_values_json")
     if isa_values_json:
         try:
             values_payload = (
@@ -438,11 +452,13 @@ def _patch_metadata_json(state: Dict[str, Any], field_payload: Dict[str, Any]) -
                 dict,
             ):
                 if _patch_matrix_sheet(values_payload[sheet], field_payload, sheet):
-                    artifacts["isa_values_json"] = json.dumps(
+                    values_str = json.dumps(
                         values_payload,
                         indent=2,
                         ensure_ascii=False,
                     )
+                    artifacts["isa_values"] = values_str
+                    artifacts["isa_values_json"] = values_str
                     isa_values_patched = True
         except (TypeError, json.JSONDecodeError):
             pass

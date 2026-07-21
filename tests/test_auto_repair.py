@@ -190,9 +190,9 @@ def test_generate_auto_repair_trace_applies_exact_candidate_patch():
     study_fields = metadata_json["isa_structure"]["study"]["fields"]
     assert any(
         field["field_name"] == "study title"
-        and field["value"] == "Pea cold stress response"
         for field in study_fields
     )
+
     assert (
         metadata_json["isa_structure"]["study"]["rows"][0]["study title"]
         == "Pea cold stress response"
