@@ -166,16 +166,25 @@ class ReactLoopMixin:
 
         try:
             contract = self._get_react_contract(scratchpad_name or getattr(self, "name", None))
+            operation_prefix = scratchpad_name or getattr(self, "name", "react")
+            run_config = {
+                "configurable": {"thread_id": thread_id},
+                "recursion_limit": max(50, contract["max_iterations"] * 20),
+            }
+            callbacks = list(
+                (self.llm_helper._build_run_config() or {}).get("callbacks", [])
+            )
+            callbacks.append(
+                self.llm_helper.build_usage_callback(operation_prefix)
+            )
+            run_config["callbacks"] = callbacks
             result = await asyncio.wait_for(
                 agent.ainvoke(
                     {
                         "messages": [{"role": "user", "content": task_message}],
                         "files": seed_files,
                     },
-                    config={
-                        "configurable": {"thread_id": thread_id},
-                        "recursion_limit": max(50, contract["max_iterations"] * 20),
-                    },
+                    config=run_config,
                 ),
                 timeout=timeout_seconds,
             )

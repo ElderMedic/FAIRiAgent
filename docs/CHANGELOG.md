@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- `workflow_report.json` now includes `performance`: workflow wall time,
+  per-phase agent duration, captured LLM latency, normalized input/output token
+  usage, configurable token/compute cost estimates, and report-only latency,
+  token, and cost gates. Missing provider usage or pricing is reported as
+  `insufficient_data`, never silently treated as zero.
+
+### Fixed
+
+- Hardened `fetch_external_url` against SSRF by rejecting credentials,
+  localhost/private/non-global DNS and connected peers, validating every
+  redirect, disabling automatic redirects, limiting redirect depth, restricting
+  readable content types, and capping responses at 2 MiB.
+- Marked manuscript figure regeneration as a slow test and removed its nested
+  `mamba run`, preventing `run_tests.py fast` from waiting indefinitely on a
+  second environment process.
+
 ### Planned / in progress
 
 - End-to-end 3/6-document LLM re-evaluation after ISA single-projection sync

@@ -1,6 +1,7 @@
 """Tests for deepagents integration helpers."""
 
-from unittest.mock import Mock
+import asyncio
+from unittest.mock import AsyncMock, Mock
 
 from fairifier.config import config
 from fairifier.agents.base import BaseAgent
@@ -82,6 +83,43 @@ def test_record_react_result_updates_state_scratchpad():
         "resolve_doi_metadata",
     ]
     assert state["react_scratchpad"]["Dummy"]["budget"]["max_iterations"] > 0
+
+
+def test_invoke_react_agent_registers_usage_and_existing_callbacks():
+    agent = DummyReactAgent("Dummy")
+    existing_callback = object()
+    usage_callback = object()
+    agent.llm_helper = Mock()
+    agent.llm_helper._build_run_config.return_value = {
+        "callbacks": [existing_callback]
+    }
+    agent.llm_helper.build_usage_callback.return_value = usage_callback
+    deep_agent = Mock()
+    deep_agent.ainvoke = AsyncMock(
+        return_value={
+            "structured_response": {"ok": True},
+            "iterations": 1,
+            "tool_calls": [],
+        }
+    )
+    state = {}
+
+    result = asyncio.run(
+        agent._invoke_react_agent(
+            deep_agent,
+            "task",
+            {},
+            "thread-1",
+            state,
+            "DocumentParser",
+            timeout_seconds=1,
+        )
+    )
+
+    assert result == {"ok": True}
+    invoke_config = deep_agent.ainvoke.await_args.kwargs["config"]
+    assert invoke_config["callbacks"] == [existing_callback, usage_callback]
+    agent.llm_helper.build_usage_callback.assert_called_once_with("DocumentParser")
 
 
 def test_get_context_feedback_prefers_agent_scoped_critic_feedback():

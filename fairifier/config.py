@@ -164,6 +164,17 @@ class FAIRifierConfig:
     # Processing limits
     max_document_size_mb: int = 50
     max_processing_time_minutes: int = 10
+    # Workflow telemetry and report-only gates. Pricing uses -1 to mean
+    # "unknown" so a missing rate cannot be mistaken for zero cost.
+    telemetry_llm_input_cost_per_million_usd: float = -1.0
+    telemetry_llm_output_cost_per_million_usd: float = -1.0
+    telemetry_compute_cost_per_hour_usd: float = -1.0
+    performance_gate_max_total_seconds: float = 3600.0
+    performance_gate_max_phase_seconds: float = 1800.0
+    performance_gate_max_total_tokens: int = 1_000_000
+    performance_gate_max_phase_tokens: int = 500_000
+    performance_gate_max_estimated_cost_usd: float = 10.0
+    performance_gate_max_phase_cost_usd: float = 5.0
     
     # Retry configuration
     max_step_retries: int = 2  # Default budget favors robustness over minimum token spend
@@ -725,6 +736,46 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.max_document_size_mb = int(os.getenv("FAIRIFIER_MAX_DOCUMENT_SIZE_MB"))
     if os.getenv("FAIRIFIER_MAX_PROCESSING_TIME_MINUTES"):
         config_instance.max_processing_time_minutes = int(os.getenv("FAIRIFIER_MAX_PROCESSING_TIME_MINUTES"))
+    for env_name, attr in (
+        (
+            "FAIRIFIER_LLM_INPUT_COST_PER_MILLION_USD",
+            "telemetry_llm_input_cost_per_million_usd",
+        ),
+        (
+            "FAIRIFIER_LLM_OUTPUT_COST_PER_MILLION_USD",
+            "telemetry_llm_output_cost_per_million_usd",
+        ),
+        (
+            "FAIRIFIER_COMPUTE_COST_PER_HOUR_USD",
+            "telemetry_compute_cost_per_hour_usd",
+        ),
+        (
+            "FAIRIFIER_PERFORMANCE_MAX_TOTAL_SECONDS",
+            "performance_gate_max_total_seconds",
+        ),
+        (
+            "FAIRIFIER_PERFORMANCE_MAX_PHASE_SECONDS",
+            "performance_gate_max_phase_seconds",
+        ),
+        (
+            "FAIRIFIER_PERFORMANCE_MAX_ESTIMATED_COST_USD",
+            "performance_gate_max_estimated_cost_usd",
+        ),
+        (
+            "FAIRIFIER_PERFORMANCE_MAX_PHASE_COST_USD",
+            "performance_gate_max_phase_cost_usd",
+        ),
+    ):
+        if os.getenv(env_name):
+            setattr(config_instance, attr, float(os.getenv(env_name)))
+    if os.getenv("FAIRIFIER_PERFORMANCE_MAX_TOTAL_TOKENS"):
+        config_instance.performance_gate_max_total_tokens = int(
+            os.getenv("FAIRIFIER_PERFORMANCE_MAX_TOTAL_TOKENS")
+        )
+    if os.getenv("FAIRIFIER_PERFORMANCE_MAX_PHASE_TOKENS"):
+        config_instance.performance_gate_max_phase_tokens = int(
+            os.getenv("FAIRIFIER_PERFORMANCE_MAX_PHASE_TOKENS")
+        )
     if os.getenv("FAIRIFIER_MIN_CONFIDENCE_THRESHOLD"):
         config_instance.min_confidence_threshold = float(os.getenv("FAIRIFIER_MIN_CONFIDENCE_THRESHOLD"))
     

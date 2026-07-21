@@ -7,6 +7,8 @@ Provides a unified interface for working with different LLM providers
 
 import json
 import hashlib
+from contextvars import ContextVar
+from time import perf_counter
 import logging
 import re
 from datetime import datetime
@@ -14,6 +16,7 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 from fairifier.utils.isa_order import ISA_LEVEL_ORDER
 
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langsmith import traceable
 
@@ -41,6 +44,10 @@ except ImportError:
 from ..config import config
 
 logger = logging.getLogger(__name__)
+_llm_call_started_at: ContextVar[float | None] = ContextVar(
+    "llm_call_started_at",
+    default=None,
+)
 
 QWEN_MAX_TOKENS_LIMIT = 65536
 
@@ -717,6 +724,77 @@ def _normalize_extracted_document_info(doc_info: Dict[str, Any]) -> Dict[str, An
     return {k: v for k, v in merged.items() if v not in (None, "", [], {})}
 
 
+class _LLMUsageCallback(BaseCallbackHandler):
+    """LangChain callback that records calls not routed through ``_call_llm``."""
+
+    def __init__(self, helper: "LLMHelper", operation_prefix: str):
+        self.helper = helper
+        self.operation_prefix = operation_prefix
+        self._calls: Dict[Any, tuple[float, List[Any]]] = {}
+
+    def on_chat_model_start(
+        self,
+        serialized: Dict[str, Any],
+        messages: List[List[Any]],
+        *,
+        run_id: Any,
+        **kwargs: Any,
+    ) -> None:
+        del serialized, kwargs
+        self._calls[run_id] = (
+            perf_counter(),
+            list(messages[0]) if messages else [],
+        )
+
+    def on_llm_start(
+        self,
+        serialized: Dict[str, Any],
+        prompts: List[str],
+        *,
+        run_id: Any,
+        **kwargs: Any,
+    ) -> None:
+        del serialized, kwargs
+        self._calls.setdefault(
+            run_id,
+            (
+                perf_counter(),
+                [HumanMessage(content=prompts[0])] if prompts else [],
+            ),
+        )
+
+    def on_llm_end(self, response: Any, *, run_id: Any, **kwargs: Any) -> None:
+        del kwargs
+        started_at, messages = self._calls.pop(run_id, (perf_counter(), []))
+        generations = getattr(response, "generations", None) or []
+        generation = generations[0][0] if generations and generations[0] else None
+        message = getattr(generation, "message", None)
+        content = getattr(message, "content", None)
+        if content is None:
+            content = getattr(generation, "text", "")
+        response_metadata = dict(getattr(response, "llm_output", None) or {})
+        response_metadata.update(dict(getattr(message, "response_metadata", None) or {}))
+        telemetry_result = type(
+            "TelemetryResult",
+            (),
+            {
+                "content": content,
+                "response_metadata": response_metadata,
+                "usage_metadata": getattr(message, "usage_metadata", None),
+            },
+        )()
+        self.helper._log_llm_response(
+            telemetry_result,
+            messages,
+            f"{self.operation_prefix}.inner_loop",
+            latency_seconds_override=perf_counter() - started_at,
+        )
+
+    def on_llm_error(self, error: BaseException, *, run_id: Any, **kwargs: Any) -> None:
+        del error, kwargs
+        self._calls.pop(run_id, None)
+
+
 class LLMHelper:
     """Helper class for LLM interactions."""
     
@@ -785,7 +863,14 @@ class LLMHelper:
         except Exception:
             pass
 
-    def _log_llm_response(self, result, messages, operation_name: str):
+    def _log_llm_response(
+        self,
+        result,
+        messages,
+        operation_name: str,
+        *,
+        latency_seconds_override: Optional[float] = None,
+    ):
         """Helper method to log LLM response to llm_responses list.
         
         Args:
@@ -811,6 +896,12 @@ class LLMHelper:
             
             # Normalize operation name for consistency
             normalized_operation = operation_name.lower().replace(" ", "_").replace(".", "_")
+            started_at = _llm_call_started_at.get()
+            latency_seconds = latency_seconds_override
+            if latency_seconds is None and started_at is not None:
+                latency_seconds = perf_counter() - started_at
+            if latency_seconds is not None:
+                latency_seconds = round(max(0.0, latency_seconds), 6)
             
             # Append to llm_responses
             self.llm_responses.append({
@@ -824,6 +915,10 @@ class LLMHelper:
                 "response_metadata": json_safe_provenance_value(
                     getattr(result, "response_metadata", None)
                 ),
+                "usage_metadata": json_safe_provenance_value(
+                    getattr(result, "usage_metadata", None)
+                ),
+                "latency_seconds": latency_seconds,
                 "timestamp": datetime.now().isoformat()
             })
             
@@ -836,6 +931,10 @@ class LLMHelper:
         except Exception as e:
             # Don't fail the entire operation if logging fails
             logger.warning(f"Failed to log LLM response for {operation_name}: {e}")
+
+    def build_usage_callback(self, operation_prefix: str) -> BaseCallbackHandler:
+        """Capture deep-agent inner-loop model calls in the shared telemetry."""
+        return _LLMUsageCallback(self, operation_prefix)
     
     async def _call_llm_json_object(
         self,
@@ -871,6 +970,26 @@ class LLMHelper:
             return result
 
     async def _call_llm(
+        self,
+        messages,
+        operation_name="LLM Call",
+        *,
+        json_mode: bool = False,
+        max_tokens: Optional[int] = None,
+    ):
+        """Measure one logical LLM interaction including provider fallbacks."""
+        token = _llm_call_started_at.set(perf_counter())
+        try:
+            return await self._call_llm_impl(
+                messages,
+                operation_name,
+                json_mode=json_mode,
+                max_tokens=max_tokens,
+            )
+        finally:
+            _llm_call_started_at.reset(token)
+
+    async def _call_llm_impl(
         self,
         messages,
         operation_name="LLM Call",
@@ -2947,6 +3066,11 @@ def get_llm_helper(force_reinit=False) -> LLMHelper:
     return _llm_helper
 
 
+def get_existing_llm_helper() -> Optional[LLMHelper]:
+    """Return the initialized helper without creating a provider connection."""
+    return _llm_helper
+
+
 def reset_llm_helper():
     """Reset the global LLM helper instance (force reinitialization on next call)."""
     global _llm_helper, _last_provider, _last_model, _last_base_url, _last_api_key_fingerprint
@@ -2969,4 +3093,3 @@ def save_llm_responses(output_path: Path, llm_helper: Optional[LLMHelper] = None
         json.dump(llm_helper.llm_responses, f, indent=2, ensure_ascii=False)
     
     logger.info(f"Saved {len(llm_helper.llm_responses)} LLM responses to {responses_file}")
-

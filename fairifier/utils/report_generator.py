@@ -4,7 +4,10 @@ import json
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
+
+from ..config import config
+from .performance_metrics import build_performance_metrics
 
 
 class WorkflowReportGenerator:
@@ -22,7 +25,9 @@ class WorkflowReportGenerator:
     def generate_report(
         self,
         state: Dict[str, Any],
-        metadata_json_path: Optional[str] = None
+        metadata_json_path: Optional[str] = None,
+        *,
+        llm_responses: Optional[Sequence[Mapping[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Generate comprehensive workflow execution report.
@@ -34,6 +39,18 @@ class WorkflowReportGenerator:
         Returns:
             Dictionary containing report data
         """
+        if llm_responses is None:
+            # Avoid initializing a provider connection during report generation,
+            # while still including telemetry from the workflow's shared helper.
+            from .llm_helper import get_existing_llm_helper
+
+            existing_llm_helper = get_existing_llm_helper()
+            llm_responses = (
+                existing_llm_helper.llm_responses
+                if existing_llm_helper is not None
+                else []
+            )
+
         report = {
             "generated_at": datetime.now().isoformat(),
             "workflow_status": state.get("status", "unknown"),
@@ -45,7 +62,12 @@ class WorkflowReportGenerator:
             "field_analysis": self._analyze_fields(state, metadata_json_path),
             "duplicate_check": self._check_duplicates(state, metadata_json_path),
             "retry_analysis": self._analyze_retries(state),
-            "timeline": self._generate_timeline(state)
+            "timeline": self._generate_timeline(state),
+            "performance": build_performance_metrics(
+                state,
+                llm_responses,
+                config,
+            ),
         }
         
         return report
@@ -633,6 +655,47 @@ class WorkflowReportGenerator:
             if len(timeline) > 10:
                 lines.append(f"... and {len(timeline) - 10} more entries")
         lines.append("")
+
+        performance = report.get("performance", {})
+        if performance:
+            workflow = performance.get("workflow", {})
+            usage = performance.get("llm_usage", {})
+            cost = performance.get("cost", {})
+            gates = performance.get("gates", {})
+            lines.append("PERFORMANCE AND COST")
+            lines.append("-" * 80)
+            lines.append(
+                f"Workflow wall time:              {workflow.get('wall_time_seconds')} s"
+            )
+            lines.append(
+                f"LLM calls with usage:            {usage.get('calls_with_token_usage', 0)}/{usage.get('calls', 0)}"
+            )
+            lines.append(
+                f"Observed tokens (in/out/total):  {usage.get('input_tokens', 0)}/"
+                f"{usage.get('output_tokens', 0)}/{usage.get('total_tokens', 0)}"
+            )
+            lines.append(
+                f"Observed LLM latency:            {usage.get('latency_seconds', 0)} s"
+            )
+            lines.append(
+                f"Estimated cost:                  {cost.get('estimated_total_cost')} USD "
+                f"({cost.get('estimate_status', 'unknown')})"
+            )
+            lines.append(
+                f"Performance gate:                {gates.get('overall_status', 'unknown')}"
+            )
+            for check in gates.get("checks", []):
+                lines.append(
+                    f"  {check.get('name')}: {check.get('status')} "
+                    f"({check.get('value')} / {check.get('limit')} {check.get('unit')})"
+                )
+            for phase, phase_checks in gates.get("per_phase", {}).items():
+                summary = ", ".join(
+                    f"{check.get('name')}={check.get('status')}"
+                    for check in phase_checks
+                )
+                lines.append(f"  phase {phase}: {summary}")
+            lines.append("")
         
         lines.append("=" * 80)
         

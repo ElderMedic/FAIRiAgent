@@ -103,6 +103,33 @@ def collect_runtime_config(
         "enable_langsmith": config.enable_langsmith,
         "max_step_retries": config.max_step_retries,
         "max_global_retries": config.max_global_retries,
+        "telemetry_llm_input_cost_per_million_usd": getattr(
+            config, "telemetry_llm_input_cost_per_million_usd", -1.0
+        ),
+        "telemetry_llm_output_cost_per_million_usd": getattr(
+            config, "telemetry_llm_output_cost_per_million_usd", -1.0
+        ),
+        "telemetry_compute_cost_per_hour_usd": getattr(
+            config, "telemetry_compute_cost_per_hour_usd", -1.0
+        ),
+        "performance_gate_max_total_seconds": getattr(
+            config, "performance_gate_max_total_seconds", 3600.0
+        ),
+        "performance_gate_max_phase_seconds": getattr(
+            config, "performance_gate_max_phase_seconds", 1800.0
+        ),
+        "performance_gate_max_total_tokens": getattr(
+            config, "performance_gate_max_total_tokens", 1_000_000
+        ),
+        "performance_gate_max_phase_tokens": getattr(
+            config, "performance_gate_max_phase_tokens", 500_000
+        ),
+        "performance_gate_max_estimated_cost_usd": getattr(
+            config, "performance_gate_max_estimated_cost_usd", 10.0
+        ),
+        "performance_gate_max_phase_cost_usd": getattr(
+            config, "performance_gate_max_phase_cost_usd", 5.0
+        ),
         "min_confidence_threshold": config.min_confidence_threshold,
         "auto_approve_threshold": config.auto_approve_threshold,
     }
@@ -168,4 +195,3 @@ def save_runtime_config(
         json.dump(all_config, f, indent=2, ensure_ascii=False)
 
     return config_file
-

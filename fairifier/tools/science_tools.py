@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import logging
+import ipaddress
+import json
+import socket
 from typing import Any, Dict, List
+from urllib.parse import urljoin, urlsplit
 
 import requests
 from langchain_core.tools import tool
@@ -13,6 +17,122 @@ from ..services.retrieval_cache import get_cached_value, make_cache_key, store_c
 
 logger = logging.getLogger(__name__)
 _SCIENCE_FAILURE_SENTINEL = "__science_error__"
+_MAX_EXTERNAL_RESPONSE_BYTES = 2 * 1024 * 1024
+_MAX_EXTERNAL_REDIRECTS = 3
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+
+
+def _validate_public_http_url(url: str) -> str:
+    """Validate that a URL resolves only to globally routable addresses."""
+    try:
+        parsed = urlsplit(url.strip())
+        port = parsed.port
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid external URL") from exc
+
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("External URL must use http or https")
+    if not parsed.hostname:
+        raise ValueError("External URL must include a hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("External URL credentials are not allowed")
+
+    hostname = parsed.hostname.rstrip(".").lower()
+    if (
+        hostname == "localhost"
+        or hostname.endswith(".localhost")
+        or hostname.endswith(".local")
+        or hostname.endswith(".internal")
+    ):
+        raise ValueError("External URL host is not public")
+
+    try:
+        literal_address = ipaddress.ip_address(hostname)
+    except ValueError:
+        literal_address = None
+    if literal_address is not None and not literal_address.is_global:
+        raise ValueError("External URL host is non-public")
+
+    try:
+        addresses = {
+            item[4][0].split("%", 1)[0]
+            for item in socket.getaddrinfo(
+                hostname,
+                port or (443 if parsed.scheme.lower() == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
+        }
+    except socket.gaierror as exc:
+        raise ValueError("External URL hostname could not be resolved") from exc
+
+    if not addresses:
+        raise ValueError("External URL hostname did not resolve")
+    for address in addresses:
+        try:
+            resolved = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError("External URL resolved to an invalid address") from exc
+        if not resolved.is_global:
+            raise ValueError("External URL resolved to a non-public address")
+
+    return parsed.geturl()
+
+
+def _validate_response_peer(response: requests.Response) -> None:
+    """Reject a non-public connected peer when requests exposes its socket."""
+    connection = getattr(getattr(response, "raw", None), "_connection", None)
+    sock = getattr(connection, "sock", None)
+    if sock is None:
+        return
+    try:
+        peer = str(sock.getpeername()[0]).split("%", 1)[0]
+        if not ipaddress.ip_address(peer).is_global:
+            raise ValueError("External URL connected to a non-public address")
+    except (AttributeError, OSError):
+        return
+
+
+def _read_limited_response(response: requests.Response) -> bytes:
+    """Read a streamed response without allowing unbounded memory use."""
+    chunks: list[bytes] = []
+    size = 0
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        size += len(chunk)
+        if size > _MAX_EXTERNAL_RESPONSE_BYTES:
+            raise ValueError("External response exceeds the 2 MiB limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _fetch_public_response(url: str) -> tuple[requests.Response, bytes]:
+    """Fetch a public URL while validating every redirect target."""
+    current_url = url
+    for redirect_count in range(_MAX_EXTERNAL_REDIRECTS + 1):
+        validated_url = _validate_public_http_url(current_url)
+        response = requests.get(
+            validated_url,
+            timeout=10,
+            headers={"User-Agent": "FAIRiAgent/2.2.0"},
+            allow_redirects=False,
+            stream=True,
+        )
+        _validate_response_peer(response)
+        if response.status_code in _REDIRECT_STATUSES:
+            location = response.headers.get("location")
+            response.close()
+            if not location:
+                raise ValueError("External redirect is missing a Location header")
+            if redirect_count >= _MAX_EXTERNAL_REDIRECTS:
+                raise ValueError("External URL exceeded the redirect limit")
+            current_url = urljoin(validated_url, location)
+            continue
+
+        response.raise_for_status()
+        return response, _read_limited_response(response)
+
+    raise ValueError("External URL exceeded the redirect limit")
 
 
 def _safe_get_json(
@@ -162,19 +282,32 @@ def create_science_tools(
     @tool
     def fetch_external_url(url: str) -> Dict[str, Any]:
         """Fetch content of a web link or URL and extract readable text."""
-        if not url.startswith(("http://", "https://")):
-            return {"success": False, "data": None, "error": "Invalid URL protocol"}
         try:
-            response = requests.get(url, timeout=10, headers={"User-Agent": "FAIRiAgent/2.1.0"})
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "")
+            response, content = _fetch_public_response(url)
+            content_type = response.headers.get("content-type", "").lower()
+            if content_type and not (
+                content_type.startswith("text/")
+                or "application/json" in content_type
+                or "application/xml" in content_type
+                or "application/xhtml+xml" in content_type
+            ):
+                return {
+                    "success": False,
+                    "data": None,
+                    "error": f"Unsupported external content type: {content_type}",
+                }
             if "application/json" in content_type:
                 try:
-                    return {"success": True, "data": response.json(), "error": None}
-                except Exception:
+                    encoding = response.encoding or "utf-8"
+                    return {
+                        "success": True,
+                        "data": json.loads(content.decode(encoding, errors="strict")),
+                        "error": None,
+                    }
+                except (UnicodeDecodeError, json.JSONDecodeError):
                     pass
             from bs4 import BeautifulSoup
-            soup = BeautifulSoup(response.content, "html.parser")
+            soup = BeautifulSoup(content, "html.parser")
             for script in soup(["script", "style"]):
                 script.decompose()
             text = soup.get_text(separator="\n")
@@ -185,8 +318,8 @@ def create_science_tools(
             if len(clean_text) > max_len:
                 clean_text = clean_text[:max_len] + "\n\n[... content truncated due to size limit ...]"
             return {"success": True, "data": clean_text, "error": None}
-        except Exception as e:
-            return {"success": False, "data": None, "error": str(e)}
+        except Exception as exc:
+            return {"success": False, "data": None, "error": str(exc)}
 
     @tool
     def query_ncbi_accession(accession_id: str, db: str = "biosample") -> Dict[str, Any]:

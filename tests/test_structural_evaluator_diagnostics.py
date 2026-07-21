@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from evaluation.evaluators.structural_evaluator import StructuralEvaluator
 
 
@@ -40,7 +42,9 @@ def test_value_accuracy_splits_missing_and_wrong():
     assert detail["wrong_value_rate"] > 0
 
 
+@pytest.mark.slow
 def test_petase_run_structural_diagnostics_smoke():
+    """Artifact-backed evaluator smoke; may load semantic scoring models."""
     run_dir = Path(
         "evaluation/runs/shadow_gate_20260703/workflow_phase4_hybrid_on/"
         "deepseek_v4-flash_v1.4.0_fairds8090_localpkg_phase4/"

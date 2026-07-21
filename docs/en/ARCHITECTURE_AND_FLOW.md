@@ -169,7 +169,21 @@ Outputs are saved to `output/<project_id>/`:
 5. **`runtime_config.json`**: Environment and config variables used in the run.
 6. **`auto_repair_trace.json`**: Deterministic repair decisions when auto mode
    applies patches.
-7. **`validation_report.txt`**: Shex/validator report (optional).
+7. **`workflow_report.json` / `workflow_report.txt`**: Quality, retrieval,
+   execution, and performance telemetry. The `performance` block records
+   workflow wall time, per-phase agent/LLM latency, observed input/output
+   tokens, configurable USD estimates, and report-only latency/token/cost
+   gates. Usage or pricing that a provider does not expose is marked
+   `insufficient_data` rather than estimated as zero.
+8. **`validation_report.txt`**: Shex/validator report (optional).
+
+Cost estimates use the run-specific rates configured through
+`FAIRIFIER_LLM_INPUT_COST_PER_MILLION_USD`,
+`FAIRIFIER_LLM_OUTPUT_COST_PER_MILLION_USD`, and optionally
+`FAIRIFIER_COMPUTE_COST_PER_HOUR_USD`. A value of `-1` means unknown; use `0`
+only when the endpoint is intentionally free/local. Gate thresholds use the
+`FAIRIFIER_PERFORMANCE_MAX_*` settings documented in `env.example`. Gates are
+diagnostic and do not change workflow completion status.
 
 ### Output JSON Schema Example
 

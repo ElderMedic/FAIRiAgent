@@ -6,38 +6,36 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.slow
 def test_generate_figures_writes_main_text_assets():
+    """Regenerate manuscript assets; excluded from the fast unit-test gate."""
     build = subprocess.run(
         [
-            "mamba",
-            "run",
-            "-n",
-            "FAIRiAgent",
             sys.executable,
             "evaluation/paper_experiments_v1/build_figure_manifest.py",
         ],
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,
+        timeout=120,
     )
     assert build.returncode == 0, build.stderr
 
     result = subprocess.run(
         [
-            "mamba",
-            "run",
-            "-n",
-            "FAIRiAgent",
             sys.executable,
             "evaluation/paper_experiments_v1/generate_figures.py",
         ],
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,
+        timeout=120,
     )
     assert result.returncode == 0, result.stderr
 
