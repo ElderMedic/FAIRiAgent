@@ -114,7 +114,7 @@ def _fetch_public_response(url: str) -> tuple[requests.Response, bytes]:
         response = requests.get(
             validated_url,
             timeout=10,
-            headers={"User-Agent": "FAIRiAgent/2.2.0"},
+            headers={"User-Agent": "FAIRiAgent/2.2.1"},
             allow_redirects=False,
             stream=True,
         )

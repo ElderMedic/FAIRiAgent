@@ -1,41 +1,62 @@
 # FAIRiAgent Docker Deployment Guide
 
-To keep the project root clean, all Docker configurations have been consolidated into this single reference guide. You can copy the sections below to create the files necessary for your specific deployment needs.
+Canonical Compose and Dockerfiles live under [`docker/`](../../../docker/). Prefer those files over copying snippets by hand.
 
 ## 1. Complete System Deployment (Docker Compose)
-This is the recommended way to run FAIRiAgent. It spins up the `fairifier-api`, the `FAIR-DS` knowledge base backend, and `Qdrant` (for Mem0 v3 vector memory) all in one go. It also maps the Docker socket so that the `BioMetadataAgent` can spawn BioContainers on the host machine.
 
-Create a file named `docker-compose.yml`:
+Recommended path: run the checked-in compose file so FAIR-DS, Qdrant, and the FAIRiAgent API start together (Docker socket is mounted for BioContainers).
+
+```bash
+cd docker
+# Optional: set LLM_PROVIDER / API keys / FAIRIFIER_LLM_BASE_URL in docker/.env
+docker compose up -d --build
+```
+
+| Service | URL |
+| --- | --- |
+| FAIRiAgent API / Web UI | http://localhost:8000 |
+| FAIR-DS | http://localhost:8083 |
+| Qdrant | http://localhost:6333 |
+
+Notes for new users:
+
+- **Apple Silicon**: `fairds` is pinned to `platform: linux/amd64` (official image has no arm64 manifest).
+- **Healthcheck**: the FAIR-DS image has no `curl`; compose probes the port with bash `/dev/tcp`.
+- **Storage**: host `docker/fairds_storage` → container `/root/fairds_storage`.
+- **Ollama on the host**: default `FAIRIFIER_LLM_BASE_URL=http://host.docker.internal:11434`.
+- **MinerU**: off by default (`MINERU_ENABLED=false`).
+
+Equivalent service definition (keep in sync with `docker/compose.yaml`):
 
 ```yaml
 services:
-  # FAIR Data Station API (Official Image)
   fairds:
     image: docker-registry.wur.nl/m-unlock/docker/fairds:latest
+    platform: linux/amd64
     ports:
       - "8083:8083"
     environment:
       JAVA_TOOL_OPTIONS: ${FAIRDS_JAVA_TOOL_OPTIONS:--Xmx2g}
     volumes:
-      - ./fairds_storage:/fairds_storage
+      - ./fairds_storage:/root/fairds_storage
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8083/api/package"]
-      interval: 20s
-      timeout: 10s
-      retries: 40
-      start_period: 120s
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8083'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
     restart: unless-stopped
 
-  # FAIRiAgent Core API
   fairifier-api:
     build:
-      context: .
+      context: ..
       dockerfile: ${FAIRIFIER_DOCKERFILE:-Dockerfile}
     ports:
       - "8000:8000"
     environment:
       LLM_PROVIDER: ${LLM_PROVIDER:-qwen}
       FAIRIFIER_LLM_MODEL: ${FAIRIFIER_LLM_MODEL:-qwen-flash}
+      FAIRIFIER_LLM_BASE_URL: ${FAIRIFIER_LLM_BASE_URL:-http://host.docker.internal:11434}
       QWEN_API_BASE_URL: ${QWEN_API_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
       LLM_API_KEY: ${LLM_API_KEY:-}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
@@ -43,7 +64,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       LLM_ENABLE_THINKING: ${LLM_ENABLE_THINKING:-false}
       FAIRIFIER_ENABLE_DEEP_AGENTS: ${FAIRIFIER_ENABLE_DEEP_AGENTS:-true}
-      FAIR_DS_API_URL: ${FAIR_DS_API_URL:-http://fairds:8083}
+      FAIR_DS_API_URL: ${FAIRIFIER_COMPOSE_FAIR_DS_URL:-http://fairds:8083}
       MINERU_ENABLED: ${MINERU_ENABLED:-false}
       MINERU_SERVER_URL: ${MINERU_SERVER_URL:-http://host.docker.internal:30000}
       CHECKPOINTER_BACKEND: ${CHECKPOINTER_BACKEND:-sqlite}
@@ -59,11 +80,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./output:/app/output
-      - ./kb:/app/kb
-      - ./examples:/app/examples:ro
-      # Required for BioMetadataAgent to spawn BioContainers on the host
-      - /var/run/docker.sock:/var/run/docker.sock  
+      - ../output:/app/output
+      - ../kb:/app/kb
+      - ../examples:/app/examples:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       fairds:
         condition: service_healthy
@@ -71,7 +91,6 @@ services:
         condition: service_started
     restart: unless-stopped
 
-  # Vector Database for Mem0 v3
   qdrant:
     image: qdrant/qdrant:v1.13.0
     ports:
@@ -84,71 +103,22 @@ volumes:
   qdrant_data:
 ```
 
-### Running the System
-1. Save the above block as `docker-compose.yml` in the root of the repository.
-2. Run `docker compose up -d --build`.
-
 ---
 
 ## 2. Minimal FAIRiAgent Dockerfile
-If you only want to build the core FAIRiAgent microservice without heavy dependencies (e.g., stripping out Playwright browser binaries) but still retaining the ability to trigger external Docker instances (like BioContainers), use this Dockerfile.
 
-Create a file named `Dockerfile.minimal`:
+Use [`docker/Dockerfile.minimal`](../../../docker/Dockerfile.minimal) for a lighter image without Playwright browsers (still includes Docker CLI for BioContainers).
 
-```dockerfile
-# ==============================================================================
-# FAIRiAgent Minimal Core Dockerfile
-# ==============================================================================
-FROM python:3.11-slim AS builder
-
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# ==============================================================================
-FROM python:3.11-slim
-
-WORKDIR /app
-
-COPY --from=builder /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
-COPY --from=builder /usr/local/bin/ /usr/local/bin/
-
-# Install the absolute minimum runtime dependencies.
-# Docker CLI is installed so the container can spawn BioContainers on the host 
-# via a mounted /var/run/docker.sock volume.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    docker.io \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy Core FAIRiAgent Code
-COPY fairifier/ ./fairifier/
-COPY kb/ ./kb/
-COPY run_fairifier.py .
-
-RUN mkdir -p output logs
-
-EXPOSE 8000
-
-ENTRYPOINT ["python", "run_fairifier.py"]
-CMD ["config-info"]
+```bash
+cd docker
+export FAIRIFIER_DOCKERFILE=docker/Dockerfile.minimal
+docker compose up -d --build fairifier-api
 ```
 
-### Using the Minimal Image
-To instruct the `docker-compose.yml` to use this lightweight image instead of the default heavy one, simply export the environment variable before running:
+`FAIRIFIER_DOCKERFILE` is resolved relative to the **repository root** (`build.context: ..`), so the value must be `docker/Dockerfile.minimal`, not `Dockerfile.minimal`.
+
+To refresh a local FAIR-DS JAR (optional):
+
 ```bash
-export FAIRIFIER_DOCKERFILE=Dockerfile.minimal
-docker compose up -d --build
+./scripts/update_fairds_jar.sh
 ```

@@ -59,7 +59,10 @@ RUN mkdir -p output logs
 # 5. Define standard API port
 EXPOSE 8000
 
-# Provide the flexibility to either serve the API or run CLI commands
-ENTRYPOINT ["python", "run_fairifier.py"]
-# Default to checking the config info
-CMD ["config-info"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/health 2>/dev/null || exit 1
+
+# Default: serve the API (same as the root Dockerfile).
+# Override for CLI, e.g.:
+#   docker compose run --rm fairifier-api python run_fairifier.py config-info
+CMD ["python", "-m", "uvicorn", "fairifier.apps.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

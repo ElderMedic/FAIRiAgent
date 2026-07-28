@@ -69,40 +69,88 @@ Research metadata generation is **time-consuming** and **error-prone**. Scientis
 
 ## 🚀 Quick Start
 
-### 1. Prerequisites & Installation
+Two supported paths. **Docker Compose** is the simplest way to get FAIR-DS + API running together (MinerU not required). Use the local conda path if you prefer a host Python install.
 
-*   Python 3.11+
-*   Node.js 18+ (optional, for Web UI)
+### Option A — Docker Compose (recommended)
+
+**Prerequisites:** Docker Desktop / Docker Engine with Compose v2.
 
 ```bash
-# Clone the repository
+git clone https://github.com/ElderMedic/FAIRiAgent.git
+cd FAIRiAgent/docker
+
+# Configure LLM (required for processing)
+cp .env.example .env
+# Edit .env: set LLM_PROVIDER + LLM_API_KEY (cloud), or Ollama settings (see comments in .env.example)
+
+docker compose up -d --build
+```
+
+**Smoke checks (install / debug):**
+
+```bash
+# FAIR-DS knowledge backend
+curl -sf http://localhost:8083/api/package | head
+
+# FAIRiAgent API
+curl -sf http://localhost:8000/api/v1/health
+
+# Pre-flight inside the API container (FAIR-DS + LLM)
+docker compose exec fairifier-api python run_fairifier.py validate-document --env-only
+```
+
+**First successful run (no MinerU):**
+
+```bash
+docker compose exec fairifier-api python run_fairifier.py process \
+  /app/examples/quickstart/earthworm_4n_paper_bioRxiv.md --verbose
+```
+
+- API docs: http://localhost:8000/docs  
+- If port 8000 is busy: `FAIRIFIER_HOST_PORT=8001 docker compose up -d` then use `http://localhost:8001`  
+- Apple Silicon is supported (`fairds` runs as `linux/amd64`)  
+- Details: [docker/README.md](docker/README.md) · [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md)
+
+### Option B — Local conda / mamba
+
+*   Python 3.11+
+*   Node.js 18+ (only if you want the Web UI)
+*   FAIR-DS at `http://localhost:8083` (or another port you configure in `.env`)
+
+**FAIR-DS without Docker (JAR):**
+
+```bash
+# Download once (writes docker/fairds/fairds.jar)
+./scripts/update_fairds_jar.sh
+
+# Default port 8083. If that port is taken, pick another:
+java -Dserver.port=8083 -jar docker/fairds/fairds.jar
+# then set FAIR_DS_API_URL=http://localhost:8083 in .env
+```
+
+**FAIR-DS with Docker only for the backend** (FAIRiAgent still local): `cd docker && docker compose up -d fairds`
+
+```bash
 git clone https://github.com/ElderMedic/FAIRiAgent.git
 cd FAIRiAgent
 
-# Create and activate conda environment
 mamba create -n FAIRiAgent python=3.11 -y
 mamba activate FAIRiAgent
-
-# Install Python dependencies
 pip install -r requirements.txt
 
-# Configure environment variables
 cp env.example .env
-# Edit .env with your LLM provider credentials (e.g. LLM_PROVIDER, LLM_API_KEY)
-```
+# Edit .env: LLM_PROVIDER, LLM_API_KEY (or Ollama), FAIR_DS_API_URL=http://localhost:8083
+# Quickstart Markdown path does not need MinerU: MINERU_ENABLED=false
 
-### 2. Basic Commands
+# Smoke check
+mamba run -n FAIRiAgent python run_fairifier.py validate-document --env-only
 
-```bash
-# CLI: Process a scientific PDF and extract metadata
-mamba run -n FAIRiAgent python run_fairifier.py process examples/inputs/earthworm_4n_paper_bioRXiv.pdf
-
-# Multi-source quickstart (Markdown paper + Excel supplement; no MinerU required)
+# Multi-source quickstart (Markdown + Excel; no MinerU)
 mamba run -n FAIRiAgent python run_fairifier.py process examples/quickstart/earthworm_4n_paper_bioRxiv.md --verbose
 
-# Web UI: Start local web application
+# Web UI (builds frontend on first run)
 mamba run -n FAIRiAgent python run_fairifier.py webui
-# Open http://localhost:8000 in your browser
+# Open http://localhost:8000
 ```
 
 ---
@@ -115,7 +163,7 @@ For detailed guides, architecture diagrams, and developer manuals, please see:
 *   [Source Workspace](docs/en/SOURCE_WORKSPACE.md) – Multi-file inputs, auto-discovery, evidence search.
 *   [LLM Integration Guide](docs/en/LLM_INTEGRATION_GUIDE.md) – Provider configuration (Ollama, OpenAI, Gemini, Qwen, Anthropic, DeepSeek).
 *   [Hybrid Retrieval Upgrade Plan](docs/en/development/HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md) – Hybrid retrieval, auto mode, ISA structural sync (§12.1).
-*   [Changelog](docs/CHANGELOG.md) – Release history (`v2.2.0` current).
+*   [Changelog](docs/CHANGELOG.md) – Release history (`v2.2.1` current).
 *   [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md) – Docker Compose setup.
 *   [FAIRiAgent REST API Manual](docs/en/development/FAIRIFIER_API_MANUAL.md) – FastAPI backend and SSE streaming.
 *   [Memory Management Guide](docs/MEMORY_GUIDE.md) – mem0 semantic memory.
@@ -127,10 +175,13 @@ For detailed guides, architecture diagrams, and developer manuals, please see:
 
 | Issue | Cause | Solution |
 | :--- | :--- | :--- |
-| **API connection timeout / LLM Error** | Invalid API keys or network connection error. | Verify `LLM_PROVIDER` and `LLM_API_KEY` in `.env`. |
-| **FAIR-DS connection failed** | Local FAIR-DS service is not running. | Start FAIR-DS: `curl http://localhost:8083/api/package`. If using Docker, run `docker compose up -d`. |
-| **Ollama Model not found** | Ollama lacks the selected model locally. | Run `ollama pull <model_name>` (e.g., `ollama pull qwen3:8b`). |
-| **Docker container networking** | The API container cannot reach host ports. | Use `http://host.docker.internal:11434` instead of `localhost` in Docker env. |
+| **API connection timeout / LLM Error** | Invalid API keys or network connection error. | Set `LLM_PROVIDER` and `LLM_API_KEY` in `docker/.env` (Compose) or root `.env` (local). Re-check with `validate-document --env-only`. |
+| **FAIR-DS connection failed** | FAIR-DS is not running or not healthy yet. | `cd docker && docker compose up -d fairds`, wait until healthy, then `curl http://localhost:8083/api/package`. |
+| **`fairifier-api` never starts** | Waiting on FAIR-DS healthcheck. | `docker compose ps` / `docker compose logs fairds`. First boot on Apple Silicon can take ~1–2 minutes. |
+| **Ollama Model not found** | Ollama lacks the selected model locally. | `ollama pull <model_name>` (e.g. `ollama pull qwen3:8b`). In Docker set `FAIRIFIER_LLM_BASE_URL=http://host.docker.internal:11434`. |
+| **LLM 429 / insufficient balance** | Cloud provider quota exhausted. | Top up the provider account, or switch `docker/.env` to a working key / local Ollama. Re-run `validate-document --env-only` then `process`. |
+| **Port 8000 already in use** | Another process bound the API port. | `FAIRIFIER_HOST_PORT=8001 docker compose up -d` (from `docker/`). |
+| **Docker container networking** | Container cannot reach host Ollama/MinerU. | Use `host.docker.internal` (Compose already sets `extra_hosts`). |
 
 ---
 

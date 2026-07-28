@@ -76,7 +76,25 @@ ollama pull qwen3:8b
 
 **方式 A — Docker Compose（推荐，一次拉起 API + FAIR-DS + Qdrant）**
 
-参见英文文档 [Docker Deployment Guide](../../en/guides/DOCKER_DEPLOYMENT.md)：在仓库根目录构建镜像后，进入 `docker/` 配置 `.env` 并执行 `docker compose up -d --build`。Compose 中的 `fairds` 服务会在容器网络内提供 `http://fairds:8083`，一般无需再手写 `FAIR_DS_API_URL`。
+参见 [Docker Deployment Guide](../../en/guides/DOCKER_DEPLOYMENT.md) 与 [`docker/README.md`](../../../docker/README.md)：
+
+```bash
+cd docker
+# 可选：在 docker/.env 中配置 LLM_PROVIDER / API key
+# Apple Silicon 已在 compose 中 pin platform=linux/amd64
+# 使用宿主机 Ollama 时默认 FAIRIFIER_LLM_BASE_URL=http://host.docker.internal:11434
+docker compose up -d --build
+```
+
+Compose 内 FAIR-DS 为 `http://fairds:8083`（容器间），宿主机探测用 `http://localhost:8083`。MinerU 默认关闭。
+
+轻量镜像构建（路径相对仓库根目录）：
+
+```bash
+cd docker
+export FAIRIFIER_DOCKERFILE=docker/Dockerfile.minimal
+docker compose up -d --build fairifier-api
+```
 
 **方式 B — 本机 JAR**
 
@@ -84,12 +102,10 @@ ollama pull qwen3:8b
 # 检查是否运行
 curl http://localhost:8083/api/package
 
-# 若无响应：下载并启动 FAIR-DS（与主 README 相同）
-# wget http://download.systemsbiology.nl/unlock/fairds-latest.jar
-# java -jar fairds-latest.jar
+# 若无响应：下载并启动 FAIR-DS
+# ./scripts/update_fairds_jar.sh   # 写入 docker/fairds/fairds.jar
+# java -jar docker/fairds/fairds.jar
 ```
-
-也可使用 `docker/pack-fairds-jar.sh` 将 `~/Downloads` 下最新的 `fairds*.jar` 复制到 `docker/fairds/fairds.jar`，并在 `docker/.env` 中设置 `FAIRDS_DOCKERFILE=Dockerfile.from-local` 后仅重建 `fairds` 镜像（JAR 体积大，默认不纳入 git）。
 
 ### 3️⃣ 运行快速测试
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.2.1] - 2026-07-28 – Docker / local quickstart shipping readiness
+
+### Fixed
+
+- FAIR-DS Compose healthcheck no longer depends on missing `curl` (uses bash
+  `/dev/tcp`); pin `platform: linux/amd64` for Apple Silicon.
+- Compose mounts FAIR-DS storage at `/root/fairds_storage`, serves API via
+  explicit uvicorn command, probes `/api/v1/health`, and keeps in-stack
+  `FAIR_DS_API_URL=http://fairds:8083` from being overwritten by host
+  `localhost` values.
+- Minimal image defaults to API serve; `FAIRIFIER_DOCKERFILE` path documented as
+  `docker/Dockerfile.minimal`.
+
+### Added
+
+- Root README Docker + local (JAR) quickstart paths with smoke checks;
+  `docker/.env.example` for Compose LLM configuration.
+
 ## [Unreleased]
 
 ### Added
@@ -665,6 +683,7 @@ python run_fairifier.py process document.pdf
 
 ## Version History
 
+- **v2.2.1** (2026-07-28): Docker / local quickstart shipping readiness
 - **v2.2.0** (2026-07-17): Multi-source ingest, auto repair, ISA sync & provenance
 - **v2.1.0** (2026-07-14): DeepSeek Pro transition, A/B evaluation & hybrid retrieval
 - **v2.0.4** (2026-07-03): Phase 4 hybrid default + DocumentParser outline

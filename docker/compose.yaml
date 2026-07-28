@@ -1,30 +1,56 @@
 services:
   # FAIR Data Station API (Official Image)
+  # Image is linux/amd64-only; platform pin enables Apple Silicon via emulation.
   fairds:
     image: docker-registry.wur.nl/m-unlock/docker/fairds:latest
+    platform: linux/amd64
     ports:
       - "8083:8083"
     environment:
       JAVA_TOOL_OPTIONS: ${FAIRDS_JAVA_TOOL_OPTIONS:--Xmx2g}
     volumes:
-      - ./fairds_storage:/fairds_storage
+      # Official image writes under /root/fairds_storage (not /fairds_storage).
+      - ./fairds_storage:/root/fairds_storage
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8083/api/package"]
-      interval: 20s
-      timeout: 10s
-      retries: 40
-      start_period: 120s
+      # Official image has no curl/wget; probe the listen port with bash /dev/tcp.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8083'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
     restart: unless-stopped
 
   fairifier-api:
     build:
       context: ..
+      # Default: repo-root Dockerfile. Minimal image:
+      #   FAIRIFIER_DOCKERFILE=docker/Dockerfile.minimal
       dockerfile: ${FAIRIFIER_DOCKERFILE:-Dockerfile}
+    # Always serve the API (overrides Dockerfile.minimal ENTRYPOINT/CMD).
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "fairifier.apps.api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     ports:
-      - "8000:8000"
+      - "${FAIRIFIER_HOST_PORT:-8000}:8000"
     environment:
       LLM_PROVIDER: ${LLM_PROVIDER:-qwen}
       FAIRIFIER_LLM_MODEL: ${FAIRIFIER_LLM_MODEL:-qwen-flash}
+      # Host Ollama from inside the container (ignored when cloud providers set their own base URL).
+      FAIRIFIER_LLM_BASE_URL: ${FAIRIFIER_LLM_BASE_URL:-http://host.docker.internal:11434}
       QWEN_API_BASE_URL: ${QWEN_API_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
       LLM_API_KEY: ${LLM_API_KEY:-}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
@@ -32,7 +58,9 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       LLM_ENABLE_THINKING: ${LLM_ENABLE_THINKING:-false}
       FAIRIFIER_ENABLE_DEEP_AGENTS: ${FAIRIFIER_ENABLE_DEEP_AGENTS:-true}
-      FAIR_DS_API_URL: ${FAIR_DS_API_URL:-http://fairds:8083}
+      # Always use the compose service DNS name inside the stack.
+      # Do not point this at localhost (that breaks in-container checks).
+      FAIR_DS_API_URL: ${FAIRIFIER_COMPOSE_FAIR_DS_URL:-http://fairds:8083}
       CROSSREF_MAILTO: ${CROSSREF_MAILTO:-}
       MINERU_ENABLED: ${MINERU_ENABLED:-false}
       MINERU_SERVER_URL: ${MINERU_SERVER_URL:-http://host.docker.internal:30000}

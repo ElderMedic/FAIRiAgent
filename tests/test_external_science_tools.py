@@ -51,7 +51,7 @@ def test_fetch_external_url(mock_get, _mock_dns):
     mock_get.assert_called_once_with(
         "https://example.com",
         timeout=10,
-        headers={"User-Agent": "FAIRiAgent/2.2.0"},
+        headers={"User-Agent": "FAIRiAgent/2.2.1"},
         allow_redirects=False,
         stream=True,
     )

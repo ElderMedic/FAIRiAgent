@@ -76,7 +76,7 @@ EXPOSE 8000
 # Add healthcheck (for API mode)
 # For one-shot CLI usage, run with: docker run --no-healthcheck ...
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/health 2>/dev/null || exit 1
+    CMD curl -f http://localhost:8000/api/v1/health 2>/dev/null || exit 1
 
 # Default to production-style API serving in container.
 # Override at runtime for CLI commands, for example:
