@@ -1,0 +1,78 @@
+{
+  "schema_version": "fairiagent.condition_registry.v2",
+  "conditions": [
+    {
+      "condition_id": "single_pass_structured_extraction",
+      "publication_name": "Single-pass structured extraction",
+      "component_settings": {
+        "document_retrieval": false,
+        "standards_context": false,
+        "planning_and_specialized_roles": false,
+        "critique_and_revision": false,
+        "deterministic_correction": false
+      }
+    },
+    {
+      "condition_id": "standards_guided_extraction",
+      "publication_name": "Standards-guided extraction",
+      "component_settings": {
+        "document_retrieval": false,
+        "standards_context": true,
+        "planning_and_specialized_roles": false,
+        "critique_and_revision": false,
+        "deterministic_correction": false
+      }
+    },
+    {
+      "condition_id": "retrieval_assisted_extraction",
+      "publication_name": "Retrieval-assisted extraction",
+      "component_settings": {
+        "document_retrieval": true,
+        "standards_context": true,
+        "planning_and_specialized_roles": false,
+        "critique_and_revision": false,
+        "deterministic_correction": false
+      }
+    },
+    {
+      "condition_id": "iterative_agentic_extraction",
+      "publication_name": "Iterative agentic extraction",
+      "component_settings": {
+        "document_retrieval": true,
+        "standards_context": true,
+        "planning_and_specialized_roles": true,
+        "critique_and_revision": true,
+        "deterministic_correction": false
+      }
+    },
+    {
+      "condition_id": "complete_fairiagent_system",
+      "publication_name": "Complete FAIRiAgent system",
+      "component_settings": {
+        "document_retrieval": true,
+        "standards_context": true,
+        "planning_and_specialized_roles": true,
+        "critique_and_revision": true,
+        "deterministic_correction": true
+      }
+    },
+    {
+      "condition_id": "lexical_retrieval_control",
+      "publication_name": "Lexical-retrieval control",
+      "component_settings": { "retrieval_method": "lexical" }
+    },
+    {
+      "condition_id": "hybrid_retrieval_system",
+      "publication_name": "Hybrid-retrieval system",
+      "component_settings": { "retrieval_method": "lexical_and_semantic" }
+    },
+    {
+      "condition_id": "hybrid_retrieval_with_deterministic_metadata_correction",
+      "publication_name": "Hybrid retrieval with deterministic metadata correction",
+      "component_settings": {
+        "retrieval_method": "lexical_and_semantic",
+        "deterministic_correction": true
+      }
+    }
+  ]
+}

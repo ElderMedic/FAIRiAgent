@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run evaluation for Anthropic models in parallel
-# Usage: ./run_anthropic_evaluation.sh [repeats] [workers]
+# Usage: ./run_anthropic_evaluation.sh [repeats] [workers] [approval-id]
 
 BASE_DIR="/Users/changlinke/Documents/Main/SSB/PhD/Research/FAIRiAgent"
 cd "$BASE_DIR"
@@ -12,6 +12,12 @@ PYTHON="/Users/changlinke/miniforge3/envs/FAIRiAgent/bin/python3"
 # Default values: 10 repeats, 5 workers
 REPEATS=${1:-10}
 WORKERS=${2:-5}
+APPROVAL_ID=${3:-${FAIRIAGENT_APPROVAL_ID:-}}
+
+if [ -z "$APPROVAL_ID" ]; then
+  echo "Refusing model execution: provide approval-id as argument 3 or FAIRIAGENT_APPROVAL_ID."
+  exit 2
+fi
 
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
@@ -33,6 +39,7 @@ nohup $PYTHON evaluation/scripts/run_batch_evaluation.py \
   --repeats $REPEATS \
   --workers $WORKERS \
   --exclude-documents biorem \
+  --approval-id "$APPROVAL_ID" \
   > "${OUTPUT_DIR}/sonnet.log" 2>&1 &
 SONNET_PID=$!
 echo "  Claude Sonnet 4.5 PID: $SONNET_PID"
@@ -47,6 +54,7 @@ nohup $PYTHON evaluation/scripts/run_batch_evaluation.py \
   --repeats $REPEATS \
   --workers $WORKERS \
   --exclude-documents biorem \
+  --approval-id "$APPROVAL_ID" \
   > "${OUTPUT_DIR}/haiku.log" 2>&1 &
 HAIKU_PID=$!
 echo "  Claude Haiku 4.5 PID: $HAIKU_PID"
@@ -67,4 +75,3 @@ echo "📁 Results will be in: $OUTPUT_DIR"
 echo ""
 echo "📊 After all runs complete, run analysis:"
 echo "  $PYTHON evaluation/analysis/run_analysis.py --runs-dir $OUTPUT_DIR"
-

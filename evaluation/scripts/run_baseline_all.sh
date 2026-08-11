@@ -17,6 +17,12 @@ BASE_OUTPUT_DIR="evaluation/runs/baseline_${TIMESTAMP}"
 GROUND_TRUTH="evaluation/datasets/annotated/ground_truth_filtered.json"  # Excludes biorem
 N_RUNS=10  # 每个文档运行 10 次
 WORKERS=3  # 并发数（比 agentic 低，因为单次调用更快）
+APPROVAL_ID=${FAIRIAGENT_APPROVAL_ID:-}
+
+if [ -z "$APPROVAL_ID" ]; then
+    echo "Refusing model execution: set FAIRIAGENT_APPROVAL_ID after reviewing token/cost estimates."
+    exit 2
+fi
 
 echo "========================================================================"
 echo "🔬 Baseline Single-Prompt Evaluation"
@@ -55,7 +61,8 @@ for config_pair in "${CONFIGS[@]}"; do
         --ground-truth "$GROUND_TRUTH" \
         --output-dir "$BASE_OUTPUT_DIR/baseline_${config_name}" \
         --workers "$WORKERS" \
-        --n-runs "$N_RUNS"
+        --n-runs "$N_RUNS" \
+        --approval-id "$APPROVAL_ID"
     
     if [ $? -eq 0 ]; then
         echo "✅ baseline_${config_name} completed"
@@ -79,4 +86,3 @@ echo "     --output-dir $BASE_OUTPUT_DIR/baseline_openai_gpt4o/evaluation_result
 echo ""
 echo "2. Compare with agentic workflow results using analysis tools"
 echo "========================================================================"
-

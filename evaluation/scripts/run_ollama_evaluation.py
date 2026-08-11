@@ -6,8 +6,8 @@ Runs FAIRiAgent evaluation on multiple Ollama models sequentially.
 Each model is evaluated one at a time to avoid GPU overload.
 
 Usage:
-    python run_ollama_evaluation.py --repeats 10
-    python run_ollama_evaluation.py --repeats 5 --models ollama_llama4 ollama_gemma3-27b
+    python run_ollama_evaluation.py --repeats 10 --approval-id <review-id>
+    python run_ollama_evaluation.py --repeats 5 --models ollama_llama4 ollama_gemma3-27b --approval-id <review-id>
     python run_ollama_evaluation.py --list-models
 """
 
@@ -96,7 +96,8 @@ def run_single_model_evaluation(
     env_file: Path,
     repeats: int = 10,
     preload: bool = True,
-    exclude_documents: list = None
+    exclude_documents: list = None,
+    approval_id: str = "",
 ) -> dict:
     """Run evaluation for a single model."""
     config_path = MODEL_CONFIGS_DIR / f"{config_name}.env"
@@ -139,6 +140,7 @@ def run_single_model_evaluation(
         "--repeats", str(repeats),
         "--workers", "1",  # Sequential for Ollama (local resources)
         "--timeout", "7200",  # 2h per document for slower local Ollama inference
+        "--approval-id", approval_id,
     ]
     
     # Add exclude documents if specified
@@ -217,7 +219,8 @@ def run_all_evaluations(
     env_file: Path,
     repeats: int = 10,
     preload: bool = True,
-    exclude_documents: list = None
+    exclude_documents: list = None,
+    approval_id: str = "",
 ) -> dict:
     """Run evaluation for all specified models sequentially."""
     results = {
@@ -246,7 +249,8 @@ def run_all_evaluations(
             env_file=env_file,
             repeats=repeats,
             preload=preload,
-            exclude_documents=exclude_documents
+            exclude_documents=exclude_documents,
+            approval_id=approval_id,
         )
         
         results["model_results"][model] = result
@@ -307,6 +311,11 @@ def main():
                        help="Skip Ollama connection check")
     parser.add_argument("--exclude-documents", type=str, nargs="+", default=None,
                        help="Document IDs to exclude (e.g., --exclude-documents earthworm biosensor)")
+    parser.add_argument(
+        "--approval-id",
+        default=None,
+        help="Human approval identifier confirming the reviewed token/cost estimate.",
+    )
     
     args = parser.parse_args()
     
@@ -316,6 +325,10 @@ def main():
         for config in get_available_ollama_configs():
             log(f"  - {config}")
         return 0
+
+    if not args.approval_id:
+        log("❌ Refusing model execution: --approval-id is required after reviewing token/cost estimates.")
+        return 2
     
     # Check Ollama connection
     if not args.skip_connection_check:
@@ -366,7 +379,8 @@ def main():
         env_file=args.env_file,
         repeats=args.repeats,
         preload=not args.no_preload,
-        exclude_documents=args.exclude_documents
+        exclude_documents=args.exclude_documents,
+        approval_id=args.approval_id,
     )
     
     # Summary

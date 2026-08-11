@@ -655,8 +655,16 @@ async def main():
                        help='Document IDs to exclude from evaluation (e.g., --exclude-documents biorem)')
     parser.add_argument('--include-documents', type=str, nargs='+', default=None,
                        help='Document IDs to include (overrides --exclude-documents)')
+    parser.add_argument('--approval-id', type=str, default=None,
+                       help='Researcher approval identifier required before model calls')
     
     args = parser.parse_args()
+
+    if not args.approval_id:
+        parser.error(
+            'model execution requires --approval-id after the token/cost estimate has been reviewed; '
+            'use the v2 manifest runner for new benchmark results'
+        )
     
     # Create output directory
     args.output_dir.mkdir(parents=True, exist_ok=True)

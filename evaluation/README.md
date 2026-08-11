@@ -2,6 +2,86 @@
 
 Comprehensive evaluation system for assessing FAIRiAgent's metadata extraction quality, comparing LLM models, and generating publication-ready results.
 
+> **Benchmark redesign in progress (2026-07-21).** The authoritative scientific
+> contract is [Evaluation Benchmark Methodology](../docs/en/EVALUATION_METHODOLOGY.md),
+> and the complete maintained work plan is
+> [Evaluation Benchmark Redesign and Implementation Plan](EVALUATION_IMPROVEMENT_PLAN.md).
+> Commands below describe the current implementation. Its legacy aggregate,
+> compatibility baseline contract, and historical run names must not be
+> presented as benchmark version 2 results.
+
+### Migration status of the former Layer 1–4 metrics
+
+The former layers are retained as implementation modules during the benchmark
+version 2 migration. They should not be archived as a group, and they are no
+longer the publication-facing benchmark structure:
+
+| Former implementation layer | Benchmark version 2 destination | Action |
+|---|---|---|
+| Layer 1 field presence | Field recovery / presence axis | Maintain the reusable field/required-field coverage primitives; do not present values-first presence as a complete selection benchmark |
+| Layer 2 value accuracy | GT-wide value score axis | Maintain and extend type-aware matching and entity-aligned scoring; report independent Task-B filling only with a fixed oracle field list |
+| Layer 3 structural/hierarchical evaluation | ISA structural fidelity axis | Maintain sheet, row, identifier, and linkage evaluation; make critical failures explicit gates |
+| Layer 4 novel-field classification | Optional discovery and fabrication diagnostics | Do not use as a primary quality axis; never require or infer ground-truth evidence, especially for PETase |
+
+The old `aggregate_score` and its arithmetic weights remain only for historical
+run reproduction. The new scorecard, Benchmark Success Rate, and geometric
+quality summary are defined in
+[EVALUATION_IMPROVEMENT_PLAN.md](EVALUATION_IMPROVEMENT_PLAN.md). Once the new
+scorer has golden-fixture coverage and a release version, obsolete explanatory
+plans and result summaries can be moved to `evaluation/archive/docs/`; the
+metric implementations themselves should remain until all historical loaders
+and reports have migrated.
+
+### Benchmark version 2 dry run
+
+The maintained entry point is manifest-driven. It schedules every declared
+document-condition-model-repetition cell before any model call:
+
+```bash
+mamba run -n FAIRiAgent python evaluation/harness/runner.py \
+  --manifest evaluation/benchmark/fixtures/benchmark_v2_smoke_manifest.json \
+  --dry-run
+```
+
+Use the asset inventory before a production run and score the persisted run
+index afterwards; see [Evaluation Harness](harness/README.md). The
+development/held-out split is approved in
+`datasets/APPROVED_SPLIT_MAP_20260721.json`; the frozen-panel production
+manifest is now materialized at
+`output/benchmark_v2_20260721_release_prep/production_manifest_20260721.json`.
+Its post-panel release gate passes all preparation checks and waits only for
+an attached campaign run index.
+
+Before scheduling progressive or focused comparisons, audit that the manifest
+conditions differ only in their declared capability group:
+
+```bash
+mamba run -n FAIRiAgent python -m evaluation.benchmark.condition_comparison \
+  --manifest <approved-publication-manifest.json>
+```
+
+This audit is token-free and fails closed on an undeclared component change.
+
+The corresponding non-baseline agentic/retrieval campaign is planned and
+executed through `evaluation.benchmark.agentic_campaign`; it defaults to a
+token-free plan and requires `--execute --approval-id` for subprocesses.
+
+The complete transition from token-free preparation to model execution is
+listed in [EXECUTION_CHECKLIST_20260721.md](EXECUTION_CHECKLIST_20260721.md).
+
+Publication baseline context assets are generated explicitly with
+`evaluation.benchmark.context_snapshots`. The token-free compiler uses the
+declared local FAIR-DS package for standards context and creates a lexical
+retrieval snapshot from source documents; it never reads ground-truth values
+or mutates the input manifest. The release gate rejects standards/retrieval
+baseline conditions when these context paths are missing.
+
+All legacy runners that can invoke a model require an explicit
+`--approval-id` (or `FAIRIAGENT_APPROVAL_ID` for shell wrappers). This records
+human review of the token and cost estimate; listing models and reporting-only
+commands remain token-free. New benchmark work should use the v2 manifest
+runner above.
+
 ## Quick Start
 
 ### 1. Setup (One-time)
@@ -43,7 +123,7 @@ python scripts/prepare_ground_truth.py validate \
   --ground-truth datasets/annotated/ground_truth_filtered.json
 ```
 
-### 3. Run Batch Evaluation
+### 3. Run Legacy Batch Evaluation (historical compatibility)
 
 ```bash
 # Run FAIRiAgent on all papers with all model configs
@@ -54,12 +134,13 @@ python scripts/run_batch_evaluation.py \
   --output-dir runs/batch_$(date +%Y%m%d_%H%M%S) \
   --repeats 10 \
   --workers 5 \
-  --exclude-documents biorem
+  --exclude-documents biorem \
+  --approval-id <researcher-approval-id>
 ```
 
 **Note (v1.2.2+)**: Each run uses isolated memory (unique `--project-id` per run). This ensures consistent, independent evaluation. See [Memory System](#memory-system-v122) for details.
 
-### 4. Run Analysis
+### 4. Run Legacy Analysis (historical compatibility)
 
 ```bash
 # Generate comprehensive analysis reports, visualizations, and tables
@@ -67,6 +148,12 @@ python analysis/run_analysis.py \
   --runs-dir runs \
   --output-dir analysis/output
 ```
+
+The compatibility evaluator accepts at most one run per document and stops if
+repeated runs are present; it no longer selects a “best” repetition. For new
+experiments, build a v2 run index and use
+`python -m evaluation.benchmark.evaluate_run_index`, which keeps every
+scheduled result and failure in the denominator.
 
 Results will be saved to `analysis/output/`:
 - **Figures**: `figures/*.png` - All visualizations
@@ -126,18 +213,32 @@ evaluation/
 - **`cleanup_incomplete_runs.py`**: Remove incomplete/timeout runs
 - **`reorganize_runs.py`**: Reorganize runs into clean directory structure
 
+## Legacy evaluator reference (compatibility only)
+
+The remainder of this README documents the former Layer 1–4 evaluator and
+historical retrieval diagnostics for reproducing old runs. It is not the
+publication-facing benchmark contract. New results must use the six-axis v2
+scorecard, canonical run index, and scientific condition names defined in
+`EVALUATION_IMPROVEMENT_PLAN.md`.
+
 ## Evaluation Metrics
 
 The framework evaluates:
 - **Completeness / Layer 1 (metadata extraction headline)**: What fraction of GT field *names* were extracted -- see **Layer 1 headline metrics** below; extra (non-GT) fields are **not** penalized at this layer
 - **Correctness (Layer 1, diagnostic)**: `field_coverage_precision` / `field_coverage_f1` -- optional diagnostics for output cleanliness, not the metadata-extraction headline
-- **Value Accuracy (Layer 2)**: Whether extracted field *values* actually match ground truth
+- **GT-wide Value Score (Layer 2)**: Whether extracted field *values* match ground truth; missing/unselected GT fields score zero, so this is not independent conditional filling accuracy
 - **Structural/Hierarchical F1 (Layer 3)**: Whether fields/rows are placed in the correct ISA sheet and correctly aligned to distinct real-world entities
 - **Novel Field Classification (Layer 4)**: Evidence-grounded classification of non-GT fields (beneficial discovery / domain insight / unsupported fabrication)
 - **LLM Judge Score**: Internal quality assessment from critic agent
 - **Workflow Reliability**: Completion rates, retry rates, failure patterns
 - **Runtime**: Time taken for extraction
 - **Pass@k**: Probability of successful extraction in k attempts (similar to SWE-agent benchmark)
+
+For the legacy Layer 4 diagnostics, “evidence-grounded” means that the system
+output can be checked against source text or the FAIR-DS vocabulary. It does not
+mean that the ground-truth annotation contains evidence spans. In particular,
+PETase ground truth has no evidence annotation and must not be augmented for
+this diagnostic.
 
 ### Layer 1 headline metrics (metadata extraction)
 
@@ -168,16 +269,21 @@ Pass@k presets (`moderate` / `strict` / `very_strict`) gate on **completeness /
 recall**, not F1 or precision. Layers 2-4 remain available for value/structure/
 fabrication audits when needed.
 
-### Layer 2 headline metrics (value accuracy)
+### Layer 2 headline metrics (GT-wide value score)
 
 Layer 2 scores **how similar each extracted value is to GT**, on a continuous
-0-1 scale per field. Semantically close but not identical strings (different
+0-1 scale per GT-populated field. Semantically close but not identical strings (different
 ID formats, paraphrased titles, shorthand enzyme names) receive **partial
 credit** via graded scorers in ``evaluation/evaluators/_value_matching.py`` --
 they are not forced into binary right/wrong except for strict controlled
 vocabulary (``categorical``) fields.
 
-**Report these as Layer 2 headline numbers:**
+**Report these as GT-wide Layer 2 headline numbers:**
+
+These values include missing/unselected fields as zero. For the independent
+value-filling task, provide every model with the same oracle package and field
+list and report the resulting conditional score separately; do not infer Task-B
+performance by dividing a joint score after selecting fields.
 
 | Metric | Use |
 |---|---|

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fairiagent.local/schemas/result-envelope-v2.json",
+  "title": "FAIRiAgent canonical document-run result version 2",
+  "type": "object",
+  "required": ["schema_version", "run_id", "instance_id", "condition_id", "model_id", "repetition", "status", "artifact", "validation", "axes"],
+  "properties": {
+    "schema_version": { "const": "fairiagent.result_envelope.v2" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "instance_id": { "type": "string", "minLength": 1 },
+    "condition_id": { "type": "string", "minLength": 1 },
+    "model_id": { "type": "string", "minLength": 1 },
+    "repetition": { "type": "integer", "minimum": 1 },
+    "status": { "enum": ["success", "failed", "timeout", "infrastructure_error", "not_observed"] },
+    "artifact": {
+      "type": "object",
+      "required": ["exists", "parseable"],
+      "properties": {
+        "exists": { "type": "boolean" },
+        "parseable": { "type": "boolean" },
+        "path": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "validation": {
+      "type": "object",
+      "required": ["fairds_valid", "isa_round_trip_valid", "critical_errors"],
+      "properties": {
+        "fairds_valid": { "type": "boolean" },
+        "isa_round_trip_valid": { "type": "boolean" },
+        "critical_errors": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "axes": {
+      "type": "object",
+      "required": ["information_coverage", "value_accuracy", "structural_fidelity", "interoperability"],
+      "properties": {
+        "information_coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "value_accuracy": { "type": "number", "minimum": 0, "maximum": 1 },
+        "structural_fidelity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "interoperability": { "type": "number", "minimum": 0, "maximum": 1 },
+        "efficiency": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": true
+    },
+    "resources": { "type": "object", "additionalProperties": true },
+    "failure": { "type": "object", "additionalProperties": true },
+    "provenance": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": false
+}

@@ -12,6 +12,12 @@ BASE_OUTPUT_DIR="evaluation/runs/rerun_${TIMESTAMP}"
 WORKERS=5  # 并发工作进程数
 GROUND_TRUTH="evaluation/datasets/annotated/ground_truth_filtered.json"  # 使用过滤后的 ground truth（排除 biorem）
 EVAL_ENV="evaluation/config/env.evaluation"  # 评估环境配置
+APPROVAL_ID=${FAIRIAGENT_APPROVAL_ID:-}
+
+if [ -z "$APPROVAL_ID" ]; then
+    echo "Refusing model execution: set FAIRIAGENT_APPROVAL_ID after reviewing token/cost estimates."
+    exit 2
+fi
 
 # 检查文件是否存在
 if [ ! -f "$GROUND_TRUTH" ]; then
@@ -80,7 +86,8 @@ PYTHON_EOF
         --model-configs "$MODEL_CONFIG" \
         --output-dir "$BASE_OUTPUT_DIR/${MODEL_NAME}_${DOCUMENT}" \
         --workers "$WORKERS" \
-        --repeats "$REPEAT_COUNT"
+        --repeats "$REPEAT_COUNT" \
+        --approval-id "$APPROVAL_ID"
     
     local STATUS=$?
     
@@ -233,4 +240,3 @@ echo ""
 echo "  3. 重新运行分析："
 echo "     python evaluation/analysis/run_analysis.py"
 echo "========================================================================"
-

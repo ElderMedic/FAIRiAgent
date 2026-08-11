@@ -343,8 +343,16 @@ def main():
         action='store_true',
         help='只检查，不实际更新文件'
     )
+    parser.add_argument(
+        '--approval-id',
+        default=None,
+        help='非 dry-run 时确认已审核 token/cost 的人工审批标识'
+    )
     
     args = parser.parse_args()
+
+    if not args.dry_run and not args.approval_id:
+        parser.error('非 dry-run 可能调用 LLM Judge，必须提供 --approval-id')
     
     # Load ground truth
     print("📊 加载 ground truth...")

@@ -1,0 +1,6 @@
+{
+  "document_id": "fixture_document",
+  "ground_truth_fields": [
+    {"field_name": "sample_name", "value": "S1"}
+  ]
+}

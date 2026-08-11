@@ -1,8 +1,90 @@
 # FAIRiAgent Evaluation Datasets
 
-> Last updated: 2026-05-07
+> Last updated: 2026-07-21
 >
-> **Important — manuscript benchmark composition.** This file lists 10 annotated documents plus the CompBioBench bundle. For the manuscript, these are partitioned into three roles (see §"Credibility Tiers and Manuscript Roles" below). The current main benchmark is **8 documents**; `biorem` and `pomato` are kept as supplementary case studies, and `compbiobench` is a separate research direction.
+> **Important — historical manuscript inventory.** This file lists 10 annotated
+> documents plus the CompBioBench bundle. The former v1 composition used **8
+> documents** as a main candidate and kept `biorem` and `pomato` supplementary;
+> the benchmark version 2 release split is recorded in the approved split map
+> below. `compbiobench` remains a separate research direction.
+
+> **Ground-truth policy for benchmark version 2 (2026-07-21).** Ground truth is
+> the human-annotated result converted into the repository format. A converter
+> does not create evidence annotations. Evidence fields are optional metadata
+> only and must never be required or inferred for PETase ground truth. The local
+> PETase package is treated as the FAIR-DS package it mirrors; local transport is
+> not a contamination condition. See
+> `evaluation/EVALUATION_IMPROVEMENT_PLAN.md` for the maintained benchmark
+> contract.
+
+> **Public curated collection (2026-07-21).**
+> `ground_truth_public_curated.json` is now the canonical 27-document public
+> collection: 19 expert-annotated PETase papers, six published mixed-domain
+> studies, `biosensor`, and `earthworm`. `biorem`, `pomato`, and
+> `compbiobench` are explicitly excluded and were not altered by this curation
+> pass. This collection resolves the PETase overlap by treating
+> `ground_truth_petase_only.json`/the expert PETase JSON sources as authoritative
+> for all 19 PETase documents. Development/held-out roles are recorded in the
+> approved split map below.
+
+## Benchmark version 2 split checkpoint
+
+The annotation-authority part of this checkpoint is resolved for the new public
+collection: expert PETase JSON is authoritative for the 19-paper PETase series,
+and the three excluded datasets are outside this collection. The approved
+development/held-out assignment is recorded separately from the curation audit.
+For the current release decision, `biorem` and `pomato` are excluded from the
+evaluation manifest; they remain available for a future separately labelled
+stress/case-study release.
+See [RELEASE_DECISION_CHECKPOINT.md](RELEASE_DECISION_CHECKPOINT.md) for the
+exact choices and their effects. The current token-free 7-development/
+20-held-out proposal is recorded in
+[SPLIT_PROPOSAL_20260721.md](SPLIT_PROPOSAL_20260721.md). It was approved as
+`researcher-approved:benchmark-v2-split-20260721` and persisted in
+[APPROVED_SPLIT_MAP_20260721.json](APPROVED_SPLIT_MAP_20260721.json).
+
+The repository also retains two historical annotation collections that must not
+be silently merged into a release manifest:
+
+| Collection | Documents | Current contents | Release role |
+|---|---:|---|---|
+| `ground_truth_phase4_ab.json` | 8 | six mixed-domain documents plus two PETase papers | Historical collection definition; no GT authority |
+| `ground_truth_petase_only.json` | 19 | PETase papers, including the same two papers above | PETase-specialized view; canonical authority for all 19 PETase documents |
+
+The PETase overlap is exactly `petase_10_1002_anie_202218390` and
+`petase_10_1038_s41586-020-2149-4`; the active release uses the complete
+canonical v3 value asset from `petase_only` for both and never merges fields
+across collections. `ground_truth_biorem.local.json` is a separate historical
+case-study collection and is outside the current release. The
+development/held-out roles are now fixed by the approved split map. The
+frozen-panel production manifest is now materialized at
+`output/benchmark_v2_20260721_release_prep/production_manifest_20260721.json`;
+its post-panel release gate passes all preparation checks and remains blocked
+only until a campaign run index is attached.
+
+### Measured source-layout signals
+
+`evaluation/benchmark/dataset_inventory.py` reports measured PDF layout signals
+separately from declared benchmark strata. These include text-block counts,
+image-page counts, sparse/no-text pages, and PyMuPDF table-detection counts and
+status. They are diagnostic observations, not automatic OCR-quality or
+table-density labels; Markdown and other non-PDF sources remain explicitly
+`not_measured` where a signal does not apply. Production stress strata still
+require a documented sampling/adjudication decision.
+
+For a historical collection other than `ground_truth_public_curated.json`, use
+`evaluation.benchmark.annotation_audit` with repeated
+`--authoritative-overlap DOCUMENT_ID=COLLECTION_PATH` arguments to create a
+non-overlapping collection. The helper copies one complete annotation per
+document and carries adjacent `values/ground_truth_<id>_values.json` references;
+it does not merge fields or add evidence. The current token-free audit report
+is persisted at
+`output/benchmark_v2_20260721_release_prep/annotation_audit_20260721.json`;
+it compares canonical value files separately from legacy metadata/path fields.
+
+All PETase ground truth in both collections is the human-annotated result
+converted into repository JSON. The current files contain no `_evidence`
+annotations; the benchmark does not add or infer them.
 
 ## Directory Structure
 
@@ -11,9 +93,11 @@ evaluation/datasets/
 ├── DATASET_README.md              ← this file
 ├── annotated/
 │   ├── ground_truth_filtered.json ← master index: 10 documents, field definitions only (no values)
+│   ├── ground_truth_public_curated.json ← canonical public index (27 documents; three exclusions)
+│   ├── public_schema_profile.json  ← observed core/extension field frequencies; descriptive, not required
 │   ├── compbiobench_metadata.json ← CompBioBench dataset (separate format)
 │   └── values/
-│       └── ground_truth_{id}_values.json  ← per-dataset expected metadata values with _evidence
+│       └── ground_truth_{id}_values.json  ← source-backed values under the permissive v3 contract
 ├── raw/
 │   ├── {dataset_id}/
 │   │   ├── study_narrative.md     ← input document: research description in ISA-like format
@@ -76,16 +160,28 @@ Contains field definitions only — which metadata fields should be extracted, o
 
 ### `values/ground_truth_{id}_values.json` (per-dataset)
 
-Contains expected metadata values with `_evidence` traceability:
+Contains expected source-reported metadata values under the permissive
+`fairiagent.ground_truth_values.v3` contract. Every document records original
+source assets and checksums, publication metadata where verified, annotation
+policy, a linked ISA core, and domain extensions. Missing/unreported fields are
+omitted and are not scored; placeholder strings are prohibited. The schema is
+`evaluation/schemas/ground_truth_values.schema.json`.
 
 ```json
 {
   "document_id": "...",
-  "paper_doi": "...",
+  "schema_version": "fairiagent.ground_truth_values.v3",
+  "publication": {"doi": "...", "title": "..."},
+  "schema_profile": {
+    "core": "fairds_isa_linked_core_v1",
+    "extensions": ["domain_extension"],
+    "field_policy": "source_reported_fields_only"
+  },
+  "source_assets": [{"path": "...", "role": "primary_source", "sha256": "..."}],
   "isa_sheets": {
     "investigation": {
       "multi_row": true,
-      "expected_rows": [{ "investigation identifier": "...", "_evidence": "..." }]
+      "expected_rows": [{ "investigation identifier": "..." }]
     },
     "study": { ... },
     "assay": { ... },
@@ -125,9 +221,12 @@ Numbers in parentheses = number of expected rows (for multi-row sheets).
 | aetherobacter_fasciculatus_genome | `paper.pdf` (630 KB) | PDF | Europe PMC render (PMC11876861) |
 | pseudomonas_recombinase_screen | `paper.pdf` (1.5 MB) | PDF | Europe PMC render (PMC10711431) |
 
-## Credibility Tiers and Manuscript Roles
+## Historical credibility tiers and manuscript roles
 
-The 10 annotated documents differ in (a) source provenance — peer-reviewed paper vs. template/proposal — and (b) annotation traceability — whether each ground-truth row carries an `_evidence` string back to a specific span of the source. For the manuscript, this matters because the headline claims (Structural/Hierarchical F1, Pass@k, ablation McNemar) must rest on ground truth that an external reviewer would accept.
+The following tiers are a historical provenance inventory, not the benchmark
+version 2 split. They describe source type and curation history; a legacy
+`_evidence` count is shown only as a diagnostic where it was recorded. It is
+not a ground-truth quality gate, and it is never required for PETase.
 
 > **Structural/Hierarchical F1, precisely defined:** this is *not* a single opaque number. It is `StructuralEvaluator` (Layer 3, `evaluation/evaluators/structural_evaluator.py`), reported as two independently-computed sub-metrics plus their combination -- see the Metrics Glossary in `evaluation/README.md` for exact formulas:
 > - **3a. Sheet-placement accuracy** -- did each extracted field land on the correct ISA sheet (`investigation`/`study`/`sample`/`observationunit`/`assay`), independent of its value?
@@ -135,11 +234,12 @@ The 10 annotated documents differ in (a) source provenance — peer-reviewed pap
 >
 > This requires the per-document *value*-level ground truth under `values/ground_truth_{document_id}_values.json` (see "`values/ground_truth_{id}_values.json` (per-dataset)" below for its schema) -- not just the `ground_truth_fields` field-presence GT used for Layer 1. Documents without a matching `values/` file are skipped for Layer 2/3 and only scored on Layer 1 (field-name coverage).
 
-The audit results (2026-05-07) are below.
+The legacy audit results (2026-05-07) are below. They do not freeze the v2
+development, held-out, generalization, or supplemental roles.
 
-### Tier A — High-credibility research papers (6 docs, **always in main benchmark**)
+### Tier A — High-credibility research papers (6 docs, v1 candidate core)
 
-| Dataset | `generated_by` | DOI | _evidence rows | Notes |
+| Dataset | `generated_by` | DOI | legacy evidence diagnostic | Notes |
 |---|---|---|---|---|
 | `arabidopsis_vacuolar_srna` | `manual_curation_from_paper_bioRxiv` | ✓ | 13/13 (100%) | bioRxiv 793950, ENA PRJEB41301 |
 | `pea_cold_stress` | `manual_curation_from_paper_Mazurier` | ✓ | 11/11 (100%) | MDPI Genes 13:1119 |
@@ -148,25 +248,31 @@ The audit results (2026-05-07) are below.
 | `aetherobacter_fasciculatus_genome` | `manual_curation_from_paper_PMC1187…` | ✓ | 9/9 (100%) | Microb Biotechnol 18:e70104 |
 | `pseudomonas_recombinase_screen` | `manual_curation_from_paper_PMC1071…` | ✓ | 10/10 (100%) | Nucleic Acids Res 51:12522 |
 
-All Tier-A datasets have peer-reviewed publications, ENA/NCBI accessions, and per-row `_evidence` strings. They are the credibility backbone of the manuscript.
+All Tier-A datasets have peer-reviewed publications and ENA/NCBI accessions.
+Their legacy evidence diagnostics must not be confused with human annotation
+requirements.
 
-### Tier B — Research-paper sources with lighter curator metadata (2 docs, **in main benchmark**)
+### Tier B — Research-paper sources with lighter curator metadata (2 docs, v1 candidate core)
 
-| Dataset | `generated_by` | DOI | _evidence rows | Source | Notes |
+| Dataset | `generated_by` | DOI | legacy evidence diagnostic | Source | Notes |
 |---|---|---|---|---|---|
 | `biosensor` | `manual review of source document` | — | 18/18 (100%) | Research paper PDF (mineru) | No top-level DOI field, but `_evidence` rows are populated |
 | `earthworm` | `manual review of source document` | — | 20/20 (100%) | bioRxiv preprint PDF (mineru) | Used as the primary smoke/diagnostic dataset; confirmed real research paper |
 
-Tier-B datasets keep the same per-row evidence discipline as Tier A but lack a top-level `paper_doi` field. Add the DOI fields before submission.
+Tier-B rows were historically audited with the same optional diagnostic, but
+that diagnostic is not required by the v2 contract. Add DOI fields if they are
+needed for publication provenance.
 
-### Tier C — Supplementary case studies (2 docs, **excluded from main benchmark for v1 manuscript**)
+### Tier C — Supplementary case-study candidates (2 docs)
 
-| Dataset | `generated_by` | _evidence rows | Reason for exclusion | Manuscript role |
+| Dataset | `generated_by` | legacy evidence diagnostic | Source/role consideration | Manuscript role |
 |---|---|---|---|---|
 | `biorem` | `manual review of source document` | 35/35 (100%) | Source is a **BIOREM metadata template (Excel)**, not a research paper. Domain language differs from FAIR-DS terms; B1 zero-shot scored 0.838 because GT field names are template-aligned (artifact, not generalisable). | Supplementary §S — "structured-template" stress test |
 | `pomato` | `manual review of source document` | **0/18 (0%)** | Source is an **EU project proposal**, not a research paper; ground truth has 789 fields, no Assay sheet (only inv/study/sample/observationunit), and **none of the rows carry `_evidence` strings**. B1 scored 0.040 on it because the field-name conventions in the GT do not appear in the source. | Supplementary §S — "proposal/grant document" case study |
 
-These two datasets remain valuable as illustrations of edge cases (template-aligned vs. proposal-style sources) but cannot be averaged into the main hierarchical-F1 number without distorting it.
+These two datasets remain valuable as illustrations of edge cases
+(template-aligned vs. proposal-style sources). Their v2 role and weighting must
+be decided by the release split, not inferred from legacy scores.
 
 ### Tier D — Bioinformatics agentic benchmark (separate research direction)
 
@@ -176,7 +282,7 @@ These two datasets remain valuable as illustrations of edge cases (template-alig
 
 CompBioBench's evaluation flow is `data file → biocontainer tool → metadata extraction`, whereas Tiers A/B evaluate `paper text → ISA-Tab reconstruction`. Keeping them separate avoids comparing apples to oranges.
 
-### Manuscript benchmark composition (v1)
+### Historical manuscript benchmark composition (v1)
 
 | Tier | Count | Datasets | Role |
 |---|---|---|---|
@@ -185,14 +291,21 @@ CompBioBench's evaluation flow is `data file → biocontainer tool → metadata 
 | C — non-paper sources | 2 | biorem, pomato | Supplementary case studies |
 | D — bioinformatics agentic | 1 bundle | compbiobench_metadata | Separate stress test |
 
-**Main benchmark size:** **8 documents**. Domains covered: plant transcriptomics, marine metagenomics, microbial genomics, microbial genetics / synthetic biology, environmental microbiology, human microbiome, ecotoxicology, biosensors → **7 distinct domains**.
+This historical composition had **8 documents** in the main benchmark. It is
+not the v2 release composition; v2 uses the approved 27-document map described
+above.
 
 ### Open credibility items (to address before final submission)
 
-1. **Add `paper_doi` to Tier-B JSONs** (biosensor, earthworm) so every main-benchmark row has a citeable source.
+1. **Publication provenance:** completed for Earthworm using the verified
+   bioRxiv DOI `10.1101/2025.06.16.660036`. Biosensor remains explicitly tagged
+   `doi_status: not_present_in_source`; a DOI must not be invented before the
+   manuscript has a verifiable registration.
 2. **Re-run a 5%-sample re-annotation by a second curator** on Tier-A + Tier-B (≥ 1 row per sheet per dataset) and report Cohen's κ. This is the cheapest evidence that the ground truth is not single-curator artefact.
 3. **Tag any LLM-assisted annotations explicitly** (e.g. add `_annotation_method: "llm_drafted_then_human_reviewed"` per row where applicable). The current `generated_by` field reads "manual" everywhere, but if any draft pass used an LLM the manuscript should disclose it for transparency.
-4. **`pomato` re-curation:** add `_evidence` strings to all 18 rows (currently 0/18) before re-introducing it into the main benchmark.
+4. **Case-study role decision:** resolved for this release — `biorem` and
+   `pomato` are excluded from the evaluation manifest and remain available for
+   a future separately labelled stress/case-study release.
 
 ---
 
@@ -204,7 +317,7 @@ CompBioBench's evaluation flow is `data file → biocontainer tool → metadata 
 
 2. Create `evaluation/datasets/annotated/values/ground_truth_{dataset_id}_values.json`:
    - Follow the existing schema with `isa_sheets` → `expected_rows`
-   - Every field value must have `_evidence` tracing back to paper or ENA metadata
+   - Preserve the evidence policy of the annotation protocol. Do not invent `_evidence`; PETase annotations are valid without it.
    - Use FAIR-DS terms and packages relevant to the study domain
 
 3. Rebuild `ground_truth_filtered.json`:

@@ -1,5 +1,12 @@
 # Hybrid Retrieval, Evidence Store, and Deterministic Coverage — Upgrade Plan
 
+> **Evaluation terminology note (2026-07-21):** This document records component
+> design and implementation history. New benchmark conditions and publication
+> names are defined by the
+> [Evaluation Benchmark Redesign and Implementation Plan](../../../evaluation/EVALUATION_IMPROVEMENT_PLAN.md).
+> Historical engineering labels in this document must not be reused as scientific
+> condition names.
+
 > **Status: PROPOSED (v1.5.0 candidate) — v3, resilient-default revision**
 > This document supersedes the "no vector RAG" guardrail in
 > [SOURCE_GROUNDING_ARCHITECTURE.md](SOURCE_GROUNDING_ARCHITECTURE.md) for the
@@ -1040,7 +1047,9 @@ monitor extra_fields on semantic-fallback fields in expanded slice.
 Artifacts: `evaluation/runs/phase4_adaptive_20260705/workflow_shadow_dimfix/`,
 `workflow_phase4_dimfix/`, smoke `workflow_phase4_dimfix_smoke/`.
 
-**Handover:** See [HYBRID_RETRIEVAL_PHASE4_HANDOVER.md](./HYBRID_RETRIEVAL_PHASE4_HANDOVER.md) for full context, provenance, and next steps for agents/colleagues.
+**Historical handover note:** The earlier engineering handover was not retained
+as a maintained document. Current evaluation terminology, provenance, and next
+steps are defined in the benchmark redesign plan linked at the top of this file.
 
 **Service note:** MinerU is **`http://localhost:30000`** (canonical; see `env.example` /
 `fairifier/config.py`). An earlier agent note incorrectly cited `:30001` — never
