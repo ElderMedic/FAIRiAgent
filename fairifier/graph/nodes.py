@@ -68,6 +68,13 @@ from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.context_observability import log_context_usage
 from ..utils.document_text import read_document_text
 from ..utils.execution_history import compact_prior_attempts_for_agent
+from ..utils.retry_progress import (
+    build_retry_observation,
+    capture_agent_output,
+    is_better_candidate,
+    restore_agent_output,
+    should_stop_for_no_progress,
+)
 from ..utils.planner_tasks import (
     parse_plan_tasks_from_llm_output,
     planner_task_to_dict,
@@ -1264,10 +1271,6 @@ class OrchestrateNode:
             state["retry_trajectory"] = {}
         state["retry_trajectory"][agent_name] = []
         
-        # Track previous scores for no-progress detection
-        previous_scores = []
-        NO_PROGRESS_THRESHOLD = 2  # Exit if score unchanged for this many consecutive attempts
-        
         # [R] Retrieve relevant memories before execution
         session_id = state.get("session_id")
         if self.mem0_service and session_id:
@@ -1429,20 +1432,6 @@ class OrchestrateNode:
                 decision = critic_eval.get("decision", "ACCEPT")
                 score = critic_eval.get("score", 0.0)
             
-            # Record retry trajectory
-            state["retry_trajectory"][agent_name].append({
-                "attempt": attempt,
-                "decision": decision,
-                "score": score,
-                "issues_count": len(critic_eval.get("issues", [])),
-                "timestamp": datetime.now().isoformat()
-            })
-            
-            logger.info(
-                f"   📊 Critic: {decision} (score: {score:.2f}, "
-                f"attempt: {attempt}/{self.max_step_retries + 1})"
-            )
-
             if run_id and run_stop_requested(run_id):
                 logger.warning(
                     "⏹ Stop requested after Critic evaluation for %s; stopping workflow.",
@@ -1504,6 +1493,19 @@ class OrchestrateNode:
                         state["context"]["retrieved_memories"] = enriched_memories
 
                     if target_agent != agent_name and not self._cross_layer_rollback_is_disabled():
+                        # Cross-layer routing returns before the normal retry
+                        # branch, so record the observation here as well.
+                        trajectory = state["retry_trajectory"][agent_name]
+                        observation = build_retry_observation(
+                            agent_name,
+                            state,
+                            critic_eval,
+                            trajectory,
+                            min_score_delta=getattr(config, "retry_min_score_delta", 0.02),
+                        )
+                        observation["timestamp"] = datetime.now().isoformat()
+                        trajectory.append(observation)
+                        state["context"]["retry_observation"] = observation
                         state["context"]["force_retry_from"] = target_agent
                         state["context"]["cross_layer_retry_reason"] = hard_gate.get("summary")
                         logger.info(
@@ -1530,6 +1532,44 @@ class OrchestrateNode:
                             agent_name,
                             target_agent,
                         )
+
+            # Record a deterministic retry observation after all local gates
+            # (including the JSON hard gate) have adjusted the evaluation.
+            # This is the evidence used by the controller, not an LLM summary.
+            trajectory = state["retry_trajectory"][agent_name]
+            observation = build_retry_observation(
+                agent_name,
+                state,
+                critic_eval,
+                trajectory,
+                min_score_delta=getattr(config, "retry_min_score_delta", 0.02),
+            )
+            observation["timestamp"] = datetime.now().isoformat()
+            trajectory.append(observation)
+            state["context"]["retry_observation"] = observation
+
+            # Keep the best evaluated candidate inside the retry controller.
+            # It is not exposed to prompts and is discarded when this agent's
+            # retry session ends; it only prevents a regressing retry from
+            # becoming the final output.
+            best_candidates = state["context"].setdefault("retry_best_outputs", {})
+            best_candidate = best_candidates.get(agent_name)
+            if is_better_candidate(
+                observation["score"], observation["issues_count"], best_candidate
+            ):
+                best_candidates[agent_name] = {
+                    "attempt": observation["attempt"],
+                    "score": observation["score"],
+                    "issues_count": observation["issues_count"],
+                    "output": capture_agent_output(agent_name, state),
+                }
+
+            logger.info(
+                f"   📊 Critic: {decision} (score: {score:.2f}, "
+                f"progress: {observation.get('status')}, "
+                f"output_changed: {observation.get('feedback_applied')}, "
+                f"attempt: {attempt}/{self.max_step_retries + 1})"
+            )
 
             # --- START NEW DISK APPEND ---
             if log_path:
@@ -1602,34 +1642,46 @@ class OrchestrateNode:
                 
                 break
             
-            # Track score for no-progress detection
-            previous_scores.append(round(score, 2))
-            
-            # Check for no-progress: if score unchanged for N consecutive attempts
-            if len(previous_scores) >= NO_PROGRESS_THRESHOLD:
-                recent_scores = previous_scores[-NO_PROGRESS_THRESHOLD:]
-                if len(set(recent_scores)) == 1:
-                    # All recent scores are identical - no progress being made
-                    logger.warning(
-                        f"⚠️ No progress detected for {agent_name}: "
-                        f"score unchanged at {score:.2f} for {NO_PROGRESS_THRESHOLD} consecutive attempts\n"
-                        f"  This may indicate API limitations or infeasible requirements.\n"
-                        f"  Accepting current output to avoid further token waste."
-                    )
-                    if check_output_fn(state):
-                        state["needs_human_review"] = True
-                        state["no_progress_detected"] = True
-                        break
-                    else:
-                        logger.error(f"❌ No progress and no usable output from {agent_name}")
-                        state["errors"] = state.get("errors", []) + [
-                            f"{agent_name}: No progress after {NO_PROGRESS_THRESHOLD} attempts (score stuck at {score:.2f})"
-                        ]
-                        break
+            # Stop only when the deterministic trajectory says that another
+            # attempt is unlikely to change the result. A score alone is not a
+            # progress signal: a model can change the score while returning the
+            # same output or repeating the same issue.
+            no_progress_reason = should_stop_for_no_progress(
+                state["retry_trajectory"][agent_name],
+                stagnant_limit=getattr(config, "retry_stagnant_attempts", 1),
+            )
+            if no_progress_reason:
+                logger.warning(
+                    "⚠️ Retry terminated for %s: %s (score %.2f, output=%s, repeated_issue=%s)",
+                    agent_name,
+                    no_progress_reason,
+                    score,
+                    observation.get("output_fingerprint"),
+                    observation.get("repeated_issue"),
+                )
+                state["retry_termination_reason"] = no_progress_reason
+                state["no_progress_detected"] = True
+                best_candidate = state["context"].get("retry_best_outputs", {}).get(agent_name)
+                if best_candidate and best_candidate.get("attempt") != attempt:
+                    restore_agent_output(agent_name, state, best_candidate["output"])
+                    state["retry_restored_best"] = True
+                    state["retry_best_attempt"] = best_candidate.get("attempt")
+                if check_output_fn(state):
+                    state["needs_human_review"] = True
+                    break
+                state["errors"] = state.get("errors", []) + [
+                    f"{agent_name}: retry terminated due to {no_progress_reason}"
+                ]
+                break
             
             # Check if more retries available
             if attempt > self.max_step_retries:
                 # Max retries reached - check if we have usable output
+                best_candidate = state["context"].get("retry_best_outputs", {}).get(agent_name)
+                if best_candidate and best_candidate.get("attempt") != attempt:
+                    restore_agent_output(agent_name, state, best_candidate["output"])
+                    state["retry_restored_best"] = True
+                    state["retry_best_attempt"] = best_candidate.get("attempt")
                 if check_output_fn(state):
                     logger.warning(
                         f"⚠️ Max retries reached ({attempt-1}/{self.max_step_retries}) "
@@ -1685,6 +1737,8 @@ class OrchestrateNode:
             agent_name,
             keep_latest=False,
         )
+        state.get("context", {}).pop("retry_best_outputs", None)
+        state.get("context", {}).pop("retry_observation", None)
 
         return state
 

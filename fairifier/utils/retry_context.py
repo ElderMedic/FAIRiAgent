@@ -29,6 +29,7 @@ _PROMPT_KEPT_FIELDS = (
     "issues",
     "suggestions",
     "target_agent",
+    "retry_contract",
 )
 
 
@@ -60,3 +61,24 @@ def clean_critic_feedback_for_prompt(
         for key in _PROMPT_KEPT_FIELDS
         if key in critic_feedback
     }
+
+
+def format_retry_contract_for_prompt(
+    critic_feedback: Optional[Dict[str, Any]],
+    heading: str = "Retry contract",
+) -> str:
+    """Render explicit retry obligations without exposing critic prose."""
+    if not critic_feedback:
+        return ""
+    contract = critic_feedback.get("retry_contract") or {}
+    lines = []
+    for key, label in (
+        ("must_change", "MUST CHANGE"),
+        ("must_not_repeat", "MUST NOT REPEAT"),
+        ("verification", "VERIFY"),
+    ):
+        for item in contract.get(key, [])[:10]:
+            lines.append(f"- {label}: {item}")
+    if not lines:
+        return ""
+    return f"**{heading}:**\n" + "\n".join(lines)

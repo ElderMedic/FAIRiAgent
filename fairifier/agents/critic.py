@@ -20,6 +20,7 @@ from ..config import config
 from ..utils.json_parse import safe_json_parse
 from ..utils.llm_helper import get_llm_helper
 from ..utils.structured_output import invoke_structured_output
+from ..utils.retry_progress import build_retry_contract
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -201,7 +202,8 @@ class CriticAgent(BaseAgent):
         self, 
         agent_name: str, 
         evaluation: Dict[str, Any], 
-        state: FAIRifierState
+        state: FAIRifierState,
+        observation: Optional[Dict[str, Any]] = None,
     ) -> FAIRifierState:
         """
         Prepare state with critic feedback for agent to retry.
@@ -215,14 +217,18 @@ class CriticAgent(BaseAgent):
         # Don't increment retry_count here - it's managed by evaluate nodes
         
         # Store critic feedback (use .get() for safe access)
+        if observation is None:
+            observation = state.get("context", {}).get("retry_observation")
+        improvement_ops = evaluation.get("improvement_ops") or evaluation.get("suggestions") or []
         feedback_payload = {
             "decision": evaluation.get("decision", "ACCEPT"),
             "score": evaluation.get("score", 0.0),
             "critique": evaluation.get("critique", ""),
             "issues": evaluation.get("issues", []),
-            "suggestions": evaluation.get("improvement_ops", []),
+            "suggestions": improvement_ops,
             "timestamp": datetime.now().isoformat(),
             "target_agent": agent_name,
+            "retry_contract": build_retry_contract(evaluation, observation),
         }
         state["context"]["critic_feedback"] = feedback_payload
         state["context"].setdefault("critic_feedback_by_agent", {})[agent_name] = feedback_payload
@@ -232,7 +238,7 @@ class CriticAgent(BaseAgent):
         history.setdefault(agent_name, [])
         
         # Add new improvement ops (deduplicated)
-        for op in evaluation.get("improvement_ops", []):
+        for op in improvement_ops:
             # Simple deduplication: avoid exact duplicates
             if op not in history[agent_name]:
                 history[agent_name].append(op)
@@ -722,14 +728,21 @@ class CriticAgent(BaseAgent):
         
         from langchain_core.messages import HumanMessage
 
-        # Cap Critic output at 1 024 tokens — a well-formed evaluation needs
-        # < 200 chars of critique + 3×80-char issues + 3×120-char suggestions.
+        # Use one provider-agnostic budget policy.  Critic reasoning and the
+        # structured JSON share the completion budget on many providers, so a
+        # 1k default is unsafe even when the visible JSON is short.  Provider
+        # adapters may translate the parameter name, but no model gets a
+        # smaller budget based on its model name.
+        critic_max_tokens = min(
+            max(int(config.llm_max_tokens or 16384), 16384),
+            32768,
+        )
         parsed = await invoke_structured_output(
             self.llm_helper,
             [HumanMessage(content=prompt)],
             CriticEvaluation,
             operation_name=f"Critic.{node_key}",
-            max_tokens=1024,
+            max_tokens=critic_max_tokens,
         )
         
         if not parsed:
@@ -758,7 +771,8 @@ class CriticAgent(BaseAgent):
         }[decision]
         
         # Log decision with clear threshold information
-        from ..config import config
+        # (use module-level config — a local import here shadows it and breaks
+        # earlier references in this function under UnboundLocalError)
         rubric_file = str(config.critic_rubric_path)
         logger.info(
             f"Critic decision for {node_key}: {mapped_decision}\n"

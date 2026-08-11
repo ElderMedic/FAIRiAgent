@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from fairifier.utils.llm_helper import normalize_llm_response_content
 from fairifier.utils.package_selection import rank_packages_by_document
+from fairifier.utils.retry_context import format_retry_contract_for_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,13 @@ Select at least 1 package. Choose as many as needed - there is no upper limit.""
             feedback_text += f"- {issue}\n"
         for suggestion in critic_feedback.get('suggestions', []):
             feedback_text += f"- {suggestion}\n"
+        contract_text = format_retry_contract_for_prompt(critic_feedback)
+        if contract_text:
+            feedback_text += f"\n{contract_text}\n"
+        feedback_text += (
+            "On retry, satisfy every MUST CHANGE item and do not reintroduce "
+            "packages or selection patterns named under MUST NOT REPEAT.\n"
+        )
         system_prompt += feedback_text
     
     if planner_instruction:
@@ -436,8 +444,17 @@ Select at least 5 fields. Choose as many as needed - there is no upper limit."""
 
     if critic_feedback:
         feedback_text = "\n\n**Improve based on feedback:**\n"
+        for issue in critic_feedback.get('issues', []):
+            feedback_text += f"- issue: {issue}\n"
         for suggestion in critic_feedback.get('suggestions', []):
             feedback_text += f"- {suggestion}\n"
+        contract_text = format_retry_contract_for_prompt(critic_feedback)
+        if contract_text:
+            feedback_text += f"\n{contract_text}\n"
+        feedback_text += (
+            "On retry, verify that the selected fields changed in the requested "
+            "direction before returning the JSON.\n"
+        )
         system_prompt += feedback_text
 
     user_prompt = f"""Document context:
