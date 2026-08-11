@@ -163,15 +163,26 @@ class TestSchemaLockdown:
         ), f"DocumentInfoResponse should reject unknown fields, got extra={extra!r}"
 
     def test_response_model_drops_alias_fields(self):
-        """When the LLM returns aliases like 'summary', the model ignores them.
-        Canonicalization happens upstream of this validation."""
+        """Aliases like 'summary' must be canonicalized upstream; the locked
+        schema forbids extras so OpenAI Responses emits additionalProperties:false."""
+        import pytest
         from fairifier.agents.response_models import DocumentInfoResponse
+        from fairifier.utils.doc_info_canonical import canonicalize_doc_info
 
-        instance = DocumentInfoResponse(
-            title="T",
-            summary="this should be silently ignored or normalized upstream",
+        with pytest.raises(Exception):
+            DocumentInfoResponse(
+                title="T",
+                summary="this should be normalized upstream before validation",
+            )
+
+        canonical = canonicalize_doc_info(
+            {
+                "title": "T",
+                "summary": "normalized into abstract upstream",
+            }
         )
+        instance = DocumentInfoResponse.model_validate(canonical)
         dumped = instance.model_dump(exclude_none=True)
         assert dumped.get("title") == "T"
-        # 'summary' is not a canonical field — must not appear in output
         assert "summary" not in dumped
+        assert dumped.get("abstract") == "normalized into abstract upstream"

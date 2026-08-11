@@ -1012,25 +1012,50 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         self,
         matrix: Dict[str, Dict[str, Any]],
     ) -> Dict[str, Dict[str, Any]]:
-        """Ensure every row in a sheet has the same column keys."""
+        """Ensure every row in a sheet has the same column keys without case duplicate artifacts."""
         for _lvl, sheet in matrix.items():
             rows = sheet.get("rows", [])
             if not rows:
                 continue
 
-            all_cols: set = set()
+            col_canonical_map: Dict[str, str] = {}
             for row in rows:
-                all_cols.update(row.keys())
-            for c in sheet.get("columns", []):
-                all_cols.add(str(c).strip().lower())
+                if isinstance(row, dict):
+                    for k in row.keys():
+                        k_clean = str(k).strip()
+                        k_lower = k_clean.lower()
+                        if k_lower not in col_canonical_map or (k_clean != k_lower and col_canonical_map[k_lower] == k_lower):
+                            col_canonical_map[k_lower] = k_clean
 
-            sorted_cols = sorted(all_cols)
+            for c in sheet.get("columns", []):
+                c_clean = str(c).strip()
+                c_lower = c_clean.lower()
+                if c_lower not in col_canonical_map:
+                    col_canonical_map[c_lower] = c_clean
+
+            norm_rows: List[Dict[str, Any]] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    norm_rows.append(row)
+                    continue
+                norm_row: Dict[str, Any] = {}
+                for k, v in row.items():
+                    k_lower = str(k).strip().lower()
+                    canon_key = col_canonical_map.get(k_lower, str(k).strip())
+                    existing_v = norm_row.get(canon_key)
+                    if existing_v is None or (str(existing_v).strip() == "" and str(v).strip() != ""):
+                        norm_row[canon_key] = v
+                norm_rows.append(norm_row)
+
+            sheet["rows"] = norm_rows
+            sorted_cols = sorted(col_canonical_map.values(), key=lambda x: x.lower())
             sheet["columns"] = sorted_cols
 
-            for row in rows:
-                for col in sorted_cols:
-                    if col not in row:
-                        row[col] = ""
+            for row in norm_rows:
+                if isinstance(row, dict):
+                    for c_lower, canon_key in col_canonical_map.items():
+                        if canon_key not in row and c_lower not in row:
+                            row[canon_key] = ""
 
         return matrix
 
