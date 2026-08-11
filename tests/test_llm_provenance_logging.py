@@ -2,6 +2,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from fairifier.utils.llm_helper import (
@@ -110,6 +111,28 @@ def test_call_llm_records_end_to_end_latency():
     assert helper.llm_responses[0]["latency_seconds"] >= 0
 
 
+def test_call_llm_records_provider_error():
+    class FailingLLM:
+        async def ainvoke(self, messages, config=None):
+            raise RuntimeError("provider unavailable")
+
+    helper = LLMHelper.__new__(LLMHelper)
+    helper.provider = "custom"
+    helper.model = "fake"
+    helper.llm = FailingLLM()
+    helper.llm_responses = []
+    helper._build_run_config = lambda: None
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        asyncio.run(helper._call_llm([HumanMessage(content="hello")], "Failing Call"))
+
+    assert len(helper.llm_responses) == 1
+    entry = helper.llm_responses[0]
+    assert entry["operation"] == "failing_call"
+    assert entry["status"] == "error"
+    assert entry["usage_metadata"] == {}
+
+
 def test_usage_callback_records_deep_agent_inner_call():
     helper = LLMHelper.__new__(LLMHelper)
     helper.provider = "custom"
@@ -144,3 +167,26 @@ def test_usage_callback_records_deep_agent_inner_call():
     assert entry["operation"] == "documentparser_inner_loop"
     assert entry["usage_metadata"]["total_tokens"] == 9
     assert entry["latency_seconds"] is not None
+
+
+def test_usage_callback_records_deep_agent_error():
+    helper = LLMHelper.__new__(LLMHelper)
+    helper.provider = "custom"
+    helper.model = "fake"
+    helper.llm_responses = []
+    callback = helper.build_usage_callback("KnowledgeRetriever")
+    run_id = "deep-agent-error"
+
+    callback.on_chat_model_start(
+        {},
+        [[HumanMessage(content="inspect the package")]],
+        run_id=run_id,
+    )
+    callback.on_llm_error(RuntimeError("rate limited"), run_id=run_id)
+
+    assert len(helper.llm_responses) == 1
+    entry = helper.llm_responses[0]
+    assert entry["operation"] == "knowledgeretriever_inner_loop"
+    assert entry["status"] == "error"
+    assert entry["error"] == "rate limited"
+    assert entry["usage_metadata"] == {}

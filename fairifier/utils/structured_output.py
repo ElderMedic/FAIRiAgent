@@ -152,20 +152,80 @@ async def invoke_structured_output(
     if mode == StructuredOutputMode.JSON_SCHEMA:
         try:
             llm = llm_helper.get_llm()
+            # Never mutate the shared ChatModel — Critic's low max_tokens must
+            # not permanently starve later planner/JSON calls (esp. always-on
+            # reasoning models like Kimi K3 that share budget with thinking).
             if max_tokens is not None:
-                if hasattr(llm, "max_tokens"):
-                    llm.max_tokens = max_tokens
-                if hasattr(llm, "num_predict"):
-                    llm.num_predict = max_tokens
-            structured_llm = llm.with_structured_output(schema_model)
-            result = await structured_llm.ainvoke(messages)
-            return _coerce_to_dict(result, schema_model)
+                if hasattr(llm, "model_copy"):
+                    fields = getattr(llm, "model_fields", None)
+                    if not isinstance(fields, dict):
+                        fields = getattr(llm, "__fields__", None)
+                    if not isinstance(fields, dict):
+                        fields = {}
+                    update = {}
+                    if "max_tokens" in fields or (
+                        not fields and hasattr(llm, "max_tokens")
+                    ):
+                        update["max_tokens"] = max_tokens
+                    if "num_predict" in fields:
+                        update["num_predict"] = max_tokens
+                    if update:
+                        llm = llm.model_copy(update=update)
+                    else:
+                        llm = llm.bind(max_tokens=max_tokens)
+                else:
+                    llm = llm.bind(max_tokens=max_tokens)
+            # Kimi K3 natively supports strict JSON Schema. Explicitly select
+            # this path so LangChain does not silently downgrade to a looser
+            # function-calling/prompt-only contract.
+            model_name = str(getattr(llm_helper, "model", "") or "").lower()
+            if "kimi-k3" in model_name.replace("_", "-"):
+                structured_llm = llm.with_structured_output(
+                    schema_model,
+                    method="json_schema",
+                    strict=True,
+                    include_raw=True,
+                )
+            else:
+                structured_llm = llm.with_structured_output(
+                    schema_model,
+                    include_raw=True,
+                )
         except Exception as exc:
             logger.debug(
-                "JSON Schema structured output unavailable (%s); trying json_object fallback",
+                "JSON Schema structured-output setup unavailable (%s); trying json_object fallback",
                 exc,
             )
             mode = StructuredOutputMode.JSON_OBJECT
+        else:
+            try:
+                run_config = (
+                    llm_helper._build_run_config()
+                    if hasattr(llm_helper, "_build_run_config")
+                    else None
+                )
+                result = await structured_llm.ainvoke(messages, config=run_config)
+            except Exception as exc:
+                if hasattr(llm_helper, "_log_llm_error"):
+                    llm_helper._log_llm_error(messages, operation_name, exc)
+                logger.debug(
+                    "JSON Schema structured-output invocation unavailable (%s); "
+                    "trying json_object fallback",
+                    exc,
+                )
+                mode = StructuredOutputMode.JSON_OBJECT
+            else:
+                # include_raw=True preserves the provider AIMessage, including
+                # input/output/cache/reasoning usage metadata. The previous
+                # direct Pydantic return path discarded that provenance.
+                raw_result = result
+                parsed_result = result
+                if isinstance(result, dict) and "raw" in result:
+                    raw_result = result.get("raw")
+                    parsed_result = result.get("parsed")
+                if raw_result is not None and hasattr(llm_helper, "_log_llm_response"):
+                    llm_helper._log_llm_response(raw_result, messages, operation_name)
+                return _coerce_to_dict(parsed_result, schema_model)
 
     if mode == StructuredOutputMode.JSON_OBJECT:
         try:

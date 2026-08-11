@@ -7,6 +7,7 @@ Provides a unified interface for working with different LLM providers
 
 import json
 import hashlib
+import os
 from contextvars import ContextVar
 from time import perf_counter
 import logging
@@ -15,6 +16,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 from fairifier.utils.isa_order import ISA_LEVEL_ORDER
+from fairifier.utils.retry_context import format_retry_contract_for_prompt
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
@@ -50,6 +52,112 @@ _llm_call_started_at: ContextVar[float | None] = ContextVar(
 )
 
 QWEN_MAX_TOKENS_LIMIT = 65536
+
+
+def _is_kimi_k3_model(model_name: Optional[str]) -> bool:
+    """Return whether a model name refers to Moonshot's Kimi K3."""
+    normalized = (model_name or "").lower().replace("_", "-")
+    return normalized == "kimi-k3" or normalized.startswith("kimi-k3-")
+
+
+def _openai_omits_sampling_params(model_name: Optional[str]) -> bool:
+    """True when the model rejects fixed temperature/top_p sampling knobs.
+
+    Kimi K3 and GPT-5 / Luna (especially via Responses API) reject ``top_p``
+    and often ``temperature``; bind them only when the model accepts them.
+    """
+    if _is_kimi_k3_model(model_name):
+        return True
+    normalized = (model_name or "").lower().replace("_", "-")
+    if "luna" in normalized:
+        return True
+    if normalized.startswith(("gpt-5", "o1", "o3", "o4")):
+        return True
+    return False
+
+
+def _is_official_openai_base_url(base_url: Optional[str]) -> bool:
+    """True when ChatOpenAI will hit api.openai.com (default or explicit)."""
+    if not base_url:
+        return True
+    normalized = base_url.strip().lower()
+    if not normalized or normalized == "http://localhost:11434":
+        # FAIRiAgent treats the Ollama default as "unset" for OpenAI and
+        # passes base_url=None → OpenAI SDK default host.
+        return True
+    return "api.openai.com" in normalized
+
+
+def resolve_openai_use_responses_api(
+    *,
+    base_url: Optional[str] = None,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+    explicit: Optional[bool] = None,
+) -> bool:
+    """Decide whether OpenAI calls should use the Responses API.
+
+    Official OpenAI hosts reject function tools + non-none ``reasoning_effort``
+    on ``/v1/chat/completions`` (e.g. gpt-5.6-luna). Responses API supports
+    that combination, which Deep ReAct needs. Auto-enable for api.openai.com;
+    leave OpenAI-compatible proxies (Moonshot, vLLM, …) on Chat Completions
+    unless ``LLM_USE_RESPONSES_API=true``.
+    """
+    if explicit is True:
+        return True
+    if explicit is False:
+        return False
+    if _is_kimi_k3_model(model):
+        return False
+    if not _is_official_openai_base_url(base_url):
+        return False
+    # Prefer Responses on official OpenAI: agentic runs bind tools, and
+    # reasoning models increasingly require Responses for tools+effort.
+    return True
+
+
+if ChatOpenAI is not None:
+    class KimiK3ChatOpenAI(ChatOpenAI):
+        """ChatOpenAI adapter for K3's preserved-thinking message contract.
+
+        The current LangChain OpenAI adapter preserves K3 tool calls but drops
+        the provider-specific ``reasoning_content`` field when converting an
+        assistant response to an ``AIMessage``. K3 requires that field to be
+        sent back unchanged on later tool/multi-turn requests.
+        """
+
+        def _create_chat_result(self, response, generation_info=None):
+            result = super()._create_chat_result(response, generation_info)
+            response_dict = (
+                response if isinstance(response, dict) else response.model_dump()
+            )
+            for generation, choice in zip(
+                result.generations, response_dict.get("choices", [])
+            ):
+                reasoning_content = (choice.get("message") or {}).get(
+                    "reasoning_content"
+                )
+                if reasoning_content:
+                    generation.message.additional_kwargs[
+                        "reasoning_content"
+                    ] = reasoning_content
+            return result
+
+        def _get_request_payload(self, input_, *, stop=None, **kwargs):
+            payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+            messages = self._convert_input(input_).to_messages()
+            payload_messages = payload.get("messages", [])
+            for message, payload_message in zip(messages, payload_messages):
+                if not isinstance(message, AIMessage):
+                    continue
+                reasoning_content = message.additional_kwargs.get(
+                    "reasoning_content"
+                )
+                if reasoning_content:
+                    payload_message["reasoning_content"] = reasoning_content
+            return payload
+else:  # pragma: no cover - only used when langchain-openai is unavailable
+    KimiK3ChatOpenAI = None
 
 
 def estimate_tokens(text: str) -> int:
@@ -330,15 +438,16 @@ def _fix_json_string(content: str) -> str:
     return content
 
 
-def _parse_json_with_fallback(content: str) -> Optional[Dict[str, Any]]:
+def _parse_json_with_fallback(content: Any) -> Optional[Dict[str, Any]]:
     """Parse JSON with multiple fallback strategies.
-    
+
     Args:
-        content: JSON string to parse
-        
+        content: JSON string to parse (or provider list/dict content blocks)
+
     Returns:
         Parsed JSON dict or None if all strategies fail
     """
+    content = normalize_llm_response_content(content)
     # Pre-process: Remove markdown code fences if present
     original_length = len(content)
     content = _extract_json_from_markdown(content)
@@ -791,8 +900,14 @@ class _LLMUsageCallback(BaseCallbackHandler):
         )
 
     def on_llm_error(self, error: BaseException, *, run_id: Any, **kwargs: Any) -> None:
-        del error, kwargs
-        self._calls.pop(run_id, None)
+        del kwargs
+        started_at, messages = self._calls.pop(run_id, (perf_counter(), []))
+        self.helper._log_llm_error(
+            messages,
+            f"{self.operation_prefix}.inner_loop",
+            error,
+            latency_seconds_override=perf_counter() - started_at,
+        )
 
 
 class LLMHelper:
@@ -906,6 +1021,7 @@ class LLMHelper:
             # Append to llm_responses
             self.llm_responses.append({
                 "operation": normalized_operation,
+                "status": "success",
                 "provider": self.provider,
                 "model": self.model,
                 "prompt": prompt,
@@ -932,6 +1048,60 @@ class LLMHelper:
             # Don't fail the entire operation if logging fails
             logger.warning(f"Failed to log LLM response for {operation_name}: {e}")
 
+    def _log_llm_error(
+        self,
+        messages,
+        operation_name: str,
+        error: BaseException,
+        *,
+        latency_seconds_override: Optional[float] = None,
+    ):
+        """Record an LLM attempt that did not produce a response.
+
+        Failed attempts remain in the same ledger so retries and quota errors
+        are visible. They contribute zero tokens unless the provider exposes
+        usage metadata on the exception.
+        """
+        try:
+            prompt = serialize_llm_messages(messages)
+            prompt_length = prompt_length_from_serialized_messages(prompt)
+            started_at = _llm_call_started_at.get()
+            latency_seconds = latency_seconds_override
+            if latency_seconds is None and started_at is not None:
+                latency_seconds = perf_counter() - started_at
+            if latency_seconds is not None:
+                latency_seconds = round(max(0.0, latency_seconds), 6)
+
+            usage = getattr(error, "usage_metadata", None)
+            if usage is None:
+                response = getattr(error, "response", None)
+                usage = getattr(response, "usage_metadata", None)
+                if usage is None and isinstance(response, dict):
+                    usage = response.get("usage")
+            if not isinstance(usage, dict):
+                usage = {}
+
+            normalized_operation = operation_name.lower().replace(" ", "_").replace(".", "_")
+            self.llm_responses.append({
+                "operation": normalized_operation,
+                "status": "error",
+                "provider": self.provider,
+                "model": self.model,
+                "prompt": prompt,
+                "prompt_length": prompt_length,
+                "response": None,
+                "response_length": 0,
+                "response_metadata": {},
+                "usage_metadata": json_safe_provenance_value(usage),
+                "error_type": type(error).__name__,
+                "error": str(error),
+                "latency_seconds": latency_seconds,
+                "timestamp": datetime.now().isoformat(),
+            })
+        except Exception as exc:
+            # Observability must never mask the original provider exception.
+            logger.warning("Failed to log LLM error for %s: %s", operation_name, exc)
+
     def build_usage_callback(self, operation_prefix: str) -> BaseCallbackHandler:
         """Capture deep-agent inner-loop model calls in the shared telemetry."""
         return _LLMUsageCallback(self, operation_prefix)
@@ -947,6 +1117,9 @@ class LLMHelper:
         bind_kwargs: Dict[str, Any] = {"response_format": {"type": "json_object"}}
         if max_tokens is not None:
             bind_kwargs["max_tokens"] = max_tokens
+        effort = (config.llm_reasoning_effort or "").strip().lower() or None
+        if self.provider == "openai" and effort:
+            bind_kwargs["reasoning_effort"] = effort
 
         if self.provider == "deepseek":
             # DeepSeek JSON Output: https://api-docs.deepseek.com/guides/json_mode
@@ -965,6 +1138,17 @@ class LLMHelper:
                 self.provider,
                 exc,
             )
+            # Keep per-call max_tokens on the fallback path so a failed
+            # json_object attempt cannot inherit a truncated shared budget.
+            if max_tokens is not None:
+                try:
+                    result = await self.llm.bind(max_tokens=max_tokens).ainvoke(
+                        messages, config=run_config
+                    )
+                    self._log_llm_response(result, messages, operation_name)
+                    return result
+                except Exception:
+                    pass
             result = await self.llm.ainvoke(messages, config=run_config)
             self._log_llm_response(result, messages, operation_name)
             return result
@@ -986,6 +1170,9 @@ class LLMHelper:
                 json_mode=json_mode,
                 max_tokens=max_tokens,
             )
+        except Exception as exc:
+            self._log_llm_error(messages, operation_name, exc)
+            raise
         finally:
             _llm_call_started_at.reset(token)
 
@@ -1104,19 +1291,52 @@ class LLMHelper:
             self._log_llm_response(result, messages, operation_name)
             return result
         elif self.provider == "openai":
-            # OpenAI reasoning models (o1, o3, gpt-5) use reasoning_effort; non-reasoning
-            # models will reject this parameter — fall back to plain invoke on error.
-            if enable_thinking:
+            # OpenAI-compatible reasoning models use reasoning_effort; non-reasoning
+            # models reject it — fall back to plain invoke on error.
+            # Kimi K3 always thinks; set LLM_REASONING_EFFORT=low|high|max explicitly
+            # (do not rely on LLM_ENABLE_THINKING, which would incorrectly send "medium").
+            bind_kwargs: Dict[str, Any] = {}
+            if max_tokens is not None:
+                bind_kwargs["max_tokens"] = max_tokens
+            effort = (config.llm_reasoning_effort or "").strip().lower() or None
+            if effort:
+                bind_kwargs["reasoning_effort"] = effort
+            elif enable_thinking and not _is_kimi_k3_model(self.model):
+                bind_kwargs["reasoning_effort"] = "medium"
+            if bind_kwargs:
                 try:
-                    llm_with_params = self.llm.bind(reasoning_effort="medium")
+                    llm_with_params = self.llm.bind(**bind_kwargs)
                     result = await llm_with_params.ainvoke(messages, config=run_config)
                     self._log_llm_response(result, messages, operation_name)
                     return result
                 except Exception as e:
                     logger.warning(
-                        "OpenAI reasoning_effort not supported by model %s, falling back: %s",
-                        self.model, e,
+                        "OpenAI bind params %s not supported by model %s, falling back: %s",
+                        bind_kwargs,
+                        self.model,
+                        e,
                     )
+                    if "reasoning_effort" in bind_kwargs and (
+                        max_tokens is not None or len(bind_kwargs) > 1
+                    ):
+                        try:
+                            retry_kwargs = {
+                                k: v
+                                for k, v in bind_kwargs.items()
+                                if k != "reasoning_effort"
+                            }
+                            if retry_kwargs:
+                                result = await self.llm.bind(**retry_kwargs).ainvoke(
+                                    messages, config=run_config
+                                )
+                                self._log_llm_response(result, messages, operation_name)
+                                return result
+                        except Exception as e2:
+                            logger.warning(
+                                "OpenAI retry without reasoning_effort failed for %s: %s",
+                                self.model,
+                                e2,
+                            )
             result = await self.llm.ainvoke(messages, config=run_config)
             self._log_llm_response(result, messages, operation_name)
             return result
@@ -1141,6 +1361,23 @@ class LLMHelper:
         elif self.provider == "ollama":
             try:
                 llm_with_params = self.llm.bind(think=enable_thinking)
+                # The installed LangChain Ollama adapter does not expose
+                # presence_penalty as a constructor field, but it forwards a
+                # per-call ``options`` mapping to Ollama. Include the full
+                # configured sampler set when this optional card parameter is
+                # present so the options override does not drop other values.
+                if config.llm_presence_penalty is not None:
+                    sampler_options = {
+                        "temperature": config.llm_temperature,
+                        "top_p": config.llm_top_p,
+                        "top_k": config.llm_top_k,
+                        "repeat_penalty": config.llm_repeat_penalty,
+                        "presence_penalty": config.llm_presence_penalty,
+                        "num_predict": self._resolved_max_tokens(),
+                    }
+                    llm_with_params = llm_with_params.bind(
+                        options={key: value for key, value in sampler_options.items() if value is not None}
+                    )
                 result = await llm_with_params.ainvoke(messages, config=run_config)
 
                 if not result:
@@ -1286,26 +1523,84 @@ class LLMHelper:
                 model=self.model,
                 base_url=config.llm_base_url,
                 temperature=config.llm_temperature,
+                top_p=config.llm_top_p,
+                top_k=config.llm_top_k,
+                repeat_penalty=config.llm_repeat_penalty,
                 num_predict=self._resolved_max_tokens(),  # Limit output tokens to prevent runaway generation
             )
         elif self.provider == "openai":
             if ChatOpenAI is None:
                 raise ImportError("langchain_openai not installed. Install with: pip install langchain-openai")
-            if not config.llm_api_key:
-                raise ValueError("LLM_API_KEY environment variable is required for OpenAI provider")
             base_url = config.llm_base_url if config.llm_base_url != "http://localhost:11434" else None
+            api_key = config.llm_api_key
+            if not api_key:
+                if base_url and any(h in base_url for h in ("localhost", "127.0.0.1", "0.0.0.0", ":8000", ":8080", ":3000")):
+                    api_key = "EMPTY"
+                else:
+                    raise ValueError("LLM_API_KEY environment variable is required for OpenAI provider")
             logger.info(f"Initializing OpenAI LLM: {self.model}" + (f" at {base_url}" if base_url else ""))
             # Initialize ChatOpenAI
             # For OpenAI, enable_thinking is not a standard parameter
-            return ChatOpenAI(
-                model=self.model,
-                api_key=config.llm_api_key,
-                base_url=base_url,  # None uses default OpenAI API
-                temperature=config.llm_temperature,
-                max_tokens=self._resolved_max_tokens(),  # Limit output tokens
-                timeout=180,
-                max_retries=3,
+            # Kimi K3 always-on max reasoning routinely exceeds 180s on JSON batches.
+            model_l = (self.model or "").lower()
+            default_timeout = 900 if "kimi" in model_l else 180
+            try:
+                request_timeout = int(
+                    os.getenv("LLM_REQUEST_TIMEOUT", str(default_timeout))
+                )
+            except (TypeError, ValueError):
+                request_timeout = default_timeout
+            # The workflow already has Critic/step retries. Avoid multiplying
+            # those with the OpenAI SDK's network retry loop for K3, where a
+            # timed-out long-thinking request may already have consumed quota.
+            request_retries = 1 if _is_kimi_k3_model(self.model) else 3
+            chat_model_cls = (
+                KimiK3ChatOpenAI
+                if _is_kimi_k3_model(self.model) and KimiK3ChatOpenAI is not None
+                else ChatOpenAI
             )
+            openai_kwargs = {
+                "model": self.model,
+                "api_key": api_key,
+                "base_url": base_url,
+                "max_tokens": self._resolved_max_tokens(),
+                "timeout": request_timeout,
+                "max_retries": request_retries,
+            }
+            effort = (config.llm_reasoning_effort or "").strip().lower() or None
+            use_responses = resolve_openai_use_responses_api(
+                base_url=base_url,
+                model=self.model,
+                reasoning_effort=effort,
+                explicit=getattr(config, "llm_use_responses_api", None),
+            )
+            if use_responses:
+                # Attach effort on the model so Deep ReAct (tools) inherits it;
+                # Chat Completions rejects function tools + non-none effort.
+                openai_kwargs["use_responses_api"] = True
+                if effort and effort != "none":
+                    openai_kwargs["reasoning_effort"] = effort
+                logger.info(
+                    "OpenAI Responses API enabled for model %s "
+                    "(tools + reasoning_effort supported)",
+                    self.model,
+                )
+            if _openai_omits_sampling_params(self.model):
+                logger.info(
+                    "OpenAI model %s: omitting fixed sampling parameters; "
+                    "reasoning_effort=%s responses=%s",
+                    self.model,
+                    effort or config.llm_reasoning_effort or "provider-default",
+                    use_responses,
+                )
+            else:
+                openai_kwargs.update(
+                    {
+                        "temperature": config.llm_temperature,
+                        "top_p": config.llm_top_p,
+                    }
+                )
+            return chat_model_cls(**openai_kwargs)
         elif self.provider == "qwen":
             if ChatOpenAI is None:
                 raise ImportError("langchain_openai not installed. Install with: pip install langchain-openai")
@@ -1322,6 +1617,7 @@ class LLMHelper:
                 api_key=config.llm_api_key,
                 base_url=base_url,
                 temperature=config.llm_temperature,
+                top_p=config.llm_top_p,
                 max_tokens=self._resolved_max_tokens(),  # DashScope rejects values above provider limit
                 timeout=180,
                 max_retries=3,
@@ -1340,6 +1636,7 @@ class LLMHelper:
                 api_key=config.llm_api_key,
                 base_url=base_url,
                 temperature=config.llm_temperature,
+                top_p=config.llm_top_p,
                 max_tokens=self._resolved_max_tokens(),
                 timeout=180,
                 max_retries=3,
@@ -1893,6 +2190,9 @@ REQUIREMENTS:
                 feedback_text += f"- Issue: {issue}\n"
             for suggestion in critic_feedback.get('suggestions', []):
                 feedback_text += f"- Suggestion: {suggestion}\n"
+            contract_text = format_retry_contract_for_prompt(critic_feedback)
+            if contract_text:
+                feedback_text += f"\n{contract_text}\n"
             system_prompt += feedback_text
         
         if planner_instruction:
@@ -1968,10 +2268,12 @@ Document:
         
         try:
             response = await self._call_llm(messages, operation_name="Extract Document Info")
-            content = getattr(response, 'content', None) if response else None
+            content = normalize_llm_response_content(
+                getattr(response, "content", None) if response else None
+            )
             
             # Check if response is empty
-            if not content or len(str(content).strip()) == 0:
+            if not content.strip():
                 error_msg = f"LLM returned empty response. Provider: {self.provider}, Model: {self.model}"
                 logger.error(f"❌ {error_msg}")
                 logger.error(f"Response object: {response}")
@@ -2201,6 +2503,9 @@ REQUIREMENTS:
                 feedback_text += f"- {issue}\n"
             for suggestion in critic_feedback.get('suggestions', []):
                 feedback_text += f"- {suggestion}\n"
+            contract_text = format_retry_contract_for_prompt(critic_feedback)
+            if contract_text:
+                feedback_text += f"\n{contract_text}\n"
             system_prompt += feedback_text
         
         if planner_instruction:
@@ -2364,6 +2669,11 @@ REQUIREMENTS:
         if provider == "qwen":
             return 20
         if provider == "openai":
+            # Kimi K3 (Moonshot OpenAI-compatible): thinking is always on and
+            # often returns a single object before the request times out when
+            # the batch is large — keep batches small for usable JSON arrays.
+            if "kimi" in model:
+                return 4
             return 24
         if provider == "deepseek":
             # DeepSeek v4-pro has generous input context but the output
@@ -2522,6 +2832,9 @@ REQUIREMENTS:
                 feedback_text += f"- {issue}\n"
             for suggestion in critic_feedback.get('suggestions', []):
                 feedback_text += f"- {suggestion}\n"
+            contract_text = format_retry_contract_for_prompt(critic_feedback)
+            if contract_text:
+                feedback_text += f"\n{contract_text}\n"
             system_prompt += feedback_text
         
         if planner_instruction:
@@ -2598,25 +2911,26 @@ Fields by ISA hierarchy:
 - Other fields: Use "not specified" but STILL include the field
 
 **OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**
-Wrap your JSON array in markdown code blocks:
+Prefer a JSON array. If the API requires a JSON object (json_object mode),
+wrap the array as {{"fields": [ ... ]}} (keys data/metadata/items also accepted).
 
 ```json
-[
-  {{
-    "field_name": "exact_name",
-    "value": "concise value < 500 chars",
-    "evidence": "brief source < 200 chars",
-    "confidence": 0.X,
-    "entity_id": "optional_multirow_group"
-  }}
-]
+{{
+  "fields": [
+    {{
+      "field_name": "exact_name",
+      "value": "concise value < 500 chars",
+      "evidence": "brief source < 200 chars",
+      "confidence": 0.X,
+      "entity_id": "optional_multirow_group"
+    }}
+  ]
+}}
 ```
 
 REQUIREMENTS:
-- Line 1: ```json (alone)
-- Lines 2-N: Valid JSON array covering ALL {len(selected_fields)} input fields at least once
-- Line N+1: ``` (alone)
-- NO text before/after block
+- Valid JSON array, or object with a list under fields/data/metadata/items
+- Cover ALL {len(selected_fields)} input fields at least once
 - NO comments in JSON
 - Each value: < 500 characters
 - Each evidence: < 200 characters"""
@@ -2669,14 +2983,14 @@ REQUIREMENTS:
                 raise ValueError(error_msg)
 
             content = _extract_json_from_markdown(content)
-            metadata = json.loads(content)
+            metadata = self._coerce_metadata_list(json.loads(content))
 
             logger.info(
                 "Generated metadata for %s fields in batch %s",
-                len(metadata) if isinstance(metadata, list) else 1,
+                len(metadata),
                 batch_label or "1/1",
             )
-            return metadata if isinstance(metadata, list) else [metadata]
+            return metadata
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM response as JSON: {e}")
@@ -2685,6 +2999,45 @@ REQUIREMENTS:
         except Exception as e:
             logger.error(f"Error generating metadata: {e}")
             raise  # Re-raise to trigger retry mechanism
+
+    @staticmethod
+    def _coerce_metadata_list(payload: Any) -> List[Dict[str, Any]]:
+        """Normalize metadata JSON into a list of field objects.
+
+        OpenAI-style ``json_object`` mode cannot return a bare array, so providers
+        such as Kimi wrap records under keys like ``data`` / ``fields``.
+        """
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+        for key in ("fields", "data", "metadata", "items", "results", "records"):
+            nested = payload.get(key)
+            if isinstance(nested, list):
+                return [item for item in nested if isinstance(item, dict)]
+        if payload.get("field_name"):
+            return [payload]
+        # Map of field_name -> value/object
+        coerced: List[Dict[str, Any]] = []
+        for key, value in payload.items():
+            if key.startswith("_") or key in {"count", "status", "message"}:
+                continue
+            if isinstance(value, dict) and (
+                "value" in value or "field_name" in value or "evidence" in value
+            ):
+                item = dict(value)
+                item.setdefault("field_name", key)
+                coerced.append(item)
+            elif isinstance(value, (str, int, float, bool)) or value is None:
+                coerced.append(
+                    {
+                        "field_name": key,
+                        "value": value,
+                        "evidence": "Parsed from field-keyed JSON object",
+                        "confidence": 0.5,
+                    }
+                )
+        return coerced
 
     async def _generate_complete_metadata_with_fallback(
         self,

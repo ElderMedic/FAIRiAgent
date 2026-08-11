@@ -749,13 +749,29 @@ Keep it concise (2-3 paragraphs max) and conversational."""
                 HumanMessage(content=user_prompt)
             ]
             
-            response = llm.invoke(messages)
+            response = llm.invoke(
+                messages,
+                config=llm_helper._build_run_config(),
+            )
+            llm_helper._log_llm_response(
+                response,
+                messages,
+                "Mem0.MemoryOverview",
+            )
             summary = response.content.strip()
             
             logger.debug(f"Generated LLM summary ({len(summary)} chars)")
             return summary
             
         except Exception as e:
+            try:
+                llm_helper._log_llm_error(
+                    messages,
+                    "Mem0.MemoryOverview",
+                    e,
+                )
+            except Exception:
+                pass
             logger.warning(f"LLM summary generation failed: {e}")
             return self._generate_simple_summary(memory_texts, agent_counts, themes)
 

@@ -188,6 +188,16 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
         seed_files = self._build_bio_seed_files(state)
         thread_id = state.get("session_id", "default")
 
+        run_config = {
+            "configurable": {"thread_id": thread_id},
+            "recursion_limit": 120,
+        }
+        callbacks = list(
+            (self.llm_helper._build_run_config() or {}).get("callbacks", [])
+        )
+        callbacks.append(self.llm_helper.build_usage_callback("BioMetadataAgent"))
+        run_config["callbacks"] = callbacks
+
         # Use raw ainvoke (not _invoke_react_agent) to get full messages when
         # response_format is None — we parse the final LLM message for metadata.
         raw_result = await inner_agent.ainvoke(
@@ -195,10 +205,7 @@ class BioMetadataAgent(ReactLoopMixin, BaseAgent):
                 "messages": [{"role": "user", "content": self._compose_task_message(state, task)}],
                 "files": seed_files,
             },
-            config={
-                "configurable": {"thread_id": thread_id},
-                "recursion_limit": 120,
-            },
+            config=run_config,
         )
         self._record_react_result(state, "BioMetadataAgent", raw_result)
 

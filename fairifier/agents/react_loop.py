@@ -16,6 +16,14 @@ from ..skills import format_skills_catalog_for_task, list_skill_virtual_paths
 QWEN_MAX_TOKENS_LIMIT = 65536
 
 
+class _DeepAgentHandle:
+    """Wrap a deep agent when structured output is parsed manually."""
+
+    def __init__(self, agent: Any, response_format: Type[BaseModel]):
+        self.agent = agent
+        self.response_format = response_format
+
+
 class ReactLoopMixin:
     """Small bridge from FAIRifier agents to deepagents."""
 
@@ -66,6 +74,11 @@ class ReactLoopMixin:
             return None
         if config.llm_provider == "qwen":
             return min(max_tokens, QWEN_MAX_TOKENS_LIMIT)
+        # K3 counts always-on reasoning in the same completion budget. A full
+        # 131k budget on every inner tool turn is both expensive and prone to
+        # long stalls; the outer extraction calls retain their configured cap.
+        if "kimi-k3" in (config.llm_model or "").lower().replace("_", "-"):
+            return min(max_tokens, 32768)
         return max_tokens
 
     def _get_react_model(self):
@@ -78,6 +91,10 @@ class ReactLoopMixin:
         # - Zhipu (GLM-4.5+): OpenAI-compatible endpoint with the same
         #   "thinking" extra_body contract and multi-turn reasoning_content
         #   propagation gap as DeepSeek
+        # - OpenAI (official): function tools + reasoning_effort require the
+        #   Responses API (/v1/responses), not Chat Completions
+        if config.llm_provider == "openai":
+            return self._get_openai_react_model(base_model)
         if config.llm_provider not in ("qwen", "deepseek", "zhipu"):
             return base_model
 
@@ -108,6 +125,80 @@ class ReactLoopMixin:
             max_retries=3,
         )
 
+    def _get_openai_react_model(self, base_model: Any):
+        """Ensure Deep ReAct OpenAI models can use tools with reasoning_effort."""
+        from fairifier.utils.llm_helper import resolve_openai_use_responses_api
+
+        base_url = config.llm_base_url
+        if base_url == "http://localhost:11434":
+            base_url = None
+        effort = (config.llm_reasoning_effort or "").strip().lower() or None
+        use_responses = resolve_openai_use_responses_api(
+            base_url=base_url,
+            model=config.llm_model,
+            reasoning_effort=effort,
+            explicit=getattr(config, "llm_use_responses_api", None),
+        )
+        if not use_responses:
+            return base_model
+        if getattr(base_model, "use_responses_api", None) is True:
+            return base_model
+
+        try:
+            from langchain_openai import ChatOpenAI
+        except Exception as exc:  # pragma: no cover - optional dependency
+            self.logger.warning(
+                "Unable to create OpenAI Responses deepagents model, "
+                "using base model: %s",
+                exc,
+            )
+            return base_model
+
+        from fairifier.utils.llm_helper import _openai_omits_sampling_params
+
+        kwargs: Dict[str, Any] = {
+            "model": config.llm_model,
+            "api_key": config.llm_api_key,
+            "base_url": base_url,
+            "max_tokens": self._resolved_react_max_tokens(),
+            "timeout": 180,
+            "max_retries": 3,
+            "use_responses_api": True,
+        }
+        if not _openai_omits_sampling_params(config.llm_model):
+            kwargs["temperature"] = config.llm_temperature
+            if config.llm_top_p is not None:
+                kwargs["top_p"] = config.llm_top_p
+        if effort and effort != "none":
+            kwargs["reasoning_effort"] = effort
+        self.logger.info(
+            "Deep ReAct OpenAI model using Responses API "
+            "(reasoning_effort=%s)",
+            effort or "provider-default",
+        )
+        return ChatOpenAI(**kwargs)
+
+    def _openai_responses_manual_structured(self) -> bool:
+        """OpenAI Responses rejects many optional-field JSON Schemas as text.format.
+
+        Prefer tools+reasoning via Responses, then parse the final JSON message
+        into the expected Pydantic model instead of binding response_format.
+        """
+        if config.llm_provider != "openai":
+            return False
+        from fairifier.utils.llm_helper import resolve_openai_use_responses_api
+
+        base_url = config.llm_base_url
+        if base_url == "http://localhost:11434":
+            base_url = None
+        effort = (config.llm_reasoning_effort or "").strip().lower() or None
+        return resolve_openai_use_responses_api(
+            base_url=base_url,
+            model=config.llm_model,
+            reasoning_effort=effort,
+            explicit=getattr(config, "llm_use_responses_api", None),
+        )
+
     def _build_react_agent(
         self,
         tools: List[Any],
@@ -125,13 +216,32 @@ class ReactLoopMixin:
         if create_deep_agent is None:
             return None
 
+        manual_structured = self._openai_responses_manual_structured()
+        prompt = system_prompt
+        if manual_structured:
+            try:
+                import json
+
+                schema_hint = json.dumps(
+                    response_format.model_json_schema(), indent=2
+                )
+            except Exception:
+                schema_hint = response_format.__name__
+            prompt = (
+                f"{system_prompt}\n\n"
+                "After tool use, finish with a single JSON object that matches this "
+                "schema (no markdown fences, no commentary):\n"
+                f"{schema_hint}"
+            )
+
         kwargs: Dict[str, Any] = {
             "model": self._get_react_model(),
             "tools": tools,
             "subagents": subagents,
-            "response_format": response_format,
-            "system_prompt": system_prompt,
+            "system_prompt": prompt,
         }
+        if not manual_structured:
+            kwargs["response_format"] = response_format
 
         if memory_files:
             kwargs["memory"] = memory_files
@@ -141,7 +251,51 @@ class ReactLoopMixin:
         if list_skill_virtual_paths(*config.skill_roots):
             kwargs["skills"] = ["/skills"]
 
-        return create_deep_agent(**kwargs)
+        agent = create_deep_agent(**kwargs)
+        if manual_structured:
+            return _DeepAgentHandle(agent, response_format=response_format)
+        return agent
+
+    def _parse_structured_from_result(
+        self,
+        result: Dict[str, Any],
+        response_format: Type[BaseModel],
+    ) -> Optional[BaseModel]:
+        """Parse a Pydantic payload from deep-agent messages when response_format is unbound."""
+        import json
+        from fairifier.utils.llm_helper import (
+            normalize_llm_response_content,
+            _extract_json_from_markdown,
+        )
+
+        structured = result.get("structured_response")
+        if isinstance(structured, response_format):
+            return structured
+        if isinstance(structured, BaseModel):
+            try:
+                return response_format.model_validate(structured.model_dump())
+            except Exception:
+                pass
+
+        messages = list(result.get("messages") or [])
+        for message in reversed(messages):
+            content = normalize_llm_response_content(
+                getattr(message, "content", None)
+                if not isinstance(message, dict)
+                else message.get("content")
+            )
+            if not content:
+                continue
+            try:
+                payload = json.loads(_extract_json_from_markdown(content))
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                try:
+                    return response_format.model_validate(payload)
+                except Exception:
+                    continue
+        return None
 
     async def _invoke_react_agent(
         self,
@@ -164,6 +318,13 @@ class ReactLoopMixin:
         if agent is None:
             return None
 
+        if isinstance(agent, _DeepAgentHandle):
+            response_format = agent.response_format
+            runnable = agent.agent
+        else:
+            response_format = None
+            runnable = agent
+
         try:
             contract = self._get_react_contract(scratchpad_name or getattr(self, "name", None))
             operation_prefix = scratchpad_name or getattr(self, "name", "react")
@@ -179,7 +340,7 @@ class ReactLoopMixin:
             )
             run_config["callbacks"] = callbacks
             result = await asyncio.wait_for(
-                agent.ainvoke(
+                runnable.ainvoke(
                     {
                         "messages": [{"role": "user", "content": task_message}],
                         "files": seed_files,
@@ -203,7 +364,16 @@ class ReactLoopMixin:
             scratchpad_name or getattr(self, "name", "unknown"),
             result,
         )
-        return result.get("structured_response")
+        structured = result.get("structured_response")
+        if structured is None and response_format is not None:
+            structured = self._parse_structured_from_result(result, response_format)
+            if structured is None:
+                self.logger.warning(
+                    "Deep ReAct finished without parseable %s JSON — using fallback",
+                    getattr(response_format, "__name__", "structured_response"),
+                )
+                return None
+        return structured
 
     def _record_react_result(
         self,
@@ -272,6 +442,13 @@ class ReactLoopMixin:
                 critic_lines.append(f"- issue: {issue}")
             for suggestion in suggestions:
                 critic_lines.append(f"- suggestion: {suggestion}")
+            retry_contract = critic_feedback.get("retry_contract") or {}
+            for item in retry_contract.get("must_change", [])[:10]:
+                critic_lines.append(f"- must_change: {item}")
+            for item in retry_contract.get("must_not_repeat", [])[:10]:
+                critic_lines.append(f"- must_not_repeat: {item}")
+            for item in retry_contract.get("verification", [])[:5]:
+                critic_lines.append(f"- verification: {item}")
             if len(critic_lines) > 1:  # at least one issue or suggestion
                 sections.append("\n".join(critic_lines))
 
