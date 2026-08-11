@@ -13,8 +13,9 @@ Features
   and other heuristics expand single merged rows into per-entity rows.
 * **Backward compatibility** — the flat ``fields`` list is still accepted.
 * **FAIR-DS API integration** — when an API URL is provided and reachable,
-  ``POST /api/isa`` supplies the column headers (and any data rows the
-  server writes); the local filling logic adds the remaining rows.
+  ``POST /api/isa`` may supply a partial workbook (often only investigation /
+  study). Local post-processing creates any missing ISA sheets and replaces
+  placeholder rows from the compiled ``columns`` × ``rows`` matrix.
 * **Graceful degradation** — if ``openpyxl`` is not installed, the function
   falls back to the API path; if neither works it returns ``None``.
 """
@@ -326,16 +327,105 @@ def _generate_xlsx_local(
 # ── Post-process: fill rows into API-generated workbook ─────────
 
 
+def _sheet_title_for_level(level_name: str, existing_titles: Dict[str, str]) -> str:
+    """Reuse the workbook's existing casing for a level, else lowercase."""
+    return existing_titles.get(level_name, level_name)
+
+
+def _clear_data_rows(ws: "openpyxl.worksheet.worksheet.Worksheet") -> None:
+    """Remove all data rows while keeping the header row intact."""
+    if ws.max_row <= 1:
+        return
+    ws.delete_rows(2, ws.max_row - 1)
+
+
+def _populate_sheet_from_level(
+    ws: "openpyxl.worksheet.worksheet.Worksheet",
+    level_data: Dict[str, Any],
+    *,
+    replace_existing_rows: bool,
+) -> int:
+    """Write ``columns``/``rows`` from *level_data* into *ws*.
+
+    Returns the number of cell values written.
+    """
+    columns = [
+        str(col).strip()
+        for col in (level_data.get("columns") or [])
+        if str(col).strip()
+    ]
+    rows = _resolve_rows(level_data)
+    if not columns and not rows:
+        return 0
+
+    header_col = _build_header_column_map(ws)
+    if not header_col:
+        # Brand-new sheet (or headerless): seed headers from columns, then rows.
+        for col_idx, col_name in enumerate(columns, start=1):
+            ws.cell(row=1, column=col_idx, value=col_name)
+            header_col[col_name.strip().lower()] = col_idx
+    else:
+        # Extend headers with any columns present in the authoritative matrix.
+        for col_name in columns:
+            normalized = col_name.strip().lower()
+            if normalized in header_col:
+                continue
+            col_idx = ws.max_column + 1
+            ws.cell(row=1, column=col_idx, value=col_name)
+            header_col[normalized] = col_idx
+
+    for row_data in rows:
+        for key in row_data.keys():
+            normalized = str(key).strip().lower()
+            if not normalized or normalized in header_col:
+                continue
+            col_idx = ws.max_column + 1
+            ws.cell(row=1, column=col_idx, value=normalized)
+            header_col[normalized] = col_idx
+
+    if not rows:
+        return 0
+
+    if replace_existing_rows and ws.max_row > 1:
+        _clear_data_rows(ws)
+
+    # Only skip when the sheet already has data and the caller asked not to
+    # replace (legacy empty-sheet fill).
+    if (not replace_existing_rows) and ws.max_row > 1:
+        return 0
+
+    total_filled = 0
+    for row_idx, row_data in enumerate(rows, start=2):
+        if not isinstance(row_data, dict):
+            continue
+        for key, value in row_data.items():
+            col = header_col.get(str(key).strip().lower())
+            if col is not None and value is not None:
+                val_str = _excel_safe_value(value)
+                if not val_str.strip():
+                    # Do not overwrite a previously written non-empty cell value with an empty string
+                    existing = ws.cell(row=row_idx, column=col).value
+                    if existing and str(existing).strip():
+                        continue
+                ws.cell(row=row_idx, column=col, value=val_str)
+                total_filled += 1
+    return total_filled
+
+
 def _fill_missing_data_rows(
     xlsx_bytes: bytes,
     isa_structure: Dict[str, Any],
 ) -> bytes:
-    """Post-process Excel: fill data rows for ISA sheets the API left empty.
+    """Post-process Excel: complete ISA sheets from the authoritative matrix.
 
-    The FAIR-DS ``POST /api/isa`` endpoint writes data rows only for
-    ``investigation`` and ``study``.  This function fills the remaining
-    sheets from the ``columns`` + ``rows`` (or legacy ``fields``) data in
-    ``isa_structure`` — **one Excel row per entity**.
+    The FAIR-DS ``POST /api/isa`` endpoint commonly returns only
+    ``investigation`` / ``study`` sheets (sometimes with placeholder study
+    rows).  This function:
+
+    1. Creates any missing ISA sheets that have columns/rows in
+       *isa_structure* (observationunit / sample / assay).
+    2. Fills empty sheets and **replaces** API placeholder data rows with
+       the compiled ``columns`` × ``rows`` matrix — one Excel row per entity.
 
     Returns
     -------
@@ -352,54 +442,61 @@ def _fill_missing_data_rows(
     except Exception:
         return xlsx_bytes
 
-    isa_level_names = set(ISA_LEVEL_ORDER)
+    existing_by_level: Dict[str, str] = {
+        name.lower(): name
+        for name in wb.sheetnames
+        if name.lower() in set(ISA_LEVEL_ORDER)
+    }
 
-    for sheet_name in wb.sheetnames:
-        ws = wb[sheet_name]
-        if sheet_name.lower() not in isa_level_names:
-            continue
-        # Only fill if the sheet has headers but no data rows yet.
-        if ws.max_row > 1:
-            continue
-
-        level_data = isa_structure.get(sheet_name.lower())
+    for level_name in ISA_LEVEL_ORDER:
+        level_data = isa_structure.get(level_name)
         if not isinstance(level_data, dict):
             continue
-
+        columns = level_data.get("columns") or []
         rows = _resolve_rows(level_data)
-        if not rows:
+        fields = level_data.get("fields") or []
+        if not (columns or rows or fields):
             continue
 
-        header_col = _build_header_column_map(ws)
-        if not header_col:
-            continue
+        sheet_title = existing_by_level.get(level_name)
+        created = False
+        if sheet_title is None:
+            sheet_title = _sheet_title_for_level(level_name, existing_by_level)
+            ws = wb.create_sheet(title=sheet_title)
+            existing_by_level[level_name] = sheet_title
+            created = True
+        else:
+            ws = wb[sheet_title]
 
-        for row_data in rows:
-            for key in row_data.keys():
-                normalized = str(key).strip().lower()
-                if not normalized or normalized in header_col:
-                    continue
-                col_idx = ws.max_column + 1
-                ws.cell(row=1, column=col_idx, value=normalized)
-                header_col[normalized] = col_idx
-
-        total_filled = 0
-        for row_idx, row_data in enumerate(rows, start=2):
-            filled_in_row = 0
-            for key, value in row_data.items():
-                col = header_col.get(key.lower())
-                if col is not None and value is not None:
-                    ws.cell(row=row_idx, column=col, value=_excel_safe_value(value))
-                    filled_in_row += 1
-            total_filled += filled_in_row
-
-        if total_filled:
+        # Always prefer the compiled matrix over API placeholder rows.
+        # Newly created sheets start empty; existing API sheets may already
+        # contain incomplete investigation/study stubs that must be replaced.
+        total_filled = _populate_sheet_from_level(
+            ws,
+            level_data,
+            replace_existing_rows=True,
+        )
+        if total_filled or created:
             logger.debug(
-                "Filled %d values across %d row(s) in '%s' sheet",
+                "%s ISA sheet '%s' from matrix (%d values)",
+                "Created" if created else "Filled",
+                sheet_title,
                 total_filled,
-                len(rows),
-                sheet_name,
             )
+
+    # Canonical order: investigation → study → OU → sample → assay → Help.
+    ordered_titles: List[str] = []
+    for level_name in ISA_LEVEL_ORDER:
+        title = existing_by_level.get(level_name)
+        if title and title in wb.sheetnames:
+            ordered_titles.append(title)
+    for name in wb.sheetnames:
+        if name not in ordered_titles:
+            ordered_titles.append(name)
+    for target_idx, title in enumerate(ordered_titles):
+        current_idx = wb.sheetnames.index(title)
+        if current_idx != target_idx:
+            wb.move_sheet(title, offset=target_idx - current_idx)
 
     try:
         buf = io.BytesIO()
