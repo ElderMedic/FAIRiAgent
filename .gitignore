@@ -240,11 +240,19 @@ output/logs/
 docker-output/
 docker-test-output/
 
-# Local FAIR Data Station runtime cache
-docker/fairds/*.jar
-docker/fairds/*.log
-docker/fairds/*.pid
+# Local FAIR Data Station and Docker container runtime cache / volume storage / local envs
+docker/.env
+docker/fairds/
 docker/fairds_storage/
+docker/qdrant_storage/
+docker/qdrant_mem0_storage/
+docker/evaluation/
+docker/*_storage/
+docker/*_data/
+docker/*.log
+docker/*.db
+docker/*.sqlite
+
 
 # Local AI / agent tooling (machine-specific; not for GitHub)
 .gemini/
@@ -256,14 +264,18 @@ docker/fairds_storage/
 /package.json
 /package-lock.json
 
-# Private manuscript drafts (local only)
+# Private manuscript drafts, internal presentations, and research notes (local only)
 docs/manuscript/
+docs/fairiagent-presentation/
+docs/ai4bio/
+docs/internal/
+docs/private/
+docs/drafts/
+docs/archive/
 
 # Local-only development notes (not for GitHub)
 docs/en/development/local/
 
-# Local presentation materials and web app (not for GitHub)
-docs/fairiagent-presentation/
 
 # Local FAIR-DS stats HTML snapshot
 fairds_stats.html
@@ -367,11 +379,25 @@ evaluation/*.log
 !evaluation/scripts/
 !evaluation/evaluators/
 !evaluation/config/
+# Temporary scratch files & developer workspace
+scratch/
+
+# Local evaluation progress notes, dated checklists, and handover plans
+evaluation/DEVELOPMENT_STATUS_*.md
+evaluation/EXECUTION_CHECKLIST_*.md
+evaluation/HANDOVER_*.md
+evaluation/*_PLAN_*.md
+evaluation/EVALUATION_IMPROVEMENT_PLAN.md
+
+# Generated evaluation metadata caches
+evaluation/config/*_cache.json
+
 # But ignore .env files in config directories (they may contain secrets)
 evaluation/config/**/*.env
 evaluation/config/**/*.env.*
 !evaluation/config/**/*.template
 !evaluation/config/**/*.example
+
 
 !evaluation/analysis/analyzers/
 !evaluation/analysis/data_loaders/
