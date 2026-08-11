@@ -80,9 +80,25 @@ class FAIRifierConfig:
     llm_api_key: Optional[str] = None  # For OpenAI/Qwen/Gemini/Anthropic
     embedding_model: str = "nomic-embed-text-v2-moe:latest"
     llm_temperature: float = 0.3  # Recommended for structured extraction; keep consistent across configs (control variable)
+    # Optional provider/model-specific sampling controls.  These remain unset
+    # by default so existing profiles keep their provider defaults.
+    llm_top_p: Optional[float] = None
+    llm_top_k: Optional[int] = None
+    # Ollama's runtime name for the model-card ``repetition_penalty``
+    # setting. Keep unset by default so legacy profiles retain provider
+    # defaults.
+    llm_repeat_penalty: Optional[float] = None
+    # Passed through Ollama's per-call options when a model card recommends it.
+    llm_presence_penalty: Optional[float] = None
     llm_max_tokens: int = 16384  # Conservative default for test/dev cost control
     llm_enable_thinking: bool = True  # Thinking enabled by default — models that support it benefit from reasoning traces
-    llm_thinking_budget: int = 2048  # Token budget for thinking/reasoning (Gemini, Anthropic). 0 = model default
+    llm_thinking_budget: int = 8192  # Token budget for thinking/reasoning (Gemini, Anthropic, Open Models). 0 = model default
+    # Provider reasoning effort when supported (e.g. Kimi K3: low|high|max). None = omit / provider default.
+    llm_reasoning_effort: Optional[str] = None
+    # OpenAI Responses API routing. None = auto (official api.openai.com → True so
+    # Deep ReAct can combine function tools with reasoning_effort / high).
+    # Explicit True/False overrides via LLM_USE_RESPONSES_API.
+    llm_use_responses_api: Optional[bool] = None
     enable_deep_agents: bool = True  # Use deepagents inner loops when dependency is available
     enable_a2a: bool = True  # Structured in-process agent-to-agent handoff (AgentMailbox)
     
@@ -179,6 +195,8 @@ class FAIRifierConfig:
     # Retry configuration
     max_step_retries: int = 2  # Default budget favors robustness over minimum token spend
     max_global_retries: int = 5  # Allow planner/critic loops to recover from upstream misses
+    retry_min_score_delta: float = 0.02  # Material improvement required to call a retry useful
+    retry_stagnant_attempts: int = 1  # Stop after one consecutive stagnant revision
     
     # Confidence thresholds
     min_confidence_threshold: float = 0.75
@@ -346,6 +364,8 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
             return "anthropic"
         if value in ("zhipu", "zhipuai", "glm"):
             return "zhipu"
+        if value in ("vllm", "sglang", "lmdeploy"):
+            return "openai"
         return value
 
     # Ensure correct model name is used
@@ -708,6 +728,18 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("LLM_TEMPERATURE"):
         config_instance.llm_temperature = float(os.getenv("LLM_TEMPERATURE"))
 
+    if os.getenv("LLM_TOP_P"):
+        config_instance.llm_top_p = float(os.getenv("LLM_TOP_P"))
+
+    if os.getenv("LLM_TOP_K"):
+        config_instance.llm_top_k = int(os.getenv("LLM_TOP_K"))
+
+    if os.getenv("LLM_REPEAT_PENALTY"):
+        config_instance.llm_repeat_penalty = float(os.getenv("LLM_REPEAT_PENALTY"))
+
+    if os.getenv("LLM_PRESENCE_PENALTY"):
+        config_instance.llm_presence_penalty = float(os.getenv("LLM_PRESENCE_PENALTY"))
+
     if os.getenv("LLM_MAX_TOKENS"):
         config_instance.llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS"))
     
@@ -716,6 +748,24 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
         config_instance.llm_enable_thinking = os.getenv("LLM_ENABLE_THINKING").lower() in ("true", "1", "yes")
     if os.getenv("LLM_THINKING_BUDGET"):
         config_instance.llm_thinking_budget = int(os.getenv("LLM_THINKING_BUDGET"))
+    if os.getenv("LLM_REASONING_EFFORT"):
+        effort = os.getenv("LLM_REASONING_EFFORT", "").strip().lower()
+        config_instance.llm_reasoning_effort = effort or None
+    if os.getenv("LLM_USE_RESPONSES_API") is not None and os.getenv(
+        "LLM_USE_RESPONSES_API", ""
+    ).strip() != "":
+        raw = os.getenv("LLM_USE_RESPONSES_API", "").strip().lower()
+        if raw in ("true", "1", "yes", "on"):
+            config_instance.llm_use_responses_api = True
+        elif raw in ("false", "0", "no", "off"):
+            config_instance.llm_use_responses_api = False
+        elif raw in ("auto",):
+            config_instance.llm_use_responses_api = None
+        else:
+            raise ValueError(
+                "LLM_USE_RESPONSES_API must be true|false|auto "
+                f"(got {os.getenv('LLM_USE_RESPONSES_API')!r})"
+            )
     
     # Document parsing context limits
     if os.getenv("MAX_DOC_CONTEXT_MARKDOWN"):
@@ -785,6 +835,14 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     
     if os.getenv("FAIRIFIER_MAX_GLOBAL_RETRIES"):
         config_instance.max_global_retries = int(os.getenv("FAIRIFIER_MAX_GLOBAL_RETRIES"))
+    if os.getenv("FAIRIFIER_RETRY_MIN_SCORE_DELTA"):
+        config_instance.retry_min_score_delta = float(
+            os.getenv("FAIRIFIER_RETRY_MIN_SCORE_DELTA")
+        )
+    if os.getenv("FAIRIFIER_RETRY_STAGNANT_ATTEMPTS"):
+        config_instance.retry_stagnant_attempts = int(
+            os.getenv("FAIRIFIER_RETRY_STAGNANT_ATTEMPTS")
+        )
     
     # Critic rubric path
     if os.getenv("FAIRIFIER_CRITIC_RUBRIC_PATH"):
