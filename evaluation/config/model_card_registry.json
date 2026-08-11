@@ -1,0 +1,119 @@
+{
+  "schema_version": "fairiagent.model_card_registry.v1",
+  "as_of": "2026-07-21",
+  "source_policy": "official Hugging Face or Ollama model cards only",
+  "models": {
+    "deepseek_v4-flash_v1.4.0": {
+      "architecture_class": "mixture_of_experts",
+      "total_parameters": "284B",
+      "active_parameters": "13B",
+      "context_length": 1000000,
+      "modalities": ["text"],
+      "capabilities": ["reasoning", "tools", "structured_output"],
+      "reasoning_modes": ["non_think", "think", "think_max"],
+      "release_note": "Preview-era panel id; superseded for new runs by deepseek_v4-flash_0731",
+      "card_urls": [
+        "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash"
+      ],
+      "card_sampling": {
+        "temperature": 1.0,
+        "top_p": 1.0
+      }
+    },
+    "deepseek_v4-flash_0731": {
+      "architecture_class": "mixture_of_experts",
+      "total_parameters": "284B",
+      "active_parameters": "13B",
+      "context_length": 1000000,
+      "modalities": ["text"],
+      "capabilities": ["reasoning", "tools", "structured_output"],
+      "reasoning_modes": ["non_think", "think", "think_max"],
+      "api_model": "deepseek-v4-flash",
+      "release_note": "Official DeepSeek-V4-Flash-0731 (2026-07-31); same API name as preview, re-post-trained. Not interchangeable with deepseek_v4-flash_v1.4.0 panel runs.",
+      "card_urls": [
+        "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731"
+      ],
+      "card_sampling": {
+        "temperature": 1.0,
+        "top_p": 1.0
+      }
+    },
+    "deepseek_v4-pro_v1.4.0": {
+      "architecture_class": "mixture_of_experts",
+      "total_parameters": "1.6T",
+      "active_parameters": "49B",
+      "context_length": 1000000,
+      "modalities": ["text"],
+      "capabilities": ["reasoning", "tools", "structured_output"],
+      "reasoning_modes": ["non_think", "think", "think_max"],
+      "card_urls": [
+        "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro"
+      ],
+      "card_sampling": {
+        "temperature": 1.0,
+        "top_p": 1.0
+      }
+    },
+    "ollama_gpt-oss": {
+      "architecture_class": "mixture_of_experts",
+      "total_parameters": "21B",
+      "active_parameters": "3.6B",
+      "context_length": 131072,
+      "modalities": ["text"],
+      "capabilities": ["reasoning", "tools", "structured_output", "function_calling"],
+      "reasoning_modes": ["low", "medium", "high"],
+      "response_format_requirement": "OpenAI Harmony response format; Ollama handles the model template",
+      "card_urls": [
+        "https://huggingface.co/openai/gpt-oss-20b",
+        "https://ollama.com/library/gpt-oss"
+      ],
+      "card_sampling": {
+        "temperature": 1.0,
+        "top_p": 1.0
+      },
+      "quantization": "MXFP4"
+    },
+    "ollama_qwen3.6-27b_v1.4.0": {
+      "architecture_class": "dense_not_marked_moe",
+      "total_parameters": "27B",
+      "context_length": 262144,
+      "modalities": ["text", "image"],
+      "capabilities": ["reasoning", "tools", "structured_output", "function_calling"],
+      "reasoning_modes": ["thinking", "non_thinking"],
+      "card_urls": [
+        "https://huggingface.co/Qwen/Qwen3.6-27B",
+        "https://registry.ollama.com/library/qwen3.6"
+      ],
+      "card_sampling": {
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "presence_penalty": 1.5,
+        "repetition_penalty": 1.0
+      },
+      "runtime_sampling_mapping": {
+        "repetition_penalty": "LLM_REPEAT_PENALTY -> Ollama repeat_penalty",
+        "presence_penalty": "LLM_PRESENCE_PENALTY -> per-call Ollama options"
+      },
+      "quantization": "Q4_K_M"
+    },
+    "ollama_gemma4-26b_v1.4.0": {
+      "architecture_class": "mixture_of_experts",
+      "total_parameters": "25.2B",
+      "active_parameters": "3.8B",
+      "context_length": 262144,
+      "modalities": ["text", "image"],
+      "capabilities": ["reasoning", "tools", "structured_output", "function_calling"],
+      "reasoning_modes": ["thinking", "non_thinking"],
+      "card_urls": [
+        "https://registry.ollama.com/library/gemma4%3A26b"
+      ],
+      "card_sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 64
+      },
+      "quantization": "Q4_K_M"
+    }
+  }
+}

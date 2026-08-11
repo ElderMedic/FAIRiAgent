@@ -12,7 +12,7 @@ from .retrieval_coverage_evaluator import RetrievalCoverageEvaluator
 from .value_accuracy_evaluator import ValueAccuracyEvaluator
 from .structural_evaluator import StructuralEvaluator
 from .novel_field_evaluator import NovelFieldEvaluator, find_source_text
-from . import calibration
+from .nli_evaluator import NLIFaithfulnessEvaluator
 
 __all__ = [
     'CompletenessEvaluator',
@@ -26,6 +26,7 @@ __all__ = [
     'ValueAccuracyEvaluator',
     'StructuralEvaluator',
     'NovelFieldEvaluator',
+    'NLIFaithfulnessEvaluator',
     'find_source_text',
     'calibration',
 ]
