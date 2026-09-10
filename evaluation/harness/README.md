@@ -14,7 +14,9 @@ The maintained benchmark contract is defined by:
 
 The manifest validator rejects condition identifiers that are not in this
 registry. Historical aliases must be translated at the input boundary and
-never appear in publication-facing results.
+never appear in publication-facing results. `phase4_tuned` is a complete-system
+**base env** (hybrid retrieval in the prompt, tighter snippet budget), not a
+condition name. Glossary: [evaluation/config/README.md](../config/README.md).
 
 Validate and expand a matrix without calling a model:
 
@@ -174,6 +176,29 @@ mamba run -n FAIRiAgent python -m evaluation.benchmark.evaluate_run_index \
 single-run compatibility. It refuses to choose among repeated runs; repeated
 experiments must use the v2 run index and `evaluate_run_index` above.
 
+## Single-deliverable expected-outcome checks
+
+During pipeline development, a source-specific expected-outcome fixture can
+check the persisted FAIR-DS workbook without putting benchmark examples or
+value patterns into production agents. The evaluator first runs the generic
+FAIR-DS structural and field-contract audit, then checks externally declared
+package, sheet, entity, value-distribution, and linkage expectations:
+
+```bash
+mamba run -n FAIRiAgent python \
+  evaluation/scripts/evaluate_fairds_expected_outcome.py \
+  <run-directory> \
+  <expected-outcome.json> \
+  --output <run-directory>/reports/expected_outcome.json
+```
+
+Fixtures must validate against
+`evaluation/schemas/fairds_expected_outcome.schema.json` and pin the source
+SHA-256. They are evaluation assets only: the runtime pipeline never reads
+them. A passing expected-outcome result can still set `review_required=true`
+when mandatory FAIR-DS fields are absent from the source; that state must not
+be reported as fully review-free metadata.
+
 ## Materialize a production manifest
 
 After the researcher has assigned every document to a split and approved the
@@ -277,6 +302,11 @@ mamba run -n FAIRiAgent python -m evaluation.benchmark.model_preflight \
 The model-card registry is static provenance only. It records architecture,
 active/total parameters, context, capabilities, and official source URLs; it
 never substitutes for endpoint, structured-output, or tool-contract evidence.
+
+Thinking defaults for new profiles: `LLM_ENABLE_THINKING=true` when the card
+lists a thinking/reasoning mode, using the thinking-mode sampler; `false` only
+for no-think models. Frozen 2026-07-21 panel env files that pin non-think remain
+historical. Do not reuse a non-think cell as a thinking-on result.
 
 The execution boundary is approval-gated. Without `--execute`, the command
 below is a dry-run and cannot initialize a provider:

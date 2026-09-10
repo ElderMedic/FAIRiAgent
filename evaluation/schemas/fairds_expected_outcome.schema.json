@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fairiagent.local/schemas/fairds_expected_outcome.schema.json",
+  "title": "FAIRiAgent FAIR-DS expected outcome",
+  "type": "object",
+  "required": ["schema_version", "case_id", "source", "packages", "levels"],
+  "properties": {
+    "schema_version": {"enum": ["fairiagent.fairds_expected_outcome.v1", "fairiagent.fairds_expected_outcome.v2"]},
+    "case_id": {"type": "string", "minLength": 1},
+    "source": {"$ref": "#/$defs/sourceAsset"},
+    "source_assets": {"type": "array", "items": {"$ref": "#/$defs/sourceAsset"}, "uniqueItems": true},
+    "evaluation_scope": {"$ref": "#/$defs/evaluationScope"},
+    "coverage_ledger": {"type": "array", "items": {"$ref": "#/$defs/coverageEntry"}},
+    "packages": {
+      "type": "object",
+      "properties": {
+        "required": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "required_any_of": {"type": "array", "items": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true}},
+        "forbidden": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      },
+      "additionalProperties": false
+    },
+    "required_sheets": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "forbidden_sheets": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "allowed_audit_warning_codes": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "levels": {"type": "object", "additionalProperties": {"$ref": "#/$defs/levelExpectation"}},
+    "relationships": {"type": "array", "items": {"$ref": "#/$defs/relationship"}},
+    "source_table_checks": {"type": "array", "items": {"$ref": "#/$defs/sourceTableCheck"}}
+  },
+  "$defs": {
+    "sourceAsset": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "role": {"enum": ["main_manuscript", "supplementary_methods", "metadata_table", "result_payload", "contextual_metadata"]},
+        "description": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "evaluationScope": {
+      "type": "object",
+      "required": ["focal_entity_scope", "contextual_data_scope", "result_data_scope"],
+      "properties": {
+        "focal_entity_scope": {"type": "string", "minLength": 1},
+        "contextual_data_scope": {"type": "string", "minLength": 1},
+        "result_data_scope": {"type": "string", "minLength": 1},
+        "focal_record_filter": {
+          "type": "object",
+          "required": ["field", "value"],
+          "properties": {"field": {"type": "string", "minLength": 1}, "value": {"type": "string"}},
+          "additionalProperties": false
+        },
+        "focal_record_count": {"type": "integer", "minimum": 0},
+        "contextual_record_count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "coverageEntry": {
+      "type": "object",
+      "required": ["concept", "disposition", "evidence_source", "evidence_locator", "rationale"],
+      "properties": {
+        "concept": {"type": "string", "minLength": 1},
+        "disposition": {"enum": ["standard_field", "source_extension", "entity_structure", "study_context", "result_payload_excluded", "source_absent_review"]},
+        "target_level": {"type": "string"},
+        "target_fields": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "evidence_source": {"type": "string", "minLength": 1},
+        "evidence_locator": {"type": "string", "minLength": 1},
+        "expected_coverage": {"type": "string"},
+        "rationale": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "fieldExpectation": {
+      "type": "object",
+      "properties": {
+        "nonempty_count": {"type": "integer", "minimum": 0},
+        "min_nonempty_count": {"type": "integer", "minimum": 0},
+        "max_nonempty_count": {"type": "integer", "minimum": 0},
+        "blank_count": {"type": "integer", "minimum": 0},
+        "distinct_nonempty_count": {"type": "integer", "minimum": 0},
+        "value_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+        "allowed_values": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "required_substrings": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "value_regex": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "levelExpectation": {
+      "type": "object",
+      "properties": {
+        "row_count": {"type": "integer", "minimum": 0},
+        "required_columns": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "forbidden_columns": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "unique_fields": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "expected_rows": {"type": "array", "items": {"type": "object", "additionalProperties": {"type": "string"}}},
+        "fields": {"type": "object", "additionalProperties": {"$ref": "#/$defs/fieldExpectation"}}
+      },
+      "additionalProperties": false
+    },
+    "relationship": {
+      "type": "object",
+      "required": ["child_level", "parent_level", "link_field"],
+      "properties": {
+        "child_level": {"type": "string"},
+        "parent_level": {"type": "string"},
+        "link_field": {"type": "string"},
+        "one_child_per_parent": {"type": "boolean"},
+        "linked_field_equalities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["child_field", "parent_field"],
+            "properties": {
+              "child_field": {"type": "string"},
+              "parent_field": {"type": "string"},
+              "compare_when_parent_nonempty": {"type": "boolean"},
+              "expected_comparison_count": {"type": "integer", "minimum": 0}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "targetKeyLookup": {
+      "type": "object",
+      "required": ["level", "target_link_field", "lookup_id_field", "lookup_value_field"],
+      "properties": {
+        "level": {"type": "string", "minLength": 1},
+        "target_link_field": {"type": "string", "minLength": 1},
+        "lookup_id_field": {"type": "string", "minLength": 1},
+        "lookup_value_field": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "sourceTableCheck": {
+      "type": "object",
+      "required": ["path", "sheet", "header_row", "source_field", "target_level", "target_field"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sheet": {"type": "string", "minLength": 1},
+        "header_row": {"type": "integer", "minimum": 1},
+        "filter": {
+          "type": "object",
+          "required": ["field", "value"],
+          "properties": {"field": {"type": "string", "minLength": 1}, "value": {"type": "string"}},
+          "additionalProperties": false
+        },
+        "source_field": {"type": "string", "minLength": 1},
+        "source_key_field": {"type": "string", "minLength": 1},
+        "source_value_map": {"type": "object", "additionalProperties": {"type": "string"}},
+        "target_level": {"type": "string", "minLength": 1},
+        "target_field": {"type": "string", "minLength": 1},
+        "target_key_field": {"type": "string", "minLength": 1},
+        "target_key_lookup": {"$ref": "#/$defs/targetKeyLookup"},
+        "comparison": {"enum": ["exact_set", "exact_multiset", "exact_keyed", "numeric_keyed"]},
+        "absolute_tolerance": {"type": "number", "minimum": 0},
+        "relative_tolerance": {"type": "number", "minimum": 0}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"comparison": {"enum": ["exact_keyed", "numeric_keyed"]}}, "required": ["comparison"]},
+          "then": {
+            "required": ["source_key_field"],
+            "anyOf": [{"required": ["target_key_field"]}, {"required": ["target_key_lookup"]}]
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

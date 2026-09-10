@@ -52,16 +52,53 @@ def _values_path(
     return inferred if inferred.is_file() else None
 
 
-def _run_directory(result: Mapping[str, Any], run_index_path: Path) -> Path:
+def _resolve_existing_path(
+    raw: str,
+    *,
+    run_index_path: Path,
+    project_root: Path,
+) -> Path:
+    """Resolve a stored artifact path without double-prefixing the run directory.
+
+    Campaign envelopes often store a project-root-relative path such as
+    ``output/.../run_01/deliverables/metadata.json``. Joining that with the
+    run-index directory would miss the file.
+    """
+
+    path = Path(raw)
+    if path.is_absolute():
+        return path
+    for candidate in (
+        project_root / path,
+        Path.cwd() / path,
+        run_index_path.parent / path,
+        path,
+    ):
+        if candidate.exists():
+            return candidate
+    return project_root / path
+
+
+def _run_directory(
+    result: Mapping[str, Any],
+    run_index_path: Path,
+    *,
+    project_root: Path,
+) -> Path:
     provenance = result.get("provenance")
     if isinstance(provenance, Mapping) and provenance.get("run_dir"):
         return Path(str(provenance["run_dir"]))
     artifact = result.get("artifact")
     if isinstance(artifact, Mapping) and artifact.get("path"):
-        path = Path(str(artifact["path"]))
-        if not path.is_absolute():
-            path = run_index_path.parent / path
-        return path.parent
+        path = _resolve_existing_path(
+            str(artifact["path"]),
+            run_index_path=run_index_path,
+            project_root=project_root,
+        )
+        run_dir = path.parent
+        if run_dir.name == "deliverables":
+            return run_dir.parent
+        return run_dir
     raise ValueError("result has neither provenance.run_dir nor artifact.path")
 
 
@@ -95,12 +132,17 @@ def attach_evaluator_results(
         values_path = _values_path(instance, ground_truth_path, manifest_path, project_root)
         values_doc = _load_json(values_path) if values_path else None
 
-        run_dir = _run_directory(original, run_index_path)
+        run_dir = _run_directory(
+            original, run_index_path, project_root=project_root
+        )
         output_path = resolve_metadata_output_read_path(run_dir) or (run_dir / "metadata.json")
         artifact = original.get("artifact")
         if isinstance(artifact, Mapping) and artifact.get("path"):
-            candidate = Path(str(artifact["path"]))
-            output_path = candidate if candidate.is_absolute() else run_index_path.parent / candidate
+            output_path = _resolve_existing_path(
+                str(artifact["path"]),
+                run_index_path=run_index_path,
+                project_root=project_root,
+            )
         validation = {"fairds_valid": False, "isa_round_trip_valid": False, "critical_errors": 0}
         if output_path.is_file():
             try:
