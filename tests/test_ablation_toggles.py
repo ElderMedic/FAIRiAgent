@@ -63,6 +63,12 @@ async def test_json_hard_gate_disable_skips_cross_layer_retry(monkeypatch):
     class Agent:
         async def execute(self, state):
             state["metadata_fields"] = [{"field_name": "study title", "isa_sheet": "study"}]
+            state["retrieved_knowledge"] = [
+                {
+                    "term": "investigation identifier",
+                    "metadata": {"required": True, "isa_sheet": "investigation"},
+                }
+            ]
             state["api_capabilities"] = {
                 "required_metadata_terms": ["alpha diversity"],
                 "uncovered_required_metadata_terms": ["alpha diversity"],
@@ -107,6 +113,12 @@ async def test_cross_layer_rollback_disable_keeps_retry_at_json_generator(monkey
     class Agent:
         async def execute(self, state):
             state["metadata_fields"] = [{"field_name": "study title", "isa_sheet": "study"}]
+            state["retrieved_knowledge"] = [
+                {
+                    "term": "investigation identifier",
+                    "metadata": {"required": True, "isa_sheet": "investigation"},
+                }
+            ]
             state["api_capabilities"] = {
                 "required_metadata_terms": ["alpha diversity"],
                 "uncovered_required_metadata_terms": ["alpha diversity"],

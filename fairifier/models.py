@@ -62,6 +62,11 @@ class MetadataField:
     # None or "" means "no specific entity" — field goes to the default/first row.
     entity_id: Optional[str] = None
 
+    # Scope of a non-empty extracted value. ``level`` means the source states
+    # that the value applies to every entity on the ISA sheet; ``entity`` means
+    # it is tied to one entity/group. Unknown scope must never be broadcast.
+    value_scope: Optional[str] = None
+
     # Additional metadata for internal use
     data_type: Optional[str] = None
     required: bool = False

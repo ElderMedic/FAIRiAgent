@@ -26,6 +26,8 @@ async def llm_select_relevant_packages(
     prior_memory_context: Optional[str] = None,
     priority_package_hints: Optional[List[str]] = None,
     document_match_text: Optional[str] = None,
+    proposed_package_names: Optional[List[str]] = None,
+    source_schema_match_hints: Optional[List[Dict[str, Any]]] = None,
 ) -> List[str]:
     """
     LLM determines which FAIR-DS packages are relevant for this document.
@@ -54,6 +56,7 @@ async def llm_select_relevant_packages(
             "recommended": pkg.get("recommended_count", 0),
             "sheets": pkg["sheets"],
             "sample_fields": pkg.get("sample_fields", []),
+            "field_contract": pkg.get("field_contract", []),
         })
 
     described_packages = [pkg for pkg in all_packages if str(pkg.get("description", "")).strip()]
@@ -65,42 +68,49 @@ async def llm_select_relevant_packages(
         else "Package descriptions were not available from the API; rely on names and field counts."
     )
 
-    # Dynamically categorize packages based on API data (ALL packages)
-    package_categories = {}
-    for pkg in all_packages:
-        searchable = " ".join(
-            [
-                pkg["name"],
-                str(pkg.get("description", "")),
-                " ".join(pkg.get("sheets") or []),
-            ]
-        ).lower()
-        if any(x in searchable for x in ["default", "core", "basic"]):
-            package_categories.setdefault("universal", []).append(pkg["name"])
-        elif any(x in searchable for x in ["soil", "water", "air", "sediment", "marine", "environment"]):
-            package_categories.setdefault("environmental", []).append(pkg["name"])
-        elif any(x in searchable for x in ["gsc", "mims", "mimag", "misag", "miuvig", "genome", "sequenc"]):
-            package_categories.setdefault("genomics", []).append(pkg["name"])
-        elif any(x in searchable for x in ["plant", "miappe", "crop"]):
-            package_categories.setdefault("plant_science", []).append(pkg["name"])
-        else:
-            package_categories.setdefault("other_domains", []).append(pkg["name"])
-
-    # Build dynamic package overview (show ALL packages - no truncation)
+    # Build the overview entirely from server-provided metadata. Do not map
+    # package names into hand-written domain buckets.
     pkg_overview = (
         f"**Available FAIR-DS Packages (from API - Total: {len(all_packages)}):**\n"
         f"{description_note}\n"
     )
-    for category, pkgs in package_categories.items():
-        category_name = category.replace("_", " ").title()
-        pkg_overview += f"• {category_name}: {', '.join(pkgs)}\n"
 
     if described_packages:
-        pkg_overview += "\n**Highest-signal package descriptions (pre-ranked):**\n"
-        for pkg in described_packages[:8]:
+        pkg_overview += "\n**Candidate package descriptions (pre-ranked):**\n"
+        for pkg in described_packages:
             description = str(pkg.get("description", "")).strip()
-            if description:
-                pkg_overview += f"- {pkg['name']}: {description[:160]}\n"
+            fields = [
+                str(label).strip()
+                for label in pkg.get("sample_fields", [])
+                if str(label).strip()
+            ]
+            mandatory = [
+                str(label).strip()
+                for label in pkg.get("mandatory_fields", [])
+                if str(label).strip()
+            ]
+            field_contract = [
+                field
+                for field in pkg.get("field_contract", [])
+                if isinstance(field, dict)
+            ]
+            pkg_overview += f"- {pkg['name']}: {description[:160]}\n"
+            if fields:
+                pkg_overview += f"  fields: {', '.join(fields[:16])}\n"
+            if mandatory:
+                pkg_overview += f"  mandatory fields: {', '.join(mandatory[:12])}\n"
+            for field in field_contract[:12]:
+                matched_values = field.get("source_matched_values") or []
+                match_suffix = (
+                    f"; source matches controlled value(s): {', '.join(matched_values[:4])}"
+                    if matched_values
+                    else ""
+                )
+                pkg_overview += (
+                    f"  contract: {field.get('label', '')} "
+                    f"[{field.get('requirement', '')}, {field.get('level', '')}]"
+                    f"{match_suffix}\n"
+                )
     
     system_prompt = f"""You are an expert at selecting appropriate FAIR-DS metadata packages for research data.
 
@@ -122,10 +132,16 @@ async def llm_select_relevant_packages(
 6. Select method-specific packages only when the description clearly matches the document methods
 7. Avoid generic environmental or omics-heavy packages unless the document and description both justify them
 8. Prefer precision over breadth when two packages provide overlapping coverage
-9. If the document concerns plant-pathogen or host-pathogen systems, strongly prefer packages whose descriptions cover host, pathogen, taxon, biosafety, and inoculation metadata
-10. Select at least 1 package. Choose as many as needed to fully cover the document's metadata requirements
-11. There is no upper limit - use your judgment to determine the optimal number of packages
-12. ONLY select from the packages listed above - these are real and current
+9. Select the smallest sufficient package set; normally this is `default`, at most one domain/sample package, and one applicable method package
+10. Distinguish schema applicability from value availability. A package applies when its scope and several of its fields match an explicitly described sample or method, even if some required values are absent and must remain blank for human completion
+11. Do not require the literal package name to appear in the source. Use semantic evidence from the domain, sample, assay, and the package's actual field labels
+12. For a platform-specific package, an explicit vendor/model is strongest evidence. If it is absent, select that package only when it is the closest available schema for an explicitly stated assay type; never populate platform/model/file values without source evidence
+13. A short abstract may justify a focused package when it describes the relevant sample or assay in enough detail. Reject broad checklists whose fields mostly do not apply
+14. Priority hints are advisory candidates, not instructions to force every hinted package
+15. ONLY select from the packages listed above - these are real and current
+16. Reject a proposed package when its stated scope conflicts with the source assay or sample type, even if a Planner or memory suggested it
+17. Compare overlapping packages by their applicable fields and unsupported mandatory burden; prefer the narrower contract that represents the current source faithfully
+18. A controlled value from a real field contract that matches the source (for example a library strategy or material type) is direct schema-applicability evidence; default-only is insufficient when such evidence exists at a non-core ISA level
 
 **Think step by step:**
 1. What is the research domain? (genomics, ecology, plant science, etc.)
@@ -151,7 +167,9 @@ REQUIREMENTS:
 - NO text after the closing ```
 - NO comments in JSON
 
-Select at least 1 package. Choose as many as needed - there is no upper limit."""
+Select at least 1 package. Choose the smallest set that still covers every
+high-confidence source-supported domain, sample, and assay concept; unexplained
+coverage loss is worse than adding one justified non-overlapping package."""
 
     if critic_feedback:
         feedback_text = "\n\n**Address critic feedback:**\n"
@@ -169,12 +187,35 @@ Select at least 1 package. Choose as many as needed - there is no upper limit.""
         system_prompt += feedback_text
     
     if planner_instruction:
-        system_prompt += f"\n\n**Planner guidance:**\n- {planner_instruction}\n"
+        system_prompt += (
+            f"\n\n**Planner guidance (candidate discovery only):**\n- {planner_instruction}\n"
+            "Planner labels are hypotheses, not source evidence. Validate them against the current "
+            "document and the real package description/fields before selecting anything.\n"
+        )
     if priority_package_hints:
         system_prompt += (
-            "\n\n**High-confidence package hints from domain heuristics:**\n- "
+            "\n\n**Advisory package candidates:**\n- "
             + ", ".join(priority_package_hints)
-            + "\nUse these hints unless the document clearly contradicts them."
+            + "\nThese are not approvals. Keep only candidates independently justified by the current source."
+        )
+    if proposed_package_names:
+        system_prompt += (
+            "\n\n**Package-contract audit:**\n"
+            f"A prior pass proposed: {', '.join(proposed_package_names)}. "
+            "Re-evaluate that proposal from scratch using the now-visible real fields. "
+            "You may retain, remove, or replace any package."
+        )
+    if source_schema_match_hints:
+        system_prompt += (
+            "\n\n**Current-source to real-schema matches:**\n"
+            + json.dumps(
+                source_schema_match_hints[:12],
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\nThese matches are computed from the current document and FAIR-DS field "
+            "contracts. Cover each represented ISA level with one defensible package, "
+            "unless you can identify a concrete scope conflict in your reasoning."
         )
 
     user_prompt = f"""Document information:
@@ -204,8 +245,10 @@ REQUIREMENTS:
 - Line N+1: ``` (alone)
 - NO text before/after block
 - NO comments in JSON"""
-    if prior_memory_context:
-        user_prompt = prior_memory_context + "\n\n" + user_prompt
+    # Cross-run memories can help discover candidates upstream, but historical
+    # package recommendations are not evidence that a package applies to the
+    # current source. Deliberately exclude them from final adjudication.
+    del prior_memory_context
 
     messages = [
         SystemMessage(content=system_prompt),
@@ -216,23 +259,38 @@ REQUIREMENTS:
         logger.info("Calling LLM to select relevant packages...")
         response = await llm_helper._call_llm(messages, operation_name="Extract Package Terms")
         package_lookup = {pkg["name"].lower(): pkg["name"] for pkg in all_packages}
+
+        def fallback_packages() -> List[str]:
+            """Use explicit hints, then FAIR-DS default; never arbitrary top-N."""
+            fallback: List[str] = []
+            for package_name in priority_package_hints or []:
+                actual_name = package_lookup.get(str(package_name).lower())
+                if actual_name and actual_name not in fallback:
+                    fallback.append(actual_name)
+                if len(fallback) >= 3:
+                    return fallback
+            default_name = package_lookup.get("default")
+            if default_name and default_name not in fallback:
+                fallback.insert(0, default_name)
+            if not fallback and all_packages:
+                fallback.append(all_packages[0]["name"])
+            return fallback[:3]
         
         # Defensive checks
         if response is None:
             logger.warning("LLM returned None response for package selection")
-            default_packages = [pkg["name"] for pkg in all_packages[:3]]
-            logger.warning(f"Using default packages from API (fallback): {default_packages}")
-            return default_packages
+            selected_fallback = fallback_packages()
+            logger.warning("Using conservative package fallback: %s", selected_fallback)
+            return selected_fallback
         
         content = normalize_llm_response_content(getattr(response, 'content', None))
         
         # Check if response is empty or None
         if not content or (isinstance(content, str) and not content.strip()):
             logger.warning(f"LLM returned empty response for package selection (content={repr(content)})")
-            # Return top 3 packages from API (based on field count - already sorted)
-            default_packages = [pkg["name"] for pkg in all_packages[:3]]
-            logger.warning(f"Using default packages from API (fallback): {default_packages}")
-            return default_packages
+            selected_fallback = fallback_packages()
+            logger.warning("Using conservative package fallback: %s", selected_fallback)
+            return selected_fallback
         
         # Parse response
         try:
@@ -245,10 +303,9 @@ REQUIREMENTS:
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse LLM package selection response (JSON error): {e}")
             logger.error(f"Response content: {content[:500]}")
-            # Return top 3 packages from API as fallback
-            default_packages = [pkg["name"] for pkg in all_packages[:3]]
-            logger.warning(f"Using default packages from API (fallback): {default_packages}")
-            return default_packages
+            selected_fallback = fallback_packages()
+            logger.warning("Using conservative package fallback: %s", selected_fallback)
+            return selected_fallback
         
         # Handle case where LLM returns a list directly instead of {"selected_packages": [...]}
         if isinstance(result, list):
@@ -274,23 +331,11 @@ REQUIREMENTS:
         
         # If nothing selected, use top packages from API
         if not selected_package_names:
-            fallback_packages: List[str] = []
-            for package_name in priority_package_hints or []:
-                actual_name = package_lookup.get(str(package_name).lower())
-                if actual_name and actual_name not in fallback_packages:
-                    fallback_packages.append(actual_name)
-
-            if fallback_packages:
-                logger.warning(
-                    "LLM selected no packages, using heuristic priority package fallback: %s",
-                    fallback_packages,
-                )
-                selected_package_names = fallback_packages
-            else:
-                logger.warning("LLM selected no packages, using top packages from API")
-                default_packages = [pkg["name"] for pkg in all_packages[:3]]
-                logger.info(f"Using default packages from API: {default_packages}")
-                selected_package_names = default_packages
+            selected_package_names = fallback_packages()
+            logger.warning(
+                "LLM selected no packages, using conservative package fallback: %s",
+                selected_package_names,
+            )
         
         logger.info(f"LLM selected packages: {selected_package_names}")
         logger.info(f"Reasoning: {(result.get('reasoning', '') if isinstance(result, dict) else '')[:200]}")
@@ -368,7 +413,7 @@ async def llm_select_fields_from_package(
 **Total optional fields available:** {len(optional_fields)}
 **Mandatory fields:** {len(mandatory_fields)} (automatically included)
 
-**Your task:** Select at least 5 relevant OPTIONAL fields for the {isa_sheet} level based on document content.
+**Your task:** Select only OPTIONAL fields that are directly relevant and supportable from the document. Selecting zero is valid.
 
 **IMPORTANT - Term & Field Search Capabilities:**
 The FAIR-DS API provides two search mechanisms:
@@ -393,7 +438,7 @@ The FAIR-DS API provides two search mechanisms:
 **Selection criteria:**
 1. Field is relevant to the document's content at the {isa_sheet} level
 2. Information for this field is likely present in the document
-3. Field adds value for FAIR data principles (findability, accessibility, interoperability, reusability)
+3. Do not select a field merely because it could be useful in a richer source
 4. Prioritize publication-ready metadata such as identifiers, provenance, study design, taxa, geography, timepoints, host/pathogen context, and method descriptors when relevant
 5. Balance between general and specific fields appropriate for {isa_sheet} level
 6. If a needed field is missing, you can request it by name for the system to search
@@ -440,7 +485,9 @@ REQUIREMENTS:
 }}
 ```
 
-Select at least 5 fields. Choose as many as needed - there is no upper limit."""
+Select every source-supported, non-redundant optional field that materially
+describes the study at this ISA level. The evidence determines the field count;
+there is no fixed numeric cap."""
 
     if critic_feedback:
         feedback_text = "\n\n**Improve based on feedback:**\n"
@@ -480,7 +527,8 @@ Examples of when to use term/field search:
 - You need domain-specific fields that might be in other packages → add to `terms_to_search`
 - You want to find the standard FAIR-DS terminology for a concept → add to `terms_to_search`
 
-Select at least 5 relevant optional fields for the {isa_sheet} level. There is no upper limit - choose as many as needed.
+Select every source-supported, non-redundant optional field for the {isa_sheet}
+level. An empty list is valid only when the source truly contains none.
 
 **OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**
 Wrap your JSON in markdown code blocks:

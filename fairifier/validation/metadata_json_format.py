@@ -197,10 +197,24 @@ def validate_value_formats(
         if sheet_name == "description":
             continue
 
-        fields = sheet_data.get("fields", [])
-        for field in fields:
-            field_name = field.get("field_name", "").lower()
-            value = field.get("value", "")
+        rows = sheet_data.get("rows") or []
+        if rows:
+            values_to_check = [
+                (str(field_name).lower(), value)
+                for row in rows
+                if isinstance(row, dict)
+                for field_name, value in row.items()
+            ]
+        else:
+            values_to_check = [
+                (
+                    str(field.get("field_name") or "").lower(),
+                    field.get("value", ""),
+                )
+                for field in (sheet_data.get("fields") or [])
+                if isinstance(field, dict)
+            ]
+        for field_name, value in values_to_check:
 
             if not value or str(value).lower() in [
                 "not specified",

@@ -10,18 +10,63 @@ Other providers fall back to prompt-guided JSON parsing.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from enum import Enum
 from typing import Any, Dict, List, Optional, Type, Union, get_args, get_origin
 
 from langchain_core.messages import BaseMessage, HumanMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from fairifier.config import config
 from fairifier.utils.json_parse import parse_llm_json
 
 logger = logging.getLogger(__name__)
+
+
+async def _invoke_prompt_json_with_transport_retry(
+    llm_helper,
+    messages: List[BaseMessage],
+    *,
+    operation_name: str,
+    max_tokens: Optional[int],
+    attempts: int = 2,
+) -> Any:
+    """Call a prompt-JSON provider without leaking transient transport errors.
+
+    Provider clients normally retry failures that happen before a response is
+    opened, but streamed local responses can still end with an incomplete body.
+    A structured-output audit is not allowed to crash the whole workflow for
+    that reason.  Retry the identical bounded request once, then return ``None``
+    so the owning agent can fail its deterministic validation or use its own
+    stage-level retry policy.
+    """
+    last_error: Optional[Exception] = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            return await llm_helper._call_llm(
+                messages,
+                operation_name=operation_name,
+                max_tokens=max_tokens,
+            )
+        except Exception as exc:  # provider exception types vary by adapter
+            last_error = exc
+            logger.warning(
+                "Prompt JSON transport failure for %s (attempt %d/%d): %s",
+                operation_name,
+                attempt,
+                attempts,
+                exc,
+            )
+            if attempt < attempts:
+                await asyncio.sleep(1.0)
+    logger.error(
+        "Prompt JSON transport retries exhausted for %s: %s",
+        operation_name,
+        last_error,
+    )
+    return None
 
 
 class StructuredOutputMode(str, Enum):
@@ -121,13 +166,26 @@ def _enhance_messages_for_json_object(
 
 
 def _coerce_to_dict(parsed: Any, model: Type[BaseModel]) -> Optional[Dict[str, Any]]:
+    """Validate provider output and return canonical schema field names.
+
+    Prompt-JSON and JSON-object providers return ordinary dictionaries. Passing
+    them through unchanged makes validation aliases provider-dependent: an
+    accepted alias such as ``dimension`` never becomes the canonical
+    ``dimension_name`` expected downstream. Keep one schema boundary for every
+    provider instead.
+    """
     if parsed is None:
         return None
-    if isinstance(parsed, BaseModel):
-        return parsed.model_dump()
-    if isinstance(parsed, dict):
-        return parsed
-    return None
+    try:
+        validated = parsed if isinstance(parsed, model) else model.model_validate(parsed)
+    except (ValidationError, TypeError, ValueError) as exc:
+        logger.warning(
+            "Structured output failed %s validation: %s",
+            model.__name__,
+            exc,
+        )
+        return None
+    return validated.model_dump()
 
 
 async def invoke_structured_output(
@@ -237,7 +295,7 @@ async def invoke_structured_output(
                 max_tokens=max_tokens,
             )
             content = getattr(response, "content", "") if response else ""
-            return parse_llm_json(content)
+            return _coerce_to_dict(parse_llm_json(content), schema_model)
         except Exception as exc:
             logger.warning(
                 "JSON Object mode failed (%s); falling back to prompt JSON",
@@ -246,13 +304,14 @@ async def invoke_structured_output(
             mode = StructuredOutputMode.PROMPT_JSON
 
     prompt_messages = _enhance_messages_for_json_object(messages, schema_model)
-    response = await llm_helper._call_llm(
+    response = await _invoke_prompt_json_with_transport_retry(
+        llm_helper,
         prompt_messages,
         operation_name=operation_name,
         max_tokens=max_tokens,
     )
     content = getattr(response, "content", "") if response else ""
-    return parse_llm_json(content)
+    return _coerce_to_dict(parse_llm_json(content), schema_model)
 
 
 def supports_api_json_object(provider: Optional[str] = None) -> bool:

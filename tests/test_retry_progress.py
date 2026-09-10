@@ -30,6 +30,24 @@ def test_same_output_and_same_issue_is_stagnation():
     assert second["feedback_applied"] is False
 
 
+def test_same_output_cannot_be_improved_by_critic_score_or_rewording():
+    first = {
+        "output_fingerprint": "same",
+        "score": 0.0,
+        "issue_signature": ["critic transport failure"],
+    }
+    current = {
+        "output_fingerprint": "same",
+        "score": 0.75,
+        "issue_signature": ["missing parent link"],
+    }
+
+    result = classify_retry_progress([first], current)
+
+    assert result["status"] == "stagnant"
+    assert result["feedback_applied"] is False
+
+
 def test_changed_output_with_higher_score_is_improved():
     first = {
         "output_fingerprint": "a",
@@ -162,6 +180,36 @@ async def test_retry_controller_allows_a_real_improvement(monkeypatch):
     assert calls == 2
     assert result["retry_trajectory"]["DocumentParser"][-1]["status"] == "improved"
     assert result["execution_history"][-1]["critic_evaluation"]["decision"] == "ACCEPT"
+
+
+@pytest.mark.anyio
+async def test_per_source_retry_scope_does_not_consume_or_obey_global_budget(monkeypatch):
+    from fairifier.config import config
+
+    monkeypatch.setattr(config, "disable_critic", False)
+    app = _bare_app(max_step_retries=1)
+    app.global_retry_count = app.max_global_retries
+    app.critic = _RetryCritic([0.8])
+    calls = 0
+
+    class Agent:
+        async def execute(self, state):
+            nonlocal calls
+            calls += 1
+            state["document_info"] = {"title": "source-local result"}
+            return state
+
+    result = await app._execute_agent_with_retry(
+        {"context": {}, "execution_history": [], "errors": []},
+        Agent(),
+        "DocumentParser",
+        lambda state: bool(state.get("document_info")),
+        enforce_global_retry_limit=False,
+    )
+
+    assert calls == 1
+    assert app.global_retry_count == app.max_global_retries
+    assert result["document_info"]["title"] == "source-local result"
 
 
 @pytest.mark.anyio

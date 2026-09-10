@@ -296,3 +296,75 @@ def test_performance_settings_read_environment(monkeypatch):
     assert cfg.performance_gate_max_phase_tokens == 6789
     assert cfg.performance_gate_max_estimated_cost_usd == 2.5
     assert cfg.performance_gate_max_phase_cost_usd == 1.5
+
+
+def test_retrieval_metrics_keep_all_field_stats():
+    telemetry = {
+        f"field_{i:03d}": {
+            "lexical_hit_count": 1,
+            "semantic_hit_count": 0,
+            "hybrid_hit_count": 1,
+        }
+        for i in range(51)
+    }
+    metrics = WorkflowReportGenerator().generate_report(
+        {"retrieval_telemetry": telemetry}
+    )["retrieval_metrics"]
+    assert metrics["fields_with_retrieval_telemetry"] == 51
+    assert len(metrics["field_retrieval_stats"]) == 51
+
+
+def test_execution_summary_includes_retry_trajectory_and_handoff():
+    report = WorkflowReportGenerator().generate_report(
+        {
+            "status": "completed",
+            "execution_summary": {
+                "total_steps": 2,
+                "successful_steps": 2,
+                "failed_steps": 0,
+                "steps_requiring_retry": 1,
+                "needs_human_review": False,
+                "total_retries": 1,
+                "retries_by_agent": {"JSONGenerator": 1},
+                "retry_trajectory": {
+                    "JSONGenerator": [
+                        {
+                            "attempt": 1,
+                            "decision": "RETRY",
+                            "score": 0.6,
+                        }
+                    ]
+                },
+                "agent_handoff": {
+                    "total_messages": 2,
+                    "acked": 2,
+                    "unacked": 0,
+                },
+            },
+        }
+    )
+    summary = report["execution_summary"]
+    trajectory = summary["retry_trajectory"]["JSONGenerator"]
+    assert trajectory[0]["decision"] == "RETRY"
+    assert summary["agent_handoff"]["total_messages"] == 2
+    assert summary["total_retries"] == 1
+
+
+def test_text_report_includes_full_timeline():
+    generator = WorkflowReportGenerator()
+    report = {
+        "generated_at": "2026-08-27T12:00:00",
+        "workflow_status": "completed",
+        "execution_summary": {},
+        "quality_metrics": {},
+        "field_analysis": {"error": "not needed"},
+        "duplicate_check": {"duplicates_found": False},
+        "retry_analysis": {},
+        "timeline": [
+            {"agent": f"Agent{i}", "attempt": 1, "success": True}
+            for i in range(12)
+        ],
+    }
+    text = generator.generate_text_report(report)
+    assert "Agent11" in text
+    assert "more entries" not in text

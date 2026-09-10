@@ -39,14 +39,18 @@ flowchart TD
             E --> C2
         end
 
-        subgraph GENERATE["Step 5: JSON Generation"]
+        subgraph ENTITY["Step 5: Entity Structure"]
+            E2[🧱 EntityStructurePlanner<br/>Cardinality + Scope + Links]
+        end
+
+        subgraph GENERATE["Step 6: JSON Generation"]
             F[📝 JSON Generator<br/>ISA-Tab Mapping]
             C3[🧑⚖️ Critic]
             F --> C3
         end
 
-        subgraph MAP["Step 6: ISA Value Mapping"]
-            H[🔗 ISA Value Mapper<br/>Entity Grouping + Terms]
+        subgraph MAP["Step 7: ISA Value Mapping"]
+            H[🔗 ISA Value Mapper<br/>Plan Projection + Contracts]
         end
     end
 
@@ -67,8 +71,9 @@ flowchart TD
     D --> E
     API -.->|packages, terms| E
     E -.->|api_capabilities| C2
-    C2 -->|ACCEPT| F
+    C2 -->|ACCEPT| E2
     C2 -->|RETRY| E
+    E2 --> F
     C3 -->|ACCEPT| H
     C3 -->|RETRY| F
     H --> J
@@ -95,13 +100,23 @@ flowchart TD
 4. **Knowledge Retriever**: Queries FAIR-DS API (59 packages, 892 terms) + local knowledge base.
    - Reports **API capabilities** for Critic awareness.
    - Routed to **Critic evaluation** → ACCEPT / RETRY / ESCALATE.
-5. **JSON Generator**: Maps extracted info to ISA-Tab metadata.
+5. **EntityStructurePlanner**: Builds and independently audits the five-level
+   entity graph, including factor cardinality, ISA scope, and unique parent
+   linkage. Explicit source metadata tables can supply authoritative record
+   identities through an agent-selected, deterministically validated table
+   plan, avoiding false Cartesian expansion of incomplete designs. It owns row
+   structure; downstream agents may not merge or invent entities.
+6. **JSON Generator**: Maps extracted info to selected FAIR-DS field contracts.
    - **Recursive Batch Splitting**: Auto-detects truncation and splits batches (16→8→4→2→1 fields) to prevent token window overflow.
    - Routed to **Critic evaluation** → ACCEPT / RETRY.
    - **Cross-layer rollback** (ρ mechanism): JSON hard-gate failure triggers KnowledgeRetriever redo.
-6. **ISA Value Mapper**: Assigns entity_id grouping, maps values to standardised ISA terms.
-   - **Cardinality gate**: Skips expensive deep-agent loop when >12 entity groups to save costs.
-7. **Critic Agent**: Embedded after most nodes; rubric-driven LLM-as-Judge.
+7. **ISA Value Mapper**: Projects source-backed values onto the locked entity
+   graph, enforces field/value contracts and evidence scope, and compiles the
+   canonical JSON/Excel matrix.
+8. **Critic Agent**: Embedded after most nodes; rubric-driven LLM-as-Judge.
+
+A workflow completion status or an LLM critic score is not, by itself, a
+deliverable-quality verdict.
 
 ---
 
@@ -158,18 +173,36 @@ local_kb.add_term(LocalTerm(
 
 ## 6. Output Files & Formats
 
-Outputs are saved to `output/<project_id>/`:
-1. **`metadata.json`**: Standardized FAIR-DS JSON (includes `isa_values` and
+Outputs are saved under `output/<project_id>/` and grouped by purpose:
+
+- `deliverables/`: `metadata.json`, `isa_values.json`, and
+  `metadata_fairds.xlsx`.
+- `logs/`: `full_output.log`, `processing_log.jsonl`, `llm_responses.json`, and
+  other execution traces.
+- `reports/`: runtime configuration, validation, workflow, and auto-repair
+  reports.
+- `workspace/`: preserved source material and intermediate working data.
+
+The run directory is not created until the workflow performs its first write.
+Each functional subdirectory is also created lazily on its first artifact write;
+an absent directory therefore means that the run produced no artifact of that
+class. API request validation and project registration must complete before any
+run directory is materialized. This prevents rejected or never-started requests
+from leaving empty `fairifier_<timestamp>` directories.
+
+Key artifacts include:
+
+1. **`deliverables/metadata.json`**: Standardized FAIR-DS JSON (includes `isa_values` and
    `isa_matrix_id` when the ISA matrix compiler ran).
-2. **`isa_values_json.json`**: Compiled ISA columns×rows sidecar; kept in sync
+2. **`deliverables/isa_values.json`**: Compiled ISA columns×rows sidecar; kept in sync
    with `metadata.json.isa_values` after ISAValueMapper / AutoRepair.
-3. **`processing_log.jsonl`**: Real-time structured log events (including critic
+3. **`logs/processing_log.jsonl`**: Real-time structured log events (including critic
    evaluations when available).
-4. **`llm_responses.json`**: Complete record of all LLM requests/responses.
-5. **`runtime_config.json`**: Environment and config variables used in the run.
-6. **`auto_repair_trace.json`**: Deterministic repair decisions when auto mode
+4. **`logs/llm_responses.json`**: Complete record of all LLM requests/responses.
+5. **`reports/runtime_config.json`**: Environment and config variables used in the run.
+6. **`reports/auto_repair_trace.json`**: Deterministic repair decisions when auto mode
    applies patches.
-7. **`workflow_report.json` / `workflow_report.txt`**: Quality, retrieval,
+7. **`reports/workflow_report.json` / `reports/workflow_report.txt`**: Quality, retrieval,
    execution, and performance telemetry. The `performance` block records
    workflow wall time, per-phase agent/LLM latency, observed input/output
    tokens, configurable USD estimates, and report-only latency/token/cost

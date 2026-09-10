@@ -4,8 +4,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
+from fairifier.agents.response_models import EntityPlanScopeAuditResponse
 from fairifier.utils.structured_output import (
     StructuredOutputMode,
     append_json_schema_instructions,
@@ -20,6 +21,14 @@ class SampleSchema(BaseModel):
     score: float = Field(description="Score")
     critique: str = ""
     issues: list[str] = Field(default_factory=list)
+
+
+class AliasSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dimension_name: str = Field(
+        validation_alias=AliasChoices("dimension_name", "dimension")
+    )
 
 
 class TestStructuredOutputMode:
@@ -155,3 +164,116 @@ async def test_invoke_structured_output_logs_direct_schema_errors_before_fallbac
         failure,
     )
     assert parsed["score"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_prompt_json_is_schema_validated_and_aliases_are_canonicalized():
+    llm_helper = MagicMock()
+    llm_helper.provider = "ollama"
+    llm_helper._call_llm = AsyncMock(
+        return_value=MagicMock(content='{"dimension": "developmental_stage"}')
+    )
+
+    parsed = await invoke_structured_output(
+        llm_helper,
+        [HumanMessage(content="Audit the dimension.")],
+        AliasSchema,
+    )
+
+    assert parsed == {"dimension_name": "developmental_stage"}
+
+
+@pytest.mark.asyncio
+async def test_prompt_json_returns_none_when_schema_validation_fails():
+    llm_helper = MagicMock()
+    llm_helper.provider = "ollama"
+    llm_helper._call_llm = AsyncMock(
+        return_value=MagicMock(content='{"unexpected": "value"}')
+    )
+
+    parsed = await invoke_structured_output(
+        llm_helper,
+        [HumanMessage(content="Audit the dimension.")],
+        AliasSchema,
+    )
+
+    assert parsed is None
+
+
+@pytest.mark.asyncio
+async def test_prompt_json_retries_one_transient_transport_failure():
+    llm_helper = MagicMock()
+    llm_helper.provider = "ollama"
+    llm_helper._call_llm = AsyncMock(
+        side_effect=[
+            RuntimeError("incomplete chunked read"),
+            MagicMock(content='{"dimension": "developmental_stage"}'),
+        ]
+    )
+
+    parsed = await invoke_structured_output(
+        llm_helper,
+        [HumanMessage(content="Audit the dimension.")],
+        AliasSchema,
+        operation_name="EntityStructurePlanner.scope_audit",
+    )
+
+    assert parsed == {"dimension_name": "developmental_stage"}
+    assert llm_helper._call_llm.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_prompt_json_returns_none_after_transport_retries_exhausted():
+    llm_helper = MagicMock()
+    llm_helper.provider = "ollama"
+    llm_helper._call_llm = AsyncMock(side_effect=RuntimeError("connection reset"))
+
+    parsed = await invoke_structured_output(
+        llm_helper,
+        [HumanMessage(content="Audit the dimension.")],
+        AliasSchema,
+        operation_name="EntityStructurePlanner.scope_audit",
+    )
+
+    assert parsed is None
+    assert llm_helper._call_llm.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_prompt_json_scope_audit_accepts_common_group_alias():
+    llm_helper = MagicMock()
+    llm_helper.provider = "ollama"
+    llm_helper._call_llm = AsyncMock(
+        return_value=MagicMock(
+            content="""{
+                "missing_conditions": [],
+                "mapping_corrections": [],
+                "mapping_decisions": [{
+                    "group": "group_001",
+                    "dimension": "stage",
+                    "mappings": []
+                }],
+                "reuse_validations": [{
+                    "group": "group_001",
+                    "approved": false,
+                    "reason": "No source-grounded reuse"
+                }],
+                "dimension_scopes": [{
+                    "group": "group_001",
+                    "dimension": "stage",
+                    "applies_to": ["sample", "assay"]
+                }]
+            }"""
+        )
+    )
+
+    parsed = await invoke_structured_output(
+        llm_helper,
+        [HumanMessage(content="Audit the entity plan.")],
+        EntityPlanScopeAuditResponse,
+    )
+
+    assert parsed["mapping_decisions"][0]["group_id"] == "group_001"
+    assert parsed["reuse_validations"][0]["group_id"] == "group_001"
+    assert parsed["reuse_validations"][0]["rationale"] == "No source-grounded reuse"
+    assert parsed["dimension_scopes"][0]["group_id"] == "group_001"

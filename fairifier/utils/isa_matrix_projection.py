@@ -7,11 +7,31 @@ Keeps a single ``matrix_id`` across ``metadata.json.isa_values`` and
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from fairifier.utils.isa_matrix_compiler import compile_isa_matrix, matrix_id_for
 from fairifier.utils.isa_order import ISA_LEVEL_ORDER
+
+
+_STRUCTURAL_WARNING_FIELDS = {
+    "investigation identifier",
+    "investigation title",
+    "investigation description",
+    "study identifier",
+    "study title",
+    "study description",
+    "observation unit identifier",
+    "observation unit name",
+    "observation unit description",
+    "sample identifier",
+    "sample name",
+    "sample description",
+    "assay identifier",
+    "assay description",
+}
+_WARNING_FIELD_RE = re.compile(r"field '([^']+)'", re.IGNORECASE)
 
 
 def _parse_jsonish(value: Any) -> Any:
@@ -57,6 +77,12 @@ def apply_matrix_to_metadata(
     isa_structure = updated.get("isa_structure")
     if not isinstance(isa_structure, dict):
         isa_structure = {}
+    else:
+        isa_structure = {
+            sheet: block
+            for sheet, block in isa_structure.items()
+            if sheet in ISA_LEVEL_ORDER
+        }
 
     for sheet in ISA_LEVEL_ORDER:
         block = matrix.get(sheet) or {"columns": [], "rows": []}
@@ -66,21 +92,46 @@ def apply_matrix_to_metadata(
         sheet_payload = isa_structure.get(sheet)
         if not isinstance(sheet_payload, dict):
             sheet_payload = {"description": "", "fields": []}
+        selected = {str(column).strip().lower() for column in columns}
+        if isinstance(sheet_payload.get("fields"), list):
+            sheet_payload["fields"] = [
+                field
+                for field in sheet_payload["fields"]
+                if isinstance(field, dict)
+                and str(field.get("field_name") or field.get("name") or "")
+                .strip()
+                .lower()
+                in selected
+            ]
         sheet_payload["columns"] = columns
         sheet_payload["rows"] = rows
         isa_structure[sheet] = sheet_payload
 
-    for sheet, block in matrix.items():
-        if sheet in isa_values or not isinstance(block, dict):
-            continue
-        isa_values[sheet] = {
-            "columns": list(block.get("columns") or []),
-            "rows": list(block.get("rows") or []),
-        }
-
     updated["isa_values"] = isa_values
     updated["isa_structure"] = isa_structure
     updated["isa_matrix_id"] = mid
+    selected_fields = {
+        str(column).strip().lower()
+        for block in isa_values.values()
+        for column in block.get("columns") or []
+        if str(column).strip()
+    }
+    warnings = updated.get("warnings")
+    if isinstance(warnings, list):
+        filtered_warnings = []
+        for warning in warnings:
+            text = str(warning or "").strip()
+            match = _WARNING_FIELD_RE.search(text)
+            if match:
+                field_name = match.group(1).strip().lower()
+                if (
+                    field_name not in selected_fields
+                    or field_name in _STRUCTURAL_WARNING_FIELDS
+                ):
+                    continue
+            if text and text not in filtered_warnings:
+                filtered_warnings.append(text)
+        updated["warnings"] = filtered_warnings
     return updated
 
 

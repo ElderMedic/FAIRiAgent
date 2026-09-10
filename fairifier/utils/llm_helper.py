@@ -2762,11 +2762,11 @@ REQUIREMENTS:
 3. Each evidence: brief (< 200 characters)
 4. Use summaries, not full quotes or paragraphs
 
-**Your task:** For EACH AND EVERY metadata field in the list, extract or generate an appropriate value from the document.
+**Your task:** For EACH AND EVERY metadata field in the list, extract a source-supported value or return an empty value.
 
 **CRITICAL REQUIREMENTS:**
 1. **MUST generate coverage for ALL fields** - every field in the provided list must appear at least once in the response
-2. **Investigation-level fields** - Project-level metadata. Extract from title/abstract or derive from context
+2. **Investigation-level fields** - Project-level metadata. Extract from title/abstract
 3. **Study-level fields** - Study description. Extract from title/abstract/methods/results
 4. **Assay-level fields** - Measurement methods. Extract from methods
 5. **Sample-level fields** - Biological material. Extract from methods/results
@@ -2774,11 +2774,19 @@ REQUIREMENTS:
 
 **Principles:**
 1. Extract values directly from document when possible - keep concise
-2. Generate appropriate values when information is implicit
+2. Never generate a scientific fact merely because it is plausible or typical
 3. Provide brief evidence (not full quotes)
 4. Assign realistic confidence scores (0.0-1.0)
-5. If information truly isn't available, use "not specified" but STILL include the field
+5. If information is unavailable, use the empty string but STILL include the field
 6. If field-specific source evidence is provided, cite its source_id/span/table row in evidence.
+7. Never infer a platform, instrument, library selection, package version,
+   protocol detail, date, facility, location, controlled-vocabulary term, or
+   accession unless the supplied source states it. An assay label such as
+   "mRNA-seq" does not by itself entail a particular selection chemistry.
+   Absence is not evidence for a guessed value.
+8. When a field declares FAIR-DS `regex` or `syntax`, every non-empty value MUST
+   full-match it. Translate an explicitly supported source phrase to the canonical
+   controlled value; if no listed value is justified, return the empty string.
 
 **For each field, provide:**
 - field_name: MUST match exactly one of the field names in the provided list
@@ -2786,6 +2794,7 @@ REQUIREMENTS:
 - evidence: Brief source location (< 200 chars) - e.g., "Methods section" not full quote
 - confidence: Float 0.0-1.0 (1.0 = explicit, 0.7-0.9 = strong inference, 0.4-0.6 = reasonable inference, 0.0-0.3 = not available)
 - entity_id: REQUIRED for multi-row ISA levels when the document describes multiple entities. Reuse the same entity_id across ALL fields that belong to the same observation unit, sample, or assay row — this is more important than emitting separate records per field.
+- value_scope: REQUIRED for every non-empty value. Use `level` only when the source explicitly supports that value for every entity on the entire ISA sheet. Use `entity` when it applies to one entity or one experimental group. If unsure, use `entity`; relevance to a field is not evidence of whole-level scope.
 - One assay row = one complete measurement instance under one condition set (not one row per method step or per individual parameter).
 
 **IMPORTANT:**
@@ -2793,10 +2802,11 @@ REQUIREMENTS:
 - For multi-row ISA levels (`observationunit`, `sample`, `assay`), repeated `field_name` values are allowed and expected when the document describes multiple entities
 - When separate entities exist, assign a stable entity_id and reuse it for every field of that entity — do NOT create a new entity_id per field
 - Only use separate entity_id values when the document clearly describes distinct entities (different samples, conditions, or measurement instances)
-- Use short, stable entity_id labels such as `exp1_control`, `enzyme_lcc_wt`, `assay_ph8_37c`
+- Reuse entity_id values from the authoritative entity plan when it is supplied
 - Do NOT skip any fields, even if information is limited
-- For investigation/study fields: If not explicitly stated, derive from document title/abstract
-- For fields with limited information, use "not specified" but still include the field
+- Investigation/study titles or descriptions may summarize supplied title/abstract text;
+  identifiers and all scientific attributes still require explicit source evidence
+- For fields with limited information, use an empty string and confidence 0.0
 - Keep all values concise (< 500 chars each)
 - Keep all evidence brief (< 200 chars each)
 - Prefer evidence like "source_001:123-145" or "source_002 table samples row 4" when available.
@@ -2811,7 +2821,8 @@ Wrap your JSON array in markdown code blocks EXACTLY like this:
     "value": "concise value",
     "evidence": "brief source",
     "confidence": 0.X,
-    "entity_id": "optional_multirow_group"
+    "entity_id": "optional_multirow_group",
+    "value_scope": "level|entity"
   }}
 ]
 ```
@@ -2843,12 +2854,16 @@ REQUIREMENTS:
         # Prepare field descriptions
         field_descriptions = []
         for field in selected_fields:
+            metadata = field.get("metadata", {}) if isinstance(field.get("metadata"), dict) else {}
             field_descriptions.append({
                 "field_name": field.get("name", ""),  # Use exact field name from FAIR-DS
                 "description": field.get("description", ""),
                 "required": field.get("required", False),
                 "isa_sheet": field.get("isa_sheet", "study"),
                 "multi_row": field.get("isa_sheet", "study") in {"observationunit", "sample", "assay"},
+                "syntax": metadata.get("syntax", ""),
+                "regex": metadata.get("regex", ""),
+                "example": metadata.get("example", ""),
             })
 
         # Group fields by ISA sheet for better context
@@ -2896,19 +2911,20 @@ Fields by ISA hierarchy:
 1. You MUST return a JSON array that covers ALL {len(selected_fields)} fields in the list above at least once
 2. Use the EXACT field_name from the list above. Do not modify or abbreviate field names
 3. For `observationunit`, `sample`, and `assay` fields, you MAY and often SHOULD repeat the same field_name across multiple records when the document describes multiple entities
-4. **Investigation-level fields** ({field_counts.get('investigation', 0)} fields): Must generate values from document title, abstract, or research context
-5. **Study-level fields** ({field_counts.get('study', 0)} fields): Must generate values from document title, abstract, methods, or results
-6. **Assay-level fields** ({field_counts.get('assay', 0)} fields): Must generate values from methods section
-7. **Sample-level fields** ({field_counts.get('sample', 0)} fields): Must generate values from methods or results
-8. **ObservationUnit-level fields** ({field_counts.get('observationunit', 0)} fields): Must generate values from methods or environmental context
+4. **Investigation-level fields** ({field_counts.get('investigation', 0)} fields): Extract values from supplied title or abstract
+5. **Study-level fields** ({field_counts.get('study', 0)} fields): Extract values from supplied title, abstract, methods, or results
+6. **Assay-level fields** ({field_counts.get('assay', 0)} fields): Extract values explicitly stated in methods
+7. **Sample-level fields** ({field_counts.get('sample', 0)} fields): Extract values explicitly stated in methods or results
+8. **ObservationUnit-level fields** ({field_counts.get('observationunit', 0)} fields): Extract values explicitly stated in methods or environmental context
 9. If the document excerpt contains "Field-specific source evidence", use matching source_id/span/table row references in the evidence field.
 10. For multi-row ISA levels, add an `entity_id` to each output object and reuse the same entity_id across all fields for that entity row.
 11. Prefer complete entity rows (many fields sharing one entity_id) over many sparse rows (one field per entity_id).
 12. Do NOT squeeze multiple distinct entities into a single list-like value; use separate records with distinct entity_id values instead.
 
 **For fields where information is not explicitly stated:**
-- Investigation/Study fields: Derive from document title/abstract
-- Other fields: Use "not specified" but STILL include the field
+- Investigation/Study title or description: a concise summary of supplied title/abstract is allowed
+- Identifiers and scientific attributes: use an empty string with confidence 0.0
+- Never turn publication date into assay date or generic sequencing into a vendor/platform
 
 **OUTPUT FORMAT - CRITICAL (STANDARD v1.0):**
 Prefer a JSON array. If the API requires a JSON object (json_object mode),
@@ -3117,7 +3133,7 @@ REQUIREMENTS:
         return [
             {
                 "field_name": field.get("name", ""),
-                "value": "not specified",
+                "value": "",
                 "evidence": f"Generation fallback: {placeholder_reason}",
                 "confidence": 0.0,
             }
@@ -3155,7 +3171,7 @@ REQUIREMENTS:
                 reconciled.append(
                     {
                         "field_name": expected_name,
-                        "value": "not specified",
+                        "value": "",
                         "evidence": "LLM omitted field in batch response",
                         "confidence": 0.0,
                         "entity_id": None,

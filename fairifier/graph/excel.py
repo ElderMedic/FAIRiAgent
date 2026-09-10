@@ -16,6 +16,9 @@ Features
   ``POST /api/isa`` may supply a partial workbook (often only investigation /
   study). Local post-processing creates any missing ISA sheets and replaces
   placeholder rows from the compiled ``columns`` × ``rows`` matrix.
+* **Help sheet** — lists used metadata types in FAIR-DS layout (term,
+  definition, requirement, package, example), built from ``isa_structure``
+  fields even when data rows come from a compiled ``isa_values`` sidecar.
 * **Graceful degradation** — if ``openpyxl`` is not installed, the function
   falls back to the API path; if neither works it returns ``None``.
 """
@@ -26,14 +29,31 @@ import io
 import json
 import logging
 import re
+from copy import copy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from fairifier.utils.entity_splitter import split_entities_in_isa_structure
 from fairifier.utils.isa_order import ISA_LEVEL_ORDER
 
+ISA_WORKBOOK_LEVEL_ORDER = ISA_LEVEL_ORDER
+
 logger = logging.getLogger(__name__)
 
 _XML_ILLEGAL_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F\uFFFE\uFFFF]")
+_HEADER_BADGE_RE = re.compile(r"\s*\(([MRO])\)\s*$")
+_API_FIELD_KEYS = (
+    "field_name",
+    "value",
+    "package_source",
+    "requirement",
+    "isa_sheet",
+    "isa_level",
+    "origin",
+    "status",
+    "confidence",
+)
+
+_LOCAL_TERM_CATALOG: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None
 
 
 def _excel_safe_value(value: Any) -> str:
@@ -81,97 +101,432 @@ def _build_header_column_map(ws: "openpyxl.worksheet.worksheet.Worksheet") -> Di
     for col_idx in range(1, ws.max_column + 1):
         h = ws.cell(row=1, column=col_idx).value
         if h:
-            header_col[str(h).strip().lower()] = col_idx
+            # Read legacy FAIRiAgent workbooks defensively, but never make the
+            # non-standard requirement badge part of a FAIR-DS term name.
+            normalized = _HEADER_BADGE_RE.sub("", str(h)).strip().lower()
+            header_col[normalized] = col_idx
     return header_col
 
 
 # ── Local Excel generation (no API needed) ───────────────────────
 
 
-def _build_column_requirement_map(
-    isa_structure: Dict[str, Any],
-) -> Dict[str, Dict[str, str]]:
-    """Return {sheet_name: {column_name: requirement}} from the ISA structure.
-
-    Sources (in order): ``_field_definitions``, ``fields`` blocks, and
-    ``column_metadata`` embedded in each sheet.
-
-    requirement is one of ``MANDATORY``, ``RECOMMENDED``, or ``OPTIONAL``.
-    """
-    by_sheet: Dict[str, Dict[str, str]] = {}
-
-    # 1. _field_definitions (from JSONGenerator)
-    field_defs = isa_structure.get("_field_definitions", []) or []
-    for fd in field_defs:
-        if not isinstance(fd, dict):
-            continue
-        name = str(fd.get("field_name", "")).strip().lower()
-        sheet = str(fd.get("isa_sheet", "")).strip().lower()
-        req = str(fd.get("requirement", "")).strip().upper()
-        if not name or not sheet or req not in ("MANDATORY", "RECOMMENDED", "OPTIONAL"):
-            continue
-        by_sheet.setdefault(sheet, {})[name] = req
-
-    # 2. isa_structure.<sheet>.fields blocks
-    for sheet_name, sheet_data in isa_structure.items():
-        if not isinstance(sheet_data, dict):
-            continue
-        fields = sheet_data.get("fields", []) or []
-        for f in fields:
-            if not isinstance(f, dict):
-                continue
-            name = str(f.get("field_name", "")).strip().lower()
-            req = str(f.get("requirement", "")).strip().upper()
-            if not name or req not in ("MANDATORY", "RECOMMENDED", "OPTIONAL"):
-                continue
-            by_sheet.setdefault(sheet_name.lower(), {})[name] = req
-
-    # 3. isa_structure.<sheet>.column_metadata (explicit annotation)
-    for sheet_name, sheet_data in isa_structure.items():
-        if not isinstance(sheet_data, dict):
-            continue
-        col_meta = sheet_data.get("column_metadata", {}) or {}
-        if not isinstance(col_meta, dict):
-            continue
-        for col_name, req in col_meta.items():
-            req = str(req).strip().upper()
-            if req in ("MANDATORY", "RECOMMENDED", "OPTIONAL"):
-                by_sheet.setdefault(sheet_name.lower(), {})[col_name.strip().lower()] = req
-
-    return by_sheet
-
-
 # ── requirement-label styling ───────────────────────────────────────
-_REQ_FILLS: Dict[str, PatternFill] = {}
-_REQ_FONTS: Dict[str, Font] = {}
+def _first_text(*values: Any) -> str:
+    for value in values:
+        if value is None or isinstance(value, (dict, list)):
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
 
 
-def _requirement_label(requirement: str) -> str:
-    return {"MANDATORY": "M", "RECOMMENDED": "R", "OPTIONAL": "O"}.get(requirement, "")
+def _normalize_term_name(name: Any) -> str:
+    text = _first_text(name)
+    return _HEADER_BADGE_RE.sub("", text).strip()
 
 
-def _requirement_fill(requirement: str):
-    if not _REQ_FILLS:
-        from openpyxl.styles import PatternFill
-
-        _REQ_FILLS.update({
-            "MANDATORY": PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid"),
-            "RECOMMENDED": PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid"),
-            "OPTIONAL": PatternFill(start_color="F4F4F4", end_color="F4F4F4", fill_type="solid"),
-        })
-    return _REQ_FILLS.get(requirement)
+def _empty_term_catalog() -> Dict[str, Dict[str, Dict[str, str]]]:
+    return {"by_label": {}, "by_sheet_label": {}, "by_package_label": {}}
 
 
-def _requirement_font(requirement: str):
-    if not _REQ_FONTS:
-        from openpyxl.styles import Font
+def _store_term_record(
+    catalog: Dict[str, Dict[str, Dict[str, str]]],
+    record: Dict[str, str],
+    *,
+    label: str,
+    sheet: str = "",
+    package: str = "",
+) -> None:
+    label_key = label.strip().lower()
+    if not label_key:
+        return
+    catalog["by_label"].setdefault(label_key, record)
+    if sheet:
+        catalog["by_sheet_label"][f"{sheet.strip().lower()}::{label_key}"] = record
+    if package:
+        catalog["by_package_label"][f"{package.strip().lower()}::{label_key}"] = record
 
-        _REQ_FONTS.update({
-            "MANDATORY": Font(bold=True, color="BF8F00", size=9),
-            "RECOMMENDED": Font(bold=False, color="38761D", size=9),
-            "OPTIONAL": Font(bold=False, color="999999", size=9),
-        })
-    return _REQ_FONTS.get(requirement)
+
+def _lookup_term_record(
+    catalog: Optional[Dict[str, Dict[str, Dict[str, str]]]],
+    *,
+    name: str,
+    sheet: str = "",
+    package: str = "",
+) -> Dict[str, str]:
+    if not catalog or not name:
+        return {}
+    key = name.strip().lower()
+    if package:
+        hit = catalog.get("by_package_label", {}).get(f"{package.strip().lower()}::{key}")
+        if hit:
+            return hit
+    if sheet:
+        hit = catalog.get("by_sheet_label", {}).get(f"{sheet.strip().lower()}::{key}")
+        if hit:
+            return hit
+    return catalog.get("by_label", {}).get(key) or {}
+
+
+def _index_package_metadata(
+    package: Dict[str, Any],
+    catalog: Dict[str, Dict[str, Dict[str, str]]],
+) -> None:
+    package_name = _first_text(package.get("packageName"), package.get("name"))
+    for item in package.get("metadata") or []:
+        if not isinstance(item, dict):
+            continue
+        term = item.get("term") if isinstance(item.get("term"), dict) else {}
+        label = _normalize_term_name(
+            item.get("label") or term.get("label") or item.get("field_name")
+        )
+        if not label:
+            continue
+        sheet = _first_text(
+            item.get("sheetName"),
+            item.get("level"),
+            item.get("isa_sheet"),
+            term.get("sheetName"),
+        ).lower()
+        record = {
+            "label": label,
+            "definition": _first_text(item.get("definition"), term.get("definition")),
+            "example": _first_text(item.get("example"), term.get("example")),
+            "requirement": _first_text(item.get("requirement"), term.get("requirement")).upper(),
+            "package": _first_text(item.get("packageName"), package_name),
+        }
+        _store_term_record(
+            catalog,
+            record,
+            label=label,
+            sheet=sheet,
+            package=record["package"],
+        )
+
+
+def _index_fairds_terms(
+    terms: Optional[Dict[str, Any]],
+) -> Dict[str, Dict[str, Dict[str, str]]]:
+    catalog = _empty_term_catalog()
+    if not isinstance(terms, dict):
+        return catalog
+    for name, info in terms.items():
+        if not isinstance(info, dict):
+            continue
+        nested = info.get("term") if isinstance(info.get("term"), dict) else {}
+        label = _normalize_term_name(info.get("label") or nested.get("label") or name)
+        if not label:
+            continue
+        record = {
+            "label": label,
+            "definition": _first_text(info.get("definition"), nested.get("definition")),
+            "example": _first_text(info.get("example"), nested.get("example")),
+            "requirement": _first_text(info.get("requirement"), nested.get("requirement")).upper(),
+            "package": _first_text(
+                info.get("packageName"),
+                info.get("package"),
+                nested.get("packageName"),
+            ),
+        }
+        sheet = _first_text(
+            info.get("sheetName"), info.get("level"), info.get("isa_sheet")
+        ).lower()
+        _store_term_record(
+            catalog,
+            record,
+            label=label,
+            sheet=sheet,
+            package=record["package"],
+        )
+    return catalog
+
+
+def _load_local_term_catalog(
+    force_refresh: bool = False,
+) -> Dict[str, Dict[str, Dict[str, str]]]:
+    """Index explicitly configured local extension packages for Help lookup."""
+    global _LOCAL_TERM_CATALOG
+    if _LOCAL_TERM_CATALOG is not None and not force_refresh:
+        return _LOCAL_TERM_CATALOG
+
+    catalog = _empty_term_catalog()
+    try:
+        from ..config import config
+
+        sources = list(tuple(getattr(config, "local_package_paths", ()) or ()))
+        files: List[Path] = []
+        for source in sources:
+            path = Path(source).expanduser()
+            if not path.is_absolute():
+                path = Path(config.project_root) / path
+            candidates = sorted(path.glob("*_package.json")) if path.is_dir() else [path]
+            for candidate in candidates:
+                if candidate.is_file() and candidate not in files:
+                    files.append(candidate)
+        for package_file in files:
+            try:
+                payload = json.loads(package_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.debug("Skipping local package %s: %s", package_file, exc)
+                continue
+            if isinstance(payload, dict):
+                _index_package_metadata(payload, catalog)
+    except Exception as exc:
+        logger.debug("Local Help term catalog unavailable: %s", exc)
+
+    _LOCAL_TERM_CATALOG = catalog
+    return catalog
+
+
+def _merge_term_catalogs(
+    base: Optional[Dict[str, Dict[str, Dict[str, str]]]],
+    extra: Optional[Dict[str, Dict[str, Dict[str, str]]]],
+) -> Dict[str, Dict[str, Dict[str, str]]]:
+    merged = _empty_term_catalog()
+    for bucket in merged:
+        merged[bucket].update((base or {}).get(bucket, {}))
+        # The live FAIR-DS catalog is authoritative. Local extension records
+        # may fill omissions but must never shadow server package/term metadata.
+        for key, record in ((extra or {}).get(bucket, {}) or {}).items():
+            current = merged[bucket].get(key) or {}
+            merged[bucket][key] = {
+                field: value
+                for field in set(current) | set(record)
+                if (value := record.get(field) or current.get(field)) is not None
+            }
+    return merged
+
+
+def _merge_fields_into_fill(
+    fill_structure: Dict[str, Any],
+    field_source: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Keep compiled columns×rows while restoring ``fields`` for Help / API."""
+    merged: Dict[str, Any] = {}
+    for key, value in (fill_structure or {}).items():
+        merged[key] = dict(value) if isinstance(value, dict) else value
+
+    for level, block in (field_source or {}).items():
+        if level == "_field_definitions" and isinstance(block, list):
+            merged["_field_definitions"] = block
+            continue
+        if not isinstance(block, dict):
+            continue
+        dest = merged.get(level)
+        if not isinstance(dest, dict):
+            dest = {}
+            merged[level] = dest
+        else:
+            dest = dict(dest)
+            merged[level] = dest
+        if block.get("fields"):
+            dest["fields"] = block["fields"]
+        if block.get("description") and not dest.get("description"):
+            dest["description"] = block["description"]
+        if block.get("column_metadata") and not dest.get("column_metadata"):
+            dest["column_metadata"] = block["column_metadata"]
+    return merged
+
+
+def _slim_isa_for_api(isa_structure: Dict[str, Any]) -> Dict[str, Any]:
+    """POST ``fields`` (not the columns×rows matrix) so FAIR-DS can fill Help."""
+    slim: Dict[str, Any] = {}
+    for level, block in (isa_structure or {}).items():
+        if not isinstance(block, dict) or str(level).startswith("_"):
+            continue
+        if level not in ISA_LEVEL_ORDER:
+            # Auxiliary sheets are added locally after the FAIR-DS API returns
+            # its five-level workbook; older servers may reject unknown levels.
+            continue
+        fields = [
+            {key: field[key] for key in _API_FIELD_KEYS if key in field and field[key] is not None}
+            for field in (block.get("fields") or [])
+            if isinstance(field, dict) and _normalize_term_name(field.get("field_name"))
+        ]
+        entry: Dict[str, Any] = {}
+        if block.get("description"):
+            entry["description"] = block["description"]
+        if fields:
+            entry["fields"] = fields
+            slim[level] = entry
+        elif block.get("columns") or block.get("rows"):
+            if block.get("columns"):
+                entry["columns"] = block["columns"]
+            if block.get("rows"):
+                entry["rows"] = block["rows"]
+            slim[level] = entry
+    return slim
+
+
+def _help_section_title(level_name: str) -> str:
+    return f"Below are the metadata terms that are used in the {level_name} sheet"
+
+
+def _help_record_from_field(
+    field: Dict[str, Any],
+    *,
+    sheet: str,
+    catalog: Dict[str, Dict[str, Dict[str, str]]],
+) -> Optional[Dict[str, str]]:
+    term = field.get("term") if isinstance(field.get("term"), dict) else {}
+    name = _normalize_term_name(
+        field.get("field_name") or field.get("label") or term.get("label")
+    )
+    if not name:
+        return None
+    package = _first_text(field.get("package_source"), field.get("package"), field.get("packageName"))
+    looked = _lookup_term_record(catalog, name=name, sheet=sheet, package=package)
+    requirement = _first_text(field.get("requirement"), looked.get("requirement")).upper()
+    return {
+        "name": name,
+        "definition": _first_text(
+            field.get("definition"),
+            term.get("definition"),
+            looked.get("definition"),
+        ),
+        "requirement": requirement,
+        "package": _first_text(package, looked.get("package")),
+        "example": _first_text(
+            field.get("example"),
+            term.get("example"),
+            looked.get("example"),
+        ),
+    }
+
+
+def _collect_help_terms_for_level(
+    level_name: str,
+    field_source: Dict[str, Any],
+    fill_structure: Optional[Dict[str, Any]],
+    catalog: Dict[str, Dict[str, Dict[str, str]]],
+) -> List[Dict[str, str]]:
+    source_block = field_source.get(level_name)
+    fill_block = (fill_structure or {}).get(level_name)
+    if not isinstance(source_block, dict):
+        source_block = {}
+    if not isinstance(fill_block, dict):
+        fill_block = {}
+
+    terms: List[Dict[str, str]] = []
+    seen: set[str] = set()
+
+    def _append(record: Optional[Dict[str, str]]) -> None:
+        if not record:
+            return
+        key = record["name"].strip().lower()
+        if not key or key in seen:
+            return
+        seen.add(key)
+        terms.append(record)
+
+    for field in source_block.get("fields") or []:
+        if isinstance(field, dict):
+            _append(_help_record_from_field(field, sheet=level_name, catalog=catalog))
+
+    for field in field_source.get("_field_definitions") or []:
+        if not isinstance(field, dict):
+            continue
+        sheet = _first_text(field.get("isa_sheet"), field.get("isa_level")).lower()
+        if sheet and sheet != level_name:
+            continue
+        _append(_help_record_from_field(field, sheet=level_name, catalog=catalog))
+
+    columns: List[Any] = []
+    columns.extend(source_block.get("columns") or [])
+    columns.extend(fill_block.get("columns") or [])
+    for column in columns:
+        name = _normalize_term_name(column)
+        if not name:
+            continue
+        looked = _lookup_term_record(catalog, name=name, sheet=level_name)
+        _append(
+            {
+                "name": name,
+                "definition": _first_text(looked.get("definition")),
+                "requirement": _first_text(looked.get("requirement")).upper(),
+                "package": _first_text(looked.get("package")),
+                "example": _first_text(looked.get("example")),
+            }
+        )
+    return terms
+
+
+def _write_help_sheet(
+    wb: Any,
+    field_source: Dict[str, Any],
+    fill_structure: Optional[Dict[str, Any]] = None,
+    term_catalog: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None,
+) -> None:
+    """Replace the Help sheet with a FAIR-DS-style used-term catalog."""
+    try:
+        from openpyxl.styles import Alignment, Font
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return
+
+    catalog = _merge_term_catalogs(_load_local_term_catalog(), term_catalog)
+    sections: List[Tuple[str, List[Dict[str, str]]]] = []
+    for level_name in ISA_WORKBOOK_LEVEL_ORDER:
+        terms = _collect_help_terms_for_level(
+            level_name, field_source, fill_structure, catalog
+        )
+        if terms:
+            sections.append((level_name, terms))
+    if not sections:
+        return
+
+    if "Help" in wb.sheetnames:
+        wb.remove(wb["Help"])
+    ws = wb.create_sheet(title="Help")
+    wrap = Alignment(vertical="top", wrap_text=True)
+    title_font = Font(size=11)
+
+    row_idx = 1
+    for section_i, (level_name, terms) in enumerate(sections):
+        if section_i:
+            row_idx += 1
+        cell = ws.cell(row=row_idx, column=1, value=_help_section_title(level_name))
+        cell.font = title_font
+        row_idx += 2
+        for term in terms:
+            ws.cell(row=row_idx, column=1, value=_excel_safe_value(term["name"]))
+            ws.cell(row=row_idx, column=2, value=_excel_safe_value(term["definition"]))
+            ws.cell(row=row_idx, column=3, value=_excel_safe_value(term["requirement"]))
+            ws.cell(row=row_idx, column=4, value=_excel_safe_value(term["package"]))
+            ws.cell(row=row_idx, column=5, value=_excel_safe_value(term["example"]))
+            for col in range(1, 6):
+                ws.cell(row=row_idx, column=col).alignment = wrap
+            row_idx += 1
+
+    widths = (42, 70, 16, 28, 48)
+    for col_idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+
+def _ensure_help_sheet(
+    xlsx_bytes: bytes,
+    field_source: Dict[str, Any],
+    fill_structure: Optional[Dict[str, Any]] = None,
+    term_catalog: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None,
+) -> bytes:
+    """Rewrite Help so API workbooks are not left with header-only stubs."""
+    try:
+        import openpyxl
+    except ImportError:
+        return xlsx_bytes
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+    except Exception:
+        return xlsx_bytes
+    _write_help_sheet(wb, field_source, fill_structure, term_catalog)
+    try:
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+    except Exception:
+        return xlsx_bytes
 
 
 def _generate_xlsx_local(
@@ -208,23 +563,12 @@ def _generate_xlsx_local(
     # ── end style definitions ───────────────────────────────────
 
     # ── Build requirement lookup ─────────────────────────────────
-    column_req = _build_column_requirement_map(isa_structure)
-
     wb = openpyxl.Workbook()
     # Remove the auto-created empty sheet
     default_sheet = wb.active
     wb.remove(default_sheet)
 
-    isa_level_order = list(ISA_LEVEL_ORDER)
-    isa_descriptions = {
-        "investigation": "Investigation-level metadata (project info)",
-        "study": "Study-level metadata (experimental design)",
-        "assay": "Assay-level metadata (measurement details)",
-        "sample": "Sample-level metadata (biological material)",
-        "observationunit": "ObservationUnit-level metadata (individual observations)",
-        "help": "Help — workbook overview",
-    }
-
+    isa_level_order = list(ISA_WORKBOOK_LEVEL_ORDER)
     # ── ISA data sheets ─────────────────────────────────────────
     for level_name in isa_level_order:
         level_data = isa_structure.get(level_name, {})
@@ -237,16 +581,12 @@ def _generate_xlsx_local(
             continue
 
         rows = _resolve_rows(level_data)
-        ws = wb.create_sheet(title=level_name.capitalize())
+        ws = wb.create_sheet(title=_local_sheet_title(level_name, level_data))
 
-        # Row 1: column headers (with requirement badge)
-        req_map = column_req.get(level_name, {})
+        # Row 1: raw FAIR-DS term labels. Requirement is schema metadata and
+        # belongs in Help, not in the field name.
         for col_idx, col_name in enumerate(columns, start=1):
-            key = col_name.strip().lower()
-            req = req_map.get(key, "")
-            label = _requirement_label(req)
-            display = f"{col_name}  ({label})" if label else col_name
-            cell = ws.cell(row=1, column=col_idx, value=display)
+            cell = ws.cell(row=1, column=col_idx, value=col_name)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = header_align
@@ -285,35 +625,8 @@ def _generate_xlsx_local(
             len(rows),
         )
 
-    # ── Help sheet ──────────────────────────────────────────────
-    ws_help = wb.create_sheet(title="Help", index=len(wb.sheetnames))
-    help_lines = [
-        ["FAIR-DS Metadata Excel Export"],
-        [""],
-        [
-            "This workbook contains metadata organised by ISA-TAB levels: "
-            "Investigation, Study, ObservationUnit, Sample, Assay."
-        ],
-        [""],
-        ["Sheets:"],
-        ["  Investigation"] + ["Project-level metadata (title, authors, contacts)"],
-        ["  Study"] + ["Study-level metadata (experimental design, description)"],
-        ["  ObservationUnit"] + ["Individual observation metadata"],
-        ["  Sample"] + ["Sample-level metadata (biological material, environment)"],
-        ["  Assay"] + ["Assay-level metadata (measurements, protocols, files)"],
-        [""],
-        [
-            "Each sheet has one header row followed by one data row per entity. "
-            "Fields present in the column header but absent in a particular row "
-            "are considered 'not specified'."
-        ],
-        [""],
-        ["Generated by FAIRiAgent"],
-    ]
-    for row_idx, row_data in enumerate(help_lines, start=1):
-        for col_idx, value in enumerate(row_data, start=1):
-            ws_help.cell(row=row_idx, column=col_idx, value=value)
-    ws_help.column_dimensions["A"].width = 100
+    # ── Help sheet (FAIR-DS used-term catalog) ─────────────────
+    _write_help_sheet(wb, isa_structure, isa_structure)
 
     try:
         buf = io.BytesIO()
@@ -327,9 +640,39 @@ def _generate_xlsx_local(
 # ── Post-process: fill rows into API-generated workbook ─────────
 
 
-def _sheet_title_for_level(level_name: str, existing_titles: Dict[str, str]) -> str:
-    """Reuse the workbook's existing casing for a level, else lowercase."""
-    return existing_titles.get(level_name, level_name)
+def _level_from_sheet_title(title: str) -> Optional[str]:
+    """Resolve bare and FAIR-DS ``level - package`` worksheet titles."""
+    normalized = str(title).strip().lower()
+    compact = normalized.replace(" ", "")
+    for level_name in ISA_LEVEL_ORDER:
+        aliases = {level_name, level_name.replace("unit", " unit")}
+        for alias in aliases:
+            if normalized == alias or normalized.startswith(f"{alias} - "):
+                return level_name
+        if compact == level_name or compact.startswith(f"{level_name}-"):
+            return level_name
+    return None
+
+
+def _local_sheet_title(level_name: str, level_data: Dict[str, Any]) -> str:
+    """Match FAIR-DS gold workbooks: ``ISA level - selected package``."""
+    packages: List[str] = []
+    normalized_packages: set[str] = set()
+    for field in level_data.get("fields") or []:
+        if not isinstance(field, dict):
+            continue
+        package = _first_text(
+            field.get("package_source"),
+            field.get("package"),
+            field.get("packageName"),
+        )
+        normalized = package.lower()
+        if package and normalized not in normalized_packages:
+            packages.append(package)
+            normalized_packages.add(normalized)
+    package = next((item for item in packages if item.lower() != "default"), None)
+    package = package or (packages[0] if packages else "default")
+    return f"{level_name} - {package}"[:31]
 
 
 def _clear_data_rows(ws: "openpyxl.worksheet.worksheet.Worksheet") -> None:
@@ -358,6 +701,22 @@ def _populate_sheet_from_level(
     if not columns and not rows:
         return 0
 
+    # The compiled matrix is authoritative. FAIR-DS API workbook templates can
+    # contain legacy or server-version-specific columns (for example a contact
+    # role column) that are not part of the selected matrix. Rebuild the header
+    # to the exact matrix columns while retaining the API's header style.
+    if replace_existing_rows and columns:
+        header_style = copy(ws.cell(row=1, column=1)._style)
+        header_alignment = copy(ws.cell(row=1, column=1).alignment)
+        if ws.max_row > 1:
+            _clear_data_rows(ws)
+        if ws.max_column:
+            ws.delete_cols(1, ws.max_column)
+        for col_idx, col_name in enumerate(columns, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=col_name)
+            cell._style = copy(header_style)
+            cell.alignment = copy(header_alignment)
+
     header_col = _build_header_column_map(ws)
     if not header_col:
         # Brand-new sheet (or headerless): seed headers from columns, then rows.
@@ -374,14 +733,15 @@ def _populate_sheet_from_level(
             ws.cell(row=1, column=col_idx, value=col_name)
             header_col[normalized] = col_idx
 
-    for row_data in rows:
-        for key in row_data.keys():
-            normalized = str(key).strip().lower()
-            if not normalized or normalized in header_col:
-                continue
-            col_idx = ws.max_column + 1
-            ws.cell(row=1, column=col_idx, value=normalized)
-            header_col[normalized] = col_idx
+    if not columns:
+        for row_data in rows:
+            for key in row_data.keys():
+                normalized = str(key).strip().lower()
+                if not normalized or normalized in header_col:
+                    continue
+                col_idx = ws.max_column + 1
+                ws.cell(row=1, column=col_idx, value=normalized)
+                header_col[normalized] = col_idx
 
     if not rows:
         return 0
@@ -442,13 +802,21 @@ def _fill_missing_data_rows(
     except Exception:
         return xlsx_bytes
 
-    existing_by_level: Dict[str, str] = {
-        name.lower(): name
-        for name in wb.sheetnames
-        if name.lower() in set(ISA_LEVEL_ORDER)
-    }
+    # FAIR-DS ISOSA output has five data levels. Some older API versions add
+    # a Person worksheet; contributor fields belong as repeated Investigation
+    # rows in the curated workbook convention used by this project.
+    for name in list(wb.sheetnames):
+        normalized = str(name).strip().lower()
+        if normalized == "person" or normalized.startswith("person - "):
+            wb.remove(wb[name])
 
-    for level_name in ISA_LEVEL_ORDER:
+    existing_by_level: Dict[str, str] = {}
+    for name in wb.sheetnames:
+        level_name = _level_from_sheet_title(name)
+        if level_name and level_name not in existing_by_level:
+            existing_by_level[level_name] = name
+
+    for level_name in ISA_WORKBOOK_LEVEL_ORDER:
         level_data = isa_structure.get(level_name)
         if not isinstance(level_data, dict):
             continue
@@ -461,7 +829,7 @@ def _fill_missing_data_rows(
         sheet_title = existing_by_level.get(level_name)
         created = False
         if sheet_title is None:
-            sheet_title = _sheet_title_for_level(level_name, existing_by_level)
+            sheet_title = _local_sheet_title(level_name, level_data)
             ws = wb.create_sheet(title=sheet_title)
             existing_by_level[level_name] = sheet_title
             created = True
@@ -486,7 +854,7 @@ def _fill_missing_data_rows(
 
     # Canonical order: investigation → study → OU → sample → assay → Help.
     ordered_titles: List[str] = []
-    for level_name in ISA_LEVEL_ORDER:
+    for level_name in ISA_WORKBOOK_LEVEL_ORDER:
         title = existing_by_level.get(level_name)
         if title and title in wb.sheetnames:
             ordered_titles.append(title)
@@ -521,8 +889,10 @@ def try_export_fairds_metadata_excel(
     1. Read ``metadata.json``, extract ``isa_structure``.
     2. Apply entity-splitting heuristics to expand single merged rows.
     3. If a FAIR-DS API URL is available **and** the server is reachable,
-       call ``POST /api/isa`` to obtain a workbook with column headers.
-       Then fill data rows from the (split) ISA structure.
+       call ``POST /api/isa`` with ``fields`` (so Help can list metadata
+       types) to obtain a workbook with column headers. Then fill data
+       rows from the compiled ``columns`` × ``rows`` matrix and rewrite
+       Help from field + package catalogs.
     4. If the API is unavailable or not configured, generate the workbook
        entirely locally with ``openpyxl``.
     5. Return the path to the written ``.xlsx`` file, or ``None`` on
@@ -615,16 +985,17 @@ def try_export_fairds_metadata_excel(
         )
         return None
 
-    # Legacy fallback only: when no compiled sidecar was available, keep the
-    # historical defensive split on isa_structure for field-list exports.
+    # Keep field metadata from metadata.json even when data rows come from
+    # the compiled isa_values sidecar. FAIR-DS Help is populated from fields.
     if not used_compiled_sidecar:
         isa_structure = split_entities_in_isa_structure(isa_structure)
-    else:
-        isa_structure = fill_structure
+        fill_structure = isa_structure
+    export_structure = _merge_fields_into_fill(fill_structure, isa_structure)
 
     # ── Step 2: Generate Excel ─────────────────────────────────
     xlsx_bytes: Optional[bytes] = None
     api_used = False
+    api_term_catalog: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None
 
     if url and str(url).strip():
         base = str(url).strip().rstrip("/")
@@ -632,9 +1003,13 @@ def try_export_fairds_metadata_excel(
         if client.is_available():
             try:
                 xlsx_bytes = client.generate_excel_from_isa_structure(
-                    fill_structure
+                    _slim_isa_for_api(export_structure)
                 )
                 api_used = True
+                try:
+                    api_term_catalog = _index_fairds_terms(client.get_terms())
+                except Exception as exc:
+                    logger.debug("FAIR-DS term catalog unavailable for Help: %s", exc)
             except Exception as exc:
                 logger.warning(
                     "FAIR-DS API Excel generation failed: %s", exc
@@ -651,11 +1026,23 @@ def try_export_fairds_metadata_excel(
 
     if xlsx_bytes is not None and api_used:
         # The API returned headers (and perhaps a few data rows);
-        # fill the remaining data locally.
+        # fill the remaining data locally, then restore a complete Help catalog.
         xlsx_bytes = _fill_missing_data_rows(xlsx_bytes, fill_structure)
+        xlsx_bytes = _ensure_help_sheet(
+            xlsx_bytes,
+            export_structure,
+            fill_structure,
+            api_term_catalog,
+        )
     elif xlsx_bytes is None:
         # API was not used or failed — generate entirely locally.
-        xlsx_bytes = _generate_xlsx_local(fill_structure)
+        xlsx_bytes = _generate_xlsx_local(export_structure)
+        if xlsx_bytes is not None:
+            xlsx_bytes = _ensure_help_sheet(
+                xlsx_bytes,
+                export_structure,
+                fill_structure,
+            )
 
     if xlsx_bytes is None:
         logger.warning(

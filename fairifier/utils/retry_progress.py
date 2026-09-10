@@ -207,13 +207,16 @@ def classify_retry_progress(
 
     if oscillating:
         status = "oscillating"
-    elif same_output and repeated_issue:
+    # The candidate itself is the progress authority.  A later Critic score or
+    # differently worded issue cannot turn byte-identical agent output into an
+    # improvement (for example after a transient reviewer failure).
+    elif same_output:
         status = "stagnant"
     elif score_delta >= min_score_delta or (issue_count_improved and score_delta >= 0):
         status = "improved"
     elif score_delta < -min_score_delta:
         status = "regressed"
-    elif same_output or repeated_issue:
+    elif repeated_issue:
         status = "stagnant"
     else:
         status = "changed_no_quality_gain"

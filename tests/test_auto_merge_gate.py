@@ -595,7 +595,12 @@ def test_merge_gate_fails_when_accepted_patch_not_materialized_in_excel(tmp_path
         from openpyxl import load_workbook
 
         workbook = load_workbook(xlsx)
-        worksheet = workbook["Study"]
+        worksheet = next(
+            sheet
+            for sheet in workbook.worksheets
+            if sheet.title.lower() == "study"
+            or sheet.title.lower().startswith("study - ")
+        )
         headers = {
             worksheet.cell(1, col).value: col
             for col in range(1, worksheet.max_column + 1)

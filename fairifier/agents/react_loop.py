@@ -50,6 +50,20 @@ class ReactLoopMixin:
             ]
         return contract
 
+    @staticmethod
+    def _react_recursion_limit(contract: Dict[str, Any]) -> int:
+        """Translate the advertised inner-loop budget into a real graph bound.
+
+        Deepagents counts several graph transitions per reasoning/tool cycle,
+        so the limit needs modest headroom.  It must nevertheless remain tied
+        to the configured iteration and tool budgets; the former ``max(50,
+        iterations * 20)`` allowed a six-iteration contract to run roughly a
+        hundred graph steps.
+        """
+        iterations = max(int(contract.get("max_iterations") or 1), 1)
+        tool_calls = max(int(contract.get("max_tool_calls") or 1), 1)
+        return max(12, min(64, iterations * 4 + 4, tool_calls * 2 + 6))
+
     def _get_deepagents_helpers(self):
         """Lazily import deepagents helpers so fallback mode remains available."""
         try:
@@ -330,7 +344,7 @@ class ReactLoopMixin:
             operation_prefix = scratchpad_name or getattr(self, "name", "react")
             run_config = {
                 "configurable": {"thread_id": thread_id},
-                "recursion_limit": max(50, contract["max_iterations"] * 20),
+                "recursion_limit": self._react_recursion_limit(contract),
             }
             callbacks = list(
                 (self.llm_helper._build_run_config() or {}).get("callbacks", [])

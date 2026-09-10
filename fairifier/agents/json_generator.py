@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass, field as dc_field
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Mapping, Optional, Tuple
 import re
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +26,7 @@ from ..services.semantic_index import SemanticIndex
 from ..services.section_field_candidates import field_candidate_record_to_dict
 from ..utils.llm_helper import get_llm_helper
 from ..utils.document_text import read_document_text
+from ..utils.entity_plan import render_entity_plan_for_prompt
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.grounding import SOURCE_REF_PATTERN, SOURCE_TABLE_PATTERN
 from ..utils.isa_order import ISA_LEVEL_ORDER
@@ -320,7 +321,13 @@ class JSONGeneratorAgent(BaseAgent):
 
             context_parts = [
                 part
-                for part in (evidence_context, workspace_context, field_evidence_context, a2a_handoff_context)
+                for part in (
+                    render_entity_plan_for_prompt(state.get("entity_plan") or {}),
+                    evidence_context,
+                    workspace_context,
+                    field_evidence_context,
+                    a2a_handoff_context,
+                )
                 if part
             ]
             document_context = "\n\n".join(context_parts)
@@ -335,7 +342,15 @@ class JSONGeneratorAgent(BaseAgent):
             # Get critic feedback if this is a retry
             feedback = self.get_context_feedback(state)
             critic_feedback = feedback.get("critic_feedback")
-            planner_instruction = feedback.get("planner_instruction")
+            # The orchestration planner emits free-form strategy suggestions
+            # before FAIR-DS package contracts and the entity plan are known.
+            # Those suggestions are useful for retrieval, but are not a
+            # provenance-bearing source of metadata values.  Passing them to
+            # generation previously let speculative kit/stage/protocol examples
+            # become retry obligations.  The authoritative generator context is
+            # now the source evidence + selected FAIR-DS contracts + locked
+            # entity plan only.
+            planner_instruction = None
             guidance_history = feedback.get("guidance_history") or []
             prior_memory_context = self.format_retrieved_memories_for_prompt(
                 feedback.get("retrieved_memories") or []
@@ -348,8 +363,6 @@ class JSONGeneratorAgent(BaseAgent):
                     self.log_execution(state, f"   Critique: {critique}")
                 for idx, suggestion in enumerate(critic_feedback.get("suggestions", []), 1):
                     self.log_execution(state, f"   🔧 Suggestion {idx}: {suggestion}")
-            if planner_instruction:
-                self.log_execution(state, f"🧭 Planner guidance: {planner_instruction}")
             if guidance_history:
                 self.log_execution(state, f"🧾 Historical guidance: {guidance_history}")
             
@@ -372,6 +385,11 @@ class JSONGeneratorAgent(BaseAgent):
             metadata_fields = self._ensure_mandatory_fields_present(
                 metadata_fields=metadata_fields,
                 knowledge_items=knowledge_items,
+            )
+            metadata_fields = self._ensure_plan_mapped_fields_present(
+                metadata_fields=metadata_fields,
+                knowledge_items=knowledge_items,
+                entity_plan=state.get("entity_plan") or {},
             )
             self.log_execution(
                 state, 
@@ -1222,6 +1240,9 @@ class JSONGeneratorAgent(BaseAgent):
             
             # Capture entity_id from LLM output for multi-row grouping
             entity_id = field_data.get('entity_id', None) or None
+            value_scope = str(field_data.get("value_scope") or "").strip().lower()
+            if value_scope not in {"level", "entity"}:
+                value_scope = None
 
             field = MetadataField(
                 field_name=field_name,
@@ -1232,6 +1253,7 @@ class JSONGeneratorAgent(BaseAgent):
                 package_source=package_source,  # From FAIR-DS API
                 isa_sheet=isa_sheet,  # From FAIR-DS API
                 entity_id=entity_id,
+                value_scope=value_scope,
                 status="provisional" if field_data.get('confidence', 0) < 0.9 else "confirmed",
                 status_reason="low_extraction_confidence" if field_data.get('confidence', 0) < 0.9 else None,
                 data_type=fairds_metadata.get('type', 'string'),
@@ -1319,7 +1341,13 @@ class JSONGeneratorAgent(BaseAgent):
             "isa_level": normalized_sheet,
             "required": requirement == "MANDATORY",
             "requirement": requirement,
+            "data_type": metadata.get("data_type") or metadata.get("type", "string"),
+            "definition": metadata.get("definition", ""),
+            "syntax": metadata.get("syntax", ""),
+            "regex": metadata.get("regex", ""),
+            "example": metadata.get("example", ""),
             "entity_id": getattr(field, "entity_id", None) or None,
+            "value_scope": getattr(field, "value_scope", None) or None,
         }
 
     def _is_mandatory_metadata_item(self, metadata: Dict[str, Any]) -> bool:
@@ -1390,6 +1418,86 @@ class JSONGeneratorAgent(BaseAgent):
                 injected_count,
             )
         return metadata_fields
+
+    def _ensure_plan_mapped_fields_present(
+        self,
+        metadata_fields: List[MetadataField],
+        knowledge_items: List[Dict[str, Any]],
+        entity_plan: Mapping[str, Any],
+    ) -> List[MetadataField]:
+        """Keep every audited row-level plan field in the matrix schema.
+
+        The locked plan, rather than a representative LLM value, owns the exact
+        per-entity cells. This is especially important for source-table columns
+        and prevents an optional mapped field from disappearing merely because
+        the generator omitted a level-wide summary value.
+        """
+        existing = {
+            (
+                FAIRDSAPIParser.normalize_isa_sheet(field.isa_sheet),
+                self._normalize_field_key(field.field_name),
+            )
+            for field in metadata_fields
+            if field.field_name
+        }
+        knowledge_by_key: Dict[tuple[str, str], Dict[str, Any]] = {}
+        for item in knowledge_items:
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            level = FAIRDSAPIParser.normalize_isa_sheet(
+                metadata.get("isa_sheet") or metadata.get("sheet")
+            )
+            label = str(item.get("term") or metadata.get("label") or "").strip()
+            if label:
+                knowledge_by_key[(level, self._normalize_field_key(label))] = item
+
+        requested: Dict[tuple[str, str], str] = {}
+        for level_plan in entity_plan.get("levels") or []:
+            if not isinstance(level_plan, Mapping):
+                continue
+            level = str(level_plan.get("level") or "").strip().lower()
+            for entity in level_plan.get("entities") or []:
+                if not isinstance(entity, Mapping):
+                    continue
+                for attribute in entity.get("attributes") or []:
+                    if not isinstance(attribute, Mapping):
+                        continue
+                    label = str(attribute.get("field_name") or "").strip()
+                    if label:
+                        requested[(level, self._normalize_field_key(label))] = label
+
+        injected = 0
+        for key, label in sorted(requested.items()):
+            if key in existing:
+                continue
+            item = knowledge_by_key.get(key, {})
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            is_extension = bool(metadata.get("source_extension"))
+            metadata_fields.append(
+                MetadataField(
+                    field_name=label,
+                    value=None,
+                    evidence=(
+                        "Exact row-level values are materialized from the locked "
+                        "source metadata-table plan."
+                    ),
+                    confidence=1.0,
+                    origin="entity_plan",
+                    package_source=(None if is_extension else metadata.get("package")),
+                    isa_sheet=key[0],
+                    status="confirmed",
+                    data_type=metadata.get("data_type") or metadata.get("type") or "string",
+                    required=self._is_mandatory_metadata_item(metadata),
+                    description=metadata.get("definition") or item.get("definition"),
+                    metadata=metadata,
+                )
+            )
+            existing.add(key)
+            injected += 1
+        if injected:
+            self.logger.info("Injected %s audited entity-plan field(s).", injected)
+        return metadata_fields
     
     def _generate_json_output(
         self,
@@ -1407,10 +1515,15 @@ class JSONGeneratorAgent(BaseAgent):
         packages_used = set()
         for field in fields:
             if hasattr(field, 'package_source') and field.package_source:
+                if isinstance(field.metadata, dict) and field.metadata.get("source_extension"):
+                    continue
                 if isinstance(field.package_source, list):
                     packages_used.update(field.package_source)
                 else:
                     packages_used.add(field.package_source)
+        for package_name in state.get("selected_packages", []) or []:
+            if str(package_name).strip():
+                packages_used.add(str(package_name).strip())
 
         # ── 1. Old-format isa_structure: flat fields list per sheet ──────
         flat_by_level: Dict[str, List[Dict[str, Any]]] = {
@@ -1483,6 +1596,7 @@ class JSONGeneratorAgent(BaseAgent):
 
             # Packages used (from FAIR-DS API, selected by LLM)
             "packages_used": sorted(list(packages_used)) if packages_used else [],
+            "package_selection_trace": state.get("package_selection_trace", {}),
 
             # ISA 5-sheet structure (legacy flat format with full provenance)
             "isa_structure": isa_structure,
@@ -1582,6 +1696,8 @@ class JSONGeneratorAgent(BaseAgent):
             seen_labels.add(lowered)
             packet = self._select_supporting_packet(label, evidence_packets, hint)
             value, evidence, confidence = self._infer_extension_value(label, doc_info, packet, hint)
+            if not self._is_exportable_extension(label, value, evidence):
+                continue
             suggested_isa_level, suggested_requirement = self._infer_extension_schema(label, hint)
             extensions.append(
                 {
@@ -1598,6 +1714,33 @@ class JSONGeneratorAgent(BaseAgent):
                 }
             )
         return extensions
+
+    @staticmethod
+    def _is_exportable_extension(label: str, value: str, evidence: str) -> bool:
+        """Keep extension proposals only when they carry concrete source evidence.
+
+        Metadata search terms are hypotheses, not deliverable fields.  In
+        particular, generic parser values such as ``Document`` and missing-value
+        prose must never become provisional FAIR-DS extensions.
+        """
+        normalized_label = " ".join(str(label or "").lower().split())
+        normalized_value = " ".join(str(value or "").lower().split())
+        normalized_evidence = " ".join(str(evidence or "").lower().split())
+        if normalized_label in {"", "unknown", "other", "document"}:
+            return False
+        if normalized_value in {
+            "",
+            "document",
+            "unknown",
+            "not specified",
+            "not reported in source evidence",
+        }:
+            return False
+        if not normalized_evidence or normalized_evidence.startswith(
+            "no source excerpt matched"
+        ):
+            return False
+        return True
 
     def _normalize_extension_label(self, raw_label: Any, source: Optional[str] = None) -> str:
         """Keep extension labels concise and semantic (avoid sentence-like noise)."""
@@ -1770,6 +1913,13 @@ class JSONGeneratorAgent(BaseAgent):
                     and self._packet_relevance_score(evidence_label, packet) > 0
                 ):
                     return packet
+
+        # A failed vocabulary search alone does not establish a new metadata
+        # field. Without an explicitly linked evidence packet, selecting the
+        # nearest arbitrary parser packet can manufacture values such as
+        # ``organism = Document``.
+        if str(hint.get("source") or "").strip().lower() == "term_search":
+            return None
 
         best_packet: Optional[Dict[str, Any]] = None
         best_score = 0
