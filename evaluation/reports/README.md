@@ -20,18 +20,19 @@ Main reports for sharing/pushing.
 
 ## Current result walkthrough
 
-For the latest workflow-oriented example, start from:
+For a workflow-oriented tutorial, start from:
 
 - `evaluation/analysis/README.md`
 - `evaluation/runs/qwen35_pomato_publication_fix/workflow_report.json`
 - `evaluation/runs/qwen35_pomato_publication_fix/metadata.json` (or `metadata_json.json` on older runs)
-- `evaluation/runs/qwen35_no_langfuse_eval_all_pubfix/results/evaluation_results.json`
+
+Campaign score packs and manuscript figures stay local and are not listed here.
 
 ## Key Figures
 
 - `evaluation/analysis/output/key_figures/evaluation_summary.png`
 - `evaluation/analysis/output/key_figures/field_analysis_report.png`
 
-These reflect the earlier benchmark-oriented comparison; newer workflow validation is under the `qwen35_*` runs above.
+These reflect the earlier benchmark-oriented comparison. Do not mix them with later v2 campaign scores.
 
 See `evaluation/DOCUMENTATION_INDEX.md` for full navigation.

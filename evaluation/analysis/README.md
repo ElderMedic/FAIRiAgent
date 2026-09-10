@@ -6,14 +6,11 @@ Comprehensive, reusable analysis framework for FAIRiAgent evaluation results.
 
 This folder contains both:
 
-- `legacy benchmark analysis` for the earlier multi-model comparison (`qwen_max`, `gpt-5.1`, `sonnet`, local Ollama models)
-- `current workflow-focused result inspection` for the latest `qwen3.5-plus` runs, especially:
-  - `evaluation/runs/qwen35_no_langfuse_eval_all/results/evaluation_results.json`
-  - `evaluation/runs/qwen35_no_langfuse_eval_all_pubfix/results/evaluation_results.json`
-  - `evaluation/runs/qwen35_pomato_publication_fix/`
+- `legacy benchmark analysis` for the earlier multi-model comparison (`qwen_max`, `gpt-5.1`, `sonnet`, local Ollama models) — **historical only**
+- campaign plotting helpers in `visualizations/plot_active120_model_performance.py`
+- older workflow-inspection examples under `evaluation/runs/qwen35_*` (single-run tutorials)
 
-Use the older figures and reports for historical comparison.
-Use the latest `qwen35_*` runs when explaining the current workflow behavior.
+Do not mix historical `qwen_max` success-rate narratives with later benchmark v2 campaigns.
 
 ## Quick Start For Non-Computational Users
 
@@ -151,7 +148,7 @@ This shows that the newer workflow improved:
 - required-field coverage
 - schema compliance
 
-That comparison is easier for users to understand than model-family benchmarking.
+That comparison is a single-run tutorial only and is not a benchmark v2 headline.
 
 ## Recommended Reading Paths
 
@@ -163,9 +160,8 @@ That comparison is easier for users to understand than model-family benchmarking
 
 ### For a user who wants historical benchmark context
 
-1. `evaluation/reports/FINAL_EVALUATION_RESULTS.md`
+1. `evaluation/reports/FINAL_EVALUATION_RESULTS.md` (January 2026 campaign; historical)
 2. `evaluation/analysis/key_figures/evaluation_summary.png`
-3. `evaluation/analysis/key_figures/field_analysis_report.png`
 
 ## Architecture
 

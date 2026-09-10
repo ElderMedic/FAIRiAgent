@@ -3,12 +3,10 @@
 **Purpose:** Authoritative navigation for benchmark design, implementation, and
 historical results
 
-**Last updated:** 2026-07-25
+**Last updated:** 2026-09-10
 
-Interactive run check / handout draft: `docs/manuscript/paper_ready_dashboard.html`
-(ACTIVE-120 + **可发表 Handout** checklist via `tables/dashboard_active_runs.json`;
-refresh with `docs/manuscript/scripts/build_dashboard_active_runs.py`). Manuscript
-draft updates await approval.
+Campaign result narratives, dashboards, and unpublished scores stay in the
+local manuscript tree and are not indexed here.
 
 ## Current source of truth
 
@@ -29,6 +27,9 @@ Read these documents in order:
 The methodology states what the benchmark means. The implementation plan is the
 living project record. Code and command examples in the framework README describe
 what currently exists and do not override either document.
+
+Env-file names such as `phase4_tuned` and `shadow` are hybrid-retrieval
+rollout aliases, not v2 condition IDs. See [Evaluation configuration](config/README.md).
 
 ## Design references
 

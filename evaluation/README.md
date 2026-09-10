@@ -49,8 +49,9 @@ development/held-out split is approved in
 `datasets/APPROVED_SPLIT_MAP_20260721.json`; the frozen-panel production
 manifest is now materialized at
 `output/benchmark_v2_20260721_release_prep/production_manifest_20260721.json`.
-Its post-panel release gate passes all preparation checks and waits only for
-an attached campaign run index.
+Its post-panel release gate passed preparation checks. Executed development
+campaigns and unpublished score packs remain local run artifacts and are not
+part of this public contract.
 
 Before scheduling progressive or focused comparisons, audit that the manifest
 conditions differ only in their declared capability group:
@@ -94,7 +95,12 @@ cp config/env.evaluation.template config/env.evaluation
 # Optional: create one or more per-model env files
 cp config/env.evaluation config/model_configs/my-model.env
 # Edit only the model-specific keys that should differ for that run
+# Thinking-capable models: LLM_ENABLE_THINKING=true + thinking-mode sampler.
+# No-think models: LLM_ENABLE_THINKING=false. Do not copy frozen-panel non-think.
 ```
+
+`phase4_tuned` / `shadow` are env-file aliases for the hybrid-retrieval
+rollout, not publication condition names. See [config/README.md](config/README.md).
 
 ### 2. Prepare Ground Truth Dataset
 

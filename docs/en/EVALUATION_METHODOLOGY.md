@@ -1,9 +1,9 @@
 # FAIRiAgent Evaluation Benchmark Methodology
 
-**Status:** Methodological contract for benchmark version 2; implementation is
-in progress
+**Status:** Methodological contract for benchmark version 2; implementation and
+development campaigns are tracked separately from this public contract.
 
-**Last updated:** 2026-07-21
+**Last updated:** 2026-09-10
 
 **Implementation plan and development log:**
 [Evaluation Benchmark Redesign and Implementation Plan](../../evaluation/EVALUATION_IMPROVEMENT_PLAN.md)
@@ -187,6 +187,17 @@ the frozen confirmatory analysis.
 Figures and manifests use explicit scientific condition names. Historical names
 such as `shadow`, `phase4`, `auto`, `dimfix`, and `tuned` are migration aliases,
 not publication terminology.
+
+Those aliases name **evaluation env files**, not conditions. `shadow` keeps
+hybrid retrieval off the prompt (`FAIRIFIER_RETRIEVAL_SHADOW_MODE=true`).
+`phase4` turns hybrid retrieval **on in the prompt**. `phase4_tuned`
+(`evaluation/config/env.evaluation.phase4_tuned`) is that hybrid-in-prompt
+stack with a tighter snippet/rerank budget and lexical-priority blend
+(final snippets 5, evidence snippets per field 3, rerank candidates 12,
+semantic max hits 16). `shadow_tuned` uses the same budget for a lexical-prompt
+A/B. In the v2 harness, `phase4_tuned` is the usual **complete-system base
+env**; the publication condition is still Complete FAIRiAgent system. See
+[evaluation/config/README.md](../../evaluation/config/README.md).
 
 Each batch manifest records benchmark version, asset checksums, exact condition,
 repository and evaluator commits, package identity, model identity, prompts and

@@ -276,6 +276,10 @@ docs/archive/
 # Local-only development notes (not for GitHub)
 docs/en/development/local/
 
+# Case-specific expected-outcome fixtures (collaborator / local GT)
+evaluation/expected_outcomes/*.json
+
+
 
 # Local FAIR-DS stats HTML snapshot
 fairds_stats.html
