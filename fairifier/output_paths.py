@@ -102,7 +102,12 @@ def resolve_isa_values_read_path(output_dir: Path) -> Optional[Path]:
 
 
 def ensure_output_subdirectories(output_dir: Path) -> None:
-    """Ensure that all 4 functional subdirectories exist under output_dir."""
+    """Eagerly create the complete output layout.
+
+    This helper is retained for callers that explicitly need a materialized
+    layout. Runtime entry points should create an artifact's parent directory
+    immediately before writing it.
+    """
     d = Path(output_dir)
     deliverables_dir(d).mkdir(parents=True, exist_ok=True)
     logs_dir(d).mkdir(parents=True, exist_ok=True)
@@ -134,6 +139,8 @@ def get_artifact_write_path(output_dir: Path, artifact_name: str) -> Path:
         return logs_dir(d) / "processing_log.jsonl"
     if artifact_name == "llm_responses":
         return logs_dir(d) / "llm_responses.json"
+    if artifact_name == "react_scratchpad":
+        return logs_dir(d) / "react_scratchpad.json"
     if artifact_name == "full_output":
         return logs_dir(d) / "full_output.log"
     filename = artifact_output_filename(artifact_name)
@@ -197,5 +204,3 @@ def resolve_auto_repair_trace_read_path(output_dir: Path) -> Optional[Path]:
 
 def run_has_metadata_output(run_dir: Path) -> bool:
     return resolve_metadata_output_read_path(run_dir) is not None
-
-

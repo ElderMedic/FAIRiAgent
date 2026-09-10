@@ -10,8 +10,10 @@ FAIRiAgent 现在把输入文件保存在 source workspace 中，而不是把 co
 
 - `source_workspace/source_manifest.json`：source id、路径、读取方法、角色、大小和表格引用。
 - `source_workspace/source_workspace.md`：给 agent 和报告使用的紧凑 inventory。
-- `source_workspace/sources/source_*.md`：完整 source 文本或 MinerU markdown。
-- `source_workspace/tables/*.jsonl`：CSV/TSV/Excel 的完整表格行。
+- `source_workspace/sources/source_*.md`：完整 source 文本或 MinerU markdown；
+  仅在至少有一个 source 落盘时创建。
+- `source_workspace/tables/*.jsonl`：CSV/TSV/Excel 的完整表格行；没有表格行时
+  不创建空的 `tables/` 目录。
 
 单文件 run 也走同一结构，只是只有一个 source。目录和 zip 输入会为每个支持的文件创建 source。
 

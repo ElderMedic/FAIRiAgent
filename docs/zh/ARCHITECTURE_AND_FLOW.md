@@ -156,12 +156,19 @@ local_kb.add_term(LocalTerm(
 
 ## 6. 输出文件与格式
 
-生成的产物保存在 `output/<project_id>/` 目录下：
-1. **`metadata.json`**：标准 FAIR-DS 兼容元数据。
-2. **`processing_log.jsonl`**：结构化实时处理日志。
-3. **`llm_responses.json`**：该次运行的所有大模型 API 交互详情。
-4. **`runtime_config.json`**：该次运行的所有环境变量和运行时参数。
-5. **`validation_report.txt`**：模式校验报告。
+生成的产物保存在 `output/<project_id>/` 下，并按用途分为：
+
+- `deliverables/`：`metadata.json`、`isa_values.json` 和
+  `metadata_fairds.xlsx`。
+- `logs/`：`full_output.log`、`processing_log.jsonl`、`llm_responses.json`
+  及其他运行轨迹。
+- `reports/`：运行配置、校验、工作流和自动修复报告。
+- `workspace/`：保留的原始材料与中间工作数据。
+
+run 根目录只在工作流第一次实际写文件时创建；四类功能子目录也只在第一次写入
+对应产物时按需创建。因此目录不存在表示本次 run 没有生成这一类产物，而不是缺失
+了预置结构。API 必须先通过请求配置校验并完成项目登记，之后才允许落盘，从而避免
+被拒绝或未真正启动的请求遗留空的 `fairifier_<timestamp>` 目录。
 
 ---
 

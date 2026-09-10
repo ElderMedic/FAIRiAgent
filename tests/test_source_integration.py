@@ -107,7 +107,7 @@ def test_fixture_materializes_four_sources_with_correct_roles(tmp_path):
     assert roles["source_001"] == "main_manuscript"
     assert roles["source_002"] == "supplement"
     assert roles["source_003"] == "unknown"
-    assert roles["source_004"] == "table"
+    assert roles["source_004"] == "metadata_table"
 
 
 # ── Test source_role_priority + rank_source_entries ─────────────────────
@@ -117,6 +117,7 @@ def test_role_priority_ordering():
     assert source_role_priority("main_manuscript") < source_role_priority("supplement")
     assert source_role_priority("supplement") < source_role_priority("unknown")
     assert source_role_priority("table") < source_role_priority("supplement")
+    assert source_role_priority("metadata_table") < source_role_priority("supplement")
 
 
 def test_rank_source_entries_returns_main_first(tmp_path):

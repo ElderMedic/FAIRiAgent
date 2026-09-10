@@ -11,8 +11,10 @@ When `FAIRIFIER_SOURCE_WORKSPACE_ENABLED=true`, each run writes:
 
 - `source_workspace/source_manifest.json`: source ids, paths, methods, roles, sizes, and table references.
 - `source_workspace/source_workspace.md`: compact inventory for agents and reports.
-- `source_workspace/sources/source_*.md`: full source text or MinerU markdown.
-- `source_workspace/tables/*.jsonl`: full table rows for CSV/TSV/Excel inputs.
+- `source_workspace/sources/source_*.md`: full source text or MinerU markdown;
+  created only when at least one source is materialized.
+- `source_workspace/tables/*.jsonl`: full table rows for CSV/TSV/Excel inputs;
+  the `tables/` directory is not created when no tabular rows are available.
 
 Single-file runs use the same structure with one source. Directory and zip inputs
 create one source per supported file.

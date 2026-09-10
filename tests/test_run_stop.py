@@ -94,4 +94,5 @@ def test_json_hard_gate_detects_missing_required_terms_and_routes_to_retrieval()
 
     assert gate["passed"] is False
     assert gate["anchor_agent"] == "KnowledgeRetriever"
-    assert any("alpha diversity" in issue for issue in gate["issues"])
+    assert any("data usage license" in issue for issue in gate["issues"])
+    assert any("alpha diversity" in note for note in gate["advisories"])

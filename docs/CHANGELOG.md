@@ -30,6 +30,10 @@
 
 ### Fixed
 
+- Output directories are now materialized lazily on first write. API validation
+  and project registration occur before any run path is created, preventing
+  rejected or never-started requests from leaving empty timestamped stubs;
+  artifact and source-table directories are created only when used.
 - Hardened `fetch_external_url` against SSRF by rejecting credentials,
   localhost/private/non-global DNS and connected peers, validating every
   redirect, disabling automatic redirects, limiting redirect depth, restricting

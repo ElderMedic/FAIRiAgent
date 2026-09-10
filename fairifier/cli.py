@@ -17,7 +17,6 @@ from .output_paths import (
     artifact_content_to_text,
     artifact_output_filename,
     deliverables_dir,
-    ensure_output_subdirectories,
     get_artifact_write_path,
     logs_dir,
     metadata_output_write_path,
@@ -218,16 +217,14 @@ def _post_write_metadata_json_checks(
 
     selected_fields = parsed.pop("_field_definitions", None) or []
     result = check_metadata_json_output(parsed, selected_fields=selected_fields)
-    err_preview = result["errors"][:10]
-    warn_preview = result["warnings"][:10]
     json_logger.info(
         "fair_format_check",
         is_valid=result["is_valid"],
         schema_compliance_rate=result["schema_compliance_rate"],
         error_count=len(result["errors"]),
         warning_count=len(result["warnings"]),
-        errors_preview=err_preview,
-        warnings_preview=warn_preview,
+        errors=result["errors"],
+        warnings=result["warnings"],
         validations=result["validations"],
     )
 
@@ -390,7 +387,6 @@ def process(
     # Set up output directory with timestamp
     if output_dir:
         output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
     else:
         # Create timestamped output directory under output folder
         # Include env file name in output dir if using custom env file
@@ -403,9 +399,6 @@ def process(
             output_path = base_output_dir / f"{env_name}_{timestamp}"
         else:
             output_path = base_output_dir / timestamp
-        output_path.mkdir(parents=True, exist_ok=True)
-    
-    ensure_output_subdirectories(output_path)
     
     click.echo("=" * 70)
     click.echo("🚀 FAIRifier - Automated FAIR Metadata Generation")
@@ -494,8 +487,6 @@ async def _run_workflow(
     if not project_id:
         project_id = f"fairifier_{start_time.strftime('%Y%m%d_%H%M%S')}"
     
-    ensure_output_subdirectories(output_path)
-    
     # Set LangSmith project if provided (for isolation)
     if langsmith_project:
         os.environ["LANGCHAIN_PROJECT"] = langsmith_project
@@ -505,10 +496,12 @@ async def _run_workflow(
     
     # Write .running file with PID for status tracking
     running_file = output_path / ".running"
+    running_file.parent.mkdir(parents=True, exist_ok=True)
     running_file.write_text(str(os.getpid()))
     
     # Set up log file redirection
     log_file = logs_dir(output_path) / "full_output.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     log_handle = open(log_file, 'w', encoding='utf-8', buffering=1)  # Line buffered
     
     # Create a tee-like handler that writes to both console and file
@@ -631,6 +624,20 @@ async def _run_workflow(
                 size_bytes=fairds_xlsx.stat().st_size,
             )
         
+        # Log completion before flushing processing_log.jsonl so the summary
+        # is persisted with the rest of the audit trail.
+        json_logger.info(
+            "processing_summary",
+            status=status,
+            needs_review=needs_review,
+            error_count=len(errors),
+            errors=list(errors or []),
+            overall_confidence=confidence_scores.get("_aggregate", {}).get(
+                "overall", confidence_scores.get("overall", 0.0)
+            ),
+            duration_seconds=round(duration, 2)
+        )
+
         # Save processing log using unified utility to safely merge disk and memory logs
         from fairifier.utils.json_logger import save_processing_log
         log_file = logs_dir(output_path) / "processing_log.jsonl"
@@ -652,18 +659,6 @@ async def _run_workflow(
                            f"LLM's thinking process")
         except Exception as e:
             click.echo(f"  ⚠️  Could not save LLM responses: {e}", err=True)
-        
-        # Log completion
-        json_logger.info(
-            "processing_summary",
-            status=status,
-            needs_review=needs_review,
-            error_count=len(errors),
-            overall_confidence=confidence_scores.get("_aggregate", {}).get(
-                "overall", confidence_scores.get("overall", 0.0)
-            ),
-            duration_seconds=round(duration, 2)
-        )
         
         click.echo("\n" + "=" * 70)
         
@@ -915,16 +910,35 @@ def status(project_id: str, verbose: bool):
 @cli.command()
 @click.argument("project_id")
 @click.option(
+    "--env-file",
+    "-e",
+    type=click.Path(exists=True),
+    help="Path to .env file to use for this resume (optional).",
+)
+@click.option(
     "--verbose",
     "-v",
     is_flag=True,
     help="Show detailed processing steps.",
 )
-def resume(project_id: str, verbose: bool):
+def resume(project_id: str, env_file: Optional[str], verbose: bool):
     """Resume an interrupted run from its last checkpoint.
     
     Requires persistent checkpointer (CHECKPOINTER_BACKEND=sqlite).
     """
+    if env_file:
+        from .config import load_env_file, apply_env_overrides
+        import fairifier.config as config_module
+        env_path = Path(env_file)
+        if load_env_file(env_path, verbose=verbose):
+            click.echo(f"📋 Using configuration from: {env_path}")
+            apply_env_overrides(config_module.config)
+        else:
+            click.echo(f"⚠️  Could not load .env file: {env_path}", err=True)
+            sys.exit(1)
+
+    from .config import config
+
     # Check checkpointer backend
     if config.checkpointer_backend != "sqlite":
         click.echo(
@@ -959,8 +973,10 @@ def resume(project_id: str, verbose: bool):
         except (ValueError, IOError):
             pass
     
-    # Load runtime_config to get document_path
-    runtime_config_file = run_dir / "runtime_config.json"
+    # Load runtime_config to get document_path (reports/ or run-root)
+    runtime_config_file = resolve_runtime_config_read_path(run_dir) or (
+        run_dir / "runtime_config.json"
+    )
     document_path = None
     if runtime_config_file.exists():
         try:
@@ -1001,15 +1017,15 @@ async def _resume_workflow(
 ):
     """Resume a workflow from its last checkpoint."""
     start_time = datetime.now()
-    
-    ensure_output_subdirectories(output_path)
-    
+
     # Write .running file
     running_file = output_path / ".running"
+    running_file.parent.mkdir(parents=True, exist_ok=True)
     running_file.write_text(str(os.getpid()))
     
     # Set up log file (append mode for resume)
     log_file = resolve_full_output_log_read_path(output_path) or (logs_dir(output_path) / "full_output.log")
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     log_handle = open(log_file, 'a', encoding='utf-8', buffering=1)
     log_handle.write(f"\n\n{'='*70}\n")
     log_handle.write(f"Resume started at: {start_time.isoformat()}\n")
@@ -1104,6 +1120,18 @@ async def _resume_workflow(
                 size_bytes=fairds_xlsx.stat().st_size,
             )
         
+        json_logger.info(
+            "processing_summary",
+            status=status,
+            needs_review=needs_review,
+            error_count=len(errors),
+            errors=list(errors or []),
+            overall_confidence=confidence_scores.get("_aggregate", {}).get(
+                "overall", confidence_scores.get("overall", 0.0)
+            ),
+            duration_seconds=round(duration, 2)
+        )
+
         # Save processing log using unified utility to safely merge disk and memory logs
         from fairifier.utils.json_logger import save_processing_log
         log_file = logs_dir(output_path) / "processing_log.jsonl"

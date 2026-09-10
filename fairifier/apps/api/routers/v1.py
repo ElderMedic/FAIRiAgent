@@ -1242,7 +1242,6 @@ async def create_project(
     project_id = f"fairifier_{ts}"
     now = datetime.now(timezone.utc).isoformat()
     output_dir = str((fc.output_path / project_id).resolve())
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     overrides_dict = None
     if config_overrides:

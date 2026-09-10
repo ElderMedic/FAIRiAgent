@@ -221,6 +221,10 @@ def test_create_project_rejects_non_object_config_overrides(
     demo_pdf = tmp_path / "demo.pdf"
     demo_pdf.write_bytes(b"%PDF-1.4")
     from fairifier.apps.api.routers import v1 as v1_router
+    from fairifier.config import config as fairifier_config
+
+    output_root = tmp_path / "output"
+    monkeypatch.setattr(fairifier_config, "output_path", output_root)
 
     monkeypatch.setitem(
         v1_router._DEMO_DOCUMENTS,
@@ -250,5 +254,6 @@ def test_create_project_rejects_non_object_config_overrides(
         except HTTPException as exc:
             assert exc.status_code == 400
             assert "object" in exc.detail.lower()
+        assert not output_root.exists()
     finally:
         store.close()

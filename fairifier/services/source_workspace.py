@@ -44,19 +44,72 @@ def _safe_source_filename(source_id: str) -> str:
     return f"{safe or 'source'}.md"
 
 
-def _infer_role(path: str, content_type: str) -> str:
+def infer_source_role(
+    path: str,
+    content_type: str,
+    *,
+    table_names: Optional[Iterable[str]] = None,
+    content_excerpt: str = "",
+) -> str:
+    """Infer a source's role from generic file and table semantics.
+
+    A tabular file can be more specifically a metadata table.  Detect that
+    before falling back to the broad ``table`` role so multi-file parsers and
+    critics can apply source-appropriate expectations without relying on
+    dataset-specific filenames.
+    """
     lowered = path.lower()
     if any(token in lowered for token in ("supp", "supplement", "appendix")):
         return "supplement"
+    excerpt = str(content_excerpt or "")[:4000].lower()
+    supplement_title_markers = (
+        "supplementary information for",
+        "supporting information for",
+        "online resources for",
+    )
+    supplement_toc_markers = (
+        "online methods",
+        "online figures",
+        "online tables",
+        "supplementary methods",
+        "supplementary figures",
+        "supplementary tables",
+    )
+    if any(marker in excerpt[:1200] for marker in supplement_title_markers) or (
+        "table of contents" in excerpt
+        and sum(marker in excerpt for marker in supplement_toc_markers) >= 2
+    ):
+        return "supplement"
+    normalized_table_names = " ".join(
+        str(name or "").strip().lower() for name in (table_names or [])
+    )
+    metadata_tokens = (
+        "metadata",
+        "sample information",
+        "sample overview",
+        "sample sheet",
+        "subject information",
+        "assay information",
+        "isa",
+    )
+    if normalized_table_names and any(
+        token in normalized_table_names for token in metadata_tokens
+    ):
+        return "metadata_table"
+    if any(token in lowered for token in ("metadata", "isa", "sample")):
+        return "metadata_table"
     if content_type == "table" or lowered.endswith((".csv", ".tsv", ".xlsx", ".xls")):
         return "table"
     if any(token in lowered for token in ("protocol", "methods")):
         return "protocol"
-    if any(token in lowered for token in ("metadata", "isa", "sample")):
-        return "metadata_table"
     if lowered.endswith((".md", ".txt", ".pdf")):
         return "main_manuscript"
     return "unknown"
+
+
+def _infer_role(path: str, content_type: str) -> str:
+    """Backward-compatible wrapper for callers that do not have table names."""
+    return infer_source_role(path, content_type)
 
 
 def _inventory_excerpt(content: str, max_chars: int) -> str:
@@ -101,9 +154,6 @@ def build_source_workspace(
     root_dir = workspace_dir(Path(output_dir)) / workspace_name
     sources_dir = root_dir / "sources"
     tables_dir = root_dir / "tables"
-    sources_dir.mkdir(parents=True, exist_ok=True)
-    tables_dir.mkdir(parents=True, exist_ok=True)
-
 
     source_paths: Dict[str, Path] = {}
     table_paths: Dict[str, Path] = {}
@@ -114,9 +164,15 @@ def build_source_workspace(
         source_id = record.source_id or f"source_{index:03d}"
         role = record.source_role
         if role == "unknown" and config.source_role_detection_enabled:
-            role = _infer_role(record.path, record.content_type)
+            role = infer_source_role(
+                record.path,
+                record.content_type,
+                table_names=[table.get("name", "") for table in record.tables or []],
+                content_excerpt=record.content,
+            )
 
         source_path = sources_dir / _safe_source_filename(source_id)
+        source_path.parent.mkdir(parents=True, exist_ok=True)
         source_path.write_text(record.content, encoding="utf-8")
         source_paths[source_id] = source_path
 
@@ -125,6 +181,7 @@ def build_source_workspace(
             table_name = str(table.get("name") or f"table_{table_index}")
             rows = table.get("rows") or []
             table_path = tables_dir / f"{source_id}_{table_index:02d}.jsonl"
+            table_path.parent.mkdir(parents=True, exist_ok=True)
             with table_path.open("w", encoding="utf-8") as fh:
                 for row in rows:
                     fh.write(json.dumps(_json_safe_value(row), ensure_ascii=False) + "\n")
@@ -169,6 +226,7 @@ def build_source_workspace(
         "sources": manifest_sources,
     }
     manifest_path = root_dir / "source_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     summary_path = root_dir / "source_workspace.md"
     summary_path.write_text("\n".join(summary_lines).strip() + "\n", encoding="utf-8")

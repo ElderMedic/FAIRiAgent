@@ -13,6 +13,7 @@ from fairifier.output_paths import (
     artifact_content_to_text,
     artifact_output_filename,
     deliverables_dir,
+    get_artifact_write_path,
     isa_values_output_write_path,
     logs_dir,
     metadata_output_write_path,
@@ -88,3 +89,8 @@ def test_resolve_metadata_output_read_path_supports_legacy(tmp_path: Path):
     legacy.write_text("{}", encoding="utf-8")
 
     assert resolve_metadata_output_read_path(Path(tmp_path)) == legacy
+
+
+def test_react_scratchpad_writes_to_logs_dir(tmp_path: Path):
+    path = get_artifact_write_path(tmp_path, "react_scratchpad")
+    assert path == tmp_path / LOGS_DIRNAME / "react_scratchpad.json"
