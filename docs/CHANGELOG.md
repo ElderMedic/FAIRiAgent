@@ -20,6 +20,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation catalog is now a single map in `docs/INDEX.md`. Memory
+  overview flags live in `MEMORY_GUIDE.md`; upstream candidate consensus
+  lives in `SOURCE_GROUNDING_ARCHITECTURE.md`. Stale `TEST_SUMMARY.md` and
+  duplicate catalog pages were removed.
+
 ### Added
 
 - `workflow_report.json` now includes `performance`: workflow wall time,
@@ -398,7 +405,7 @@ python run_fairifier.py memory overview <session_id> --simple  # Fast template s
 python run_fairifier.py memory overview <session_id> --json    # Raw JSON data
 ```
 
-**Documentation**: See [MEMORY_OVERVIEW_GUIDE.md](MEMORY_OVERVIEW_GUIDE.md) for complete guide.
+**Documentation**: See [MEMORY_GUIDE.md](MEMORY_GUIDE.md).
 
 **Key Improvements:**
 - 🎯 **High-Quality Fact Extraction**: Enhanced prompt with few-shot examples and negative cases

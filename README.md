@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![FAIR-DS](https://img.shields.io/badge/FAIR--DS-Compatible-orange.svg)](https://fairds.fairbydesign.nl/)
 
-[🚀 Quick Start](#-quick-start) • [📖 Documentation](#-documentation) • [🌐 Web UI](fairifier/apps/README.md) • [🇨🇳 中文版 / Chinese Version](docs/README.md)
+[🚀 Quick Start](#-quick-start) • [📖 Documentation](#-documentation) • [🌐 Web UI](fairifier/apps/README.md) • [📚 Docs catalog](docs/INDEX.md)
 
 ---
 
@@ -157,17 +157,13 @@ mamba run -n FAIRiAgent python run_fairifier.py webui
 
 ## 📖 Documentation
 
-For detailed guides, architecture diagrams, and developer manuals, please see:
+Full catalog: [docs/INDEX.md](docs/INDEX.md). Bilingual front door: [docs/README.md](docs/README.md).
 
-*   [Architecture & Flow](docs/en/ARCHITECTURE_AND_FLOW.md) – Agent nodes, ρ-mechanism rollback, checkpointers.
-*   [Source Workspace](docs/en/SOURCE_WORKSPACE.md) – Multi-file inputs, auto-discovery, evidence search.
-*   [LLM Integration Guide](docs/en/LLM_INTEGRATION_GUIDE.md) – Provider configuration (Ollama, OpenAI, Gemini, Qwen, Anthropic, DeepSeek).
-*   [Hybrid Retrieval Upgrade Plan](docs/en/development/HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md) – Hybrid retrieval, auto mode, ISA structural sync (§12.1).
-*   [Changelog](docs/CHANGELOG.md) – Release history (`v2.2.1` current).
-*   [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md) – Docker Compose setup.
-*   [FAIRiAgent REST API Manual](docs/en/development/FAIRIFIER_API_MANUAL.md) – FastAPI backend and SSE streaming.
-*   [Memory Management Guide](docs/MEMORY_GUIDE.md) – mem0 semantic memory.
-*   [Bilingual Documentation Catalog](docs/README.md) – English & Chinese index.
+*   [Architecture & Flow](docs/en/ARCHITECTURE_AND_FLOW.md)
+*   [LLM Integration](docs/en/LLM_INTEGRATION_GUIDE.md)
+*   [Source Workspace](docs/en/SOURCE_WORKSPACE.md)
+*   [Evaluation methodology](docs/en/EVALUATION_METHODOLOGY.md)
+*   [Changelog](docs/CHANGELOG.md)
 
 ---
 

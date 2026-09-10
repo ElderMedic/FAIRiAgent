@@ -10,9 +10,7 @@
 > **Status: PROPOSED (v1.5.0 candidate) — v3, resilient-default revision**
 > This document supersedes the "no vector RAG" guardrail in
 > [SOURCE_GROUNDING_ARCHITECTURE.md](SOURCE_GROUNDING_ARCHITECTURE.md) for the
-> scope described here. It complements — and does not replace —
-> [UPSTREAM_CANDIDATE_MERGING.md](UPSTREAM_CANDIDATE_MERGING.md), which stays
-> the consensus/reconciliation layer that all new candidate sources feed into.
+> scope described here, including upstream candidate consensus.
 >
 > **Revision note:** v2 correctly moved away from permanent opt-in
 > experiments, but was too aggressive about deleting old code immediately.

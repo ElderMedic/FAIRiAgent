@@ -35,4 +35,4 @@ Campaign score packs and manuscript figures stay local and are not listed here.
 
 These reflect the earlier benchmark-oriented comparison. Do not mix them with later v2 campaign scores.
 
-See `evaluation/DOCUMENTATION_INDEX.md` for full navigation.
+See [evaluation/README.md](../README.md) and [docs/INDEX.md](../../docs/INDEX.md).

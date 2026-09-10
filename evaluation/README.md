@@ -2,6 +2,11 @@
 
 Comprehensive evaluation system for assessing FAIRiAgent's metadata extraction quality, comparing LLM models, and generating publication-ready results.
 
+**Read in this order:**
+[methodology](../docs/en/EVALUATION_METHODOLOGY.md) (scientific contract) →
+this README (commands) → [harness](harness/README.md) →
+[config](config/README.md). Full catalog: [docs/INDEX.md](../docs/INDEX.md).
+
 > **Benchmark redesign in progress (2026-07-21).** The authoritative scientific
 > contract is [Evaluation Benchmark Methodology](../docs/en/EVALUATION_METHODOLOGY.md),
 > and the complete maintained work plan is

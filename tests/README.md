@@ -55,4 +55,5 @@ python -m pytest tests/ -v --tb=short -m "not integration and not slow"
 
 - Some legacy/manual mem0 scripts are excluded from normal pytest collection in `tests/conftest.py` because they are not hermetic unit tests.
 - Current suite size changes frequently; use `pytest --collect-only` if you need an exact live count.
-- A recent verification run in the `FAIRiAgent` environment completed with `475 passed, 3 skipped, 19 deselected`.
+- Tests that call a live LLM read `DASHSCOPE_API_KEY` or `LLM_API_KEY`. Optional overrides: copy `tests/.env.test.example` to `tests/.env.test`.
+- Strategy notes (Chinese): [TESTING_STRATEGY.md](TESTING_STRATEGY.md). User-facing 中文测试说明: [docs/zh/guides/TEST_GUIDE.md](../docs/zh/guides/TEST_GUIDE.md).

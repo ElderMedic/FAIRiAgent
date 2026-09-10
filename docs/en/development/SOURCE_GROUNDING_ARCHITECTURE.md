@@ -1,12 +1,12 @@
 # Source Grounding and Provenance Architecture
 
-> **Last updated: v1.4.0 (2026-05-02)**
-> For the upstream candidate merging architecture added in this version, see
-> [UPSTREAM_CANDIDATE_MERGING.md](UPSTREAM_CANDIDATE_MERGING.md).
+> **Last updated: 2026-09-10**
+> Covers source workspace grounding and upstream candidate consensus
+> (formerly a separate `UPSTREAM_CANDIDATE_MERGING.md`).
 
-This document outlines the architecture, guardrails, and testing strategy for
-the source workspace and metadata grounding implementation.
-guardrails, tests, and recommended next steps.
+This document is the developer note for citations, candidate consensus, and
+the tests that lock both. User-facing artifact layout is in
+[SOURCE_WORKSPACE.md](../SOURCE_WORKSPACE.md).
 
 ---
 
@@ -26,7 +26,22 @@ Single-file runs use the same structure with one source.  Directory and zip
 inputs create one source per supported file.  Files starting with `mineru_` are
 excluded to prevent recursive re-ingestion.
 
-JSON metadata generation uses four layers of context (v1.4.0):
+## Upstream candidate consensus
+
+Before JSON generation, field evidence from manuscript, tables, and
+supplements is collected as `FieldCandidate` rows, batched-normalized, then
+grouped by `normalized_value`. Each group is scored as
+`source_role_priority + 0.5 * agreement_count + 0.3 * relevance_score`
+(`main_manuscript=3`, `table=2`, `supplement=1`). The winning group is
+injected as the consensus value; others stay as provenance only.
+
+Always import `SOURCE_REF_PATTERN` / `SOURCE_TABLE_PATTERN` from
+`fairifier.utils.grounding`. Do not redefine those regexes locally.
+Normalization is best-effort: if the LLM call fails, grouping falls back to
+raw values. Consensus shapes the prompt only; it does not rewrite
+`metadata.json` after the fact.
+
+JSON metadata generation uses four layers of context:
 
 1. compact evidence packets,
 2. source workspace inventory,

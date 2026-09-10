@@ -1,6 +1,7 @@
 # Evaluation Analysis Framework
 
 Comprehensive, reusable analysis framework for FAIRiAgent evaluation results.
+Contract and commands: [evaluation/README.md](../README.md). Catalog: [docs/INDEX.md](../../docs/INDEX.md).
 
 ## Current Status
 
