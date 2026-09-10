@@ -5,6 +5,18 @@ benchmark plan. Their sampling values are derived from the official cards in
 `../model_card_registry.json`; do not silently replace them with the generic
 defaults in `env.evaluation.template`.
 
+### Thinking default (new profiles)
+
+Enable `LLM_ENABLE_THINKING=true` for thinking-capable models and use that
+card's **thinking-mode** sampler. Set `false` only for no-think models.
+Frozen 2026-07-21 panel files below that pin non-think are historical; do not
+copy that pin onto a later thinking-capable profile (for example Qwen3.8).
+Sonnet 5 / Kimi K3 keep the flag false so the harness does not bind invalid
+extras; those APIs still think natively.
+
+`phase4_tuned` in comments below is a **complete-system base env**, not a
+model-card or publication condition. Glossary: [evaluation/config/README.md](../README.md).
+
 The current provisional panel is:
 
 | Profile | Model-card capabilities used by the harness | Fixed sampling protocol |
@@ -14,13 +26,19 @@ The current provisional panel is:
 | `deepseek_v4-pro_v1.4.0.env` | reasoning, tools, structured output; non-think/think/think-max | `temperature=1.0`, `top_p=1.0`, non-think |
 | `ollama_gpt-oss.env` | reasoning, tools, function calling, structured output; low/medium/high effort | `temperature=1.0`, `top_p=1.0`, thinking disabled |
 | `ollama_qwen3.6-27b_v1.4.0.env` | text/image, reasoning, tools, function calling, structured output | non-thinking card profile: `temperature=0.7`, `top_p=0.80`, `top_k=20`, `presence_penalty=1.5`, `repeat_penalty=1.0` |
+| `ollama_qwen3.8-27b.env` | text/image/video, reasoning, tools, function calling, structured output | **thinking on** (default for this hybrid-thinking model); thinking-mode card: `temperature=1.0`, `top_p=0.95`, `top_k=20`, `presence_penalty=0.0`, `repeat_penalty=1.0` (PETase-3 complete-system trial; not in the 2026-07-21 frozen panel) |
 | `ollama_gemma4-26b_v1.4.0.env` | text/image, reasoning, tools, function calling, structured output | `temperature=1.0`, `top_p=0.95`, `top_k=64`, thinking disabled |
 
 ### Thinking-Enabled Local & API Variants (For Independent Evaluation Runs)
-- `ollama_qwen3.6-27b_v1.4.0_thinking.env`: `LLM_ENABLE_THINKING=true`, `LLM_THINKING_BUDGET=4096`
-- `ollama_gemma4-26b_v1.4.0_thinking.env`: `LLM_ENABLE_THINKING=true`, `LLM_THINKING_BUDGET=4096`
-- `ollama_gpt-oss_thinking.env`: `LLM_ENABLE_THINKING=true`, `LLM_THINKING_BUDGET=4096`
-- `deepseek_v4-flash_v1.4.0_thinking.env`: `LLM_ENABLE_THINKING=true`, `LLM_THINKING_BUDGET=4096`
+
+These are the correct defaults for **new** runs of thinking-capable models.
+The frozen 2026-07-21 non-think panel files above remain historical.
+
+- `ollama_qwen3.6-27b_v1.4.0_thinking.env`: `LLM_ENABLE_THINKING=true`, `LLM_THINKING_BUDGET=8192`
+- `ollama_gemma4-26b_v1.4.0_thinking.env`: `LLM_ENABLE_THINKING=true`, `LLM_THINKING_BUDGET=8192`
+- `ollama_gpt-oss_thinking.env`: `LLM_ENABLE_THINKING=true`, `LLM_THINKING_BUDGET=8192`
+- `deepseek_v4-flash_v1.4.0_thinking.env`: `LLM_ENABLE_THINKING=true`, `LLM_THINKING_BUDGET=8192`
+- `ollama_qwen3.8-27b.env`: thinking on; not a `_thinking` suffix because that is already the default for this model
 
 The capability labels are hypotheses from the cards, not evidence that a
 particular serving endpoint accepts every parameter. The approval-gated

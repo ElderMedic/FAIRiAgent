@@ -97,6 +97,39 @@
       },
       "quantization": "Q4_K_M"
     },
+    "ollama_qwen3.8-27b": {
+      "architecture_class": "dense",
+      "total_parameters": "27.3B",
+      "context_length": 262144,
+      "modalities": ["text", "image", "video"],
+      "capabilities": ["reasoning", "tools", "structured_output", "function_calling"],
+      "reasoning_modes": ["thinking", "non_thinking"],
+      "release_note": "Trial profile; not part of the frozen 2026-07-21 panel. Official card: compact dense hybrid-thinking VLM. Default thinking ON with thinking-mode sampler.",
+      "default_thinking": true,
+      "card_urls": [
+        "https://huggingface.co/Qwen/Qwen3.8-27B",
+        "https://ollama.com/library/qwen3.8"
+      ],
+      "card_sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "presence_penalty": 0.0,
+        "repetition_penalty": 1.0
+      },
+      "card_sampling_non_thinking": {
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "presence_penalty": 1.5,
+        "repetition_penalty": 1.0
+      },
+      "runtime_sampling_mapping": {
+        "repetition_penalty": "LLM_REPEAT_PENALTY -> Ollama repeat_penalty",
+        "presence_penalty": "LLM_PRESENCE_PENALTY -> per-call Ollama options"
+      },
+      "quantization": "Q4_K_M"
+    },
     "ollama_gemma4-26b_v1.4.0": {
       "architecture_class": "mixture_of_experts",
       "total_parameters": "25.2B",

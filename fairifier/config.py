@@ -91,7 +91,7 @@ class FAIRifierConfig:
     # Passed through Ollama's per-call options when a model card recommends it.
     llm_presence_penalty: Optional[float] = None
     llm_max_tokens: int = 16384  # Conservative default for test/dev cost control
-    llm_enable_thinking: bool = True  # Thinking enabled by default — models that support it benefit from reasoning traces
+    llm_enable_thinking: bool = True  # Default ON for thinking-capable models; set False only for no-think models or a frozen non-think protocol
     llm_thinking_budget: int = 8192  # Token budget for thinking/reasoning (Gemini, Anthropic, Open Models). 0 = model default
     # Provider reasoning effort when supported (e.g. Kimi K3: low|high|max). None = omit / provider default.
     llm_reasoning_effort: Optional[str] = None
@@ -274,7 +274,7 @@ class FAIRifierConfig:
     # FAIR naming: fairifier-{environment}-{provider}-{model}-{timestamp}
     langsmith_project: str = "fairifier"  # Base name, enhanced at runtime
     langsmith_endpoint: str = "https://api.smith.langchain.com"
-    enable_langsmith: bool = False  # Off by default; set True when LANGSMITH_API_KEY is set
+    enable_langsmith: bool = False  # Off by default; opt in with LANGCHAIN_TRACING_V2=true
     langsmith_use_fair_naming: bool = True  # Use FAIR-compliant naming scheme
     
     # Checkpointer configuration
@@ -608,10 +608,20 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
 
     if os.getenv("LANGSMITH_API_KEY"):
         config_instance.langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
-        config_instance.enable_langsmith = True
 
-    # LANGSMITH_DISABLE=1 or LANGCHAIN_TRACING_V2=false: disable tracing (default for production)
-    if os.getenv("LANGSMITH_DISABLE", "").strip() in ("1", "true", "yes"):
+    # Off by default. An API key is stored for opt-in use but does not enable tracing.
+    _truthy = ("1", "true", "yes", "on")
+    tracing_opt_in = (
+        os.getenv("LANGCHAIN_TRACING_V2", "").strip().lower() in _truthy
+        or os.getenv("LANGSMITH_TRACING", "").strip().lower() in _truthy
+        or os.getenv("LANGSMITH_ENABLE", "").strip().lower() in _truthy
+    )
+    config_instance.enable_langsmith = bool(
+        tracing_opt_in and config_instance.langsmith_api_key
+    )
+
+    # Explicit off wins over opt-in.
+    if os.getenv("LANGSMITH_DISABLE", "").strip().lower() in _truthy:
         config_instance.enable_langsmith = False
     if os.getenv("LANGCHAIN_TRACING_V2", "").strip().lower() == "false":
         config_instance.enable_langsmith = False
@@ -619,9 +629,11 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     # Single source of truth: set env so LangChain/LangSmith SDK no-ops when disabled
     if config_instance.langsmith_api_key and config_instance.enable_langsmith:
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGSMITH_TRACING"] = "true"
         os.environ["LANGCHAIN_PROJECT"] = config_instance.langsmith_project
     else:
         os.environ["LANGCHAIN_TRACING_V2"] = "false"
+        os.environ["LANGSMITH_TRACING"] = "false"
 
     if os.getenv("LANGSMITH_PROJECT"):
         config_instance.langsmith_project = os.getenv("LANGSMITH_PROJECT")
