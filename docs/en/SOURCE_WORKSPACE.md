@@ -7,12 +7,15 @@ the run output directory.
 
 ## Artifacts
 
-When `FAIRIFIER_SOURCE_WORKSPACE_ENABLED=true`, each run writes:
+When `FAIRIFIER_SOURCE_WORKSPACE_ENABLED=true`, each run writes under
+`workspace/source_workspace/`:
 
-- `source_workspace/source_manifest.json`: source ids, paths, methods, roles, sizes, and table references.
-- `source_workspace/source_workspace.md`: compact inventory for agents and reports.
-- `source_workspace/sources/source_*.md`: full source text or MinerU markdown.
-- `source_workspace/tables/*.jsonl`: full table rows for CSV/TSV/Excel inputs.
+- `workspace/source_workspace/source_manifest.json`: source ids, paths, methods, roles, sizes, and table references.
+- `workspace/source_workspace/source_workspace.md`: compact inventory for agents and reports.
+- `workspace/source_workspace/sources/source_*.md`: full source text or MinerU markdown;
+  created only when at least one source is materialized.
+- `workspace/source_workspace/tables/*.jsonl`: full table rows for CSV/TSV/Excel inputs;
+  the `tables/` directory is not created when no tabular rows are available.
 
 Single-file runs use the same structure with one source. Directory and zip inputs
 create one source per supported file.
@@ -42,7 +45,9 @@ During JSON metadata generation, FAIRiAgent builds field-specific evidence
 context from the preserved workspace. For each FAIR-DS field, it searches source
 text with literal queries from the field name and description. For table inputs,
 it searches the full JSONL table rows by column name and cell value, so values
-outside the table preview can still be surfaced to the LLM.
+outside the table preview can still be surfaced to the LLM. When the locked
+entity plan names metadata-table sources, that table search stays on those
+source ids.
 
 When evidence is found, prompts ask the model to cite source references such as
 `source_001:123-145` or `source_002 table samples row 4` in the generated

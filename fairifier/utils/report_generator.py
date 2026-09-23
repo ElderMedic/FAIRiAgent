@@ -93,7 +93,7 @@ class WorkflowReportGenerator:
             else:
                 agents_executed[agent_name]["failed"] += 1
         
-        return {
+        exec_summary = {
             "total_steps": summary.get("total_steps", len(execution_history)),
             "successful_steps": summary.get("successful_steps", 0),
             "failed_steps": summary.get("failed_steps", 0),
@@ -101,8 +101,19 @@ class WorkflowReportGenerator:
             "needs_human_review": summary.get("needs_human_review", False),
             "agents_executed": agents_executed,
             "processing_start": state.get("processing_start"),
-            "processing_end": state.get("processing_end")
+            "processing_end": state.get("processing_end"),
         }
+        for key in (
+            "total_retries",
+            "retries_by_agent",
+            "retry_trajectory",
+            "agent_handoff",
+            "overall_confidence",
+            "average_confidence",
+        ):
+            if key in summary:
+                exec_summary[key] = summary[key]
+        return exec_summary
     
     def _generate_quality_metrics(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Generate quality metrics summary."""
@@ -253,7 +264,7 @@ class WorkflowReportGenerator:
             "prompt_mode_counts": dict(prompt_mode_counts),
             "auto_repair_score_summary": auto_repair_score_summary,
             "auto_repair_reason_counts": dict(auto_repair_reason_counts),
-            "field_retrieval_stats": field_stats[:50],
+            "field_retrieval_stats": field_stats,
             "evidence_store": state.get("evidence_store", {}),
         }
     
@@ -641,7 +652,7 @@ class WorkflowReportGenerator:
         if timeline:
             lines.append("EXECUTION TIMELINE")
             lines.append("-" * 80)
-            for entry in timeline[:10]:  # Show first 10 entries
+            for entry in timeline:
                 agent = entry.get("agent", "unknown")
                 attempt = entry.get("attempt", 1)
                 duration = entry.get("duration_seconds")
@@ -651,9 +662,6 @@ class WorkflowReportGenerator:
                 if duration:
                     line += f" - {duration:.1f}s"
                 lines.append(line)
-            
-            if len(timeline) > 10:
-                lines.append(f"... and {len(timeline) - 10} more entries")
         lines.append("")
 
         performance = report.get("performance", {})

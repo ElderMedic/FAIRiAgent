@@ -34,6 +34,7 @@ from .state import FAIRifierState, ProcessingStatus
 from ..agents.base import BaseAgent
 from ..agents.document_parser import DocumentParserAgent
 from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
+from ..agents.entity_structure_planner import EntityStructurePlannerAgent
 from ..agents.json_generator import JSONGeneratorAgent
 from ..agents.isa_value_mapper import ISAValueMapperAgent
 from ..agents.critic import CriticAgent
@@ -68,11 +69,23 @@ from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.context_observability import log_context_usage
 from ..utils.document_text import read_document_text
 from ..utils.execution_history import compact_prior_attempts_for_agent
+from ..utils.retry_progress import (
+    build_retry_observation,
+    capture_agent_output,
+    is_better_candidate,
+    restore_agent_output,
+    should_stop_for_no_progress,
+)
 from ..utils.planner_tasks import (
     parse_plan_tasks_from_llm_output,
     planner_task_to_dict,
 )
-from ..services.source_workspace import SourceRecord, build_source_workspace
+from ..services.source_workspace import (
+    SourceRecord,
+    build_source_workspace,
+    infer_source_role,
+    source_role_priority,
+)
 from ..tools.mineru_tools import create_mineru_convert_tool
 
 # Mem0 service (optional)
@@ -94,17 +107,33 @@ def _flatten_field_definition(item: Dict[str, Any]) -> Dict[str, Any]:
     (Excel Help sheet, validators) can read them without understanding
     the internal nesting.
     """
+    from ..utils.fairds_value_contracts import usable_regex_pattern
+
     meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-    return {
+    raw_regex = str(meta.get("regex") or "")
+    usable_regex = usable_regex_pattern(raw_regex)
+    flattened = {
         "term": item.get("term", ""),
         "source": item.get("source", ""),
         "isa_sheet": meta.get("isa_sheet", ""),
         "data_type": meta.get("data_type", ""),
+        "definition": meta.get("definition", "") or item.get("definition", ""),
+        "syntax": meta.get("syntax", ""),
+        "regex": usable_regex,
+        "example": meta.get("example", ""),
+        "ontology_uri": meta.get("ontology_uri", ""),
         "requirement": meta.get("requirement", ""),
         "required": bool(meta.get("requirement", "").upper() == "MANDATORY"
                          or meta.get("required")),
         "package": meta.get("package", ""),
+        "source_extension": bool(meta.get("source_extension")),
+        "source_column": meta.get("source_column", ""),
+        "source_path": meta.get("source_path", ""),
+        "table_name": meta.get("table_name", ""),
     }
+    if raw_regex and not usable_regex:
+        flattened["invalid_source_regex"] = raw_regex
+    return flattened
 
 
 def _filesystem_document_path(document_path: str):
@@ -334,7 +363,13 @@ class ReadFileNode:
             for f in sorted(path.parent.iterdir()):
                 if f.is_file() and f != path and not f.name.startswith("."):
                     suffix = f.suffix.lower()
-                    if suffix in {".xlsx", ".xls", ".csv", ".tsv", ".txt", ".md"}:
+                    is_table = suffix in {".xlsx", ".xls", ".csv", ".tsv"}
+                    name_lower = f.name.lower()
+                    is_named_supplement = suffix in {".txt", ".md"} and any(
+                        token in name_lower
+                        for token in ("supp", "supplement", "appendix", "protocol")
+                    )
+                    if is_table or is_named_supplement:
                         try:
                             supp_text, supp_info = self._read_single_document_content(str(f), output_dir)
                             records.append(
@@ -958,6 +993,7 @@ class OrchestrateNode:
         document_parser=None,
         bio_metadata_agent=None,
         knowledge_retriever=None,
+        entity_structure_planner=None,
         json_generator=None,
         isa_value_mapper=None,
         critic=None,
@@ -970,6 +1006,7 @@ class OrchestrateNode:
         self._document_parser = document_parser
         self._bio_metadata_agent = bio_metadata_agent
         self._knowledge_retriever = knowledge_retriever
+        self._entity_structure_planner = entity_structure_planner
         self._json_generator = json_generator
         self._isa_value_mapper = isa_value_mapper
         self._critic = critic
@@ -1002,6 +1039,10 @@ class OrchestrateNode:
     @property
     def knowledge_retriever(self):
         return self._knowledge_retriever if self._knowledge_retriever is not None else (self.app.knowledge_retriever if self.app else None)
+
+    @property
+    def entity_structure_planner(self):
+        return self._entity_structure_planner if self._entity_structure_planner is not None else (self.app.entity_structure_planner if self.app else None)
 
     @property
     def json_generator(self):
@@ -1131,6 +1172,22 @@ class OrchestrateNode:
         if run_id and run_stop_requested(run_id):
             return self._mark_interrupted_state(state)
 
+        # Step 3.5: establish entity cardinality and links before values are filled.
+        logger.info("\n" + "="*70)
+        logger.info("🧱 Step 3.5: EntityStructurePlanner")
+        logger.info("="*70)
+        state = await self.entity_structure_planner.execute(state)
+        if run_id and run_stop_requested(run_id):
+            return self._mark_interrupted_state(state)
+        if not (state.get("entity_plan_validation") or {}).get("passed", False):
+            logger.error(
+                "🚫 EntityStructurePlanner hard gate failed; metadata generation "
+                "and workbook materialization are not permitted."
+            )
+            state["needs_human_review"] = True
+            state["entity_plan_hard_gate_failed"] = True
+            return state
+
         # Step 4: Generate JSON (with optional cross-layer rollback to retrieval)
         cross_layer_retries_used = 0
         while True:
@@ -1203,8 +1260,20 @@ class OrchestrateNode:
                     state, self.knowledge_retriever, "KnowledgeRetriever",
                     lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
                 )
+            state = await self.entity_structure_planner.execute(state)
             if run_id and run_stop_requested(run_id):
                 return self._mark_interrupted_state(state)
+            if not (state.get("entity_plan_validation") or {}).get(
+                "passed", False
+            ):
+                logger.error(
+                    "🚫 EntityStructurePlanner hard gate failed after cross-layer "
+                    "rollback; metadata generation and workbook materialization "
+                    "are not permitted."
+                )
+                state["needs_human_review"] = True
+                state["entity_plan_hard_gate_failed"] = True
+                return state
         state["cross_layer_retries_used"] = cross_layer_retries_used
 
         # ── Step 4.5: ISAValueMapper ─────────────────────────────────
@@ -1231,7 +1300,9 @@ class OrchestrateNode:
         state: FAIRifierState,
         agent: BaseAgent,
         agent_name: str,
-        check_output_fn
+        check_output_fn,
+        *,
+        enforce_global_retry_limit: bool = True,
     ) -> FAIRifierState:
         """
         Execute an agent with Critic evaluation and retry logic.
@@ -1264,10 +1335,6 @@ class OrchestrateNode:
             state["retry_trajectory"] = {}
         state["retry_trajectory"][agent_name] = []
         
-        # Track previous scores for no-progress detection
-        previous_scores = []
-        NO_PROGRESS_THRESHOLD = 2  # Exit if score unchanged for this many consecutive attempts
-        
         # [R] Retrieve relevant memories before execution
         session_id = state.get("session_id")
         if self.mem0_service and session_id:
@@ -1295,7 +1362,10 @@ class OrchestrateNode:
                 return self._mark_interrupted_state(state)
 
             # Check global retry limit
-            if self.global_retry_count >= self.max_global_retries:
+            if (
+                enforce_global_retry_limit
+                and self.global_retry_count >= self.max_global_retries
+            ):
                 logger.warning(f"⚠️ Global retry limit ({self.max_global_retries}) reached")
                 if check_output_fn(state):
                     logger.warning(f"   But {agent_name} has usable output - accepting")
@@ -1328,7 +1398,8 @@ class OrchestrateNode:
                 logger.info(f"▶️  Executing {agent_name}")
             else:
                 logger.info(f"🔄 Retry {attempt-1}/{self.max_step_retries} for {agent_name}")
-                self.global_retry_count += 1
+                if enforce_global_retry_limit:
+                    self.global_retry_count += 1
                 # Strip verbose Critic prose / failed-output detail from earlier
                 # attempts of this agent so the in-state history stays lean and
                 # the LLM is not anchored to its own past mistakes.
@@ -1429,20 +1500,6 @@ class OrchestrateNode:
                 decision = critic_eval.get("decision", "ACCEPT")
                 score = critic_eval.get("score", 0.0)
             
-            # Record retry trajectory
-            state["retry_trajectory"][agent_name].append({
-                "attempt": attempt,
-                "decision": decision,
-                "score": score,
-                "issues_count": len(critic_eval.get("issues", [])),
-                "timestamp": datetime.now().isoformat()
-            })
-            
-            logger.info(
-                f"   📊 Critic: {decision} (score: {score:.2f}, "
-                f"attempt: {attempt}/{self.max_step_retries + 1})"
-            )
-
             if run_id and run_stop_requested(run_id):
                 logger.warning(
                     "⏹ Stop requested after Critic evaluation for %s; stopping workflow.",
@@ -1504,6 +1561,19 @@ class OrchestrateNode:
                         state["context"]["retrieved_memories"] = enriched_memories
 
                     if target_agent != agent_name and not self._cross_layer_rollback_is_disabled():
+                        # Cross-layer routing returns before the normal retry
+                        # branch, so record the observation here as well.
+                        trajectory = state["retry_trajectory"][agent_name]
+                        observation = build_retry_observation(
+                            agent_name,
+                            state,
+                            critic_eval,
+                            trajectory,
+                            min_score_delta=getattr(config, "retry_min_score_delta", 0.02),
+                        )
+                        observation["timestamp"] = datetime.now().isoformat()
+                        trajectory.append(observation)
+                        state["context"]["retry_observation"] = observation
                         state["context"]["force_retry_from"] = target_agent
                         state["context"]["cross_layer_retry_reason"] = hard_gate.get("summary")
                         logger.info(
@@ -1530,6 +1600,70 @@ class OrchestrateNode:
                             agent_name,
                             target_agent,
                         )
+
+            # Cardinality and linkage are deterministic contracts.  An LLM
+            # Critic cannot accept a matrix that violates the pre-value plan.
+            if (
+                agent_name == "ISAValueMapper"
+                and decision == "ACCEPT"
+                and not self._hard_gate_is_disabled()
+            ):
+                structure_gate = state.get("entity_matrix_validation") or {}
+                if not structure_gate.get("passed", False):
+                    gate_issues = list(structure_gate.get("errors") or [])
+                    logger.warning(
+                        "🚫 ISA entity-structure hard gate failed: %s", gate_issues
+                    )
+                    critic_eval.setdefault("issues", [])
+                    critic_eval["issues"] = list(
+                        dict.fromkeys(list(critic_eval["issues"]) + gate_issues[:8])
+                    )
+                    critic_eval["entity_structure_gate"] = structure_gate
+                    critic_eval["decision"] = "RETRY"
+                    critic_eval["score"] = min(
+                        float(critic_eval.get("score", 0.0) or 0.0),
+                        config.critic_retry_max_threshold,
+                    )
+                    decision = "RETRY"
+                    score = critic_eval["score"]
+
+            # Record a deterministic retry observation after all local gates
+            # (including the JSON hard gate) have adjusted the evaluation.
+            # This is the evidence used by the controller, not an LLM summary.
+            trajectory = state["retry_trajectory"][agent_name]
+            observation = build_retry_observation(
+                agent_name,
+                state,
+                critic_eval,
+                trajectory,
+                min_score_delta=getattr(config, "retry_min_score_delta", 0.02),
+            )
+            observation["timestamp"] = datetime.now().isoformat()
+            trajectory.append(observation)
+            state["context"]["retry_observation"] = observation
+
+            # Keep the best evaluated candidate inside the retry controller.
+            # It is not exposed to prompts and is discarded when this agent's
+            # retry session ends; it only prevents a regressing retry from
+            # becoming the final output.
+            best_candidates = state["context"].setdefault("retry_best_outputs", {})
+            best_candidate = best_candidates.get(agent_name)
+            if is_better_candidate(
+                observation["score"], observation["issues_count"], best_candidate
+            ):
+                best_candidates[agent_name] = {
+                    "attempt": observation["attempt"],
+                    "score": observation["score"],
+                    "issues_count": observation["issues_count"],
+                    "output": capture_agent_output(agent_name, state),
+                }
+
+            logger.info(
+                f"   📊 Critic: {decision} (score: {score:.2f}, "
+                f"progress: {observation.get('status')}, "
+                f"output_changed: {observation.get('feedback_applied')}, "
+                f"attempt: {attempt}/{self.max_step_retries + 1})"
+            )
 
             # --- START NEW DISK APPEND ---
             if log_path:
@@ -1602,34 +1736,46 @@ class OrchestrateNode:
                 
                 break
             
-            # Track score for no-progress detection
-            previous_scores.append(round(score, 2))
-            
-            # Check for no-progress: if score unchanged for N consecutive attempts
-            if len(previous_scores) >= NO_PROGRESS_THRESHOLD:
-                recent_scores = previous_scores[-NO_PROGRESS_THRESHOLD:]
-                if len(set(recent_scores)) == 1:
-                    # All recent scores are identical - no progress being made
-                    logger.warning(
-                        f"⚠️ No progress detected for {agent_name}: "
-                        f"score unchanged at {score:.2f} for {NO_PROGRESS_THRESHOLD} consecutive attempts\n"
-                        f"  This may indicate API limitations or infeasible requirements.\n"
-                        f"  Accepting current output to avoid further token waste."
-                    )
-                    if check_output_fn(state):
-                        state["needs_human_review"] = True
-                        state["no_progress_detected"] = True
-                        break
-                    else:
-                        logger.error(f"❌ No progress and no usable output from {agent_name}")
-                        state["errors"] = state.get("errors", []) + [
-                            f"{agent_name}: No progress after {NO_PROGRESS_THRESHOLD} attempts (score stuck at {score:.2f})"
-                        ]
-                        break
+            # Stop only when the deterministic trajectory says that another
+            # attempt is unlikely to change the result. A score alone is not a
+            # progress signal: a model can change the score while returning the
+            # same output or repeating the same issue.
+            no_progress_reason = should_stop_for_no_progress(
+                state["retry_trajectory"][agent_name],
+                stagnant_limit=getattr(config, "retry_stagnant_attempts", 1),
+            )
+            if no_progress_reason:
+                logger.warning(
+                    "⚠️ Retry terminated for %s: %s (score %.2f, output=%s, repeated_issue=%s)",
+                    agent_name,
+                    no_progress_reason,
+                    score,
+                    observation.get("output_fingerprint"),
+                    observation.get("repeated_issue"),
+                )
+                state["retry_termination_reason"] = no_progress_reason
+                state["no_progress_detected"] = True
+                best_candidate = state["context"].get("retry_best_outputs", {}).get(agent_name)
+                if best_candidate and best_candidate.get("attempt") != attempt:
+                    restore_agent_output(agent_name, state, best_candidate["output"])
+                    state["retry_restored_best"] = True
+                    state["retry_best_attempt"] = best_candidate.get("attempt")
+                if check_output_fn(state):
+                    state["needs_human_review"] = True
+                    break
+                state["errors"] = state.get("errors", []) + [
+                    f"{agent_name}: retry terminated due to {no_progress_reason}"
+                ]
+                break
             
             # Check if more retries available
             if attempt > self.max_step_retries:
                 # Max retries reached - check if we have usable output
+                best_candidate = state["context"].get("retry_best_outputs", {}).get(agent_name)
+                if best_candidate and best_candidate.get("attempt") != attempt:
+                    restore_agent_output(agent_name, state, best_candidate["output"])
+                    state["retry_restored_best"] = True
+                    state["retry_best_attempt"] = best_candidate.get("attempt")
                 if check_output_fn(state):
                     logger.warning(
                         f"⚠️ Max retries reached ({attempt-1}/{self.max_step_retries}) "
@@ -1685,6 +1831,8 @@ class OrchestrateNode:
             agent_name,
             keep_latest=False,
         )
+        state.get("context", {}).pop("retry_best_outputs", None)
+        state.get("context", {}).pop("retry_observation", None)
 
         return state
 
@@ -2407,6 +2555,7 @@ class OrchestrateNode:
                 missing_required_values.append(str(field.get("field_name", "unknown")))
 
         issues: List[str] = []
+        advisories: List[str] = []
         improvement_ops: List[str] = []
         anchor_agent = "KnowledgeRetriever"
 
@@ -2420,21 +2569,15 @@ class OrchestrateNode:
             anchor_agent = "DocumentParser"
 
         if uncovered_from_retrieval:
-            issues.append(
+            advisories.append(
                 "KnowledgeRetriever still reports uncovered planner-critical concepts: "
                 + ", ".join(uncovered_from_retrieval[:8])
             )
-            improvement_ops.append(
-                "Expand FAIR-DS search scope for planner-critical terms and include matched fields before JSON generation."
-            )
 
         if missing_required_terms:
-            issues.append(
+            advisories.append(
                 "JSON output is missing planner-critical concepts: "
                 + ", ".join(missing_required_terms[:8])
-            )
-            improvement_ops.append(
-                "Re-run KnowledgeRetriever with planner/critic guidance and ensure required concepts are selected."
             )
 
         if missing_mandatory_terms:
@@ -2447,12 +2590,9 @@ class OrchestrateNode:
             )
 
         if missing_required_values:
-            issues.append(
+            advisories.append(
                 "JSON output includes mandatory fields with empty values: "
                 + ", ".join(missing_required_values[:8])
-            )
-            improvement_ops.append(
-                "Populate mandatory field values from document evidence; if unavailable, keep explicit placeholder and raise review flag."
             )
 
         if isa_mapping_collapsed:
@@ -2471,6 +2611,7 @@ class OrchestrateNode:
             "passed": passed,
             "anchor_agent": anchor_agent,
             "issues": issues,
+            "advisories": advisories,
             "improvement_ops": improvement_ops,
             "summary": summary,
         }
@@ -2511,8 +2652,26 @@ class OrchestrateNode:
         merged: Dict[str, Any] = {}
         conflicts: Dict[str, List[str]] = {}
 
-        for entry in per_source_entries:
+        ordered_entries = sorted(
+            per_source_entries,
+            key=lambda entry: source_role_priority(
+                str(entry.get("source_role") or "unknown")
+            ),
+        )
+        bibliographic_keys = {
+            "title",
+            "abstract",
+            "authors",
+            "doi",
+            "pmid",
+            "journal",
+            "publication_date",
+            "publication_year",
+            "year",
+        }
+        for entry in ordered_entries:
             source_path = str(entry.get("source_path", "unknown"))
+            source_role = str(entry.get("source_role") or "unknown")
             info = entry.get("document_info", {}) or {}
             if not isinstance(info, dict):
                 continue
@@ -2524,6 +2683,18 @@ class OrchestrateNode:
                     continue
 
                 existing = merged[key]
+                if key in bibliographic_keys:
+                    existing_str = str(existing).strip()
+                    value_str = str(value).strip()
+                    if value_str != existing_str:
+                        conflicts.setdefault(key, [])
+                        if existing_str and existing_str not in conflicts[key]:
+                            conflicts[key].append(existing_str)
+                        if value_str and value_str not in conflicts[key]:
+                            conflicts[key].append(value_str)
+                    # The entries are authority-sorted.  Do not union lower-
+                    # priority table/supplement guesses into paper identity.
+                    continue
                 if isinstance(existing, list) and isinstance(value, list):
                     dedup = []
                     seen = set()
@@ -2589,6 +2760,17 @@ class OrchestrateNode:
         for index, input_doc in enumerate(input_documents, start=1):
             source_path = str(input_doc.get("path") or f"input_{index}")
             source_content = str(input_doc.get("content") or "")
+            source_content_type = str(input_doc.get("content_type") or "text")
+            source_role = infer_source_role(
+                source_path,
+                source_content_type,
+                table_names=[
+                    str(table.get("name") or "")
+                    for table in (input_doc.get("tables") or [])
+                    if isinstance(table, dict)
+                ],
+                content_excerpt=source_content,
+            )
             if not source_content.strip():
                 logger.warning("Skipping empty input source in multi-file mode: %s", source_path)
                 source_outputs.append(
@@ -2609,6 +2791,8 @@ class OrchestrateNode:
                 source_index=index,
                 source_total=len(input_documents),
                 base_document_path=base_document_path,
+                source_role=source_role,
+                source_content_type=source_content_type,
             )
 
             per_source_info = state.get("document_info", {}) or {}
@@ -2626,6 +2810,8 @@ class OrchestrateNode:
                 {
                     "source_path": source_path,
                     "method": input_doc.get("method", "unknown"),
+                    "content_type": source_content_type,
+                    "source_role": source_role,
                     "document_info": per_source_info,
                     "field_count": len(per_source_info) if isinstance(per_source_info, dict) else 0,
                     "status": "parsed",
@@ -2657,6 +2843,8 @@ class OrchestrateNode:
         context.pop("current_source_path", None)
         context.pop("current_source_index", None)
         context.pop("current_source_total", None)
+        context.pop("current_source_role", None)
+        context.pop("current_source_content_type", None)
         context["multi_file_conflicts"] = conflicts
 
         logger.info(
@@ -2678,6 +2866,8 @@ class OrchestrateNode:
         source_index: int,
         source_total: int,
         base_document_path: str,
+        source_role: str = "unknown",
+        source_content_type: str = "text",
     ) -> FAIRifierState:
         """Parse one source document in multi-file mode with explicit trace visibility."""
         logger.info(
@@ -2694,6 +2884,8 @@ class OrchestrateNode:
             source_index=source_index,
             source_total=source_total,
             base_document_path=base_document_path,
+            source_role=source_role,
+            source_content_type=source_content_type,
         )
 
         return await self._execute_agent_with_retry(
@@ -2701,6 +2893,7 @@ class OrchestrateNode:
             self.document_parser,
             "DocumentParser",
             lambda s: s.get("document_info", {}) and len(s["document_info"]) > 3,
+            enforce_global_retry_limit=False,
         )
 
     def _prepare_single_input_source_state(
@@ -2712,6 +2905,8 @@ class OrchestrateNode:
         source_index: int,
         source_total: int,
         base_document_path: str,
+        source_role: str = "unknown",
+        source_content_type: str = "text",
     ) -> None:
         """Prepare state so DocumentParser reads only the current multi-file source."""
         context = state.setdefault("context", {})
@@ -2736,6 +2931,8 @@ class OrchestrateNode:
         context["current_source_path"] = source_path
         context["current_source_index"] = source_index
         context["current_source_total"] = source_total
+        context["current_source_role"] = source_role
+        context["current_source_content_type"] = source_content_type
 
     @traceable(name="PlanWorkflow", tags=["workflow", "planning"])
     async def _plan_workflow_node(self, state: FAIRifierState) -> FAIRifierState:
@@ -3800,6 +3997,13 @@ class FinalizeNode:
             state["needs_human_review"] = True
             summary["needs_human_review"] = True
         
+        # Persist inner-loop telemetry for audit (not truncated in reports).
+        scratchpad = state.get("react_scratchpad")
+        if scratchpad:
+            state.setdefault("artifacts", {})["react_scratchpad"] = json.dumps(
+                scratchpad, indent=2, ensure_ascii=False, default=str
+            )
+
         # ── A2A handoff summary ──────────────────────────────────────
         from fairifier.services.agent_mailbox import AgentMailbox
         summary["agent_handoff"] = AgentMailbox.handoff_summary(state)
@@ -3864,20 +4068,9 @@ class FinalizeNode:
                 with open(a2a_log_path, "a", encoding="utf-8") as fp:
 
                     for msg in state["agent_messages"]:
-                        record = {
-                            "event": "agent_message",
-                            "timestamp": msg.get("created_at", datetime.now().isoformat()),
-                            "from_agent": msg.get("from_agent"),
-                            "to_agent": msg.get("to_agent"),
-                            "message_type": msg.get("message_type"),
-                            "message_id": msg.get("id"),
-                            "priority": msg.get("priority", 0),
-                            "acked_by": msg.get("acked_by", []),
-                            "payload_summary": {
-                                k: (v if not isinstance(v, list) else f"[{len(v)} items]")
-                                for k, v in (msg.get("payload") or {}).items()
-                            },
-                        }
+                        record = AgentMailbox.audit_log_record(msg)
+                        if not record.get("timestamp"):
+                            record["timestamp"] = datetime.now().isoformat()
                         fp.write(json.dumps(record, ensure_ascii=False) + "\n")
             except OSError:
                 logger.debug("Failed to write A2A messages to processing log")

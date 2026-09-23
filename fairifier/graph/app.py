@@ -38,6 +38,7 @@ from .retrieval_nodes import IndexSourcesNode, SectionMapReduceNode
 from ..agents.base import BaseAgent
 from ..agents.document_parser import DocumentParserAgent
 from ..agents.knowledge_retriever import KnowledgeRetrieverAgent
+from ..agents.entity_structure_planner import EntityStructurePlannerAgent
 from ..agents.json_generator import JSONGeneratorAgent
 from ..agents.isa_value_mapper import ISAValueMapperAgent
 from ..agents.critic import CriticAgent
@@ -84,17 +85,29 @@ def _flatten_field_definition(item: Dict[str, Any]) -> Dict[str, Any]:
     (Excel Help sheet, validators) can read them without understanding
     the internal nesting.
     """
+    from ..utils.fairds_value_contracts import usable_regex_pattern
+
     meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-    return {
+    raw_regex = str(meta.get("regex") or "")
+    usable_regex = usable_regex_pattern(raw_regex)
+    flattened = {
         "term": item.get("term", ""),
         "source": item.get("source", ""),
         "isa_sheet": meta.get("isa_sheet", ""),
         "data_type": meta.get("data_type", ""),
+        "definition": meta.get("definition", "") or item.get("definition", ""),
+        "syntax": meta.get("syntax", ""),
+        "regex": usable_regex,
+        "example": meta.get("example", ""),
+        "ontology_uri": meta.get("ontology_uri", ""),
         "requirement": meta.get("requirement", ""),
         "required": bool(meta.get("requirement", "").upper() == "MANDATORY"
                          or meta.get("required")),
         "package": meta.get("package", ""),
     }
+    if raw_regex and not usable_regex:
+        flattened["invalid_source_regex"] = raw_regex
+    return flattened
 
 
 def _filesystem_document_path(document_path: str):
@@ -115,6 +128,7 @@ class FAIRifierLangGraphApp:
         self.document_parser = DocumentParserAgent()
         self.bio_metadata_agent = BioMetadataAgent()
         self.knowledge_retriever = KnowledgeRetrieverAgent()
+        self.entity_structure_planner = EntityStructurePlannerAgent()
         self.json_generator = JSONGeneratorAgent()
         self.isa_value_mapper = ISAValueMapperAgent()
         self.critic = CriticAgent()
@@ -1012,9 +1026,17 @@ class FAIRifierLangGraphApp:
         state: FAIRifierState,
         agent: BaseAgent,
         agent_name: str,
-        check_output_fn
+        check_output_fn,
+        *,
+        enforce_global_retry_limit: bool = True,
     ) -> FAIRifierState:
-        return await OrchestrateNode(self)._execute_agent_with_retry(state, agent, agent_name, check_output_fn)
+        return await OrchestrateNode(self)._execute_agent_with_retry(
+            state,
+            agent,
+            agent_name,
+            check_output_fn,
+            enforce_global_retry_limit=enforce_global_retry_limit,
+        )
 
     def _evaluate_json_hard_gate(self, state: FAIRifierState) -> Dict[str, Any]:
         return OrchestrateNode(self)._evaluate_json_hard_gate(state)
@@ -1072,6 +1094,8 @@ class FAIRifierLangGraphApp:
         source_index: int,
         source_total: int,
         base_document_path: str,
+        source_role: str = "unknown",
+        source_content_type: str = "text",
     ) -> None:
         return OrchestrateNode(self)._prepare_single_input_source_state(
             state=state,
@@ -1080,6 +1104,8 @@ class FAIRifierLangGraphApp:
             source_index=source_index,
             source_total=source_total,
             base_document_path=base_document_path,
+            source_role=source_role,
+            source_content_type=source_content_type,
         )
 
     def _merge_document_info_entries(
@@ -1097,6 +1123,8 @@ class FAIRifierLangGraphApp:
         source_index: int,
         source_total: int,
         base_document_path: str,
+        source_role: str = "unknown",
+        source_content_type: str = "text",
     ) -> FAIRifierState:
         return await OrchestrateNode(self)._parse_single_input_source(
             state=state,
@@ -1105,6 +1133,8 @@ class FAIRifierLangGraphApp:
             source_index=source_index,
             source_total=source_total,
             base_document_path=base_document_path,
+            source_role=source_role,
+            source_content_type=source_content_type,
         )
     
     async def run(

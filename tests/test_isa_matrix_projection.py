@@ -89,3 +89,26 @@ def test_apply_matrix_to_metadata_preserves_fields_list():
     assert updated["isa_structure"]["study"]["fields"][0]["value"] == "T"
     assert updated["isa_values"]["study"]["rows"][0]["study identifier"] == "ST1"
     assert updated["isa_matrix_id"] == "abc"
+
+
+def test_apply_matrix_to_metadata_deduplicates_only_relevant_field_warnings():
+    payload = {
+        "warnings": [
+            "Low confidence extraction for field 'sample identifier': 0.70",
+            "Low confidence extraction for field 'facility': 0.00",
+            "Low confidence extraction for field 'facility': 0.00",
+            "Low confidence extraction for field 'removed optional': 0.20",
+        ]
+    }
+    matrix = {
+        "assay": {
+            "columns": ["assay identifier", "facility"],
+            "rows": [{"assay identifier": "A1", "facility": ""}],
+        }
+    }
+
+    updated = apply_matrix_to_metadata(payload, matrix)
+
+    assert updated["warnings"] == [
+        "Low confidence extraction for field 'facility': 0.00"
+    ]

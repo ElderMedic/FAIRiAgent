@@ -1,0 +1,5 @@
+artifacts/
+__pycache__/
+*.jsonl
+*.json
+!schema_examples.json

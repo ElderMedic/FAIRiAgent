@@ -119,7 +119,20 @@ def test_invoke_react_agent_registers_usage_and_existing_callbacks():
     assert result == {"ok": True}
     invoke_config = deep_agent.ainvoke.await_args.kwargs["config"]
     assert invoke_config["callbacks"] == [existing_callback, usage_callback]
+    assert invoke_config["recursion_limit"] == agent._react_recursion_limit(
+        agent._get_react_contract("DocumentParser")
+    )
+    assert invoke_config["recursion_limit"] < 50
     agent.llm_helper.build_usage_callback.assert_called_once_with("DocumentParser")
+
+
+def test_react_recursion_limit_is_bounded_by_declared_contract():
+    assert ReactLoopMixin._react_recursion_limit(
+        {"max_iterations": 6, "max_tool_calls": 18}
+    ) == 28
+    assert ReactLoopMixin._react_recursion_limit(
+        {"max_iterations": 100, "max_tool_calls": 100}
+    ) == 64
 
 
 def test_get_context_feedback_prefers_agent_scoped_critic_feedback():

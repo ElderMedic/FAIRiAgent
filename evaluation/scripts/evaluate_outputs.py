@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""
-Evaluation Orchestrator for FAIRiAgent outputs.
+"""Historical aggregate evaluator for FAIRiAgent outputs.
 
-Runs all evaluators on batch evaluation outputs and computes aggregate metrics.
+The version-2 benchmark entry point is
+``python -m evaluation.benchmark.evaluate_run_index``.  This compatibility
+script is deliberately single-run-per-document: it refuses to select a
+"best" repetition, because doing so removes failures from the denominator and
+invalidates reliability estimates.
 """
 
 import sys
@@ -324,6 +327,13 @@ class EvaluationOrchestrator:
             if not run_dirs:
                 print(f"  ⚠️  No run directories found for {doc_id}, skipping")
                 continue
+
+            if len(run_dirs) > 1:
+                raise ValueError(
+                    "Legacy aggregate evaluation refuses to select a best run for "
+                    f"{doc_id}: found {len(run_dirs)} repetitions. Build a v2 run "
+                    "index and use evaluation.benchmark.evaluate_run_index instead."
+                )
             
             # Classify all runs
             successful_runs = []
@@ -395,18 +405,12 @@ class EvaluationOrchestrator:
             print(f"  ❌ Genuine failures: {len(genuine_failures)} (JSON parsing errors)")
             print(f"  ⏭️  Incomplete (excluded): {len(incomplete_runs)} (timeouts, metadata not found, etc.)")
             
-            # Select best successful run if any
+            # A single successful run is retained for historical compatibility.
+            # Repeated runs are rejected above and must use the v2 run index.
             if not successful_runs:
                 print(f"  ⚠️  No successful runs for {doc_id}, skipping from analysis")
                 # Store failure info for statistics
                 continue
-            
-            # Sort: fully successful first, then by retry count, then by failure count
-            successful_runs.sort(key=lambda x: (
-                not x['is_fully_successful'],
-                x.get('steps_requiring_retry', 0),
-                x.get('failed_steps', 0)
-            ))
             
             selected_run = successful_runs[0]
             metadata_file = selected_run['metadata_file']
@@ -743,7 +747,7 @@ class EvaluationOrchestrator:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Evaluation Orchestrator for FAIRiAgent outputs",
+        description="Historical single-run evaluator (use the v2 run-index path for new results)",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
@@ -753,8 +757,16 @@ def main():
                        help='Directory containing batch evaluation outputs')
     parser.add_argument('--ground-truth', type=Path, required=True,
                        help='Ground truth JSON file')
+    parser.add_argument('--approval-id', type=str, default=None,
+                       help='Human approval identifier required before the historical LLM judge runs')
     
     args = parser.parse_args()
+
+    if not args.approval_id:
+        parser.error(
+            'historical evaluation invokes an LLM judge and requires --approval-id; '
+            'use the v2 deterministic evaluator for new benchmark results'
+        )
     
     # Initialize orchestrator
     orchestrator = EvaluationOrchestrator(

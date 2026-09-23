@@ -4,7 +4,7 @@ import logging
 import json
 import re
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, Iterable, List, Optional, Tuple
 from langchain_core.tools import tool
 from langsmith import traceable
 
@@ -25,9 +25,13 @@ from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.llm_helper import get_llm_helper
 from ..utils.isa_order import ISA_LEVEL_ORDER
 from ..utils.package_selection import (
+    attach_package_field_catalog,
     build_document_match_text,
+    complete_source_schema_coverage,
+    prefer_lower_burden_package_set,
     rank_packages_by_document,
     score_package_relevance,
+    source_schema_matches,
     summary_to_package_record,
     top_relevant_package_names,
 )
@@ -283,6 +287,11 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             "use FAIR-DS and science tools when needed, and return selected_packages, "
             "selected_optional_fields keyed by ISA sheet, terms_to_search, and metadata_gap_hints. "
             "Favor package names and field labels that exist in FAIR-DS. "
+            "Choose the smallest sufficient package set from semantic source evidence and the package's "
+            "actual fields. Treat package applicability separately from whether every value is present: "
+            "a source-supported domain or assay schema can apply even when some values must remain blank. "
+            "Never infer an unstated platform, instrument, protocol, or identifier. Optional fields must "
+            "be source-supportable; zero optional fields for a sheet is valid. "
             "If a useful metadata concept is not represented as a real FAIR-DS package, do not invent "
             "a package name; keep selected_packages constrained to real FAIR-DS packages and record the "
             "uncovered concept in metadata_gap_hints instead. "
@@ -298,6 +307,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 "description": "Choose the minimal but sufficient FAIR-DS packages for the document.",
                 "system_prompt": (
                     "Select real FAIR-DS packages only. Bias toward investigation/study completeness. "
+                    "Prefer default plus at most one source-supported domain package and one applicable "
+                    "method package. Judge applicability from the source and actual package fields, not "
+                    "from an exact package-name mention; leave unsupported values blank. "
                     "When /workspace/skills_catalog.md matches the study type, align package choice with those skills."
                 ),
                 "tools": [list_packages, get_package_info],
@@ -307,6 +319,8 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 "description": "Choose high-value optional FAIR-DS fields per ISA sheet.",
                 "system_prompt": (
                     "Return field labels exactly as they appear in FAIR-DS when possible. "
+                    "Select only fields whose values or applicability are supported by the source; "
+                    "an empty optional-field selection is valid. "
                     "If skills in /workspace/skills_catalog.md apply, read their SKILL.md and bias optional fields "
                     "and search terms accordingly."
                 ),
@@ -519,13 +533,6 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             critic_feedback = feedback.get("critic_feedback")
             planner_instruction = feedback.get("planner_instruction")
             guidance_history = feedback.get("guidance_history") or []
-            prior_memory_context = self.format_retrieved_memories_for_prompt(
-                feedback.get("retrieved_memories") or []
-            )
-            evidence_context = build_evidence_context(evidence_packets)
-            llm_context = "\n\n".join(
-                part for part in [prior_memory_context or None, evidence_context or None] if part
-            ) or None
 
             # Structured Planner output (refactor §4): primary source for
             # priority packages and search terms. The regex helpers below
@@ -558,6 +565,10 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 critic_feedback=critic_feedback,
                 evidence_packets=evidence_packets,
             )
+            # These are safe universal fallbacks (normally ``default``). More
+            # specific planner/local hints are candidates for the selector,
+            # not automatic package approvals.
+            fallback_package_hints = list(priority_package_hints)
             local_domain_package_hints = self._infer_local_domain_package_hints(
                 doc_info=doc_info,
                 planner_instruction=planner_instruction,
@@ -598,6 +609,13 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 planner_instruction=planner_instruction,
                 evidence_packets=evidence_packets,
                 critic_feedback=critic_feedback,
+            )
+            # Applicability evidence must come from the current source only.
+            # Planner/Critic text is useful for candidate discovery, but can
+            # mention hypothetical packages, methods, or controlled values.
+            source_match_text = build_document_match_text(
+                doc_info,
+                evidence_packets=evidence_packets,
             )
             candidate_package_names = self._build_candidate_package_names(
                 doc_info,
@@ -699,8 +717,62 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                             "optional_count": optional_count,
                             "sheets": sheets,
                             "sample_fields": [],
+                            "mandatory_fields": [],
                         }
                     )
+
+                # Package summaries are sufficient for global discovery, but
+                # not for final schema applicability. Fetch the real contracts
+                # for the bounded, document-ranked candidate set while keeping
+                # every package summary visible to the selector. This avoids a
+                # self-confirming loop where only the initially selected
+                # package ever exposes its fields.
+                contract_candidates = [
+                    name
+                    for name in candidate_package_names
+                    if name not in excluded_package_names
+                ]
+                if contract_candidates:
+                    self.log_execution(
+                        state,
+                        "   📑 Fetching real field contracts for ranked candidates: "
+                        f"{contract_candidates}",
+                    )
+                for package_name in contract_candidates:
+                    if package_name in local_package_registry:
+                        fields = (
+                            local_package_registry[package_name].get("metadata", [])
+                            or []
+                        )
+                    else:
+                        pkg_result = self.tools["get_package"].invoke(
+                            {"package_name": package_name}
+                        )
+                        fields = (
+                            pkg_result["data"].get("metadata", [])
+                            if pkg_result.get("success")
+                            and isinstance(pkg_result.get("data"), dict)
+                            else []
+                        )
+                    if fields:
+                        all_packages_metadata.extend(fields)
+                        self.log_execution(
+                            state,
+                            f"      • {package_name}: {len(fields)} contract fields",
+                        )
+                    else:
+                        self.log_execution(
+                            state,
+                            f"      ⚠️ {package_name}: field contract unavailable",
+                            "warning",
+                        )
+
+                all_packages = attach_package_field_catalog(
+                    all_packages,
+                    all_packages_metadata,
+                    match_text=source_match_text,
+                )
+
             else:
                 self.log_execution(
                     state,
@@ -730,7 +802,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     else:
                         self.log_execution(state, f"      ⚠️ {pkg_name}: failed or no metadata", "warning")
 
-                packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(all_packages_metadata)
+                packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(
+                    all_packages_metadata
+                )
 
                 if not packages_by_sheet:
                     error_msg = "FAIR-DS API returned no data. Ensure API is properly configured."
@@ -746,6 +820,20 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             self.log_execution(state, f"   Total terms: {len(terms)}")
             if packages_by_sheet:
                 self.log_execution(state, f"   ISA Sheets: {list(packages_by_sheet.keys())}")
+
+            schema_match_hints = source_schema_matches(
+                all_packages,
+                source_match_text,
+            )
+            if schema_match_hints:
+                self.log_execution(
+                    state,
+                    "   🧾 Strong source-to-schema matches: "
+                    + ", ".join(
+                        f"{item['package']}[{item['score']}]"
+                        for item in schema_match_hints[:8]
+                    ),
+                )
             
             self.log_execution(state, "📦 All packages (ranked when summaries available):")
             for pkg in all_packages:
@@ -773,12 +861,20 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             self.log_execution(state, "🤖 Phase 1: selecting relevant metadata packages...")
 
             structured_knowledge: Optional[KnowledgeResponse] = None
-            if config.enable_deep_agents and self._should_skip_deep_react(candidate_package_names):
+            use_deep_package_planner = config.enable_deep_agents and not package_summaries
+            if config.enable_deep_agents and package_summaries:
+                self.log_execution(
+                    state,
+                    "⏭️ FAIR-DS package summaries are complete; using one constrained "
+                    "selection call instead of a recursive tool loop.",
+                )
+            elif config.enable_deep_agents and self._should_skip_deep_react(candidate_package_names):
                 self.log_execution(
                     state,
                     "⏭️ Skipping deep ReAct package planner for broad Qwen candidate set; using direct LLM selection for budget/stability."
                 )
-            elif config.enable_deep_agents:
+                use_deep_package_planner = False
+            elif use_deep_package_planner:
                 self._inner_kr_agent = self._build_kr_inner_agent(
                     science_cache=self._get_science_cache(state),
                     default_candidate_packages=candidate_package_names,
@@ -793,7 +889,8 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     "/workspace/packages_summary.json and /workspace/evidence_packets.json. "
                     "Return selected_packages, "
                     "selected_optional_fields by ISA sheet, terms_to_search, and metadata_gap_hints. "
-                    "Only put real FAIR-DS package names in selected_packages."
+                    "Only put real FAIR-DS package names in selected_packages, and choose the smallest "
+                    "source-supported package set."
                 )
                 evidence_context = build_evidence_context(evidence_packets)
                 if evidence_context:
@@ -815,6 +912,10 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
 
             # Phase 1 fallback: existing LLM package selector
             structured_package_gap_hints: List[str] = []
+            package_selection_trace: List[Dict[str, Any]] = []
+            package_selection_stable = True
+            uncovered_schema_levels: List[str] = []
+            matched_levels: Dict[str, set[str]] = {}
             if structured_knowledge and structured_knowledge.selected_packages:
                 raw_structured_packages = list(dict.fromkeys(structured_knowledge.selected_packages))
                 selected_package_names, structured_package_gap_hints = self._normalize_selected_packages(
@@ -832,17 +933,152 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     )
             else:
                 self.log_execution(state, "   Calling LLM to select relevant packages...")
+                selection_packages = [
+                    package
+                    for package in all_packages
+                    if package.get("name") not in excluded_package_names
+                ]
                 selected_package_names = await llm_methods.llm_select_relevant_packages(
                     self.llm_helper,
                     doc_info,
-                    all_packages,
+                    selection_packages,
                     critic_feedback,
                     planner_instruction=planner_instruction,
-                    prior_memory_context=llm_context,
-                    priority_package_hints=priority_package_hints,
+                    prior_memory_context=None,
+                    priority_package_hints=fallback_package_hints,
                     document_match_text=document_match_text,
+                    source_schema_match_hints=schema_match_hints,
                 )
                 self.log_execution(state, f"✅ LLM selected packages: {selected_package_names}")
+                package_selection_trace.append(
+                    {"round": 0, "basis": "package_summaries", "packages": list(selected_package_names)}
+                )
+
+                # Package descriptions support broad discovery; real fields are
+                # required for a defensible final choice. Iteratively fetch only
+                # what the selector proposes, then ask it to audit that contract.
+                # Three audit rounds allow a replacement, field fetch, and a
+                # stability check while keeping cost bounded.
+                if package_summaries:
+                    package_selection_stable = False
+                    for audit_round in range(1, 4):
+                        fetched_names = {
+                            str(field.get("packageName") or "").strip().lower()
+                            for field in all_packages_metadata
+                            if field.get("packageName")
+                        }
+                        for package_name in selected_package_names:
+                            if package_name.lower() in fetched_names:
+                                continue
+                            if package_name in local_package_registry:
+                                fields = (
+                                    local_package_registry[package_name].get("metadata", [])
+                                    or []
+                                )
+                            else:
+                                pkg_result = self.tools["get_package"].invoke(
+                                    {"package_name": package_name}
+                                )
+                                fields = (
+                                    pkg_result["data"].get("metadata", [])
+                                    if pkg_result.get("success")
+                                    and isinstance(pkg_result.get("data"), dict)
+                                    else []
+                                )
+                            if fields:
+                                all_packages_metadata.extend(fields)
+
+                        all_packages = attach_package_field_catalog(
+                            all_packages,
+                            all_packages_metadata,
+                            match_text=source_match_text,
+                        )
+                        schema_match_hints = source_schema_matches(
+                            all_packages,
+                            source_match_text,
+                        )
+                        audited_package_names = (
+                            await llm_methods.llm_select_relevant_packages(
+                                self.llm_helper,
+                                doc_info,
+                                [
+                                    package
+                                    for package in all_packages
+                                    if package.get("name") not in excluded_package_names
+                                ],
+                                critic_feedback,
+                                planner_instruction=planner_instruction,
+                                prior_memory_context=None,
+                                priority_package_hints=fallback_package_hints,
+                                document_match_text=source_match_text,
+                                proposed_package_names=selected_package_names,
+                                source_schema_match_hints=schema_match_hints,
+                            )
+                        )
+                        self.log_execution(
+                            state,
+                            f"🔎 Package contract audit {audit_round}/3: "
+                            f"{audited_package_names}",
+                        )
+                        package_selection_trace.append(
+                            {
+                                "round": audit_round,
+                                "basis": "real_field_contract",
+                                "packages": list(audited_package_names),
+                            }
+                        )
+                        prior_norm = {
+                            str(name).strip().lower() for name in selected_package_names
+                        }
+                        audited_norm = {
+                            str(name).strip().lower() for name in audited_package_names
+                        }
+                        if audited_norm == prior_norm:
+                            package_selection_stable = True
+                            selected_package_names = audited_package_names
+                            break
+                        selected_package_names = audited_package_names
+
+                for match in schema_match_hints:
+                    package_name = str(match.get("package") or "")
+                    for level in match.get("levels") or []:
+                        # Core investigation/study/observation-unit contracts
+                        # are already represented by ``default``. This gate is
+                        # for missing domain/sample and method/assay coverage,
+                        # not for forcing every overlapping extension.
+                        if str(level) not in {"sample", "assay"}:
+                            continue
+                        matched_levels.setdefault(str(level), set()).add(package_name)
+                selected_lower = {
+                    str(name).strip().lower() for name in selected_package_names
+                }
+                uncovered_schema_levels = sorted(
+                    level
+                    for level, package_names in matched_levels.items()
+                    if not any(
+                        package_name.lower() in selected_lower
+                        for package_name in package_names
+                    )
+                )
+                coverage_resolved = not uncovered_schema_levels
+                package_selection_stable = (
+                    package_selection_stable and coverage_resolved
+                )
+                package_selection_trace.append(
+                    {
+                        "basis": "source_schema_coverage",
+                        "matches": schema_match_hints,
+                        "uncovered_levels": uncovered_schema_levels,
+                        "coverage_resolved": coverage_resolved,
+                    }
+                )
+                if uncovered_schema_levels:
+                    self.log_execution(
+                        state,
+                        "⚠️ Package selection left strong schema matches uncovered "
+                        f"for ISA levels: {uncovered_schema_levels}",
+                        "warning",
+                    )
 
             if excluded_package_names:
                 filtered_package_names = [
@@ -857,21 +1093,160 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     selected_package_names = filtered_package_names
 
             selected_package_names = list(dict.fromkeys(selected_package_names))
-            if guided_package_hints:
-                merged_selected_packages: List[str] = []
-                for package_name in selected_package_names + guided_package_hints:
-                    if package_name not in merged_selected_packages:
-                        merged_selected_packages.append(package_name)
-                selected_package_names = merged_selected_packages
-            for pkg in reversed(local_domain_package_hints):
-                if pkg in selected_package_names:
-                    selected_package_names.remove(pkg)
-                selected_package_names.insert(0, pkg)
-            if not selected_package_names:
-                selected_package_names = priority_package_hints[:]
-            if not selected_package_names:
-                selected_package_names = candidate_package_names[:3]
+            # The constrained selector is the sole package-selection authority.
+            # Planner, Critic, and configured-local matches shape its candidate
+            # set and prompt but cannot silently append a package after the
+            # selector has rejected it.
+            selected_package_names = self._finalize_package_selection(
+                selected_package_names,
+                fallback_package_hints=fallback_package_hints,
+                candidate_package_names=candidate_package_names,
+            )
+            selected_package_names, burden_decisions = prefer_lower_burden_package_set(
+                selected_package_names,
+                all_packages,
+                source_match_text,
+            )
+            if burden_decisions:
+                package_selection_trace.append(
+                    {
+                        "basis": "mandatory_burden_arbitration",
+                        "decisions": burden_decisions,
+                        "packages": list(selected_package_names),
+                    }
+                )
+                replacements = [
+                    decision
+                    for decision in burden_decisions
+                    if decision.get("action") == "replace"
+                ]
+                if replacements:
+                    self.log_execution(
+                        state,
+                        "🧹 Replaced source-unsupported high-burden package(s): "
+                        + ", ".join(
+                            f"{item['package']} → {item['replacement']}"
+                            for item in replacements
+                        ),
+                    )
 
+            # Coverage is level-based. A lean, source-relevant replacement may
+            # cover the same ISA level without appearing in the strongest-three
+            # lexical match list, so re-evaluate after burden arbitration.
+            selected_records = {
+                str(package.get("name") or "").strip().lower(): package
+                for package in all_packages
+            }
+            selected_levels = {
+                str(level).strip().lower()
+                for name in selected_package_names
+                if str(name).strip().lower() != "default"
+                for level in (
+                    selected_records.get(str(name).strip().lower(), {}).get("sheets")
+                    or []
+                )
+                if str(level).strip().lower() in {"sample", "assay"}
+            }
+            uncovered_schema_levels = sorted(
+                level
+                for level in matched_levels
+                if level not in selected_levels
+            )
+            package_selection_stable = (
+                package_selection_stable and not uncovered_schema_levels
+            )
+
+            # Some FAIR-DS versions provide only package names in the summary
+            # endpoint. If the bounded first pass leaves a source-backed ISA
+            # level uncovered, audit the complete real contract catalog before
+            # accepting the package set. This is local/server metadata, not an
+            # input-pattern fallback.
+            if uncovered_schema_levels:
+                fetched_lower = {
+                    str(field.get("packageName") or "").strip().lower()
+                    for field in all_packages_metadata
+                    if field.get("packageName")
+                }
+                remaining_contracts = [
+                    name
+                    for name in available_package_names
+                    if name.lower() not in fetched_lower
+                    and name not in excluded_package_names
+                ]
+                self.log_execution(
+                    state,
+                    "🔬 Auditing complete FAIR-DS contracts for unresolved ISA "
+                    f"coverage: {uncovered_schema_levels}",
+                )
+                for package_name in remaining_contracts:
+                    if package_name in local_package_registry:
+                        fields = local_package_registry[package_name].get("metadata", []) or []
+                    else:
+                        pkg_result = self.tools["get_package"].invoke(
+                            {"package_name": package_name}
+                        )
+                        fields = (
+                            pkg_result["data"].get("metadata", [])
+                            if pkg_result.get("success")
+                            and isinstance(pkg_result.get("data"), dict)
+                            else []
+                        )
+                    if fields:
+                        all_packages_metadata.extend(fields)
+                all_packages = attach_package_field_catalog(
+                    all_packages,
+                    all_packages_metadata,
+                    match_text=source_match_text,
+                )
+                full_matches = source_schema_matches(all_packages, source_match_text)
+                source_backed_levels = {
+                    str(level).strip().lower()
+                    for match in full_matches
+                    for level in match.get("levels") or []
+                    if str(level).strip().lower() in {"sample", "assay"}
+                }
+                selected_package_names, coverage_decisions = (
+                    complete_source_schema_coverage(
+                        selected_package_names,
+                        all_packages,
+                        source_match_text,
+                        levels=source_backed_levels,
+                    )
+                )
+                if coverage_decisions:
+                    package_selection_trace.append(
+                        {
+                            "basis": "full_contract_schema_coverage",
+                            "decisions": coverage_decisions,
+                            "packages": list(selected_package_names),
+                        }
+                    )
+                    self.log_execution(
+                        state,
+                        "🧩 Added minimum-burden source-matched package coverage: "
+                        + ", ".join(
+                            f"{item['level']}→{item['package']}"
+                            for item in coverage_decisions
+                        ),
+                    )
+                selected_records = {
+                    str(package.get("name") or "").strip().lower(): package
+                    for package in all_packages
+                }
+                selected_levels = {
+                    str(level).strip().lower()
+                    for name in selected_package_names
+                    if str(name).strip().lower() != "default"
+                    for level in (
+                        selected_records.get(str(name).strip().lower(), {}).get("sheets")
+                        or []
+                    )
+                    if str(level).strip().lower() in {"sample", "assay"}
+                }
+                uncovered_schema_levels = sorted(
+                    source_backed_levels - selected_levels
+                )
+                package_selection_stable = not uncovered_schema_levels
             # Ensure metadata is available for all finally selected packages.
             # Guided/planner-added packages can fall outside the initial candidate fetch set.
             fetched_packages = {
@@ -917,7 +1292,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                             f"   ⚠️ {pkg_name}: failed to load metadata for selected package",
                             "warning",
                         )
-                packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(all_packages_metadata)
+            packages_by_sheet = FAIRDSAPIParser.group_fields_by_sheet(
+                all_packages_metadata
+            )
 
             if not packages_by_sheet:
                 error_msg = "FAIR-DS API returned no package field metadata for the selected packages."
@@ -1213,11 +1590,10 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 self.log_execution(state, f"🔍 Phase 4: Searching for {len(all_terms_to_search)} additional terms...")
                 term_search_outcomes: Dict[str, Dict[str, int]] = {}
                 
-                # Search across all available packages to find fields the LLM might have
-                # missed during initial package selection.  Label-level dedup at line 942
-                # prevents true duplicates; explicit critic/planner term requests should be
-                # discoverable regardless of source package.
-                search_scope_packages = api_available_package_names
+                # Term search may improve labels, but field search must remain
+                # inside the selected package contract. A label hit is not
+                # evidence that an unrelated package applies to the document.
+                search_scope_packages = selected_package_names
                 package_names_str = ",".join(search_scope_packages) if search_scope_packages else None
 
                 selected_pkg_norm = {
@@ -1277,13 +1653,8 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                                 continue
                             pkg_name = field.get("packageName")
                             pkg_norm = str(pkg_name or "").strip().lower()
-                            if pkg_norm not in selected_pkg_norm and pkg_name:
-                                selected_package_names.append(pkg_name)
-                                selected_pkg_norm.add(pkg_norm)
-                                self.log_execution(
-                                    state,
-                                    f"➕ Dynamically adding package '{pkg_name}' to cover search hit '{label}'"
-                                )
+                            if pkg_name and pkg_norm not in selected_pkg_norm:
+                                continue
                             if label not in existing_labels:
                                 final_selected_fields.append(field)
                                 existing_labels.add(label)
@@ -1327,6 +1698,25 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 f"across {len(sheets_with_fields)} ISA sheets"
             )
             
+            # Defensive package boundary: no later search/retry stage may add
+            # fields from a package that was not explicitly selected.
+            selected_pkg_norm = {
+                str(package).strip().lower()
+                for package in selected_package_names
+                if str(package).strip()
+            }
+            bounded_selected_fields: List[Dict[str, Any]] = []
+            for field in final_selected_fields:
+                package_name = str(field.get("packageName") or "").strip()
+                if package_name and package_name.lower() not in selected_pkg_norm:
+                    self.log_execution(
+                        state,
+                        f"🧹 Excluded field '{field.get('label')}' from unselected package '{package_name}'",
+                    )
+                    continue
+                bounded_selected_fields.append(field)
+            final_selected_fields = bounded_selected_fields
+
             # Convert to KnowledgeItem objects
             knowledge_items = []
             for field in final_selected_fields:
@@ -1355,6 +1745,14 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 for item in knowledge_items
             ]
             state["selected_packages"] = selected_package_names
+            state["package_selection_trace"] = {
+                "stable": package_selection_stable,
+                "rounds": package_selection_trace,
+                "current_source_only": True,
+                "source_schema_matches": schema_match_hints,
+                "uncovered_schema_levels": uncovered_schema_levels,
+                "coverage_resolved": not uncovered_schema_levels,
+            }
             metadata_gap_hints = self._build_metadata_gap_hints(
                 doc_info=doc_info,
                 evidence_packets=evidence_packets,
@@ -1371,6 +1769,36 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             )
             state["metadata_gap_hints"] = metadata_gap_hints
             
+            # Preserve the complete contracts of finally selected packages for
+            # the downstream structure planner.  Optional-field selection is a
+            # relevance filter, not permission to hide value-bearing fields
+            # needed by a subsequently discovered factorial design.  The
+            # planner may promote only fields from this bounded package set.
+            selected_package_field_contracts: List[Dict[str, Any]] = []
+            seen_contracts: set[tuple[str, str]] = set()
+            for field in all_packages_metadata:
+                package_name = str(field.get("packageName") or "").strip()
+                if not package_name or package_name.lower() not in selected_pkg_norm:
+                    continue
+                field_info = FAIRDSAPIParser.extract_field_info(field)
+                contract_key = (
+                    str(field_info.get("isa_sheet") or "").strip().lower(),
+                    str(field_info.get("name") or "").strip().lower(),
+                )
+                if not all(contract_key) or contract_key in seen_contracts:
+                    continue
+                seen_contracts.add(contract_key)
+                selected_package_field_contracts.append(
+                    {
+                        "term": field_info["name"],
+                        "definition": field_info.get("definition", ""),
+                        "source": "FAIR-DS-API",
+                        "ontology_uri": field_info.get("ontology_uri"),
+                        "confidence": 0.85,
+                        "metadata": field_info,
+                    }
+                )
+
             # Store API capability info for Critic to understand limitations
             state["api_capabilities"] = {
                 "available_packages": available_package_names,
@@ -1383,6 +1811,7 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 "required_metadata_terms": required_search_terms,
                 "uncovered_required_metadata_terms": uncovered_required_terms,
                 "selected_packages": selected_package_names,
+                "selected_package_field_contracts": selected_package_field_contracts,
                 "unavailable_requested_packages": [
                     hint["label"] for hint in metadata_gap_hints
                     if hint.get("source") == "package_request"
@@ -1472,9 +1901,8 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         return merged
 
     def _local_package_files(self) -> List[Path]:
-        """Resolve built-in and environment-configured local package sources."""
-        default_dir = Path(config.project_root) / "evaluation" / "config" / "packages"
-        sources = [default_dir, *config.local_package_paths]
+        """Resolve only explicitly configured local extension packages."""
+        sources = list(config.local_package_paths)
         files: List[Path] = []
         for source in sources:
             path = Path(source).expanduser()
@@ -1578,51 +2006,44 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         evidence_packets: Optional[List[Dict[str, Any]]],
         local_package_names: List[str],
     ) -> List[str]:
-        """Infer when local extension packages should be force-prioritized."""
+        """Rank explicitly configured extensions by their own metadata text."""
         if not local_package_names:
             return []
 
-        packet_values = " ".join(
-            str(packet.get("value", ""))
-            for packet in (evidence_packets or [])[:16]
-            if packet.get("value")
+        text = build_document_match_text(
+            doc_info,
+            planner_instruction=planner_instruction,
+            evidence_packets=evidence_packets,
         )
-        text = " ".join(
-            str(part)
-            for part in [
-                doc_info.get("title", ""),
-                doc_info.get("document_type", ""),
-                doc_info.get("research_domain", ""),
-                " ".join(doc_info.get("keywords", []) or []),
-                packet_values,
-                planner_instruction or "",
-            ]
-            if part
-        ).lower()
-
-        petase_tokens = [
-            "petase",
-            "pet depolymerase",
-            "polyethylene terephthalate",
-            "depolymerisation",
-            "depolymerization",
-            "mhet",
-            "bhet",
-            "terephthalic acid",
-            "lcc",
-            "cutinase",
-            "enzyme engineering",
-            "biocatalysis",
-        ]
-        if not any(token in text for token in petase_tokens):
-            return []
-
-        hints: List[str] = []
+        registry = self._load_local_package_registry()
+        records: List[Dict[str, Any]] = []
         for name in local_package_names:
-            lowered = str(name).lower()
-            if any(token in lowered for token in ("petase", "enzyme_engineering", "depolymer")):
-                hints.append(name)
-        return hints
+            package = registry.get(name) or {}
+            metadata = [
+                field for field in package.get("metadata") or [] if isinstance(field, dict)
+            ]
+            description = " ".join(
+                str(value or "")
+                for field in metadata[:80]
+                for value in (
+                    field.get("label"),
+                    field.get("definition"),
+                    (field.get("term") or {}).get("definition")
+                    if isinstance(field.get("term"), dict)
+                    else "",
+                )
+            )
+            records.append(
+                {
+                    "name": name,
+                    "description": description,
+                    "sheets": [
+                        str(field.get("sheetName") or field.get("isa_sheet") or "")
+                        for field in metadata
+                    ],
+                }
+            )
+        return top_relevant_package_names(records, text, limit=6, min_score=2)
     
     def _calculate_retrieval_confidence(
         self, 
@@ -1648,25 +2069,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         return min(base_score + confidence_bonus + api_bonus, 1.0)
     
     def _extract_requested_packages(self, planner_instruction: Optional[str]) -> List[str]:
-        """Extract package names/keywords mentioned in planner instruction."""
-        if not planner_instruction:
-            return []
-        
-        # Common domain keywords that Planner might request
-        domain_keywords = [
-            "transcriptomics", "RNA-seq", "genomics", "proteomics", "metabolomics",
-            "ecotoxicology", "environmental", "soil", "nanomaterial", "exposure",
-            "time-series", "longitudinal", "temporal", "bioinformatics",
-            "organism", "species", "taxonomy", "biodata", "omics"
-        ]
-        
-        instruction_lower = planner_instruction.lower()
-        requested = []
-        for keyword in domain_keywords:
-            if keyword.lower() in instruction_lower:
-                requested.append(keyword)
-        
-        return requested
+        """Legacy hook retained without a hand-written domain vocabulary."""
+        del planner_instruction
+        return []
 
     def _normalize_selected_packages(
         self,
@@ -1688,6 +2093,38 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             elif raw_name not in unmapped:
                 unmapped.append(raw_name)
         return selected, unmapped
+
+    @staticmethod
+    def _finalize_package_selection(
+        selected_package_names: Iterable[Any],
+        *,
+        fallback_package_hints: Iterable[Any],
+        candidate_package_names: Iterable[Any],
+    ) -> List[str]:
+        """Finalize selector output without silently appending advisory hints."""
+        selected = list(
+            dict.fromkeys(
+                str(item).strip()
+                for item in selected_package_names
+                if str(item).strip()
+            )
+        )
+        if selected:
+            return selected
+        fallback = list(
+            dict.fromkeys(
+                str(item).strip()
+                for item in fallback_package_hints
+                if str(item).strip()
+            )
+        )
+        if fallback:
+            return fallback
+        return [
+            str(item).strip()
+            for item in candidate_package_names
+            if str(item).strip()
+        ][:3]
 
     def _build_metadata_gap_hints(
         self,
@@ -1798,104 +2235,16 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         critic_feedback: Optional[Dict[str, Any]] = None,
         evidence_packets: Optional[List[Dict[str, Any]]] = None,
     ) -> List[str]:
-        """Infer high-confidence package hints from document domain and publication context."""
-        packet_values = " ".join(
-            str(packet.get("value", ""))
-            for packet in (evidence_packets or [])[:12]
-            if packet.get("value")
-        )
-        critic_text = " ".join(
-            str(part)
-            for part in [
-                critic_feedback.get("critique") if critic_feedback else "",
-                " ".join(critic_feedback.get("suggestions", []) or []) if critic_feedback else "",
-                " ".join(critic_feedback.get("issues", []) or []) if critic_feedback else "",
-            ]
-            if part
-        )
+        """Return only universal or explicitly named package priorities.
+
+        Domain relevance is handled from FAIR-DS package summaries by
+        ``_build_candidate_package_names``. Keeping the logic here free of
+        hand-written biology keyword branches makes it portable across inputs.
+        """
+        del doc_info, planner_instruction, critic_feedback, evidence_packets
         package_lookup = {name.lower(): name for name in available_package_names}
-        text = " ".join(
-            str(part)
-            for part in [
-                doc_info.get("title", ""),
-                doc_info.get("document_type", ""),
-                doc_info.get("research_domain", ""),
-                " ".join(doc_info.get("keywords", []) or []),
-                packet_values,
-                planner_instruction or "",
-                critic_text,
-            ]
-            if part
-        ).lower()
-
-        hints: List[str] = []
-
-        def add(package_name: str):
-            actual_name = package_lookup.get(package_name.lower())
-            if actual_name and actual_name not in hints:
-                hints.append(actual_name)
-
-        # Always bias toward core investigation/study coverage.
-        add("default")
-
-        if any(
-            keyword in text
-            for keyword in [
-                "plant", "crop", "potato", "tomato", "solanum", "miappe",
-                "plant pathology", "phytopathology"
-            ]
-        ):
-            add("miappe")
-            add("plant associated")
-            add("Plant Sample Checklist")
-            add("Crop Plant sample enhanced annotation checklist")
-
-        if any(
-            keyword in text
-            for keyword in [
-                "pathogen", "phytopathogen", "bacteria", "bacterial",
-                "quarantine pest", "clavibacter", "ralstonia", "infection",
-                "biosafety"
-            ]
-        ):
-            add("ENA prokaryotic pathogen minimal sample checklist")
-
-        if any(keyword in text for keyword in ["soil", "rhizosphere", "environmental samples"]):
-            add("soil")
-
-        if any(
-            keyword in text
-            for keyword in ["rna-seq", "rna seq", "transcriptomic", "transcriptome", "illumina"]
-        ):
-            add("Illumina")
-
-        if any(keyword in text for keyword in ["metabolomics", "metabolite", "metabolites"]):
-            add("Metabolomics")
-
-        if any(keyword in text for keyword in ["genome", "genomic", "gwas", "pangenome"]):
-            add("Genome")
-
-        if any(
-            keyword in text
-            for keyword in ["mag", "mags", "metagenome", "metagenomic", "mimags"]
-        ):
-            add("GSC MIMAGS")
-
-        if any(
-            keyword in text
-            for keyword in [
-                "diversity",
-                "alpha diversity",
-                "beta diversity",
-                "gamma diversity",
-                "shannon",
-                "species richness",
-                "bray-curtis",
-            ]
-        ):
-            add("Diversity")
-
-        return hints
+        default = package_lookup.get("default")
+        return [default] if default else []
 
     def _infer_priority_search_terms(
         self,
@@ -1904,43 +2253,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         evidence_packets: Optional[List[Dict[str, Any]]] = None,
         critic_feedback: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
-        """Infer metadata labels that matter for publication-ready FAIR outputs."""
-        packet_values = " ".join(
-            str(packet.get("value", ""))
-            for packet in (evidence_packets or [])[:12]
-            if packet.get("value")
-        )
-        critic_text = " ".join(
-            str(part)
-            for part in [
-                critic_feedback.get("critique") if critic_feedback else "",
-                " ".join(critic_feedback.get("suggestions", []) or []) if critic_feedback else "",
-                " ".join(critic_feedback.get("issues", []) or []) if critic_feedback else "",
-            ]
-            if part
-        )
-        text = " ".join(
-            str(part)
-            for part in [
-                doc_info.get("title", ""),
-                doc_info.get("document_type", ""),
-                doc_info.get("research_domain", ""),
-                " ".join(doc_info.get("keywords", []) or []),
-                packet_values,
-                planner_instruction or "",
-                critic_text,
-            ]
-            if part
-        ).lower()
-
-        terms: List[str] = []
-
-        def add(term: str):
-            if term not in terms:
-                terms.append(term)
-
-        # Core publication-grade identifiers and study descriptors.
-        for term in [
+        """Return universal linkage terms; agents request domain terms explicitly."""
+        del doc_info, planner_instruction, evidence_packets, critic_feedback
+        return [
             "investigation identifier",
             "study identifier",
             "study title",
@@ -1948,43 +2263,7 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             "sample identifier",
             "sample description",
             "observation unit identifier",
-        ]:
-            add(term)
-
-        if any(
-            keyword in text
-            for keyword in [
-                "project", "proposal", "grant", "horizon", "consortium",
-                "work package", "deliverable", "dmp", "data management"
-            ]
-        ):
-            for term in [
-                "project name",
-                "collection date",
-                "geographic location (country and/or sea)",
-            ]:
-                add(term)
-
-        if any(
-            keyword in text
-            for keyword in [
-                "plant", "crop", "pathogen", "potato", "tomato",
-                "clavibacter", "ralstonia", "biosafety"
-            ]
-        ):
-            for term in [
-                "scientific name",
-                "ncbi taxonomy id",
-                "biosafety level",
-                "plant tissue type",
-                "pathogen isolate",
-                "pathogen type",
-                "sampling timepoint",
-                "time post inoculation",
-            ]:
-                add(term)
-
-        return terms
+        ]
 
     def _infer_required_search_terms(
         self,
@@ -1993,114 +2272,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         critic_feedback: Optional[Dict[str, Any]] = None,
         evidence_packets: Optional[List[Dict[str, Any]]] = None,
     ) -> List[str]:
-        """Infer planner-critical metadata concepts that must be searched across FAIR-DS."""
-        packet_text = " ".join(
-            " ".join(
-                str(packet.get(key, ""))
-                for key in ["field_candidate", "value", "evidence_text"]
-                if packet.get(key)
-            )
-            for packet in (evidence_packets or [])[:16]
-        )
-        critic_text = " ".join(
-            str(part)
-            for part in [
-                critic_feedback.get("critique") if critic_feedback else "",
-                " ".join(critic_feedback.get("suggestions", []) or []) if critic_feedback else "",
-                " ".join(critic_feedback.get("issues", []) or []) if critic_feedback else "",
-            ]
-            if part
-        )
-        text = " ".join(
-            str(part)
-            for part in [
-                doc_info.get("title", ""),
-                doc_info.get("document_type", ""),
-                doc_info.get("research_domain", ""),
-                doc_info.get("methodology", ""),
-                " ".join(doc_info.get("keywords", []) or []),
-                planner_instruction or "",
-                critic_text,
-                packet_text,
-            ]
-            if part
-        ).lower()
-
-        terms: List[str] = []
-
-        def add(term: str):
-            if term not in terms:
-                terms.append(term)
-
-        concept_rules = [
-            {
-                "triggers": [
-                    "diversity",
-                    "alpha diversity",
-                    "beta diversity",
-                    "gamma diversity",
-                    "shannon",
-                    "species richness",
-                    "bray-curtis",
-                ],
-                "terms": [
-                    "diversity",
-                    "alpha diversity",
-                    "beta diversity",
-                    "gamma diversity",
-                    "species richness",
-                    "shannon diversity",
-                    "bray-curtis dissimilarity",
-                ],
-            },
-            {
-                "triggers": [
-                    "license",
-                    "licence",
-                    "access rights",
-                    "usage rights",
-                    "reuse",
-                    "copyright",
-                ],
-                "terms": [
-                    "license",
-                    "data usage license",
-                    "access rights",
-                ],
-            },
-            {
-                "triggers": [
-                    "shotgun metagenome",
-                    "metagenome",
-                    "metagenomic",
-                    "16s",
-                    "18s",
-                    "rrna",
-                    "amplicon",
-                    "library strategy",
-                    "dataset split",
-                    "separate dataset",
-                    "dataset type",
-                ],
-                "terms": [
-                    "dataset type",
-                    "library strategy",
-                    "target gene",
-                    "sequencing method",
-                    "shotgun metagenome",
-                    "16s rrna",
-                    "18s rrna",
-                    "amplicon sequencing",
-                ],
-            },
-        ]
-
-        for rule in concept_rules:
-            if any(trigger in text for trigger in rule["triggers"]):
-                for term in rule["terms"]:
-                    add(term)
-
-        return terms
+        """Domain terms come from structured planner/evidence outputs, not rules."""
+        del doc_info, planner_instruction, critic_feedback, evidence_packets
+        return []
 
     def _selected_fields_cover_term(
         self,
@@ -2112,20 +2286,7 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         if not normalized_term:
             return False
 
-        synonyms = {
-            "license": ["license", "licence", "access rights", "usage rights"],
-            "data usage license": ["license", "usage rights", "access rights"],
-            "diversity": ["diversity", "richness", "shannon", "bray curtis"],
-            "alpha diversity": ["alpha diversity", "richness", "shannon"],
-            "beta diversity": ["beta diversity", "bray curtis", "distance matrix"],
-            "gamma diversity": ["gamma diversity", "regional diversity"],
-            "dataset type": ["dataset type", "library strategy", "target gene", "sequencing method"],
-            "shotgun metagenome": ["shotgun metagenome", "library strategy", "metagenome"],
-            "16s rrna": ["16s", "rrna", "target gene", "amplicon"],
-            "18s rrna": ["18s", "rrna", "target gene", "amplicon"],
-            "amplicon sequencing": ["amplicon", "target gene", "library strategy"],
-        }
-        expected_tokens = synonyms.get(normalized_term, [normalized_term])
+        expected_tokens = set(normalized_term.split())
 
         for field in selected_fields:
             label = self._normalize_metadata_text(field.get("label", ""))
@@ -2133,7 +2294,8 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 continue
             if normalized_term in label or label in normalized_term:
                 return True
-            if any(token in label for token in expected_tokens):
+            label_tokens = set(label.split())
+            if expected_tokens and expected_tokens <= label_tokens:
                 return True
         return False
 
@@ -2149,42 +2311,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         available_package_names: List[str],
         evidence_packets: Optional[List[Dict[str, Any]]] = None,
     ) -> set[str]:
-        """Infer package names that are clearly domain-mismatched for the current document."""
-        packet_values = " ".join(
-            str(packet.get("value", ""))
-            for packet in (evidence_packets or [])[:12]
-            if packet.get("value")
-        )
-        text = " ".join(
-            str(part)
-            for part in [
-                doc_info.get("title", ""),
-                doc_info.get("document_type", ""),
-                doc_info.get("research_domain", ""),
-                " ".join(doc_info.get("keywords", []) or []),
-                packet_values,
-                planner_instruction or "",
-            ]
-            if part
-        ).lower()
-
-        excludes: set[str] = set()
-
-        def has_keyword(*keywords: str) -> bool:
-            return any(re.search(r"\b" + re.escape(keyword) + r"\b", text) for keyword in keywords)
-
-        for package_name in available_package_names:
-            lower = package_name.lower()
-            if any(token in lower for token in ["human oral", "human vaginal", "human gut", "human skin", "human associated", "person"]):
-                if not has_keyword("human", "oral", "skin", "gut", "vaginal", "patient", "clinical"):
-                    excludes.add(package_name)
-            if any(token in lower for token in ["pig", "pig_", "pig "]):
-                if not has_keyword("pig", "swine", "porcine"):
-                    excludes.add(package_name)
-            if any(token in lower for token in ["plant sample checklist", "crop plant", "miappe", "plant associated"]):
-                if not has_keyword("plant", "crop", "leaf", "root", "stem", "seed", "pathology", "phytopathology"):
-                    excludes.add(package_name)
-        return excludes
+        """Do not blacklist domains with handwritten organism keyword rules."""
+        del doc_info, planner_instruction, available_package_names, evidence_packets
+        return set()
 
     def _extract_guided_package_names(
         self,
@@ -2246,31 +2375,6 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
         for package_name in priority_package_hints:
             add(package_name)
 
-        local_domain_hints = [
-            hint
-            for hint in priority_package_hints
-            if hint in available_package_names
-            and hint != package_lookup.get("default")
-            and any(token in hint.lower() for token in ("petase", "enzyme_engineering", "depolymer"))
-        ]
-        if local_domain_hints:
-            for package_name in ["default", *local_domain_hints]:
-                add(package_name)
-            return candidates
-
-        if any(token in text for token in ["ecotoxic", "nanotoxic", "exposure", "soil", "earthworm", "sediment"]):
-            for package_name in ["soil", "sediment", "water", "miscellaneous natural or artificial environment"]:
-                add(package_name)
-
-        if any(token in text for token in ["rna-seq", "rna seq", "transcriptom", "illumina"]):
-            for package_name in ["Illumina", "Genome"]:
-                add(package_name)
-
-        if any(token in text for token in ["proteom"]):
-            add("Proteomics")
-        if any(token in text for token in ["metabolom"]):
-            add("Metabolomics")
-
         if package_catalog:
             for package_name in top_relevant_package_names(
                 package_catalog,
@@ -2281,6 +2385,22 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 add(package_name)
                 if len(candidates) >= 12:
                     break
+            catalog_names = {
+                str(package.get("name") or "").strip().lower()
+                for package in package_catalog
+            }
+            # Locally injected packages may not have an API catalog summary.
+            # Include them only on an explicit lexical match, never as padding.
+            for package_name in available_package_names:
+                if package_name.lower() in catalog_names:
+                    continue
+                meaningful_tokens = [
+                    token
+                    for token in re.split(r"[-_\s]+", package_name.lower())
+                    if len(token) > 3 and token not in {"package", "checklist", "metadata"}
+                ]
+                if meaningful_tokens and any(token in text for token in meaningful_tokens):
+                    add(package_name)
         else:
             stop_tokens = {
                 "checklist", "sample", "reporting", "standard", "pilot", "global",
@@ -2305,15 +2425,11 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     break
 
         if not candidates:
-            return [name for name in available_package_names if name not in excluded_package_names]
+            add("default")
+            return candidates
 
         if len(candidates) < 4:
             if package_catalog:
-                catalog_names = {
-                    str(pkg.get("name", "")).lower()
-                    for pkg in package_catalog
-                    if pkg.get("name")
-                }
                 for package_name in top_relevant_package_names(
                     package_catalog,
                     text,
@@ -2323,22 +2439,10 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     add(package_name)
                     if len(candidates) >= 6:
                         break
-                if len(candidates) < 6:
-                    for package_name in available_package_names:
-                        if package_name.lower() in catalog_names:
-                            continue
-                        if package_name not in excluded_package_names:
-                            add(package_name)
-                        if len(candidates) >= 6:
-                            break
             else:
-                for package_name in available_package_names:
-                    if package_name not in excluded_package_names:
-                        add(package_name)
-                    if len(candidates) >= 6:
-                        break
+                add("default")
 
-        return candidates
+        return candidates[:12]
 
     def _should_skip_deep_react(
         self,

@@ -196,7 +196,18 @@ class TestConveniencePublishers:
         assert result["payload"]["gap_count"] == 2
         assert result["payload"]["selected_packages"] == ["Genome"]
 
-    def test_field_gap_report_caps_at_50(self):
+    def test_publish_evidence_bundle_keeps_all_packets(self):
+        state = _empty_state()
+        mailbox = AgentMailbox(state)
+        packets = [{"packet_id": f"ep-{i:03d}"} for i in range(40)]
+        result = mailbox.publish_evidence_bundle(
+            from_agent="DocumentParser",
+            packets=packets,
+        )
+        assert result["payload"]["packet_count"] == 40
+        assert len(result["payload"]["packets"]) == 40
+
+    def test_field_gap_report_keeps_all_gaps(self):
         state = _empty_state()
         mailbox = AgentMailbox(state)
         many_gaps = [{"field": f"f{i}", "reason": "x"} for i in range(80)]
@@ -204,7 +215,33 @@ class TestConveniencePublishers:
             from_agent="KR",
             gaps=many_gaps,
         )
-        assert len(result["payload"]["gaps"]) == 50
+        assert len(result["payload"]["gaps"]) == 80
+        assert result["payload"]["gap_count"] == 80
+
+
+class TestAuditLogRecord:
+    def test_audit_log_record_keeps_full_list_payload(self):
+        packets = [{"packet_id": f"ep-{i}"} for i in range(12)]
+        record = AgentMailbox.audit_log_record(
+            {
+                "id": "msg-1",
+                "created_at": "2026-08-27T10:00:00",
+                "from_agent": "DocumentParser",
+                "to_agent": "*",
+                "message_type": "evidence_bundle",
+                "priority": 1,
+                "acked_by": ["JSONGenerator"],
+                "refs": {"source_path": "/tmp/doc.pdf"},
+                "payload": {
+                    "packet_count": 12,
+                    "packets": packets,
+                },
+            }
+        )
+        assert record["event"] == "agent_message"
+        assert record["payload"]["packets"] == packets
+        assert "payload_summary" not in record
+        assert record["refs"]["source_path"] == "/tmp/doc.pdf"
 
 
 class TestHandoffSummary:

@@ -6,14 +6,23 @@ FAIRiAgent 现在把输入文件保存在 source workspace 中，而不是把 co
 
 ## 产物
 
-当 `FAIRIFIER_SOURCE_WORKSPACE_ENABLED=true` 时，每次 run 会写出：
+当 `FAIRIFIER_SOURCE_WORKSPACE_ENABLED=true` 时，每次 run 写在
+`workspace/source_workspace/` 下：
 
-- `source_workspace/source_manifest.json`：source id、路径、读取方法、角色、大小和表格引用。
-- `source_workspace/source_workspace.md`：给 agent 和报告使用的紧凑 inventory。
-- `source_workspace/sources/source_*.md`：完整 source 文本或 MinerU markdown。
-- `source_workspace/tables/*.jsonl`：CSV/TSV/Excel 的完整表格行。
+- `workspace/source_workspace/source_manifest.json`：source id、路径、读取方法、角色、大小和表格引用。
+- `workspace/source_workspace/source_workspace.md`：给 agent 和报告使用的紧凑 inventory。
+- `workspace/source_workspace/sources/source_*.md`：完整 source 文本或 MinerU markdown；
+  仅在至少有一个 source 落盘时创建。
+- `workspace/source_workspace/tables/*.jsonl`：CSV/TSV/Excel 的完整表格行；没有表格行时
+  不创建空的 `tables/` 目录。
 
 单文件 run 也走同一结构，只是只有一个 source。目录和 zip 输入会为每个支持的文件创建 source。
+
+## 补充材料自动发现
+
+只给出一份手稿路径时，FAIRiAgent 可以扫描其父目录中相邻的受支持补充材料
+（例如 Markdown 或 PDF 旁边的 Excel/CSV 表），并登记进 source workspace。
+`examples/quickstart/` 里的蚯蚓多来源示例覆盖这条路径，不需要现场做 MinerU 转换。
 
 ## 多文件稳定性
 
@@ -29,7 +38,8 @@ field-level source weighting 和 outlier handling 的基础。
 JSON metadata generation 阶段会基于保留下来的 workspace 构建 field-specific evidence
 context。对每个 FAIR-DS field，系统会用 field name 和 description 生成字面量查询，
 搜索 source text。对表格输入，系统会搜索完整 JSONL 表格行的列名和单元格值，所以即使
-value 不在 table preview 里，也可以被送入 LLM 的字段上下文。
+value 不在 table preview 里，也可以被送入 LLM 的字段上下文。已锁定的实体计划如果点名了
+元数据表来源，表格搜索就只使用这些 source id。
 
 找到 evidence 时，prompt 会要求模型在 metadata evidence 字段里优先引用
 `source_001:123-145` 或 `source_002 table samples row 4` 这类 source reference。

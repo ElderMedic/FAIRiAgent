@@ -145,6 +145,7 @@ def build_batch_command(
     documents: List[str],
     timeout: int,
     workers: int,
+    approval_id: Optional[str] = None,
 ) -> List[str]:
     cmd = [
         python_exe,
@@ -164,6 +165,8 @@ def build_batch_command(
         "--timeout",
         str(timeout),
     ]
+    if approval_id:
+        cmd.extend(["--approval-id", approval_id])
     if documents:
         cmd.append("--include-documents")
         cmd.extend(documents)
@@ -644,11 +647,19 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Run merge gate in reporting mode after execute.",
     )
+    parser.add_argument(
+        "--approval-id",
+        default=None,
+        help="Human approval identifier required for --execute model calls.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
+    if args.execute and not args.approval_id:
+        print("Refusing model execution: --approval-id is required after reviewing token/cost estimates.")
+        return 2
     docs = args.include_documents or read_target_documents(args.baseline_metadata)
     config_path = write_auto_model_config(args.base_model_config, args.auto_model_config)
     eval_env_path = write_auto_eval_env(args.eval_env, args.auto_eval_env)
@@ -661,6 +672,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         documents=docs,
         timeout=args.timeout,
         workers=args.workers,
+        approval_id=args.approval_id,
     )
 
     print("Auto eval model config:", config_path)

@@ -6,8 +6,8 @@ Runs FAIRiAgent evaluation on all external API models (OpenAI, Anthropic, Qwen).
 Models can run in parallel since they use different API endpoints.
 
 Usage:
-    python run_api_evaluation.py --repeats 10
-    python run_api_evaluation.py --repeats 10 --models anthropic_sonnet openai_gpt4.1
+    python run_api_evaluation.py --repeats 10 --approval-id <review-id>
+    python run_api_evaluation.py --repeats 10 --models anthropic_sonnet openai_gpt4.1 --approval-id <review-id>
     python run_api_evaluation.py --list-models
 """
 
@@ -65,7 +65,8 @@ def run_single_model_evaluation(
     env_file: Path,
     repeats: int = 10,
     workers: int = 4,
-    exclude_documents: list = None
+    exclude_documents: list = None,
+    approval_id: str = "",
 ) -> dict:
     """Run evaluation for a single model."""
     config_path = MODEL_CONFIGS_DIR / f"{config_name}.env"
@@ -106,6 +107,7 @@ def run_single_model_evaluation(
         "--repeats", str(repeats),
         "--workers", str(workers),  # Parallel runs for API models
         "--timeout", "7200",  # 2h per document for safety
+        "--approval-id", approval_id,
     ]
     
     # Add exclude documents if specified
@@ -185,7 +187,8 @@ def run_all_evaluations(
     env_file: Path,
     repeats: int = 10,
     workers: int = 4,
-    exclude_documents: list = None
+    exclude_documents: list = None,
+    approval_id: str = "",
 ) -> dict:
     """Run evaluation for all specified models sequentially."""
     results = {
@@ -215,7 +218,8 @@ def run_all_evaluations(
             env_file=env_file,
             repeats=repeats,
             workers=workers,
-            exclude_documents=exclude_documents
+            exclude_documents=exclude_documents,
+            approval_id=approval_id,
         )
         
         results["model_results"][model] = result
@@ -274,6 +278,11 @@ def main():
                        help="Document IDs to exclude (e.g., --exclude-documents biorem pomato)")
     parser.add_argument("--list-models", action="store_true",
                        help="List available API model configs and exit")
+    parser.add_argument(
+        "--approval-id",
+        default=None,
+        help="Human approval identifier confirming the reviewed token/cost estimate.",
+    )
     
     args = parser.parse_args()
     
@@ -283,6 +292,10 @@ def main():
         for config in get_available_api_configs():
             log(f"  - {config}")
         return 0
+
+    if not args.approval_id:
+        log("❌ Refusing model execution: --approval-id is required after reviewing token/cost estimates.")
+        return 2
     
     # Determine models to evaluate
     models = args.models if args.models else DEFAULT_API_MODELS
@@ -325,7 +338,8 @@ def main():
         env_file=args.env_file,
         repeats=args.repeats,
         workers=args.workers,
-        exclude_documents=args.exclude_documents
+        exclude_documents=args.exclude_documents,
+        approval_id=args.approval_id,
     )
     
     # Summary

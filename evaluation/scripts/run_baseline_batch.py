@@ -29,7 +29,8 @@ class BaselineBatchRunner:
         ground_truth: Path,
         output_dir: Path,
         workers: int = 3,
-        n_runs: int = 10
+        n_runs: int = 10,
+        approval_id: str = "",
     ):
         self.config_file = config_file
         self.config_name = config_name
@@ -37,6 +38,7 @@ class BaselineBatchRunner:
         self.output_dir = output_dir
         self.workers = workers
         self.n_runs = n_runs
+        self.approval_id = approval_id
         
         # Load ground truth
         with open(ground_truth, 'r') as f:
@@ -70,7 +72,8 @@ class BaselineBatchRunner:
             str(doc_path),
             "--output-dir", str(run_output_dir),
             "--config-file", str(self.config_file),
-            "--run-idx", str(run_idx)
+            "--run-idx", str(run_idx),
+            "--approval-id", self.approval_id,
         ]
         
         # Run extraction
@@ -254,6 +257,11 @@ def main():
         default=10,
         help="Number of runs per document (default: 10)"
     )
+    parser.add_argument(
+        "--approval-id",
+        required=True,
+        help="Human approval identifier confirming the reviewed token/cost estimate.",
+    )
     
     args = parser.parse_args()
     
@@ -267,7 +275,8 @@ def main():
         ground_truth=args.ground_truth,
         output_dir=args.output_dir,
         workers=args.workers,
-        n_runs=args.n_runs
+        n_runs=args.n_runs,
+        approval_id=args.approval_id,
     )
     
     runner.run()
@@ -275,4 +284,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

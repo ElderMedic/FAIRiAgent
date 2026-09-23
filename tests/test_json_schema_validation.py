@@ -37,6 +37,12 @@ class TestShExShapeDefinitions:
         assert person["familyname"]["required"] is True
         assert person["orcid"]["required"] is False
 
+    def test_assay_name_is_optional_in_fairds_default_contract(self):
+        from fairifier.validation.json_schema import SHEX_SHAPES
+
+        assay = SHEX_SHAPES["jerm:Assay"]["properties"]
+        assert assay["assay name"]["required"] is False
+
     def test_every_property_has_a_type(self):
         from fairifier.validation.json_schema import SHEX_SHAPES
 
@@ -123,6 +129,58 @@ class TestBuildIsaSchema:
 
         assert schema["properties"]["assay date"].get("format") == "date"
 
+    def test_fairds_regex_is_anchored_to_the_complete_cell_value(self):
+        from fairifier.validation.json_schema import build_isa_schema
+
+        schema = build_isa_schema(
+            "assay",
+            [
+                {
+                    "name": "library strategy",
+                    "data_type": "string",
+                    "regex": "(WGS|RNA-Seq|AMPLICON)",
+                }
+            ],
+        )
+
+        assert schema["properties"]["library strategy"]["pattern"] == (
+            "^(?:(WGS|RNA-Seq|AMPLICON))$"
+        )
+
+    def test_malformed_upstream_fairds_regex_does_not_crash_schema(self):
+        from fairifier.validation.json_schema import build_isa_schema
+
+        schema = build_isa_schema(
+            "study",
+            [
+                {
+                    "name": "study title",
+                    "data_type": "string",
+                    "regex": ".*{10,}",
+                }
+            ],
+        )
+
+        assert "pattern" not in schema["properties"]["study title"]
+
+    def test_persisted_field_definition_quarantines_invalid_source_regex(self):
+        from fairifier.graph.nodes import _flatten_field_definition
+
+        flattened = _flatten_field_definition(
+            {
+                "term": "study title",
+                "source": "FAIR-DS-API",
+                "metadata": {
+                    "isa_sheet": "study",
+                    "regex": ".*{10,}",
+                    "requirement": "MANDATORY",
+                },
+            }
+        )
+
+        assert flattened["regex"] == ""
+        assert flattened["invalid_source_regex"] == ".*{10,}"
+
     def test_build_empty_fields_returns_minimal_schema(self):
         from fairifier.validation.json_schema import build_isa_schema
 
@@ -192,6 +250,85 @@ class TestValidateIsaStructure:
         result = validate_isa_structure(isa, fields)
         assert result["valid"], f"Expected valid, got errors: {result['errors']}"
 
+    def test_runtime_term_field_definitions_validate_matrix_rows(self):
+        from fairifier.validation.json_schema import validate_isa_structure
+
+        fields = [
+            {
+                "term": "investigation title",
+                "data_type": "string",
+                "isa_sheet": "investigation",
+                "required": True,
+            },
+            {
+                "term": "investigation description",
+                "data_type": "text",
+                "isa_sheet": "investigation",
+                "required": True,
+            },
+            {
+                "term": "investigation identifier",
+                "data_type": "string",
+                "isa_sheet": "investigation",
+                "required": True,
+            },
+        ]
+        isa = {
+            "investigation": {
+                "columns": [
+                    "investigation title",
+                    "investigation description",
+                    "investigation identifier",
+                ],
+                "rows": [
+                    {
+                        "investigation title": "Test Study",
+                        "investigation description": "A test investigation",
+                        "investigation identifier": "INV-001",
+                    }
+                ],
+            }
+        }
+
+        result = validate_isa_structure(isa, fields)
+        assert result["valid"], result["errors"]
+        assert not any("'' is a required property" in error for error in result["errors"])
+
+    def test_matrix_row_supplies_compiled_link_missing_from_provenance_fields(self):
+        from fairifier.validation.json_schema import validate_isa_structure
+
+        fields = [
+            {
+                "term": "study identifier",
+                "data_type": "string",
+                "isa_sheet": "study",
+                "required": True,
+            },
+            {
+                "term": "investigation identifier",
+                "data_type": "string",
+                "isa_sheet": "study",
+                "required": True,
+            },
+        ]
+        isa = {
+            "study": {
+                "fields": [
+                    {"field_name": "study identifier", "value": "study_001"}
+                ],
+                "columns": ["study identifier", "investigation identifier"],
+                "rows": [
+                    {
+                        "study identifier": "study_001",
+                        "investigation identifier": "investigation_001",
+                    }
+                ],
+            }
+        }
+
+        result = validate_isa_structure(isa, fields)
+        assert result["valid"], result["errors"]
+
     def test_missing_required_field_fails(self):
         from fairifier.validation.json_schema import validate_isa_structure
 
@@ -233,6 +370,27 @@ class TestValidateIsaStructure:
         }
         result = validate_isa_structure(isa, fields)
         assert not result["valid"], "Expected failure for int field with string value"
+
+    def test_typed_fields_accept_lexical_numbers_and_controlled_missing_sentinels(self):
+        from fairifier.validation.json_schema import validate_isa_structure
+
+        fields = [
+            {"name": "numeric value", "data_type": "number", "isa_sheet": "sample"},
+            {"name": "integer value", "data_type": "integer", "isa_sheet": "sample"},
+            {"name": "missing number", "data_type": "number", "isa_sheet": "sample"},
+        ]
+        isa = {
+            "sample": {
+                "fields": [
+                    {"field_name": "numeric value", "value": "1.1"},
+                    {"field_name": "integer value", "value": "3"},
+                    {"field_name": "missing number", "value": "not specified"},
+                ]
+            }
+        }
+
+        result = validate_isa_structure(isa, fields)
+        assert result["valid"], result["errors"]
 
     def test_extra_properties_are_allowed(self):
         from fairifier.validation.json_schema import validate_isa_structure
@@ -305,6 +463,32 @@ class TestValidateIsaStructure:
 
         result = validate_isa_structure({}, [])
         assert result["valid"], "Empty ISA structure should be valid"
+
+    def test_controlled_value_regex_is_checked_on_every_matrix_row(self):
+        from fairifier.validation.json_schema import validate_isa_structure
+
+        fields = [
+            {
+                "term": "library strategy",
+                "data_type": "string",
+                "isa_sheet": "assay",
+                "regex": "(WGS|RNA-Seq|AMPLICON)",
+            }
+        ]
+        isa = {
+            "assay": {
+                "columns": ["library strategy"],
+                "rows": [
+                    {"library strategy": "RNA-Seq"},
+                    {"library strategy": "mRNA-Seq"},
+                ],
+            }
+        }
+
+        result = validate_isa_structure(isa, fields)
+
+        assert result["valid"] is False
+        assert any(error.startswith("assay row 2:") for error in result["errors"])
 
 
 class TestValidateMetadata:

@@ -1,0 +1,41 @@
+[
+  {
+    "schema_version": "fairiagent.result_envelope.v2",
+    "run_id": "fixture_document__complete_fairiagent_system__fixture_model__r01",
+    "instance_id": "fixture_document",
+    "condition_id": "complete_fairiagent_system",
+    "model_id": "fixture_model",
+    "repetition": 1,
+    "status": "success",
+    "artifact": {"exists": true, "parseable": true, "path": "r01/output.json"},
+    "validation": {"fairds_valid": true, "isa_round_trip_valid": true, "critical_errors": 0, "warnings": 1},
+    "axes": {
+      "information_coverage": 0.92,
+      "value_accuracy": 0.94,
+      "structural_fidelity": 0.93,
+      "interoperability": 1.0,
+      "efficiency": 0.70
+    },
+    "resources": {"latency_seconds": 20.0, "input_tokens": 1000, "output_tokens": 500}
+  },
+  {
+    "schema_version": "fairiagent.result_envelope.v2",
+    "run_id": "fixture_document__complete_fairiagent_system__fixture_model__r02",
+    "instance_id": "fixture_document",
+    "condition_id": "complete_fairiagent_system",
+    "model_id": "fixture_model",
+    "repetition": 2,
+    "status": "success",
+    "artifact": {"exists": true, "parseable": true, "path": "r02/output.json"},
+    "validation": {"fairds_valid": true, "isa_round_trip_valid": true, "critical_errors": 1, "warnings": 0},
+    "axes": {
+      "information_coverage": 0.95,
+      "value_accuracy": 0.96,
+      "structural_fidelity": 0.95,
+      "interoperability": 1.0,
+      "efficiency": 0.70
+    },
+    "failure": {"category": "critical_linkage_error"},
+    "resources": {"latency_seconds": 18.0, "input_tokens": 1000, "output_tokens": 500}
+  }
+]

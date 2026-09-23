@@ -6,6 +6,7 @@ by KnowledgeRetriever — not the entire FAIRDS universe.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 from fairifier.utils.isa_order import ISA_LEVEL_ORDER
 
@@ -37,7 +38,9 @@ SHEX_SHAPES: Dict[str, Dict[str, Any]] = {
     "jerm:Assay": {
         "isa_sheet": "assay",
         "properties": {
-            "assay name":                {"required": True,  "type": "string"},
+            # FAIR-DS default currently marks assay name OPTIONAL, and curated
+            # FAIR-DS workbooks use identifier + description as assay core.
+            "assay name":                {"required": False, "type": "string"},
             "assay description":         {"required": True,  "type": "string"},
             "assay identifier":          {"required": True,  "type": "string"},
             "assay contributor":         {"required": False, "type": "person"},
@@ -104,10 +107,28 @@ _TYPE_MAP = {
     "ontology_term": "string",  # + format: uri
 }
 
+_MISSING_VALUE_SENTINELS = [
+    "",
+    "not applicable",
+    "not available",
+    "not provided",
+    "not specified",
+    "unknown",
+]
+
 
 def _field_key(field: Dict[str, Any]) -> str:
     """Normalize a field dict into a schema property key."""
-    name = (field.get("name") or field.get("label") or "").strip().lower()
+    # FAIR-DS field definitions use ``term`` in current runtime artifacts,
+    # while older fixtures and API payloads use ``name`` or ``label``.  Value
+    # records use ``field_name``.  Treat all four as the same contract key.
+    name = (
+        field.get("name")
+        or field.get("term")
+        or field.get("label")
+        or field.get("field_name")
+        or ""
+    ).strip().lower()
     return name
 
 
@@ -127,9 +148,49 @@ def _json_type_for(field: Dict[str, Any]) -> Dict[str, Any]:
             prop["format"] = "email"
 
     if field.get("regex"):
-        prop["pattern"] = field["regex"]
+        # FAIR-DS regexes describe the complete cell syntax. JSON Schema's
+        # ``pattern`` uses substring search, so anchor the upstream expression
+        # to preserve FAIR-DS full-cell semantics.  Some upstream FAIR-DS
+        # records contain malformed expressions (for example a quantifier
+        # applied to another quantifier).  Such a service-data defect must not
+        # crash validation or prevent Excel export; omit only that unusable
+        # constraint, matching the contract-index boundary used by Mapper.
+        raw_pattern = str(field["regex"])
+        try:
+            re.compile(raw_pattern)
+        except re.error:
+            raw_pattern = ""
+        if raw_pattern:
+            pattern = raw_pattern
+            if not (pattern.startswith("^") and pattern.endswith("$")):
+                pattern = f"^(?:{pattern})$"
+            try:
+                re.compile(pattern)
+            except re.error:
+                pattern = ""
+            if pattern:
+                prop["pattern"] = pattern
 
     return prop
+
+
+def _coerce_value_for_schema(value: Any, field: Dict[str, Any]) -> Any:
+    """Coerce lexical numbers solely for validation, without mutating output."""
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    data_type = (field.get("data_type") or "string").lower()
+    json_type = _TYPE_MAP.get(data_type, "string")
+    try:
+        if json_type == "integer" and re.fullmatch(r"[+-]?\d+", stripped):
+            return int(stripped)
+        if json_type == "number" and re.fullmatch(
+            r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", stripped
+        ):
+            return float(stripped)
+    except (TypeError, ValueError, OverflowError):
+        return value
+    return value
 
 
 def build_isa_schema(
@@ -158,6 +219,10 @@ def build_isa_schema(
     # Build properties from selected fields
     for field in selected_fields:
         key = _field_key(field)
+        if not key:
+            # An unnamed API record cannot define a JSON property.  Silently
+            # excluding it is safer than creating the empty required key "".
+            continue
         prop = _json_type_for(field)
 
         # ShEx structural requirement overrides API 'required' flag
@@ -272,7 +337,7 @@ def validate_isa_structure(
         if isinstance(sheet_data, dict) and not isinstance(sheet_data, list):
             # May be {"fields": [...]} or already a flat dict
             fields_list = sheet_data.get("fields", [])
-            if not fields_list and sheet_data:
+            if not fields_list and sheet_data and "rows" not in sheet_data:
                 # Already flattened: use as-is
                 flat_dict = {
                     k.strip().lower(): v for k, v in sheet_data.items()
@@ -283,11 +348,15 @@ def validate_isa_structure(
         else:
             fields_list = sheet_data
             flat_dict = {}
-        row0 = {}
+        matrix_rows: List[Dict[str, Any]] = []
         if isinstance(sheet_data, dict):
             rows = sheet_data.get("rows", [])
-            if isinstance(rows, list) and rows and isinstance(rows[0], dict):
-                row0 = {str(k).strip().lower(): v for k, v in rows[0].items()}
+            if isinstance(rows, list):
+                matrix_rows = [
+                    {str(k).strip().lower(): v for k, v in row.items()}
+                    for row in rows
+                    if isinstance(row, dict)
+                ]
 
         if isinstance(fields_list, list):
             for item in fields_list:
@@ -295,16 +364,33 @@ def validate_isa_structure(
                     name = (item.get("field_name") or item.get("name") or "").strip().lower()
                     if name:
                         val = item.get("value", item.get("field_value"))
-                        if val is None and name in row0:
-                            val = row0[name]
                         flat_dict[name] = val
 
-
         schema = build_isa_schema(sheet_name, sheet_fields, additional_properties=True)
+        fields_by_key = {_field_key(field): field for field in sheet_fields if _field_key(field)}
         validator = jsonschema.Draft202012Validator(schema)
-        errors_list = list(validator.iter_errors(flat_dict))
-        for e in errors_list:
-            all_errors.append(f"{sheet_name}: {e.message}")
+        # ``fields`` carries provenance/confidence, while ``rows`` is the
+        # authoritative compiled matrix. Validate every row; checking only row
+        # zero lets later invalid controlled values escape unnoticed.
+        validation_rows = matrix_rows or [flat_dict]
+        for row_index, matrix_row in enumerate(validation_rows, start=1):
+            payload = dict(flat_dict)
+            payload.update(matrix_row)
+            payload = {
+                name: _coerce_value_for_schema(value, fields_by_key.get(name, {}))
+                for name, value in payload.items()
+            }
+            errors_list = [
+                error
+                for error in validator.iter_errors(payload)
+                if not (
+                    isinstance(error.instance, str)
+                    and error.instance.strip().lower() in _MISSING_VALUE_SENTINELS
+                )
+            ]
+            for error in errors_list:
+                suffix = f" row {row_index}" if matrix_rows else ""
+                all_errors.append(f"{sheet_name}{suffix}: {error.message}")
 
         # Check ShEx-mandatory fields are present
         for shape_name, shape_def in SHEX_SHAPES.items():
@@ -313,7 +399,7 @@ def validate_isa_structure(
             for prop_name, prop_def in shape_def["properties"].items():
                 if prop_def.get("required"):
                     found = any(
-                        _field_key(f) == prop_name or f.get("name") == prop_name
+                        _field_key(f) == prop_name
                         for f in sheet_fields
                     )
                     if not found:

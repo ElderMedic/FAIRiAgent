@@ -28,8 +28,13 @@ python evaluation/scripts/run_batch_evaluation.py \
   --ground-truth evaluation/datasets/annotated/ground_truth_v1.json \
   --output-dir evaluation/runs/manual_$(date +%Y%m%d_%H%M%S) \
   --repeats 3 \
-  --workers 3
+  --workers 3 \
+  --approval-id <researcher-approval-id>
 ```
+
+This historical runner now requires `--approval-id` before it can make model
+calls. New benchmark work should use the v2 manifest runner and its explicit
+budget report instead.
 
 ### 3. Run Parallel Evaluation (Multiple Models)
 
@@ -74,7 +79,8 @@ After all runs complete, evaluation metrics are automatically computed. To manua
 python evaluation/scripts/evaluate_outputs.py \
   --run-dir evaluation/runs/openai_parallel_YYYYMMDD_HHMMSS \
   --ground-truth evaluation/datasets/annotated/ground_truth_v1.json \
-  --env-file evaluation/config/env.evaluation
+  --env-file evaluation/config/env.evaluation \
+  --approval-id <researcher-approval-id>
 ```
 
 ### 6. Calculate Pass@k Metrics

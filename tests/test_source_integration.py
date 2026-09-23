@@ -107,7 +107,7 @@ def test_fixture_materializes_four_sources_with_correct_roles(tmp_path):
     assert roles["source_001"] == "main_manuscript"
     assert roles["source_002"] == "supplement"
     assert roles["source_003"] == "unknown"
-    assert roles["source_004"] == "table"
+    assert roles["source_004"] == "metadata_table"
 
 
 # ── Test source_role_priority + rank_source_entries ─────────────────────
@@ -117,6 +117,7 @@ def test_role_priority_ordering():
     assert source_role_priority("main_manuscript") < source_role_priority("supplement")
     assert source_role_priority("supplement") < source_role_priority("unknown")
     assert source_role_priority("table") < source_role_priority("supplement")
+    assert source_role_priority("metadata_table") < source_role_priority("supplement")
 
 
 def test_rank_source_entries_returns_main_first(tmp_path):
@@ -212,6 +213,36 @@ def test_field_evidence_organism_includes_table_row(tmp_path, monkeypatch):
 
     assert "Eisenia fetida" in context
     assert "row 4 column organism" in context
+
+
+def test_field_evidence_scans_only_entity_plan_authoritative_tables(
+    tmp_path, monkeypatch
+):
+    ws = _build_fixture(tmp_path)
+    agent = JSONGeneratorAgent()
+    seen_source_ids = []
+
+    def recording_search_table(workspace, query, **kwargs):
+        seen_source_ids.append(kwargs.get("source_ids"))
+        return search_table(workspace, query, **kwargs)
+
+    monkeypatch.setattr(
+        "fairifier.agents.json_generator.search_table", recording_search_table
+    )
+    agent._build_field_source_evidence_context(
+        _workspace_metadata(ws),
+        [{"name": "organism", "description": "Taxonomic organism name"}],
+        state={
+            "entity_plan": {
+                "source_coverage": {
+                    "tables": [{"source_id": "source_004", "table_name": "samples"}]
+                }
+            }
+        },
+    )
+
+    assert seen_source_ids
+    assert all(source_ids == ["source_004"] for source_ids in seen_source_ids)
 
 
 def test_field_evidence_sampling_site_from_main_manuscript(tmp_path, monkeypatch):

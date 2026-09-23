@@ -256,9 +256,9 @@ python -m fairifier.cli process examples/inputs/my_test_doc.txt \
 ⏱️  Duration: 45.23 seconds
 
 💾 Saving artifacts...
-  ✓ metadata_json.json (15.2 KB)
-  ✓ processing_log.jsonl (8.3 KB)
-  ✓ llm_responses.json (25.1 KB)
+  ✓ deliverables/metadata.json (15.2 KB)
+  ✓ logs/processing_log.jsonl (8.3 KB)
+  ✓ logs/llm_responses.json (25.1 KB)
 
 💡 Tip: Check llm_responses.json to see LLM's thinking process. All LLM calls (including Critic evaluations) are automatically logged.
 
@@ -276,16 +276,16 @@ python -m fairifier.cli process examples/inputs/my_test_doc.txt \
 ls -lh output_alpine_test/
 
 # 查看元数据 JSON
-cat output_alpine_test/metadata_json.json | jq '.'
+cat output_alpine_test/deliverables/metadata.json | jq '.'
 
 # 查看处理日志
-cat output_alpine_test/processing_log.jsonl | jq '.'
+cat output_alpine_test/logs/processing_log.jsonl | jq '.'
 
 # 查看 LLM 响应
-cat output_alpine_test/llm_responses.json | jq '.[0]'
+cat output_alpine_test/logs/llm_responses.json | jq '.[0]'
 
-# 查看执行历史（如果有）
-cat output_alpine_test/workflow_results.json | jq '.execution_history'
+# 查看工作流报告
+cat output_alpine_test/reports/workflow_report.json | jq '.execution_summary'
 ```
 
 ---
@@ -502,7 +502,7 @@ python -m fairifier.cli process examples/inputs/methods_test.txt --verbose
 
 1. ✅ 所有步骤都显示 "ACCEPT" 或最多 1-2 次 "RETRY"
 2. ✅ 整体置信度 > 0.75
-3. ✅ 生成的 `metadata_json.json` 包含 15-25 个字段
+3. ✅ 生成的 `deliverables/metadata.json` 包含本次运行抽出的字段
 4. ✅ 所有字段都有 `evidence` 和 `confidence`
 5. ✅ LangSmith 显示完整的 trace
 

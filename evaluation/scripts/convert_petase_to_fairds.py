@@ -20,6 +20,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from evaluation.benchmark.ground_truth_curation import curate_document, load_publication_cache
+
 # ── Paths ────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).parents[2]
 SOURCE_DIR = PROJECT_ROOT / "evaluation" / "datasets" / "PETase_papers_json"
@@ -263,6 +265,8 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
     doi = petase_json.get("doi", "")
     doi_slug = doi.replace("/", "_").replace(".", "_").replace("(", "").replace(")", "")
     doc_id = f"petase_{doi_slug}"
+    publication = load_publication_cache().get(doi.lower(), {})
+    publication_title = publication.get("title")
 
     # ── Extract data sections ──
     sp = petase_json.get("substrate_property", {})
@@ -292,30 +296,20 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
     # ── Investigation (paper-level, 1 row) ──
     inv_row = {
         "investigation identifier": f"INV_{doi_slug[:30]}",
-        "investigation title": f"PET hydrolase research — {doi}",
-        "investigation description": (
-            f"Enzymatic PET depolymerisation study characterising "
-            f"enzyme variants, substrate specificity, reaction conditions, "
-            f"and kinetic parameters."
-        ),
         "Associated publication": doi.replace("https://doi.org/", "") if doi.startswith("https://doi.org/") else doi,
-        "_evidence": f"DOI: {doi}",
     }
+    if publication_title:
+        inv_row["investigation title"] = publication_title
     # Only include author fields if we could extract them
     isa_sheets["investigation"]["expected_rows"].append(inv_row)
 
     # ── Study (1 row) ──
     study_row = {
         "study identifier": f"STUDY_{doi_slug[:30]}",
-        "study title": f"PET hydrolase characterisation — {doi}",
-        "study description": (
-            f"Experimental characterisation of PET hydrolase enzymes "
-            f"including substrate specificity, reaction condition "
-            f"optimisation, and kinetic analysis."
-        ),
         "investigation identifier": f"INV_{doi_slug[:30]}",
-        "_evidence": f"DOI: {doi}",
     }
+    if publication_title:
+        study_row["study title"] = publication_title
     isa_sheets["study"]["expected_rows"].append(study_row)
 
     # ── Sample rows (enzyme variants + substrate types) ──
@@ -398,8 +392,6 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
         isa_sheets["sample"]["expected_rows"].append(sample_row)
 
     # ── ObservationUnit rows (one per experimental condition) ──
-    default_enz = enz_ids[0] if enz_ids else ""
-    default_sub = sub_ids[0] if sub_ids else ""
     observation_unit_ids = {}
 
     for ak in assay_keys:
@@ -415,9 +407,6 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
             "study identifier": f"STUDY_{doi_slug[:30]}",
             "observation unit type": _classify_observation_unit_type(ak),
             "experimental subject name": _humanize_assay_name(ak),
-            "enzyme sample identifier": default_enz,
-            "substrate sample identifier": default_sub,
-            "_evidence": f"DOI: {doi}; assay: {ak}",
         }
 
         isa_sheets["observationunit"]["expected_rows"].append(ou_row)
@@ -428,10 +417,8 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
             "assay name": f"{_humanize_assay_name(ak)} product analysis",
             "assay description": "Analytical measurement of PET depolymerisation products or activity.",
             "protocol": "PETase product quantification protocol reported in source paper",
-            "Facility": "not reported",
-            "assay date": "not reported",
+            "observation unit identifier": ou_id,
             "PETase measurement category": "product_quantification",
-            "_evidence": f"DOI: {doi}; assay: {ak}",
         }
 
         # Reaction/treatment conditions belong to the Assay, not the subject.
@@ -555,10 +542,8 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
             "assay name": f"{kind} measurement for {_humanize_assay_name(condition)}",
             "assay description": "Analytical result extracted from expert PETase metadata.",
             "protocol": "Reported in source publication",
-            "Facility": "not reported",
-            "assay date": "not reported",
+            "observation unit identifier": ou_ref,
             "PETase measurement category": "product_quantification",
-            "_evidence": f"DOI: {doi}; condition: {condition}",
         }
 
     # ── Measurement/result Assay rows ──
@@ -669,14 +654,13 @@ def convert_petase_to_fairds_v2(petase_json: Dict[str, Any]) -> Dict[str, Any]:
             })
             isa_sheets["assay"]["expected_rows"].append(assay_row)
 
-    return {
+    return curate_document({
         "document_id": doc_id,
-        "document_source": f"PET hydrolase research paper — {doi}",
-        "generated_by": "PETase_v2_converter__assay_level_decomposition",
-        "generated_at": "2026-06-08",
+        "document_source": f"Expert PETase annotation and source paper for DOI {doi}",
+        "generated_by": "PETase_v3_source_grounded_converter",
         "paper_doi": doi,
         "isa_sheets": isa_sheets,
-    }
+    }, load_publication_cache())
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -739,16 +723,8 @@ def main():
 
         # Write individual file (matching existing convention)
         # Strip unnecessary empty sheets
-        output = {
-            "document_id": fairds["document_id"],
-            "document_source": fairds["document_source"],
-            "generated_by": fairds["generated_by"],
-            "generated_at": fairds["generated_at"],
-            "paper_doi": fairds["paper_doi"],
-            "isa_sheets": fairds["isa_sheets"],
-        }
         out_path = OUTPUT_DIR / f"ground_truth_{doc_id}_values.json"
-        out_path.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
+        out_path.write_text(json.dumps(fairds, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     print(f"\n{'='*70}")
     print(f"✓ Conversion complete — v2.0 subject/assay decomposition")

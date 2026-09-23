@@ -15,6 +15,7 @@ RAW_DIR = PROJECT_ROOT / "evaluation" / "datasets" / "raw" / "petase_enzyme_engi
 VALUES_DIR = PROJECT_ROOT / "evaluation" / "datasets" / "annotated" / "values"
 FILTERED_PATH = PROJECT_ROOT / "evaluation/datasets/annotated/ground_truth_filtered.json"
 PETASE_ONLY_PATH = PROJECT_ROOT / "evaluation/datasets/annotated/ground_truth_petase_only.json"
+PUBLIC_CURATED_PATH = PROJECT_ROOT / "evaluation/datasets/annotated/ground_truth_public_curated.json"
 PACKAGE_PATH = PROJECT_ROOT / "evaluation/config/packages/petase_enzyme_engineering_package.json"
 
 # Papers with PDF but no expert GT — excluded from benchmark
@@ -34,7 +35,7 @@ def run_step(label: str, script_name: str) -> None:
 
 
 def build_petase_only_index() -> dict[str, Any]:
-    master = json.loads(FILTERED_PATH.read_text(encoding="utf-8"))
+    master = json.loads(PUBLIC_CURATED_PATH.read_text(encoding="utf-8"))
     petase_docs = [
         doc
         for doc in master.get("documents", [])
@@ -111,7 +112,8 @@ def print_run_commands(n_papers: int) -> None:
         f"    --env-file {env_file.relative_to(PROJECT_ROOT)} \\\n"
         f"    --model-config {model_example.relative_to(PROJECT_ROOT)} \\\n"
         "    --include-documents petase_10_1038_s41586-020-2149-4 \\\n"
-        "    --output-dir evaluation/runs/petase_smoke --repeats 1 --workers 1 --timeout 7200"
+        "    --output-dir evaluation/runs/petase_smoke --repeats 1 --workers 1 --timeout 7200 \\\n"
+        "    --approval-id <researcher-approval-id>"
     )
     print()
     print("Smoke test (direct CLI):")
@@ -128,7 +130,8 @@ def print_run_commands(n_papers: int) -> None:
         "  mamba run -n FAIRiAgent python evaluation/scripts/run_petase_evaluation.py \\\n"
         f"    --env-file {env_file.relative_to(PROJECT_ROOT)} \\\n"
         f"    --model-config {model_example.relative_to(PROJECT_ROOT)} \\\n"
-        "    --repeats 1 --workers 1 --timeout 7200"
+        "    --repeats 1 --workers 1 --timeout 7200 \\\n"
+        "    --approval-id <researcher-approval-id>"
     )
     print()
     print("Value-level comparison (after a run):")
@@ -140,9 +143,9 @@ def print_run_commands(n_papers: int) -> None:
 
 
 def main() -> None:
-    run_step("[1/4] Organize raw PDFs and manifest", "organize_petase_dataset.py")
-    run_step("[2/4] Convert expert JSON → FAIR-DS values GT", "convert_petase_to_fairds.py")
-    run_step("[3/4] Register PETase papers in ground_truth_filtered.json", "update_filtered_with_petase.py")
+    run_step("[1/4] Verify publication metadata with Crossref", "refresh_publication_metadata.py")
+    run_step("[2/4] Convert expert JSON → source-grounded FAIR-DS values GT", "convert_petase_to_fairds.py")
+    run_step("[3/4] Curate and validate the public GT collection", "curate_public_ground_truth.py")
 
     print(f"\n{'=' * 70}\n[4/4] Build PETase-only index and validate\n{'=' * 70}")
     petase_only = build_petase_only_index()

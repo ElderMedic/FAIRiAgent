@@ -195,6 +195,45 @@ def test_persist_run_outputs_writes_core_downloadable_files(
     assert "workflow_result_summary" in processing_log
 
 
+def test_persist_run_outputs_writes_react_scratchpad_and_full_errors(
+    tmp_path,
+):
+    json_logger = JSONLogger(
+        component="test", enable_stdout=False
+    )
+    result_errors = [f"error-{i}" for i in range(15)]
+    errors = _persist_run_outputs(
+        project_id="proj-scratch",
+        result={
+            "status": "completed",
+            "errors": result_errors,
+            "artifacts": {
+                "react_scratchpad": {
+                    "ISAValueMapper": {
+                        "iterations": 2,
+                        "tools_called": ["search_workspace"],
+                    }
+                }
+            },
+        },
+        output_dir=str(tmp_path),
+        json_logger=json_logger,
+    )
+
+    assert errors == []
+    scratch = json.loads(
+        (tmp_path / "logs" / "react_scratchpad.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert scratch["ISAValueMapper"]["iterations"] == 2
+    processing_log = (
+        tmp_path / "logs" / "processing_log.jsonl"
+    ).read_text(encoding="utf-8")
+    for item in result_errors:
+        assert item in processing_log
+
+
 def test_persist_run_outputs_writes_auto_repair_trace_for_gate(
     tmp_path,
 ):
@@ -267,7 +306,12 @@ def test_persist_run_outputs_exports_fairds_workbook_from_isa_values(
     assert workbook_path.exists()
     workbook = load_workbook(workbook_path, data_only=True)
     try:
-        worksheet = workbook["Study"]
+        worksheet = next(
+            sheet
+            for sheet in workbook.worksheets
+            if sheet.title.lower() == "study"
+            or sheet.title.lower().startswith("study - ")
+        )
         headers = [
             worksheet.cell(1, col).value
             for col in range(1, worksheet.max_column + 1)
@@ -343,6 +387,10 @@ def test_full_output_capture_writes_root_logger_messages(tmp_path):
     assert "Project ID: proj-3" in text
     assert "Input: document.pdf" in text
     assert "agent log line" in text
+    assert (tmp_path / "logs").is_dir()
+    assert not (tmp_path / "deliverables").exists()
+    assert not (tmp_path / "reports").exists()
+    assert not (tmp_path / "workspace").exists()
 
 
 def test_default_demo_document_key_falls_back_to_available_sample():

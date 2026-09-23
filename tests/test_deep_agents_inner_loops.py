@@ -105,6 +105,68 @@ async def test_document_parser_falls_back_when_deep_result_is_too_sparse(monkeyp
 
 
 @pytest.mark.anyio
+async def test_document_parser_disables_external_tools_for_bundle_metadata_table(
+    monkeypatch,
+):
+    agent = DocumentParserAgent()
+    captured = {}
+
+    async def fail_extract(*args, **kwargs):
+        raise AssertionError("fallback extractor should not be called")
+
+    async def fake_invoke(*args, **kwargs):
+        return DocumentInfoResponse(
+            document_type="supplementary metadata table",
+            research_domain="transcriptomics",
+            methodology="RNA-seq sample table",
+            variables=["sample identifier"],
+            confidence=0.85,
+        )
+
+    def fake_build(*args, **kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(agent.llm_helper, "extract_document_info", fail_extract)
+    monkeypatch.setattr(agent, "_build_dp_inner_agent", fake_build)
+    monkeypatch.setattr(agent, "_invoke_react_agent", fake_invoke)
+
+    result = await agent.execute(
+        {
+            "document_path": "/bundle::samples.xlsx",
+            "document_content": "sample identifier\torganism\nS1\tArabidopsis thaliana",
+            "document_conversion": {},
+            "context": {
+                "current_source_role": "metadata_table",
+                "current_source_content_type": "table",
+                "current_source_total": 4,
+            },
+            "source_workspace": {
+                "manifest": {
+                    "sources": [
+                        {
+                            "content_type": "table",
+                            "source_role": "metadata_table",
+                            "tables": [{"name": "Sample information"}],
+                        }
+                    ]
+                },
+                "table_paths": {
+                    "source_001:Sample information": "/tmp/table.jsonl"
+                },
+            },
+            "agent_guidance": {},
+            "confidence_scores": {},
+            "errors": [],
+        }
+    )
+
+    assert captured["allow_external_science_tools"] is False
+    assert captured["allow_bio_tools"] is False
+    assert result["document_info"]["document_type"] == "supplementary metadata table"
+
+
+@pytest.mark.anyio
 async def test_document_parser_skips_deep_react_for_long_raw_qwen(monkeypatch):
     agent = DocumentParserAgent()
 
@@ -138,6 +200,42 @@ async def test_document_parser_skips_deep_react_for_long_raw_qwen(monkeypatch):
 
     assert result["document_info"]["title"] == "Fallback long-doc title"
     assert result["evidence_packets"]
+
+
+def test_document_parser_reserves_react_for_source_workspace_complexity():
+    simple = {
+        "manifest": {
+            "sources": [
+                {
+                    "content_type": "markdown",
+                    "source_role": "main_manuscript",
+                    "tables": [],
+                }
+            ]
+        },
+        "table_paths": {},
+    }
+    supplement = {
+        "manifest": {
+            "sources": [
+                {
+                    "content_type": "markdown",
+                    "source_role": "main_manuscript",
+                },
+                {
+                    "content_type": "markdown",
+                    "source_role": "supplement",
+                },
+            ]
+        }
+    }
+
+    assert DocumentParserAgent._needs_tool_parsing(
+        simple, is_mineru_content=False, text_length=2500
+    ) is False
+    assert DocumentParserAgent._needs_tool_parsing(
+        supplement, is_mineru_content=False, text_length=2500
+    ) is True
 
 
 @pytest.mark.anyio
@@ -366,7 +464,7 @@ def test_knowledge_retriever_rebalances_non_sample_optional_fields():
     assert additions["study"] > 0
 
 
-def test_knowledge_retriever_candidate_packages_exclude_obvious_domain_mismatch():
+def test_knowledge_retriever_candidates_use_relevance_without_domain_blacklists():
     agent = KnowledgeRetrieverAgent.__new__(KnowledgeRetrieverAgent)
 
     available = [
@@ -400,9 +498,7 @@ def test_knowledge_retriever_candidate_packages_exclude_obvious_domain_mismatch(
         excluded,
     )
 
-    assert "human oral" in excluded
-    assert "Plant Sample Checklist" in excluded
-    assert "pig_blood" in excluded
+    assert excluded == set()
     assert "default" in candidates
     assert "soil" in candidates
     assert "Illumina" in candidates
@@ -437,6 +533,78 @@ async def test_llm_package_selector_does_not_force_priority_hints():
     )
 
     assert selected == ["ENA Micro B3"]
+
+
+@pytest.mark.anyio
+async def test_llm_package_selector_audits_fields_without_memory_as_evidence():
+    captured = {}
+
+    class StubResponse:
+        content = """```json
+{
+  "selected_packages": ["default", "focused-assay"],
+  "reasoning": "The focused assay fields match the current source."
+}
+```"""
+
+    class StubLLMHelper:
+        async def _call_llm(self, messages, operation_name=None):
+            captured["system"] = messages[0].content
+            captured["user"] = messages[1].content
+            return StubResponse()
+
+    selected = await kr_llm_methods.llm_select_relevant_packages(
+        StubLLMHelper(),
+        doc_info={"title": "Current transcript assay", "methodology": "RNA sequencing"},
+        all_packages=[
+            {
+                "name": "default",
+                "description": "Core metadata.",
+                "field_count": 4,
+                "mandatory_count": 4,
+                "optional_count": 0,
+                "sheets": ["Study"],
+            },
+            {
+                "name": "focused-assay",
+                "description": "RNA sequencing assay metadata.",
+                "field_count": 3,
+                "mandatory_count": 1,
+                "optional_count": 2,
+                "sheets": ["Assay"],
+                "sample_fields": ["library strategy", "library source"],
+                "mandatory_fields": ["library strategy"],
+                "field_contract": [
+                    {
+                        "label": "library strategy",
+                        "level": "Assay",
+                        "requirement": "MANDATORY",
+                        "allowed_values": ["WGS", "RNA-Seq"],
+                        "source_matched_values": ["RNA-Seq"],
+                    }
+                ],
+            },
+        ],
+        prior_memory_context="Historical recommendation: select unrelated-checklist.",
+        priority_package_hints=["default", "unrelated-checklist"],
+        proposed_package_names=["default", "unrelated-checklist"],
+        source_schema_match_hints=[
+            {
+                "package": "focused-assay",
+                "score": 5,
+                "evidence": ["library strategy=RNA-Seq"],
+                "levels": ["assay"],
+            }
+        ],
+    )
+
+    assert selected == ["default", "focused-assay"]
+    assert "Historical recommendation" not in captured["user"]
+    assert "library strategy" in captured["system"]
+    assert "not approvals" in captured["system"]
+    assert "Re-evaluate that proposal from scratch" in captured["system"]
+    assert "library strategy=RNA-Seq" in captured["system"]
+    assert "Cover each represented ISA level" in captured["system"]
 
 
 @pytest.mark.anyio
@@ -543,7 +711,7 @@ def test_knowledge_retriever_builds_metadata_gap_hints_from_unmapped_requests():
     assert all(hint["status"] == "unmapped_to_fairds" for hint in hints)
 
 
-def test_knowledge_retriever_infers_required_terms_from_planner_and_critic():
+def test_knowledge_retriever_does_not_regex_infer_terms_from_planner_prose():
     agent = KnowledgeRetrieverAgent.__new__(KnowledgeRetrieverAgent)
 
     required_terms = agent._infer_required_search_terms(
@@ -570,14 +738,7 @@ def test_knowledge_retriever_infers_required_terms_from_planner_and_critic():
         ],
     )
 
-    assert "alpha diversity" in required_terms
-    assert "beta diversity" in required_terms
-    assert "license" in required_terms
-    assert "data usage license" in required_terms
-    assert "dataset type" in required_terms
-    assert "library strategy" in required_terms
-    assert "16s rrna" in required_terms
-    assert "shotgun metagenome" in required_terms
+    assert required_terms == []
 
 
 def test_kr_inner_agent_scopes_field_search_to_candidate_packages(monkeypatch):
@@ -607,7 +768,7 @@ def test_kr_inner_agent_scopes_field_search_to_candidate_packages(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_knowledge_retriever_searches_required_terms_across_all_packages(monkeypatch):
+async def test_knowledge_retriever_searches_required_terms_in_selected_packages(monkeypatch):
     agent = KnowledgeRetrieverAgent()
     monkeypatch.setattr(agent, "_load_local_package_registry", lambda: {})
 
@@ -695,7 +856,7 @@ async def test_knowledge_retriever_searches_required_terms_across_all_packages(m
     agent.fair_ds_client = object()
 
     async def fake_select_packages(*args, **kwargs):
-        return ["default"]
+        return ["default", "Diversity", "Rights"]
 
     async def fake_select_fields(*args, **kwargs):
         return {"selected_fields": [], "terms_to_search": []}
@@ -732,6 +893,15 @@ async def test_knowledge_retriever_searches_required_terms_across_all_packages(m
                 }
             }
         },
+        "plan_tasks": [
+            {
+                "agent_name": "KnowledgeRetriever",
+                "priority_packages": ["Diversity", "Rights"],
+                "search_terms": ["alpha diversity", "data usage license"],
+                "focus_sheets": ["study"],
+                "notes": "Machine-readable planner intent",
+            }
+        ],
         "confidence_scores": {},
         "errors": [],
         "evidence_packets": [
@@ -1098,11 +1268,40 @@ def test_json_generator_extension_does_not_use_unrelated_packet_value():
         ],
     )
 
-    assert extensions[0]["field_name"] == "bioinformatics quality metric"
-    assert extensions[0]["value"] == "not reported in source evidence"
-    assert "ZnO nanomaterials" not in extensions[0]["value"]
-    assert extensions[0]["evidence"] == "No source excerpt matched this inferred metadata concept."
-    assert extensions[0]["confidence"] < 0.75
+    assert extensions == []
+
+
+def test_json_generator_drops_unlinked_search_term_extensions():
+    agent = JSONGeneratorAgent()
+
+    extensions = agent._build_inferred_metadata_extensions(
+        [
+            {
+                "label": "organism",
+                "source": "term_search",
+                "reason": "No matching term",
+                "confidence": 0.68,
+            },
+            {
+                "label": "unknown",
+                "source": "evidence_packet",
+                "reason": "Unmapped parser candidate",
+                "packet_id": "ep-document",
+            },
+        ],
+        {"document_type": "Document"},
+        [
+            {
+                "packet_id": "ep-document",
+                "field_candidate": "unknown",
+                "value": "Document",
+                "evidence_text": "Document title and abstract",
+                "confidence": 0.6,
+            }
+        ],
+    )
+
+    assert extensions == []
 
 
 def test_json_generator_builds_source_workspace_context(tmp_path):

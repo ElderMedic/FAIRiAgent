@@ -56,7 +56,7 @@ services:
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      LLM_ENABLE_THINKING: ${LLM_ENABLE_THINKING:-false}
+      LLM_ENABLE_THINKING: ${LLM_ENABLE_THINKING:-true}
       FAIRIFIER_ENABLE_DEEP_AGENTS: ${FAIRIFIER_ENABLE_DEEP_AGENTS:-true}
       # Always use the compose service DNS name inside the stack.
       # Do not point this at localhost (that breaks in-container checks).

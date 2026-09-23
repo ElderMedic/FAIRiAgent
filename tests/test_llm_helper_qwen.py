@@ -142,6 +142,54 @@ async def test_openai_thinking_disabled_no_bind(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_ollama_card_presence_penalty_uses_per_call_options(monkeypatch):
+    """Ollama receives the Qwen card sampler without requiring a model call here."""
+
+    class DummyLLM:
+        def __init__(self):
+            self.bind_calls = []
+
+        def bind(self, **kwargs):
+            self.bind_calls.append(kwargs)
+            return self
+
+        async def ainvoke(self, messages, config=None):
+            return SimpleNamespace(content="OK")
+
+    helper = LLMHelper.__new__(LLMHelper)
+    helper.provider = "ollama"
+    helper.model = "qwen3.6:27b"
+    helper.llm = DummyLLM()
+    helper._langfuse_handler = None
+    helper._log_llm_response = lambda *args, **kwargs: None
+
+    monkeypatch.setattr(config, "llm_enable_thinking", False)
+    monkeypatch.setattr(config, "llm_temperature", 0.7)
+    monkeypatch.setattr(config, "llm_top_p", 0.8)
+    monkeypatch.setattr(config, "llm_top_k", 20)
+    monkeypatch.setattr(config, "llm_repeat_penalty", 1.0)
+    monkeypatch.setattr(config, "llm_presence_penalty", 1.5)
+    monkeypatch.setattr(config, "llm_max_tokens", 32768)
+
+    result = await helper._call_llm(["hello"], operation_name="test-ollama-sampler")
+
+    assert result.content == "OK"
+    assert helper.llm.bind_calls == [
+        {"think": False},
+        {
+            "options": {
+                "temperature": 0.7,
+                "top_p": 0.8,
+                "top_k": 20,
+                "repeat_penalty": 1.0,
+                "presence_penalty": 1.5,
+                "num_predict": 32768,
+            }
+        },
+    ]
+
+
+@pytest.mark.anyio
 async def test_generate_complete_metadata_splits_large_batches():
     """Large metadata generations should be split into smaller LLM batches."""
     helper = LLMHelper.__new__(LLMHelper)

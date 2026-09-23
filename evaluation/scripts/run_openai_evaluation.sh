@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run evaluation for OpenAI models in parallel
-# Usage: ./run_openai_evaluation.sh [repeats] [workers]
+# Usage: ./run_openai_evaluation.sh [repeats] [workers] [approval-id]
 
 BASE_DIR="/Users/changlinke/Documents/Main/SSB/PhD/Research/FAIRiAgent"
 cd "$BASE_DIR"
@@ -12,6 +12,12 @@ PYTHON="/Users/changlinke/miniforge3/envs/FAIRiAgent/bin/python3"
 # Default values
 REPEATS=${1:-3}
 WORKERS=${2:-3}
+APPROVAL_ID=${3:-${FAIRIAGENT_APPROVAL_ID:-}}
+
+if [ -z "$APPROVAL_ID" ]; then
+  echo "Refusing model execution: provide approval-id as argument 3 or FAIRIAGENT_APPROVAL_ID."
+  exit 2
+fi
 
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
@@ -44,6 +50,7 @@ nohup $PYTHON evaluation/scripts/run_batch_evaluation.py \
   --output-dir "${OUTPUT_DIR}/gpt4.1" \
   --repeats $REPEATS \
   --workers $WORKERS \
+  --approval-id "$APPROVAL_ID" \
   > "${OUTPUT_DIR}/gpt4.1.log" 2>&1 &
 GPT4_1_PID=$!
 echo "  GPT-4.1 PID: $GPT4_1_PID"
@@ -70,6 +77,7 @@ nohup $PYTHON evaluation/scripts/run_batch_evaluation.py \
   --output-dir "${OUTPUT_DIR}/o3" \
   --repeats $REPEATS \
   --workers $WORKERS \
+  --approval-id "$APPROVAL_ID" \
   > "${OUTPUT_DIR}/o3.log" 2>&1 &
 O3_PID=$!
 echo "  O3 PID: $O3_PID"
@@ -90,4 +98,3 @@ echo "📁 Results will be in: $OUTPUT_DIR"
 echo ""
 echo "📊 After all runs complete, run analysis:"
 echo "  $PYTHON evaluation/analysis/run_analysis.py --runs-dir $OUTPUT_DIR"
-

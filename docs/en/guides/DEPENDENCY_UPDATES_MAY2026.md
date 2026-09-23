@@ -1,5 +1,8 @@
 # May 2026 Dependency Updates & Compatibility Analysis
 
+> Historical one-off note. Current versions live in `requirements.txt` /
+> `pyproject.toml` and [CHANGELOG](../../CHANGELOG.md). Not a setup guide.
+
 ## 1. Overview of Upgrades
 The project's core dependencies have been brought up to date with their latest stable releases to ensure long-term security, better performance, and access to new features (such as Mem0's v3 memory algorithm and BioContainers integrations).
 

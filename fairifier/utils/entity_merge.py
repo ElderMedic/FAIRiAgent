@@ -131,13 +131,24 @@ def _merge_row_dicts(primary: Dict[str, Any], secondary: Dict[str, Any]) -> Dict
     for key, value in secondary.items():
         if _is_empty(value):
             continue
-        existing = merged.get(key)
-        if _is_empty(existing):
+        key_lower = str(key).strip().lower()
+        existing_key = None
+        for k in merged.keys():
+            if str(k).strip().lower() == key_lower:
+                existing_key = k
+                break
+
+        if existing_key is None:
             merged[key] = value
+            continue
+
+        existing = merged.get(existing_key)
+        if _is_empty(existing):
+            merged[existing_key] = value
             continue
         if not _values_conflict(existing, value):
             if len(str(value)) > len(str(existing)):
-                merged[key] = value
+                merged[existing_key] = value
     return merged
 
 

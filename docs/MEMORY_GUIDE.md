@@ -39,7 +39,12 @@ Total: 8 memories
 
 ### Memory Overview
 ```bash
+# LLM summary (default)
 python run_fairifier.py memory overview <session_id>
+# Statistics only
+python run_fairifier.py memory overview <session_id> --simple
+# Raw JSON
+python run_fairifier.py memory overview <session_id> --json
 ```
 
 **Example Output**:
@@ -201,7 +206,7 @@ For developers and advanced users:
 **Retrieval**: Task-specific queries with cross-agent sharing  
 **Gating**: Multi-rule quality filtering
 
-For technical setup details, see `MEM0_QUICKSTART.md` and `MEMORY_OVERVIEW_GUIDE.md`.
+For install and Qdrant setup, see [MEM0_QUICKSTART.md](MEM0_QUICKSTART.md).
 
 ---
 

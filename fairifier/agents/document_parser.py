@@ -68,10 +68,16 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
         prior_memory_context: Optional[str] = None,
         is_structured_markdown: bool = False,
         science_cache: Optional[Dict[str, Any]] = None,
+        allow_external_science_tools: bool = True,
+        allow_bio_tools: bool = True,
     ):
         """Create the deepagents-backed inner loop for document parsing."""
-        parser_science_tools = create_science_tools(cache_store=science_cache)
-        parser_bio_tools = create_bio_tools()
+        parser_science_tools = (
+            create_science_tools(cache_store=science_cache)
+            if allow_external_science_tools
+            else []
+        )
+        parser_bio_tools = create_bio_tools() if allow_bio_tools else []
 
         @tool
         def analyze_document_outline(text: str) -> Dict[str, Any]:
@@ -278,6 +284,50 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
         if document_path.endswith(".pdf"):
             return "pdf_text"
         return "text_file"
+
+    @staticmethod
+    def _needs_tool_parsing(
+        source_workspace: Dict[str, Any],
+        *,
+        is_mineru_content: bool,
+        text_length: int,
+    ) -> bool:
+        """Use recursive parsing only when source inspection adds evidence.
+
+        A short, single narrative source is better handled by one structured
+        extraction call. Tables, supplements, protocols, biological data, or a
+        genuinely long converted document justify the tool loop. An absent
+        workspace keeps legacy behavior for in-memory callers and tests.
+        """
+        if not source_workspace:
+            return True
+        if source_workspace.get("table_paths"):
+            return True
+        manifest = source_workspace.get("manifest") or {}
+        sources = [
+            item
+            for item in manifest.get("sources") or []
+            if isinstance(item, dict)
+        ]
+        if len(sources) > 1:
+            return True
+        complex_roles = {"supplement", "table", "metadata_table", "protocol"}
+        complex_types = {
+            "table",
+            "bam",
+            "vcf",
+            "h5ad",
+            "fastq",
+            "biological_data",
+        }
+        if any(
+            item.get("tables")
+            or str(item.get("source_role") or "").strip().lower() in complex_roles
+            or str(item.get("content_type") or "").strip().lower() in complex_types
+            for item in sources
+        ):
+            return True
+        return bool(is_mineru_content and text_length > 40000)
         
     @traceable(name="DocumentParser", tags=["agent", "parsing"])
     async def execute(self, state: FAIRifierState) -> FAIRifierState:
@@ -325,6 +375,24 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
             feedback = self.get_context_feedback(state)
             critic_feedback = feedback.get("critic_feedback")
             planner_instruction = feedback.get("planner_instruction")
+            source_context = state.get("context") or {}
+            current_source_role = str(
+                source_context.get("current_source_role") or "unknown"
+            )
+            current_source_total = int(
+                source_context.get("current_source_total") or 1
+            )
+            if current_source_total > 1 and current_source_role != "main_manuscript":
+                scoped_instruction = (
+                    f"This is one {current_source_role} source within a {current_source_total}-file bundle. "
+                    "Extract only facts that this source is responsible for. Preserve explicit identifiers, "
+                    "table variables, methods, and entity evidence, but do not invent or externally search for "
+                    "paper-level DOI, journal, publication date, abstract, or full author list when absent; "
+                    "the main manuscript will supply bibliographic identity during synthesis."
+                )
+                planner_instruction = "\n".join(
+                    part for part in (planner_instruction, scoped_instruction) if part
+                )
             guidance_history = feedback.get("guidance_history") or []
             prior_memory_context = self.format_retrieved_memories_for_prompt(
                 feedback.get("retrieved_memories") or []
@@ -357,10 +425,22 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
 
             doc_info_dict: Dict[str, Any] = {}
             evidence_packets: List[Dict[str, Any]] = []
-            use_deep_parse = config.enable_deep_agents and (
+            source_workspace = state.get("source_workspace", {}) or {}
+            tool_complexity = self._needs_tool_parsing(
+                source_workspace,
+                is_mineru_content=is_mineru_content,
+                text_length=len(text),
+            )
+            use_deep_parse = config.enable_deep_agents and tool_complexity and (
                 is_mineru_content or config.llm_provider != "qwen" or len(text) <= 40000
             )
-            if config.enable_deep_agents and not use_deep_parse:
+            if config.enable_deep_agents and not tool_complexity:
+                self.log_execution(
+                    state,
+                    "⏭️ Source workspace contains one simple narrative source; "
+                    "using direct structured extraction instead of recursive tool parsing."
+                )
+            elif config.enable_deep_agents and not use_deep_parse:
                 self.log_execution(
                     state,
                     "⏭️ Skipping deep ReAct parser for long unstructured Qwen input; using direct extraction for stability."
@@ -368,6 +448,23 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
 
             if use_deep_parse:
                 science_cache = get_cache_bucket(state, "science_tools")
+                current_source_content_type = str(
+                    source_context.get("current_source_content_type") or "text"
+                )
+                scoped_bundle_source = current_source_total > 1
+                allow_external_science_tools = (
+                    not scoped_bundle_source
+                    or current_source_role == "main_manuscript"
+                )
+                allow_bio_tools = (
+                    not scoped_bundle_source
+                    or current_source_content_type == "bio_binary"
+                )
+                self.log_execution(
+                    state,
+                    "🧰 Source-scoped tools: external_science=%s, bio=%s"
+                    % (allow_external_science_tools, allow_bio_tools),
+                )
                 task_desc = (
                     "Parse /workspace/document.md and extract concise document metadata. "
                     "Use tools when needed, preserve exact identifiers, and return only "
@@ -379,6 +476,8 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
                     prior_memory_context=prior_memory_context or None,
                     is_structured_markdown=is_mineru_content,
                     science_cache=science_cache,
+                    allow_external_science_tools=allow_external_science_tools,
+                    allow_bio_tools=allow_bio_tools,
                 )
                 structured = await self._invoke_react_agent(
                     self._inner_dp_agent,

@@ -115,7 +115,7 @@ class AgentMailbox:
             message_type=AgentMessageType.EVIDENCE_BUNDLE.value,
             payload={
                 "packet_count": len(packets),
-                "packets": packets[:30],
+                "packets": list(packets),
                 "source_type": source_type,
             },
             refs={"source_path": source_path or ""},
@@ -144,12 +144,30 @@ class AgentMailbox:
             message_type=AgentMessageType.FIELD_GAP_REPORT.value,
             payload={
                 "gap_count": len(gaps),
-                "gaps": gaps[:50],
+                "gaps": list(gaps),
                 "selected_packages": selected_packages or [],
             },
             priority=2,
         )
         return self.publish(msg)
+
+    @staticmethod
+    def audit_log_record(msg: Dict[str, Any]) -> Dict[str, Any]:
+        """Serialize one A2A message for processing_log.jsonl without truncation."""
+        from fairifier.utils.llm_helper import json_safe_provenance_value
+
+        return {
+            "event": "agent_message",
+            "timestamp": msg.get("created_at"),
+            "from_agent": msg.get("from_agent"),
+            "to_agent": msg.get("to_agent"),
+            "message_type": msg.get("message_type"),
+            "message_id": msg.get("id"),
+            "priority": msg.get("priority", 0),
+            "acked_by": list(msg.get("acked_by") or []),
+            "refs": json_safe_provenance_value(msg.get("refs") or {}),
+            "payload": json_safe_provenance_value(msg.get("payload") or {}),
+        }
 
     @staticmethod
     def handoff_summary(state: Dict[str, Any]) -> Dict[str, Any]:

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fairiagent.local/schemas/benchmark-manifest-v2.json",
+  "title": "FAIRiAgent benchmark manifest version 2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "benchmark_release",
+    "instances",
+    "conditions",
+    "models",
+    "scheduled_runs",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": { "const": "fairiagent.benchmark_manifest.v2" },
+    "benchmark_release": { "type": "string", "minLength": 1 },
+    "instances": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["instance_id", "source_path", "ground_truth_path", "package_id", "package_version", "split", "strata"],
+        "properties": {
+          "instance_id": { "type": "string", "minLength": 1 },
+          "source_path": { "type": "string", "minLength": 1 },
+          "ground_truth_path": { "type": "string", "minLength": 1 },
+          "ground_truth_values_path": { "type": "string", "minLength": 1 },
+          "standards_context_path": { "type": "string", "minLength": 1 },
+          "retrieved_context_path": { "type": "string", "minLength": 1 },
+          "supplementary_paths": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "package_id": { "type": "string", "minLength": 1 },
+          "package_version": { "type": "string", "minLength": 1 },
+          "reporting_role": { "enum": ["core", "supplemental", "stress"] },
+          "split": { "enum": ["development", "held_out", "core", "operational", "generalization", "stress", "verified"] },
+          "strata": {
+            "type": "object",
+            "required": ["domain"],
+            "additionalProperties": { "type": ["string", "number", "boolean"] }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "conditions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["condition_id", "publication_name", "component_settings"],
+        "properties": {
+          "condition_id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+          "publication_name": { "type": "string", "minLength": 1 },
+          "component_settings": { "type": "object" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["model_id", "provider", "model_name", "endpoint_class", "configuration_hash"],
+        "properties": {
+          "model_id": { "type": "string", "minLength": 1 },
+          "provider": { "type": "string", "minLength": 1 },
+          "model_name": { "type": "string", "minLength": 1 },
+          "endpoint_class": { "enum": ["hosted", "local", "snapshot"] },
+          "configuration_hash": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "scheduled_runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["run_id", "instance_id", "condition_id", "model_id", "repetition"],
+        "properties": {
+          "run_id": { "type": "string", "minLength": 1 },
+          "instance_id": { "type": "string", "minLength": 1 },
+          "condition_id": { "type": "string", "minLength": 1 },
+          "model_id": { "type": "string", "minLength": 1 },
+          "repetition": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["repository_commit", "evaluator_version", "created_at"],
+      "properties": {
+        "repository_commit": { "type": "string", "minLength": 1 },
+        "evaluator_version": { "type": "string", "minLength": 1 },
+        "created_at": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

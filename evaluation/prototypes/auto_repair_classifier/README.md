@@ -36,6 +36,8 @@ are trace-only and never decide whether a patch is accepted.
   injection experiments.
 - `run_auto_eval.py` - prepares the canonical full `auto` eval command and can
   execute it when `--execute` is passed.
+  Executing it requires `--approval-id <review-id>` after reviewing the token
+  and cost estimate.
 - `preconvert_mineru.py` - prepares or executes MinerU preconversion for target
   PDFs that do not yet have reusable `mineru_<stem>/` Markdown output.
 - `merge_gate.py` - compares a fresh `auto` eval run against Shadow/Tuned

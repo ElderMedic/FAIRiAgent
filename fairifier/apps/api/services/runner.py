@@ -17,7 +17,6 @@ from .event_bus import WorkflowEvent, event_bus
 from fairifier.output_paths import (
     artifact_content_to_text,
     artifact_output_filename,
-    ensure_output_subdirectories,
     get_artifact_write_path,
     logs_dir,
 )
@@ -142,8 +141,8 @@ def _start_full_output_capture(
         return None, None, None
 
     output_path = Path(output_dir)
-    ensure_output_subdirectories(output_path)
     log_path = logs_dir(output_path) / "full_output.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     handle = log_path.open("a", encoding="utf-8", buffering=1)
 
     handle.write(f"\n{'=' * 70}\n")
@@ -538,7 +537,6 @@ def _persist_run_outputs(
 
     errors: list[str] = []
     output_path = Path(output_dir)
-    ensure_output_subdirectories(output_path)
 
     artifacts = result.get("artifacts", {})
     if isinstance(artifacts, dict):
@@ -617,8 +615,8 @@ def _persist_run_outputs(
             result.get("needs_human_review", False)
         ),
         error_count=len(result.get("errors", []) or []),
-        errors_preview=[
-            str(item) for item in (result.get("errors") or [])[:10]
+        errors=[
+            str(item) for item in (result.get("errors") or [])
         ],
         artifact_names=_serialisable_artifacts(
             artifacts,

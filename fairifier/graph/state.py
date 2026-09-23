@@ -45,7 +45,11 @@ class FAIRifierState(TypedDict):
     retrieved_knowledge: List[Dict[str, Any]]
     metadata_fields: List[Dict[str, Any]]  # FAIR-DS format fields
     selected_packages: List[str]
+    package_selection_trace: Dict[str, Any]
     metadata_gap_hints: List[Dict[str, Any]]
+    entity_plan: Dict[str, Any]  # Structure-first five-level ISA rows and Investigation contacts
+    entity_plan_validation: Dict[str, Any]
+    entity_matrix_validation: Dict[str, Any]
     inferred_metadata_extensions: List[Dict[str, Any]]
     auto_repair_trace: Dict[str, Any]
     # Optional shadow-only classifier predictions by normalized field.

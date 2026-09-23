@@ -6,6 +6,7 @@ import pandas as pd
 
 from fairifier.config import config
 from fairifier.graph.langgraph_app import FAIRifierLangGraphApp
+from fairifier.services.source_workspace import infer_source_role
 
 
 def _make_app_without_init() -> FAIRifierLangGraphApp:
@@ -336,16 +337,88 @@ def test_parse_single_input_source_uses_source_content_not_bundle_path():
         source_index=1,
         source_total=2,
         base_document_path="/tmp/bundle",
+        source_role="metadata_table",
+        source_content_type="table",
     )
 
     assert state["document_content"] == "ONLY THIS SOURCE"
     assert "document_text_path" not in state
     assert state["document_path"] == "/tmp/bundle::sources/source_001.md"
     assert state["context"]["current_source_path"] == "sources/source_001.md"
+    assert state["context"]["current_source_role"] == "metadata_table"
+    assert state["context"]["current_source_content_type"] == "table"
     assert "critic_feedback" not in state["context"]
     assert "DocumentParser" not in state["context"]["critic_feedback_by_agent"]
     assert "DocumentParser" not in state["context"]["critic_guidance_history"]
     assert state["context"]["retry_count"] == 0
+
+
+def test_infer_source_role_recognizes_metadata_table_from_sheet_semantics():
+    assert (
+        infer_source_role(
+            "opaque_attachment.xlsx",
+            "table",
+            table_names=["Sample information"],
+        )
+        == "metadata_table"
+    )
+    assert (
+        infer_source_role(
+            "opaque_attachment.xlsx",
+            "table",
+            table_names=["Normalized expression matrix"],
+        )
+        == "table"
+    )
+
+
+def test_infer_source_role_recognizes_semantic_supplement_without_filename_hint():
+    content = (
+        "# Online resources for Example Study\n\n"
+        "## Table of Contents\nOnline Methods\nOnline Figures\nOnline Tables"
+    )
+    assert (
+        infer_source_role(
+            "opaque_article_attachment.pdf",
+            "markdown",
+            content_excerpt=content,
+        )
+        == "supplement"
+    )
+
+
+def test_multifile_merge_uses_main_manuscript_for_bibliographic_identity():
+    app = _make_app_without_init()
+    merged, conflicts = app._merge_document_info_entries(
+        [
+            {
+                "source_path": "analysis.xlsx",
+                "source_role": "table",
+                "document_info": {
+                    "title": "Guessed table title",
+                    "authors": ["et al."],
+                    "doi": "10.0000/guessed",
+                    "variables": ["TPM"],
+                },
+            },
+            {
+                "source_path": "article.pdf",
+                "source_role": "main_manuscript",
+                "document_info": {
+                    "title": "Authoritative paper title",
+                    "authors": ["A. Author", "B. Author"],
+                    "doi": "10.1000/real",
+                    "variables": ["developmental stage"],
+                },
+            },
+        ]
+    )
+
+    assert merged["title"] == "Authoritative paper title"
+    assert merged["authors"] == ["A. Author", "B. Author"]
+    assert merged["doi"] == "10.1000/real"
+    assert merged["variables"] == ["developmental stage", "TPM"]
+    assert "Guessed table title" in conflicts["title"]
 
 
 def test_directory_bundle_collects_bio_file_paths(tmp_path: Path):

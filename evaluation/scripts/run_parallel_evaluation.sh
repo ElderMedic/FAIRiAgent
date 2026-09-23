@@ -7,6 +7,12 @@ cd "$BASE_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_DIR="evaluation/runs/run_${TIMESTAMP}"
 PYTHON="/Users/changlinke/miniforge3/envs/FAIRiAgent/bin/python3"
+APPROVAL_ID=${1:-${FAIRIAGENT_APPROVAL_ID:-}}
+
+if [ -z "$APPROVAL_ID" ]; then
+  echo "Refusing model execution: provide approval-id as argument 1 or FAIRIAGENT_APPROVAL_ID."
+  exit 2
+fi
 
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
@@ -24,6 +30,7 @@ nohup $PYTHON evaluation/scripts/run_batch_evaluation.py \
   --output-dir "${OUTPUT_DIR}/qwen_max" \
   --repeats 3 \
   --workers 3 \
+  --approval-id "$APPROVAL_ID" \
   > "${OUTPUT_DIR}/qwen_max.log" 2>&1 &
 QWEN_MAX_PID=$!
 echo "  Qwen Max PID: $QWEN_MAX_PID"
@@ -37,6 +44,7 @@ nohup $PYTHON evaluation/scripts/run_batch_evaluation.py \
   --output-dir "${OUTPUT_DIR}/qwen_plus" \
   --repeats 3 \
   --workers 3 \
+  --approval-id "$APPROVAL_ID" \
   > "${OUTPUT_DIR}/qwen_plus.log" 2>&1 &
 QWEN_PLUS_PID=$!
 echo "  Qwen Plus PID: $QWEN_PLUS_PID"
@@ -50,6 +58,7 @@ nohup $PYTHON evaluation/scripts/run_batch_evaluation.py \
   --output-dir "${OUTPUT_DIR}/qwen_flash" \
   --repeats 3 \
   --workers 3 \
+  --approval-id "$APPROVAL_ID" \
   > "${OUTPUT_DIR}/qwen_flash.log" 2>&1 &
 QWEN_FLASH_PID=$!
 echo "  Qwen Flash PID: $QWEN_FLASH_PID"
@@ -71,4 +80,3 @@ echo "  Qwen Plus: $QWEN_PLUS_PID"
 echo "  Qwen Flash: $QWEN_FLASH_PID"
 echo ""
 echo "Output directory: $OUTPUT_DIR"
-

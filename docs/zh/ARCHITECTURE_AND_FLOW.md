@@ -39,14 +39,18 @@ flowchart TD
             E --> C2
         end
         
-        subgraph GENERATE["步骤 5: JSON 生成"]
+        subgraph ENTITY["步骤 5: 实体结构"]
+            E2[🧱 实体结构规划器<br/>基数 + 范围 + 链接]
+        end
+
+        subgraph GENERATE["步骤 6: JSON 生成"]
             F[📝 JSON 生成器 Agent<br/>ISA-Tab 格式映射]
             C3[🧑⚖️ 评估器 Critic]
             F --> C3
         end
         
-        subgraph MAP["步骤 6: ISA 值映射"]
-            H[🔗 ISA 值映射器 Agent<br/>实体分组与术语标准化]
+        subgraph MAP["步骤 7: ISA 值映射"]
+            H[🔗 ISA 值映射器 Agent<br/>计划投影与字段契约]
         end
     end
     
@@ -67,8 +71,9 @@ flowchart TD
     D --> E
     API -.->|程序包, 术语| E
     E -.->|api_capabilities| C2
-    C2 -->|接受 ACCEPT| F
+    C2 -->|接受 ACCEPT| E2
     C2 -->|重试 RETRY| E
+    E2 --> F
     C3 -->|接受 ACCEPT| H
     C3 -->|重试 RETRY| F
     H --> J
@@ -95,13 +100,15 @@ flowchart TD
 4. **知识检索器 (Knowledge Retriever)**：检索 FAIR-DS API（包含 59 个程序包，892 个术语）和本地知识库。
    - 动态反馈 **API 能力限制**（如包不支持等），使 Critic 能够进行感知的多维评估。
    - 连接 **Critic 评估** → ACCEPT / RETRY / ESCALATE。
-5. **JSON 生成器 (JSON Generator)**：将提取的信息映射到符合 ISA-Tab 兼容的元数据中。
+5. **实体结构规划器 (EntityStructurePlanner)**：在填写字段值之前建立并独立审核五级实体图，包括因子基数、ISA 范围和唯一父级链接。来源元数据表可以经代理选择、再经确定性校验的表计划提供权威记录身份，避免把不完整设计展开成错误的笛卡尔积。行结构由该节点拥有，下游代理不得合并或发明实体。
+6. **JSON 生成器 (JSON Generator)**：把提取信息映射到已选中的 FAIR-DS 字段契约。
    - **递归分批拆分**：在检测到生成内容被截断时，自动将字段数量进行二分拆分（16→8→4→2→1）以避免超出上下文限制。
    - 连接 **Critic 评估** → ACCEPT / RETRY。
-     - **跨层回滚 (ρ 机制)**：当 JSON 硬性验证失败时，直接回滚至知识检索节点，携带反馈重新检索。
-6. **ISA 值映射器 (ISA Value Mapper)**：分配 entity_id 分组并将字段值映射到标准术语中。
-   - **基数门控机制 (Cardinality gate)**：当检测到实体组数量大于 12 个时，自动使用轻量级策略跳过高成本的 ReAct 循环，以节省算力成本。
-7. **评估器 Agent (Critic Agent)**：在大多数关键节点之后充当 LLM-as-Judge 裁判，按照评分规则对产物进行打分。
+   - **跨层回滚 (ρ 机制)**：当 JSON 硬性验证失败时，直接回滚至知识检索节点，携带反馈重新检索。
+7. **ISA 值映射器 (ISA Value Mapper)**：把有来源支持的值投影到已锁定的实体图上，执行字段与取值契约以及证据范围，并编译规范的 JSON/Excel 矩阵。实体数量不再作为跳过深度映射的阈值；基数属于结构计划。
+8. **评估器 Agent (Critic Agent)**：在大多数关键节点之后充当 LLM-as-Judge 裁判，按照评分规则对产物进行打分。
+
+工作流完成状态或 LLM Critic 分数本身并不是交付物质量结论。
 
 ---
 
@@ -110,6 +117,7 @@ flowchart TD
 - **重试次数**：每个 Agent 最多 2 次（可通过 `.env` 中 `max_step_retries` 调整）。
 - **全局重试上限**：所有 Agent 总计的最大重试次数（通过 `max_global_retries` 调整）。
 - **无进展自动退出**：如果连续 2 次重试分数没有提升，工作流将接受现有输出但会打上 `review` 标签，以防止死循环。
+- **跨层回滚 (ρ)**：JSON 生成的校验失败会把反馈送回知识检索器，而不是只重试 JSON 映射。
 - **反馈去重**：历史指导意见限制在 10 项以内，避免 Token 堆积。
 
 ---
@@ -156,12 +164,34 @@ local_kb.add_term(LocalTerm(
 
 ## 6. 输出文件与格式
 
-生成的产物保存在 `output/<project_id>/` 目录下：
-1. **`metadata.json`**：标准 FAIR-DS 兼容元数据。
-2. **`processing_log.jsonl`**：结构化实时处理日志。
-3. **`llm_responses.json`**：该次运行的所有大模型 API 交互详情。
-4. **`runtime_config.json`**：该次运行的所有环境变量和运行时参数。
-5. **`validation_report.txt`**：模式校验报告。
+生成的产物保存在 `output/<project_id>/` 下，并按用途分为：
+
+- `deliverables/`：`metadata.json`、`isa_values.json` 和
+  `metadata_fairds.xlsx`。
+- `logs/`：`full_output.log`、`processing_log.jsonl`、`llm_responses.json`
+  及其他运行轨迹。
+- `reports/`：运行配置、校验、工作流和自动修复报告。
+- `workspace/`：保留的原始材料与中间工作数据。
+
+run 根目录只在工作流第一次实际写文件时创建；四类功能子目录也只在第一次写入
+对应产物时按需创建。因此目录不存在表示本次 run 没有生成这一类产物，而不是缺失
+了预置结构。API 必须先通过请求配置校验并完成项目登记，之后才允许落盘，从而避免
+被拒绝或未真正启动的请求遗留空的 `fairifier_<timestamp>` 目录。
+
+主要产物：
+
+1. **`deliverables/metadata.json`**：FAIR-DS JSON。ISA 矩阵编译完成后包含 `isa_values` 和 `isa_matrix_id`。
+2. **`deliverables/isa_values.json`**：列×行形式的 ISA 旁路文件，在 ISA 值映射或自动修复之后与 `metadata.json.isa_values` 保持同步。
+3. **`logs/processing_log.jsonl`**：实时结构化事件，包含可用的 Critic 评估。
+4. **`logs/llm_responses.json`**：全部 LLM 请求与响应。
+5. **`reports/runtime_config.json`**：本次运行使用的环境与配置。
+6. **`reports/auto_repair_trace.json`**：自动模式应用补丁时的确定性修复记录。
+7. **`reports/workflow_report.json` / `reports/workflow_report.txt`**：质量、检索、执行和性能遥测。`performance` 记录工作流墙钟时间、分阶段耗时、观测到的输入/输出 token、可配置的美元估算，以及仅用于报告的延迟、token 和成本门槛。提供商没有给出的用量或价格记为 `insufficient_data`，不会被当成 0。
+8. **`reports/validation_report.txt`**：ShEx/校验器报告（可选）。
+
+成本估算使用本次运行的费率：`FAIRIFIER_LLM_INPUT_COST_PER_MILLION_USD`、`FAIRIFIER_LLM_OUTPUT_COST_PER_MILLION_USD`，以及可选的 `FAIRIFIER_COMPUTE_COST_PER_HOUR_USD`。`-1` 表示未知；只有端点确实免费或本地运行时才使用 `0`。门槛变量是 `env.example` 中的 `FAIRIFIER_PERFORMANCE_MAX_*`。这些门槛只作诊断，不改变工作流完成状态。
+
+保留的来源材料在 `workspace/source_workspace/`，不在 run 根目录。
 
 ---
 

@@ -34,3 +34,21 @@ async def test_autodiscover_supplementary_files():
 
         csv_source = [s for s in sources if s["source_id"] == "source_002"][0]
         assert "supplementary.csv" in csv_source["path"]
+
+
+@pytest.mark.asyncio
+async def test_autodiscovery_does_not_treat_adjacent_readme_as_source():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        parent = Path(tmp_dir)
+        doc_file = parent / "input.md"
+        doc_file.write_text("Research abstract.", encoding="utf-8")
+        (parent / "README.md").write_text(
+            "Operator notes that must not become scientific evidence.", encoding="utf-8"
+        )
+
+        state = FAIRifierState(document_path=str(doc_file), output_dir=tmp_dir)
+        updated_state = await ReadFileNode()(state)
+        sources = updated_state["source_workspace"]["manifest"]["sources"]
+
+        assert len(sources) == 1
+        assert sources[0]["path"].endswith("input.md")

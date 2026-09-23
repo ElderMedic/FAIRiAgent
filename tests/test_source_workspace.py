@@ -11,6 +11,17 @@ from fairifier.services.source_workspace import (
 )
 
 
+def test_empty_source_workspace_does_not_create_empty_content_dirs(
+    tmp_path: Path,
+):
+    workspace = build_source_workspace([], tmp_path)
+
+    assert workspace.manifest_path.is_file()
+    assert workspace.summary_path.is_file()
+    assert not (workspace.root_dir / "sources").exists()
+    assert not (workspace.root_dir / "tables").exists()
+
+
 def test_source_workspace_preserves_full_text_and_manifest(tmp_path: Path):
     records = [
         SourceRecord(
@@ -27,6 +38,7 @@ def test_source_workspace_preserves_full_text_and_manifest(tmp_path: Path):
     manifest = json.loads(workspace.manifest_path.read_text(encoding="utf-8"))
     assert manifest["source_count"] == 1
     assert manifest["sources"][0]["source_id"] == "source_001"
+    assert not (workspace.root_dir / "tables").exists()
     assert workspace.source_paths["source_001"].read_text(encoding="utf-8").endswith(
         "rare accession PRJNA999999"
     )
@@ -80,6 +92,7 @@ def test_source_workspace_table_search_uses_full_table_not_preview(tmp_path: Pat
 
     matches = search_table(workspace, "Eisenia", max_matches=10)
 
+    assert (workspace.root_dir / "tables").is_dir()
     assert matches == [
         {
             "source_id": "source_001",

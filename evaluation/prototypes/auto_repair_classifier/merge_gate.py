@@ -331,7 +331,8 @@ def excel_field_value_present(excel_path: Path, sheet: str, field_name: str) -> 
         target_field = normalize_name(field_name)
         worksheet = None
         for candidate in workbook.worksheets:
-            if normalize_name(candidate.title).replace(" ", "") == sheet_key:
+            candidate_key = normalize_name(candidate.title).replace(" ", "")
+            if candidate_key == sheet_key or candidate_key.startswith(f"{sheet_key}-"):
                 worksheet = candidate
                 break
         if worksheet is None:

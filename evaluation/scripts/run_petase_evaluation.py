@@ -37,6 +37,11 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=7200)
     parser.add_argument(
+        "--approval-id",
+        required=True,
+        help="Human approval identifier confirming the reviewed token/cost estimate.",
+    )
+    parser.add_argument(
         "--include-documents",
         type=str,
         nargs="+",
@@ -72,6 +77,8 @@ def main() -> None:
         str(args.workers),
         "--timeout",
         str(args.timeout),
+        "--approval-id",
+        args.approval_id,
     ]
     if args.include_documents:
         cmd.extend(["--include-documents", *args.include_documents])

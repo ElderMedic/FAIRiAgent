@@ -356,6 +356,11 @@ def main():
         default=1,
         help="Run index number"
     )
+    parser.add_argument(
+        "--approval-id",
+        required=True,
+        help="Human approval identifier confirming the reviewed token/cost estimate.",
+    )
     
     args = parser.parse_args()
     

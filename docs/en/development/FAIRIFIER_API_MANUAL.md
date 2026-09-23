@@ -168,7 +168,7 @@ curl -s -X POST http://localhost:8000/api/v1/projects \
 | `GET` | `/projects/{project_id}/artifacts` | List files under the run output directory |
 | `GET` | `/projects/{project_id}/artifacts/{artifact_name}` | Download a single artifact (path-safe) |
 
-Typical artifacts include `metadata.json`, `processing_log.jsonl`, `llm_responses.json`, `runtime_config.json`, and `validation_report.txt`.
+Artifact names are paths relative to the run directory. Typical files include `deliverables/metadata.json`, `deliverables/isa_values.json`, `logs/processing_log.jsonl`, `logs/llm_responses.json`, `reports/runtime_config.json`, and `reports/validation_report.txt`.
 
 Hidden files (path segments starting with `.`) are excluded from listings and downloads.
 
@@ -179,7 +179,7 @@ curl -s -H "X-FAIRifier-Session-Id: ${SESSION_ID}" \
   "http://localhost:8000/api/v1/projects/${PROJECT_ID}/artifacts" | jq
 
 curl -H "X-FAIRifier-Session-Id: ${SESSION_ID}" \
-  -OJ "http://localhost:8000/api/v1/projects/${PROJECT_ID}/artifacts/metadata.json"
+  -OJ "http://localhost:8000/api/v1/projects/${PROJECT_ID}/artifacts/deliverables/metadata.json"
 ```
 
 ---
