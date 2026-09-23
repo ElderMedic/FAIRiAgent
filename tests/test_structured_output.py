@@ -201,7 +201,9 @@ async def test_prompt_json_returns_none_when_schema_validation_fails():
 
 
 @pytest.mark.asyncio
-async def test_prompt_json_retries_one_transient_transport_failure():
+async def test_prompt_json_retries_one_transient_transport_failure(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr("fairifier.utils.structured_output.asyncio.sleep", sleep)
     llm_helper = MagicMock()
     llm_helper.provider = "ollama"
     llm_helper._call_llm = AsyncMock(
@@ -220,10 +222,13 @@ async def test_prompt_json_retries_one_transient_transport_failure():
 
     assert parsed == {"dimension_name": "developmental_stage"}
     assert llm_helper._call_llm.await_count == 2
+    sleep.assert_awaited_once_with(5.0)
 
 
 @pytest.mark.asyncio
-async def test_prompt_json_returns_none_after_transport_retries_exhausted():
+async def test_prompt_json_returns_none_after_transport_retries_exhausted(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr("fairifier.utils.structured_output.asyncio.sleep", sleep)
     llm_helper = MagicMock()
     llm_helper.provider = "ollama"
     llm_helper._call_llm = AsyncMock(side_effect=RuntimeError("connection reset"))
@@ -236,7 +241,8 @@ async def test_prompt_json_returns_none_after_transport_retries_exhausted():
     )
 
     assert parsed is None
-    assert llm_helper._call_llm.await_count == 2
+    assert llm_helper._call_llm.await_count == 3
+    assert [call.args[0] for call in sleep.await_args_list] == [5.0, 15.0]
 
 
 @pytest.mark.asyncio

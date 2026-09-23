@@ -31,19 +31,27 @@ async def _invoke_prompt_json_with_transport_retry(
     *,
     operation_name: str,
     max_tokens: Optional[int],
-    attempts: int = 2,
+    attempts: Optional[int] = None,
 ) -> Any:
     """Call a prompt-JSON provider without leaking transient transport errors.
 
     Provider clients normally retry failures that happen before a response is
     opened, but streamed local responses can still end with an incomplete body.
     A structured-output audit is not allowed to crash the whole workflow for
-    that reason.  Retry the identical bounded request once, then return ``None``
-    so the owning agent can fail its deterministic validation or use its own
-    stage-level retry policy.
+    that reason. Retry the identical bounded request with a short increasing
+    backoff, then return ``None`` so the owning agent can fail its deterministic
+    validation or use its own stage-level retry policy. The transport budget
+    follows the configured step retry budget instead of racing a reconnect with
+    one immediate retry.
     """
+    attempt_budget = (
+        max(1, int(attempts))
+        if attempts is not None
+        else max(2, int(config.max_step_retries) + 1)
+    )
+    retry_delays = (5.0, 15.0, 30.0)
     last_error: Optional[Exception] = None
-    for attempt in range(1, max(1, attempts) + 1):
+    for attempt in range(1, attempt_budget + 1):
         try:
             return await llm_helper._call_llm(
                 messages,
@@ -56,11 +64,17 @@ async def _invoke_prompt_json_with_transport_retry(
                 "Prompt JSON transport failure for %s (attempt %d/%d): %s",
                 operation_name,
                 attempt,
-                attempts,
+                attempt_budget,
                 exc,
             )
-            if attempt < attempts:
-                await asyncio.sleep(1.0)
+            if attempt < attempt_budget:
+                delay = retry_delays[min(attempt - 1, len(retry_delays) - 1)]
+                logger.info(
+                    "Waiting %.1fs before retrying %s after transport failure",
+                    delay,
+                    operation_name,
+                )
+                await asyncio.sleep(delay)
     logger.error(
         "Prompt JSON transport retries exhausted for %s: %s",
         operation_name,
