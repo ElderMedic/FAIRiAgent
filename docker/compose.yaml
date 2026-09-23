@@ -1,6 +1,7 @@
 services:
-  # FAIR Data Station API (Official Image)
-  # Image is linux/amd64-only; platform pin enables Apple Silicon via emulation.
+  # Official FAIR-DS image. The registry manifest is linux/amd64 only.
+  # On Apple Silicon, the platform pin makes Docker emulate amd64.
+  # Run ./check_fairds_platform.sh first. Native ARM builds use compose.fairds-jar.yaml.
   fairds:
     image: docker-registry.wur.nl/m-unlock/docker/fairds:latest
     platform: linux/amd64
@@ -12,7 +13,7 @@ services:
       # Official image writes under /root/fairds_storage (not /fairds_storage).
       - ./fairds_storage:/root/fairds_storage
     healthcheck:
-      # Official image has no curl/wget; probe the listen port with bash /dev/tcp.
+      # Official image has no curl; probe the listen port with bash /dev/tcp.
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8083'"]
       interval: 10s
       timeout: 5s

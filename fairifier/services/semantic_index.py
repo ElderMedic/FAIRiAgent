@@ -50,9 +50,15 @@ class EmbeddingClient:
             try:
                 from sentence_transformers import SentenceTransformer
                 self.local_model = SentenceTransformer(self.model_name, trust_remote_code=True)
+            except ImportError as exc:
+                logger.warning(
+                    "sentence-transformers is not installed; local embeddings are skipped: %s",
+                    exc,
+                )
+                raise
             except Exception as exc:
                 logger.error("Failed to load local SentenceTransformer %s: %s", self.model_name, exc)
-                raise exc
+                raise
 
     def encode(self, texts: Sequence[str], is_query: bool = False) -> List[List[float]]:
         if not texts:

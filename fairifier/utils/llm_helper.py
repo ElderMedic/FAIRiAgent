@@ -81,9 +81,12 @@ def _is_official_openai_base_url(base_url: Optional[str]) -> bool:
     if not base_url:
         return True
     normalized = base_url.strip().lower()
-    if not normalized or normalized == "http://localhost:11434":
-        # FAIRiAgent treats the Ollama default as "unset" for OpenAI and
-        # passes base_url=None → OpenAI SDK default host.
+    from ..config import is_default_ollama_base_url
+
+    if is_default_ollama_base_url(normalized):
+        # FAIRiAgent treats the Ollama default, including Compose's
+        # host.docker.internal address, as "unset" for OpenAI and passes
+        # base_url=None so the SDK uses the official host.
         return True
     return "api.openai.com" in normalized
 
@@ -1531,7 +1534,13 @@ class LLMHelper:
         elif self.provider == "openai":
             if ChatOpenAI is None:
                 raise ImportError("langchain_openai not installed. Install with: pip install langchain-openai")
-            base_url = config.llm_base_url if config.llm_base_url != "http://localhost:11434" else None
+            from ..config import is_default_ollama_base_url
+
+            base_url = (
+                None
+                if is_default_ollama_base_url(config.llm_base_url)
+                else config.llm_base_url
+            )
             api_key = config.llm_api_key
             if not api_key:
                 if base_url and any(h in base_url for h in ("localhost", "127.0.0.1", "0.0.0.0", ":8000", ":8080", ":3000")):

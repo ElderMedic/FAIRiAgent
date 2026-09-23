@@ -64,7 +64,12 @@ pytest-cov>=4.1.0
 mem0ai>=2.0.1,<3.0.0
 qdrant-client>=1.12.0,<1.14.0
 
-# Evaluation (optional, for evaluation/scripts/compare_values_against_gt.py)
-# Semantic similarity matching for GT comparison; falls back to token-F1 if absent.
-sentence-transformers>=3.0.0
+# Evaluation helpers that do not pull a GPU stack.
 scipy>=1.10.0
+
+# Optional local semantic embeddings.
+# Do not install this by default. On Linux, sentence-transformers pulls torch,
+# which installs CUDA and Triton. FAIRiAgent uses the package when it is
+# already present and otherwise keeps lexical retrieval. validate-document
+# warns when it is missing.
+# pip install sentence-transformers

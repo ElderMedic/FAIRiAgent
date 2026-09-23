@@ -1270,7 +1270,43 @@ def _check_llm_preflight() -> tuple[bool, str]:
         if model_msg != config.llm_model:
             return True, f"{config.llm_model} → {model_msg}"
         return True, f"{config.llm_model} (ok)"
-    return True, f"{config.llm_provider} / {config.llm_model} (config ok)"
+    from .config import is_default_ollama_base_url
+
+    provider = config.llm_provider.lower()
+    if provider not in {"gemini", "anthropic"} and is_default_ollama_base_url(config.llm_base_url):
+        return (
+            False,
+            f"{config.llm_provider} is still pointed at the Ollama address "
+            f"{config.llm_base_url or '(empty)'}",
+        )
+    endpoint = config.llm_base_url or "provider endpoint"
+    return True, f"{config.llm_provider} / {config.llm_model} ({endpoint})"
+
+
+def _check_semantic_embedder_preflight() -> tuple[bool, str]:
+    """Report local embedding availability without failing the run.
+
+    Local sentence-transformers pulls a CUDA torch wheel on Linux. The package
+    stays optional: lexical retrieval still runs when it is absent.
+    Returns (installed_or_not_needed, message). The first value is False only
+    as a warning flag; callers must not treat it as a hard failure.
+    """
+    if not config.semantic_index_enabled:
+        return True, "disabled (optional)"
+    backend = (config.retrieval_embedding_backend or "auto").strip().lower()
+    if backend == "jina_api" or (backend == "auto" and config.jina_api_key):
+        return True, "Jina embeddings configured"
+    if backend == "ollama" or (backend == "auto" and config.retrieval_embedding_base_url):
+        return True, "Ollama embeddings configured"
+    try:
+        import sentence_transformers  # noqa: F401
+    except ImportError:
+        return (
+            False,
+            "local embeddings unavailable (sentence-transformers is not installed); "
+            "lexical retrieval still runs. Optional install: pip install sentence-transformers",
+        )
+    return True, "sentence-transformers available"
 
 
 @cli.command("validate-document")
@@ -1326,11 +1362,18 @@ def validate_document(input_file: Optional[str], env_only: bool):
     click.echo(f"   FAIR-DS API: {'✅ ' + fair_msg if fair_ok else '❌ ' + fair_msg}")
     llm_ok, llm_msg = _check_llm_preflight()
     click.echo(f"   LLM:         {'✅ ' + llm_msg if llm_ok else '❌ ' + llm_msg}")
+    embed_ok, embed_msg = _check_semantic_embedder_preflight()
+    if embed_ok:
+        click.echo(f"   Embeddings:  ✅ {embed_msg}")
+    else:
+        click.echo(f"   Embeddings:  ⚠️  {embed_msg}")
 
     click.echo("\n" + section)
     all_ok = doc_ok and mineru_ok and fair_ok and llm_ok
-    if all_ok:
+    if all_ok and embed_ok:
         click.echo("Pre-flight passed. You can run 'process'.")
+    elif all_ok:
+        click.echo("Pre-flight passed with warnings. You can run 'process'.")
     else:
         click.echo("Pre-flight had failures. Fix issues above before running 'process'.")
         sys.exit(1)

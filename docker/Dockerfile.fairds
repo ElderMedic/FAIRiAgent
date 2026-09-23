@@ -1,0 +1,17 @@
+# Native FAIR Data Station runtime for CPUs the official image does not list.
+# Default Compose pulls docker-registry.wur.nl/m-unlock/docker/fairds:latest,
+# which publishes linux/amd64 only. Use this file when emulation is unavailable
+# or undesirable. It downloads the public JAR and runs it on Java 21.
+FROM eclipse-temurin:21-jre-jammy
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG FAIRDS_JAR_URL=https://download.systemsbiology.nl/download/unlock/fairds-latest.jar
+WORKDIR /root
+RUN curl -fL --retry 3 --connect-timeout 20 -o /root/fairds.jar "${FAIRDS_JAR_URL}" \
+    && mkdir -p /root/fairds_storage
+
+EXPOSE 8083
+ENTRYPOINT ["java", "-Dserver.port=8083", "-jar", "/root/fairds.jar"]

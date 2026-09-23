@@ -1,0 +1,18 @@
+# Native FAIR-DS when the official image cannot run on this CPU.
+# The published image lists linux/amd64 only. This file builds the public JAR
+# with a multi-arch Java runtime instead of emulating amd64.
+#
+#   ./check_fairds_platform.sh
+#   FAIRDS_PLATFORM=linux/arm64 docker compose \
+#     -f compose.yaml -f compose.fairds-jar.yaml up -d --build fairds
+services:
+  fairds:
+    platform: ${FAIRDS_PLATFORM:-linux/amd64}
+    image: fairiagent-fairds:local
+    build:
+      context: .
+      dockerfile: Dockerfile.fairds
+      args:
+        FAIRDS_JAR_URL: ${FAIRDS_JAR_URL:-https://download.systemsbiology.nl/download/unlock/fairds-latest.jar}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8083/api/package"]

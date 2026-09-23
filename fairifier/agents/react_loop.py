@@ -143,8 +143,10 @@ class ReactLoopMixin:
         """Ensure Deep ReAct OpenAI models can use tools with reasoning_effort."""
         from fairifier.utils.llm_helper import resolve_openai_use_responses_api
 
+        from fairifier.config import is_default_ollama_base_url
+
         base_url = config.llm_base_url
-        if base_url == "http://localhost:11434":
+        if is_default_ollama_base_url(base_url):
             base_url = None
         effort = (config.llm_reasoning_effort or "").strip().lower() or None
         use_responses = resolve_openai_use_responses_api(
@@ -202,8 +204,10 @@ class ReactLoopMixin:
             return False
         from fairifier.utils.llm_helper import resolve_openai_use_responses_api
 
+        from fairifier.config import is_default_ollama_base_url
+
         base_url = config.llm_base_url
-        if base_url == "http://localhost:11434":
+        if is_default_ollama_base_url(base_url):
             base_url = None
         effort = (config.llm_reasoning_effort or "").strip().lower() or None
         return resolve_openai_use_responses_api(

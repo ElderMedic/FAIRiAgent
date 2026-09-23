@@ -341,6 +341,28 @@ class FAIRifierConfig:
                 )
 
 
+_DEFAULT_OLLAMA_BASE_URLS = frozenset(
+    {
+        "http://localhost:11434",
+        "http://127.0.0.1:11434",
+        "http://host.docker.internal:11434",
+    }
+)
+
+
+def is_default_ollama_base_url(url: Optional[str]) -> bool:
+    """True for an empty URL or the local Ollama address Compose injects.
+
+    Cloud providers must not keep ``host.docker.internal:11434``. Compose sets
+    that value for host Ollama, and it is not the ``localhost:11434`` sentinel
+    the provider defaults used to recognize.
+    """
+    if url is None:
+        return True
+    normalized = url.strip().rstrip("/").lower()
+    return not normalized or normalized in _DEFAULT_OLLAMA_BASE_URLS
+
+
 def _parse_path_list_from_env(key: str) -> List[Path]:
     """Split an env var by ``os.pathsep`` into non-empty expanded paths."""
     raw = os.getenv(key)
@@ -691,7 +713,7 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if config_instance.llm_provider == "qwen":
         if os.getenv("QWEN_API_BASE_URL"):
             config_instance.llm_base_url = os.getenv("QWEN_API_BASE_URL")
-        elif config_instance.llm_base_url == "http://localhost:11434":
+        elif is_default_ollama_base_url(config_instance.llm_base_url):
             # Default Qwen API endpoint (DashScope OpenAI-compatible)
             config_instance.llm_base_url = (
                 "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
@@ -727,14 +749,14 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     elif config_instance.llm_provider == "deepseek":
         if os.getenv("DEEPSEEK_API_BASE_URL"):
             config_instance.llm_base_url = os.getenv("DEEPSEEK_API_BASE_URL")
-        elif config_instance.llm_base_url == "http://localhost:11434":
+        elif is_default_ollama_base_url(config_instance.llm_base_url):
             config_instance.llm_base_url = "https://api.deepseek.com"
 
     # Zhipu API (OpenAI-compatible)
     elif config_instance.llm_provider == "zhipu":
         if os.getenv("ZHIPU_API_BASE_URL"):
             config_instance.llm_base_url = os.getenv("ZHIPU_API_BASE_URL")
-        elif config_instance.llm_base_url == "http://localhost:11434":
+        elif is_default_ollama_base_url(config_instance.llm_base_url):
             config_instance.llm_base_url = "https://open.bigmodel.cn/api/paas/v4"
 
     if os.getenv("LLM_TEMPERATURE"):
