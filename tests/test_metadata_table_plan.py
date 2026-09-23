@@ -214,6 +214,25 @@ def test_dataset_candidates_rank_source_declared_focal_data_before_context(tmp_p
     assert profiles[1]["focal_evidence_score"] == 0
 
 
+def test_dataset_mentions_ignore_boilerplate_cell_values(tmp_path):
+    rows = _raw_rows() + [
+        {
+            "All records in the study": "sample-d",
+            "Unnamed: 1": "data",
+            "Unnamed: 2": "run-d",
+            "Unnamed: 3": "control",
+        }
+    ]
+    workspace, _ = _workspace(tmp_path, rows)
+
+    profiles = metadata_table_profiles_for_document_datasets(
+        workspace,
+        ["study-1 (data generated in this work)"],
+    )
+
+    assert [item["applied_filters"][0]["value"] for item in profiles] == ["study-1"]
+
+
 def test_keeps_real_physical_headers(tmp_path):
     workspace, table_path = _workspace(
         tmp_path,

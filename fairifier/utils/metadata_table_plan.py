@@ -23,6 +23,58 @@ def _text(value: Any) -> str:
     return " ".join(str(value or "").strip().split())
 
 
+# Words that show up inside dataset sentences but are not dataset identifiers.
+# Exact cell matches on these tokens would otherwise look like focal subsets.
+_DATASET_MENTION_STOPWORDS = frozenset(
+    {
+        "about",
+        "after",
+        "also",
+        "available",
+        "been",
+        "before",
+        "between",
+        "current",
+        "data",
+        "dataset",
+        "datasets",
+        "deposited",
+        "during",
+        "from",
+        "generated",
+        "have",
+        "into",
+        "only",
+        "present",
+        "produced",
+        "publicly",
+        "sequencing",
+        "study",
+        "submitted",
+        "that",
+        "their",
+        "these",
+        "this",
+        "those",
+        "through",
+        "under",
+        "using",
+        "were",
+        "which",
+        "while",
+        "with",
+        "within",
+        "without",
+        "work",
+    }
+)
+
+
+def _dataset_identifier_token(token: str) -> bool:
+    normalized = token.casefold()
+    return len(normalized) >= 4 and normalized not in _DATASET_MENTION_STOPWORDS
+
+
 def _scalar_identifier(value: Any) -> bool:
     text = _text(value)
     return bool(text) and not any(separator in text for separator in (",", ";", "\n"))
@@ -543,10 +595,9 @@ def metadata_table_profiles_for_document_datasets(
     for raw_mention in dataset_mentions:
         mention = _text(raw_mention)
         for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", mention):
-            normalized = token.casefold()
-            if len(normalized) < 4:
+            if not _dataset_identifier_token(token):
                 continue
-            mention_tokens.setdefault(normalized, []).append(mention)
+            mention_tokens.setdefault(token.casefold(), []).append(mention)
     if not mention_tokens:
         return []
 
