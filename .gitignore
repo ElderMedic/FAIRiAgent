@@ -431,6 +431,14 @@ evaluation/reports/*_RESULTS.md
 evaluation/reports/*.json
 evaluation/reports/*.csv
 evaluation/reports/*.png
+# Nested collaborator case audits (local paths, draft ground truth, unpublished scores)
+evaluation/reports/michael_case_audit_*/
+
+# Collaborator case-study scripts and dashboards (override !evaluation/scripts/)
+evaluation/scripts/analyze_michael_case.py
+evaluation/scripts/analyze_michael_traces.py
+evaluation/scripts/build_michael_dashboard.py
+evaluation/visualizations/michael_case_dashboard.html
 
 # Local API key file
 api_keys.txt
