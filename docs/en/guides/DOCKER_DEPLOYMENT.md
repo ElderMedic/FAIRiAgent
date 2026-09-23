@@ -20,11 +20,12 @@ docker compose up -d --build
 
 Notes for new users:
 
-- **Apple Silicon**: `fairds` is pinned to `platform: linux/amd64` (official image has no arm64 manifest).
-- **Healthcheck**: the FAIR-DS image has no `curl`; compose probes the port with bash `/dev/tcp`.
+- **FAIR-DS**: Compose pulls `docker-registry.wur.nl/m-unlock/docker/fairds:latest` and pins `platform: linux/amd64`. Run `docker/check_fairds_platform.sh` first. ARM hosts have no official manifest; emulation is the default, and `compose.fairds-jar.yaml` or the Java/conda install is the native alternative.
+- **Healthcheck**: the official image has no `curl`; Compose probes the port with bash `/dev/tcp`.
 - **Storage**: host `docker/fairds_storage` → container `/root/fairds_storage`.
-- **Ollama on the host**: default `FAIRIFIER_LLM_BASE_URL=http://host.docker.internal:11434`.
+- **Ollama on the host**: default `FAIRIFIER_LLM_BASE_URL=http://host.docker.internal:11434`. Cloud providers treat that address as unset and use their own API host.
 - **MinerU**: off by default (`MINERU_ENABLED=false`).
+- **Local embeddings**: `sentence-transformers` is not installed in the image. Semantic retrieval stays lexical unless that package is already present.
 
 Equivalent service definition (keep in sync with `docker/compose.yaml`):
 

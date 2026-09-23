@@ -72,8 +72,9 @@ cd /path/to/FAIRiAgent
 # 检查是否有示例文档
 ls examples/inputs/
 
-# 使用 bundled earthworm 样本
-ls -lh examples/inputs/earthworm_4n_paper_bioRxiv.pdf
+# 使用不依赖 MinerU 的 Markdown + Excel 快速开始
+ls -lh examples/quickstart/earthworm_4n_paper_bioRxiv.md \
+  examples/quickstart/Diagonal_RNAseq_Earthworms.xlsx
 ```
 
 ### 方法 2: 创建新的测试文档
@@ -568,35 +569,12 @@ cat output_*/llm_responses.json | jq '.[] | select(.operation | startswith("crit
 ## 🎯 快速测试命令（一键运行）
 
 ```bash
-#!/bin/bash
-# quick_test.sh - 快速测试脚本
-
-# 激活环境
 mamba activate FAIRiAgent
 
-# 设置环境变量
-export LANGCHAIN_TRACING_V2=true
-export LANGCHAIN_PROJECT=fairifier-quick-test
-# export LANGSMITH_API_KEY=your_key  # 取消注释并填入你的 key
-
-# 创建输出目录
-OUTPUT_DIR="output_test_$(date +%Y%m%d_%H%M%S)"
-
-# 运行测试
-echo "🚀 Starting FAIRifier test..."
-python -m fairifier.cli process examples/inputs/earthworm_4n_paper_bioRxiv.pdf \
-  --output-dir "$OUTPUT_DIR" \
-  --project-id "test_$(date +%H%M%S)" \
-  --verbose
-
-echo ""
-echo "✅ Test complete!"
-echo "📁 Output directory: $OUTPUT_DIR"
-echo "🔍 View in LangSmith: https://smith.langchain.com/"
+# 预检通过后再跑。Markdown 快速开始不需要 MinerU。
+mamba run -n FAIRiAgent python run_fairifier.py validate-document --env-only
+mamba run -n FAIRiAgent python run_fairifier.py process \
+  examples/quickstart/earthworm_4n_paper_bioRxiv.md --verbose
 ```
 
-保存并运行：
-```bash
-chmod +x quick_test.sh
-./quick_test.sh
-```
+输出在 CLI 打印的 `output/<时间戳>/` 下，元数据是 `deliverables/metadata.json`。LangSmith 需要同时设置 `LANGSMITH_API_KEY` 和 `LANGCHAIN_TRACING_V2=true`，不是这条命令的前提。

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Compose again pulls the official FAIR-DS image and pins `linux/amd64`.
+  `docker/check_fairds_platform.sh` reports when the host has no matching
+  manifest. Those machines can build the public JAR or use the conda/Java install.
+- Cloud providers treat Compose's `host.docker.internal:11434` base URL as
+  unset and use their own API host. Pre-flight reports that resolved host.
+- The default install no longer pulls CUDA or Triton through
+  `sentence-transformers`. Local embeddings stay optional, and
+  `validate-document` warns when the package is absent.
+
 ### Planned / in progress
 
 - End-to-end 3/6-document LLM re-evaluation after ISA single-projection sync

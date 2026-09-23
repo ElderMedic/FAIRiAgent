@@ -73,7 +73,7 @@ Two supported paths. **Docker Compose** is the simplest way to get FAIR-DS + API
 
 ### Option A — Docker Compose (recommended)
 
-**Prerequisites:** Docker Desktop / Docker Engine with Compose v2.
+**Prerequisites:** Docker Desktop / Docker Engine with Compose v2. FAIR-DS is the official `linux/amd64` image. Run the architecture check before the first pull.
 
 ```bash
 git clone https://github.com/ElderMedic/FAIRiAgent.git
@@ -83,6 +83,7 @@ cd FAIRiAgent/docker
 cp .env.example .env
 # Edit .env: set LLM_PROVIDER + LLM_API_KEY (cloud), or Ollama settings (see comments in .env.example)
 
+./check_fairds_platform.sh
 docker compose up -d --build
 ```
 
@@ -108,7 +109,7 @@ docker compose exec fairifier-api python run_fairifier.py process \
 
 - API docs: http://localhost:8000/docs  
 - If port 8000 is busy: `FAIRIFIER_HOST_PORT=8001 docker compose up -d` then use `http://localhost:8001`  
-- Apple Silicon is supported (`fairds` runs as `linux/amd64`)  
+- Apple Silicon: the official image has no arm64 manifest. Compose pins `linux/amd64` so Docker emulates it. To avoid emulation, build `compose.fairds-jar.yaml` or use the Java/conda path below.  
 - Details: [docker/README.md](docker/README.md) · [Docker Deployment Guide](docs/en/guides/DOCKER_DEPLOYMENT.md)
 
 ### Option B — Local conda / mamba
@@ -123,7 +124,7 @@ docker compose exec fairifier-api python run_fairifier.py process \
 # Download once (writes docker/fairds/fairds.jar)
 ./scripts/update_fairds_jar.sh
 
-# Default port 8083. If that port is taken, pick another:
+# Requires Java 21. Default port 8083. If that port is taken, pick another:
 java -Dserver.port=8083 -jar docker/fairds/fairds.jar
 # then set FAIR_DS_API_URL=http://localhost:8083 in .env
 ```

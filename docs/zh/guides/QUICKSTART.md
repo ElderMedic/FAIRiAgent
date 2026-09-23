@@ -1,55 +1,132 @@
-# 🚀 快速开始
+# 快速开始
 
-## 最简单的测试步骤
+两条路径都可以。**Docker Compose** 最省事，一次拉起 FAIR-DS 和 API，不需要 MinerU。想在本机用 Python 跑，用后面的 conda / mamba 路径。
 
-### 1️⃣ 配置环境变量
+## 方式 A — Docker Compose（推荐）
+
+**前提：** Docker Desktop 或带 Compose v2 的 Docker Engine。FAIR-DS 默认拉取官方镜像，清单里只有 `linux/amd64`。第一次拉取前先检查本机架构。
 
 ```bash
-cd /path/to/FAIRiAgent
-mamba activate FAIRiAgent
+git clone https://github.com/ElderMedic/FAIRiAgent.git
+cd FAIRiAgent/docker
 
-# 复制配置文件
-cp env.example .env
+# 处理文档前必须配置 LLM
+cp .env.example .env
+# 编辑 .env：云端填写 LLM_PROVIDER 和 LLM_API_KEY，或按文件里的注释改成宿主机 Ollama
 
-# 编辑 .env 文件（用你喜欢的编辑器）
-nano .env
-# 或
-vim .env
-# 或
-code .env
+./check_fairds_platform.sh
+docker compose up -d --build
 ```
 
-**最小配置（写在 `.env` 中）：**
+云端提供商不要把 `FAIRIFIER_LLM_BASE_URL` 改成厂商地址。Compose 里的 `http://host.docker.internal:11434` 只表示宿主机 Ollama；Qwen、DeepSeek、智谱会改用各自的官方 API。显式覆盖用 `QWEN_API_BASE_URL`、`DEEPSEEK_API_BASE_URL` 或 `ZHIPU_API_BASE_URL`。
+
+**安装检查：**
+
 ```bash
-# LLM（最少需要一个 provider）
+# FAIR-DS
+curl -sf http://localhost:8083/api/package | head
+
+# FAIRiAgent API
+curl -sf http://localhost:8000/api/v1/health
+
+# 容器内预检（FAIR-DS + LLM）
+docker compose exec fairifier-api python run_fairifier.py validate-document --env-only
+```
+
+预检里的 Embeddings 如果是 warning，表示没装 `sentence-transformers`。词法检索仍然可用，这不阻止运行。
+
+**第一次跑通（不需要 MinerU）：**
+
+```bash
+docker compose exec fairifier-api python run_fairifier.py process \
+  /app/examples/quickstart/earthworm_4n_paper_bioRxiv.md --verbose
+```
+
+- API 文档：http://localhost:8000/docs
+- 8000 端口被占用时：`FAIRIFIER_HOST_PORT=8001 docker compose up -d`，然后打开 http://localhost:8001
+- Apple Silicon 没有官方 arm64 清单。不带平台参数的 `docker pull` 会报 `no matching manifest for linux/arm64`。Compose 固定 `platform: linux/amd64`，由 Docker 模拟运行。不想模拟时，在 `docker/` 里构建原生镜像，或改走下面的本机 Java / conda：
+
+```bash
+FAIRDS_PLATFORM=linux/arm64 docker compose \
+  -f compose.yaml -f compose.fairds-jar.yaml up -d --build fairds
+```
+
+- 细节：[docker/README.md](../../../docker/README.md) · [Docker 部署指南](../../en/guides/DOCKER_DEPLOYMENT.md)
+
+只构建轻量 API 镜像时，在 `docker/` 目录执行：
+
+```bash
+export FAIRIFIER_DOCKERFILE=docker/Dockerfile.minimal
+docker compose up -d --build fairifier-api
+```
+
+## 方式 B — 本机 conda / mamba
+
+- Python 3.11+
+- 只有需要 Web UI 时才要 Node.js 18+
+- FAIR-DS 在 `http://localhost:8083`，或在 `.env` 里改成你的端口
+
+**不用 Docker、直接跑 JAR：**
+
+```bash
+# 下载一次，写入 docker/fairds/fairds.jar
+./scripts/update_fairds_jar.sh
+
+# 需要 Java 21。默认端口 8083；被占用就改端口，并同步改 .env 里的 FAIR_DS_API_URL
+java -Dserver.port=8083 -jar docker/fairds/fairds.jar
+```
+
+**只把 FAIR-DS 放进 Docker，FAIRiAgent 仍在本机：** `cd docker && docker compose up -d fairds`
+
+```bash
+git clone https://github.com/ElderMedic/FAIRiAgent.git
+cd FAIRiAgent
+
+mamba create -n FAIRiAgent python=3.11 -y
+mamba activate FAIRiAgent
+pip install -r requirements.txt
+
+cp env.example .env
+# 编辑 .env：LLM_PROVIDER、LLM_API_KEY（或 Ollama）、FAIR_DS_API_URL=http://localhost:8083
+# 下面的 Markdown 快速开始不需要 MinerU：MINERU_ENABLED=false
+
+# 预检
+mamba run -n FAIRiAgent python run_fairifier.py validate-document --env-only
+
+# 多来源快速开始（Markdown + Excel，不需要 MinerU）
+mamba run -n FAIRiAgent python run_fairifier.py process examples/quickstart/earthworm_4n_paper_bioRxiv.md --verbose
+
+# Web UI（第一次运行会构建前端）
+mamba run -n FAIRiAgent python run_fairifier.py webui
+# 打开 http://localhost:8000
+```
+
+默认安装不包含 `sentence-transformers`，因此不会拉下 CUDA / Triton。本机已经装过这个包时，本地向量嵌入会自动启用；没装时预检给出 warning，检索退回词法匹配。
+
+### 本机 LLM 示例
+
+写在仓库根目录的 `.env` 里。模型变量名是 `FAIRIFIER_LLM_MODEL`。
+
+```bash
+# Ollama
 LLM_PROVIDER=ollama
 FAIRIFIER_LLM_MODEL=qwen3:8b
+FAIRIFIER_LLM_BASE_URL=http://localhost:11434
 
-# FAIR-DS
-FAIR_DS_API_URL=http://localhost:8083
-
-# LangSmith（可选；key 本身不会打开 tracing）
-# LANGSMITH_API_KEY=your_langsmith_key
-# LANGCHAIN_TRACING_V2=true
-# LANGSMITH_PROJECT=fairifier-test
-```
-
-**常见 provider 示例：**
-```bash
-# Zhipu (GLM)
-LLM_PROVIDER=zhipu
-FAIRIFIER_LLM_MODEL=glm-5.2
-LLM_API_KEY=your_zhipu_api_key
+# Qwen
+LLM_PROVIDER=qwen
+FAIRIFIER_LLM_MODEL=qwen-flash
+LLM_API_KEY=your_dashscope_api_key
 
 # DeepSeek
 LLM_PROVIDER=deepseek
 FAIRIFIER_LLM_MODEL=deepseek-v4-pro
 LLM_API_KEY=your_deepseek_api_key
 
-# Qwen
-LLM_PROVIDER=qwen
-FAIRIFIER_LLM_MODEL=qwen-flash
-LLM_API_KEY=your_dashscope_api_key
+# Zhipu (GLM)
+LLM_PROVIDER=zhipu
+FAIRIFIER_LLM_MODEL=glm-5.2
+LLM_API_KEY=your_zhipu_api_key
 
 # Gemini
 LLM_PROVIDER=gemini
@@ -62,252 +139,57 @@ FAIRIFIER_LLM_MODEL=claude-sonnet-4-6
 LLM_API_KEY=your_anthropic_api_key
 ```
 
-### 2️⃣ 启动依赖服务
+宿主机 Ollama 需要先启动并拉模型：
 
-#### 启动 Ollama（如果还没运行）
 ```bash
-# 检查是否运行
-curl http://localhost:11434/api/tags
-
-# 如果没运行，启动它
 ollama serve
-
-# 确保有模型
-ollama list
-# 如果没有 qwen3:8b
 ollama pull qwen3:8b
 ```
 
-#### 启动 FAIR-DS API（如果还没运行）
+LangSmith 默认关闭。要打开追踪，同时设置 `LANGSMITH_API_KEY` 和 `LANGCHAIN_TRACING_V2=true`。只写 key 不会开始追踪。
 
-**方式 A — Docker Compose（推荐，一次拉起 API + FAIR-DS + Qdrant）**
+## 查看结果
 
-参见 [Docker Deployment Guide](../../en/guides/DOCKER_DEPLOYMENT.md) 与 [`docker/README.md`](../../../docker/README.md)：
-
-```bash
-cd docker
-# 可选：在 docker/.env 中配置 LLM_PROVIDER / API key
-# Apple Silicon 已在 compose 中 pin platform=linux/amd64
-# 使用宿主机 Ollama 时默认 FAIRIFIER_LLM_BASE_URL=http://host.docker.internal:11434
-docker compose up -d --build
-```
-
-Compose 内 FAIR-DS 为 `http://fairds:8083`（容器间），宿主机探测用 `http://localhost:8083`。MinerU 默认关闭。
-
-轻量镜像构建（路径相对仓库根目录）：
+命令结束时会打印本次输出目录，一般是 `output/<YYYYMMDD_HHMMSS>/`。
 
 ```bash
-cd docker
-export FAIRIFIER_DOCKERFILE=docker/Dockerfile.minimal
-docker compose up -d --build fairifier-api
+# 元数据
+cat output/*/deliverables/metadata.json | jq '.'
+
+# 处理日志
+cat output/*/logs/processing_log.jsonl | head -20
+
+# LLM 交互
+cat output/*/logs/llm_responses.json | jq '.[0]'
+
+# 工作流报告
+cat output/*/reports/workflow_report.json | jq '.performance'
 ```
 
-**方式 B — 本机 JAR**
+目录里有很多历史运行时，改成 CLI 打印的那一个具体目录。
 
-```bash
-# 检查是否运行
-curl http://localhost:8083/api/package
+跑通的标志是：`validate-document --env-only` 没有失败项，`process` 结束，并且该次目录下存在 `deliverables/metadata.json`。Critic 分数和 LangSmith 追踪都不是安装是否成功的条件。
 
-# 若无响应：下载并启动 FAIR-DS
-# ./scripts/update_fairds_jar.sh   # 写入 docker/fairds/fairds.jar
-# java -jar docker/fairds/fairds.jar
-```
+## 常见问题
 
-### 3️⃣ 运行快速测试
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| API 超时或 LLM 报错 | 密钥或网络不对 | 在 `docker/.env`（Compose）或仓库根 `.env`（本机）设置 `LLM_PROVIDER` 和 `LLM_API_KEY`，再跑 `validate-document --env-only` |
+| FAIR-DS 连不上 | 服务还没起来 | `cd docker && docker compose up -d fairds`，等到 healthy，再 `curl http://localhost:8083/api/package` |
+| `fairifier-api` 一直不起 | 在等 FAIR-DS 健康检查 | `docker compose ps` 和 `docker compose logs fairds`。第一次启动大约 1–2 分钟 |
+| 找不到 Ollama 模型 | 本机没有这个模型 | `ollama pull <model_name>`，例如 `ollama pull qwen3:8b`。容器里访问宿主机用 `FAIRIFIER_LLM_BASE_URL=http://host.docker.internal:11434` |
+| LLM 429 或余额不足 | 云端额度用完 | 给账户充值，或把 `docker/.env` 改成可用密钥 / 本机 Ollama。先预检，再 `process` |
+| 8000 端口被占用 | 已有进程占用 | 在 `docker/` 下执行 `FAIRIFIER_HOST_PORT=8001 docker compose up -d` |
+| 容器访问不到宿主机 Ollama 或 MinerU | 容器网络 | 使用 `host.docker.internal`。Compose 已经配置了 `extra_hosts` |
 
-```bash
-# 激活环境
-mamba activate FAIRiAgent
+## 可选：记忆层（mem0）
 
-# 方式 1: 使用测试脚本（推荐）
-./quick_test.sh
+Compose 已经带了 Qdrant，默认 `MEM0_ENABLED=false`。要打开记忆，在 `docker/.env` 或本机 `.env` 里设置 `MEM0_ENABLED=true`。本机单独跑时再启动 Qdrant，不要和 Compose 抢 6333 端口。
 
-# 方式 2: 直接使用 CLI
-python -m fairifier.cli process examples/inputs/earthworm_4n_paper_bioRxiv.pdf --verbose
-```
+说明见 [Mem0 快速开始](MEM0_QUICKSTART.md)。
 
-### 4️⃣ 可选：启用记忆层（mem0）
+## 下一步
 
-如果你想测试 session memory / persistent memory：
-
-```bash
-# 安装依赖
-pip install mem0ai qdrant-client
-
-# 启动 Qdrant
-docker run -d -p 6333:6333 qdrant/qdrant
-
-# 在 .env 中启用
-MEM0_ENABLED=true
-MEM0_QDRANT_URL=http://localhost:6333
-```
-
-详细说明见：[Mem0 快速开始](MEM0_QUICKSTART.md)
-
----
-
-## 📊 查看结果
-
-### CLI 输出
-你会看到实时的进度输出，包括：
-- ✅ 每个步骤的执行状态
-- 🔍 Critic/LLM-as-Judge 的评估结果
-- 📊 置信度分数（critic / structural / validation / overall）
-- 💾 生成的文件列表
-
-示例片段：
-```
-🎯 Confidence Scores:
-  ✅ critic: 0.78
-  ⚠️ structural: 0.62
-  ✅ validation: 1.00
-  ⚠️ overall: 0.76
-
-quality_metrics:
-  field_completion_ratio: 0.80
-  evidence_coverage_ratio: 0.70
-  avg_field_confidence: 0.83
-```
-
-### 查看生成的文件
-```bash
-# 列出输出文件
-ls -lh output_test_*/
-
-# 查看元数据（美化 JSON）
-cat output_test_*/deliverables/metadata.json | jq '.'
-
-# 查看前 5 个字段
-cat output_test_*/deliverables/metadata.json | jq '.metadata[0:5]'
-
-# 查看处理日志
-cat output_test_*/logs/processing_log.jsonl | head -20
-
-# 查看 LLM 交互
-cat output_test_*/logs/llm_responses.json | jq '.[0]'
-
-# 查看工作流报告
-cat output_test_*/reports/workflow_report.json | jq '.performance'
-```
-
-### 在 LangSmith 查看（可选）
-1. 打开浏览器访问：https://smith.langchain.com/
-2. 登录你的账号
-3. 选择项目：`fairifier-test`
-4. 查看最新的 trace
-
-你会看到完整的执行流程：
-```
-FAIRifierLangGraphApp
-├─ read_file
-├─ parse_document → Critic → ✅ ACCEPT
-├─ plan_workflow （生成指导指令）
-├─ retrieve_knowledge → Critic → ✅ ACCEPT
-├─ generate_json → Critic → ✅ ACCEPT
-└─ finalize
-```
-
----
-
-## 🎯 测试不同的文档
-
-### 创建你自己的测试文档
-```bash
-cat > examples/inputs/my_research.txt << 'EOF'
-Title: 你的研究标题
-
-Authors: 作者姓名
-
-Abstract: 研究摘要...
-
-Keywords: 关键词1, 关键词2...
-
-[添加更多内容...]
-EOF
-
-# 测试你的文档
-python -m fairifier.cli process examples/inputs/my_research.txt --verbose
-```
-
----
-
-## 🐛 常见问题快速解决
-
-### 问题 1: LangSmith 没有追踪数据
-```bash
-# 检查环境变量
-echo $LANGCHAIN_TRACING_V2  # 应该是 "true"
-echo $LANGSMITH_API_KEY     # 应该显示你的 key
-
-# 如果没有，重新设置
-export LANGCHAIN_TRACING_V2=true
-export LANGSMITH_API_KEY=your_key
-```
-
-### 问题 2: FAIR-DS 连接失败
-```bash
-# 检查 FAIR-DS API
-curl http://localhost:8083/api/package
-
-# 如果返回 HTML 或错误，检查 FAIR-DS 是否正确启动
-```
-
-### 问题 3: Ollama 模型找不到
-```bash
-# 拉取模型
-ollama pull qwen3:8b
-
-# 或使用其他模型
-export LLM_MODEL=llama2:7b
-```
-
----
-
-## ✅ 成功的标志
-
-运行成功后，你应该看到：
-
-1. ✅ 所有步骤显示 "ACCEPT" 决策
-2. ✅ 整体置信度 > 75%
-3. ✅ 生成了 3-4 个输出文件
-4. ✅ LangSmith 显示完整的 trace
-5. ✅ `deliverables/metadata.json` 已生成，并包含本次运行抽出的字段
-
----
-
-## 📞 需要帮助？
-
-### 查看详细日志
-```bash
-# 使用 verbose 模式
-python -m fairifier.cli process your_doc.txt --verbose 2>&1 | tee debug.log
-
-# 查找错误
-grep "❌" debug.log
-grep "Error" debug.log
-
-# 查找警告
-grep "⚠️" debug.log
-```
-
-### 检查系统状态
-```bash
-# 检查配置
-python -m fairifier.cli config-info
-
-# 验证文档
-python -m fairifier.cli validate-document your_doc.txt
-```
-
----
-
-## 🎉 下一步
-
-测试成功后：
-1. 📖 阅读 `TEST_GUIDE.md` 了解更多测试选项
-2. 🔍 在 LangSmith 深入分析 LLM 的决策过程
-3. 📝 尝试处理你的真实研究文档
-4. ⚙️ 根据需要调整配置和阈值
-5. 🧠 如果要测试记忆能力，继续阅读 `MEM0_QUICKSTART.md`
-
-**祝测试顺利！** 🚀
+- [测试指南](TEST_GUIDE.md)
+- [系统架构与工作流](../ARCHITECTURE_AND_FLOW.md)
+- [LLM 集成指南](../LLM_INTEGRATION_GUIDE.md)

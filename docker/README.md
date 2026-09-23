@@ -2,15 +2,37 @@
 
 This folder contains the complete deployment ecosystem for FAIRiAgent. Below is a unified guide to understanding and running the Docker configurations provided here.
 
-## 1. Official FAIR-DS Integration
-We use the official FAIR Data Station Docker image provided by the M-Unlock team.
-- **Image**: `docker-registry.wur.nl/m-unlock/docker/fairds:latest` *(WUR-internal registry; for public use, replace with a publicly accessible FAIR-DS image or contact the M-Unlock team)*
-- **Platform**: `linux/amd64` (required on Apple Silicon; Compose sets this automatically)
-- **Storage**: `./fairds_storage` is mounted at `/root/fairds_storage` so ontologies and cached packages persist across restarts
+## 1. FAIR-DS Integration
+The default Compose service pulls the official image:
 
-Whenever the official FAIR-DS team pushes an update, a simple `docker compose pull fairds` will keep your knowledge base backend up-to-date.
+`docker-registry.wur.nl/m-unlock/docker/fairds:latest`
 
-To refresh a local JAR copy (optional, not used by the default compose image path):
+That manifest is **linux/amd64 only**. Check the host before the first pull:
+
+```bash
+./check_fairds_platform.sh
+docker compose up -d --build
+```
+
+- **amd64 hosts** match the image and pull it directly.
+- **Apple Silicon and other ARM hosts** get `no matching manifest for linux/arm64` from a plain `docker pull`. Compose sets `platform: linux/amd64`, so Docker Desktop runs the same image under emulation.
+- **No emulation, or the pull still fails:** build the public JAR for this CPU, or skip the container and use Java 21 / conda.
+
+```bash
+# Native JAR image (set FAIRDS_PLATFORM=linux/arm64 on Apple Silicon)
+FAIRDS_PLATFORM=linux/arm64 docker compose \
+  -f compose.yaml -f compose.fairds-jar.yaml up -d --build fairds
+```
+
+```bash
+# From the repository root, no FAIR-DS container
+./scripts/update_fairds_jar.sh
+java -Dserver.port=8083 -jar docker/fairds/fairds.jar
+```
+
+Storage for the container stays at `./fairds_storage` → `/root/fairds_storage`.
+
+To refresh a local JAR copy (host Java, or the optional native image):
 
 ```bash
 # from repo root
