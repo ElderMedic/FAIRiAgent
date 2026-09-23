@@ -26,6 +26,9 @@
   overview flags live in `MEMORY_GUIDE.md`; upstream candidate consensus
   lives in `SOURCE_GROUNDING_ARCHITECTURE.md`. Stale `TEST_SUMMARY.md` and
   duplicate catalog pages were removed.
+- The entity planner now prefers metadata-table subsets that the source
+  describes as the focal study, and record-column review uses a single-purpose
+  response contract.
 
 ### Added
 
@@ -37,6 +40,11 @@
 
 ### Fixed
 
+- Context-snapshot character offsets now match the stripped text windows.
+- JSON field-evidence search is limited to metadata tables named by the
+  locked entity plan.
+- Structured-output transport retries follow the configured step-retry budget
+  and wait longer between attempts.
 - Output directories are now materialized lazily on first write. API validation
   and project registration occur before any run path is created, preventing
   rejected or never-started requests from leaving empty timestamped stubs;
