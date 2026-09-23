@@ -529,6 +529,18 @@ class JSONGeneratorAgent(BaseAgent):
                 if candidate_index.connect() and candidate_index.embedder_ready():
                     semantic_index = candidate_index
         retrieval_telemetry = state.setdefault("retrieval_telemetry", {}) if state else {}
+        authoritative_table_source_ids = sorted(
+            {
+                str(table.get("source_id") or "").strip()
+                for table in (
+                    ((state or {}).get("entity_plan") or {})
+                    .get("source_coverage", {})
+                    .get("tables", [])
+                )
+                if isinstance(table, Mapping)
+                and str(table.get("source_id") or "").strip()
+            }
+        )
 
         for field in knowledge_items:
             field_metadata = field.get("metadata") or {}
@@ -595,6 +607,7 @@ class JSONGeneratorAgent(BaseAgent):
                     for match in search_table(
                         workspace,
                         query,
+                        source_ids=authoritative_table_source_ids or None,
                         max_rows=config.table_search_max_rows,
                         max_matches=config.table_search_max_matches,
                     ):

@@ -215,6 +215,36 @@ def test_field_evidence_organism_includes_table_row(tmp_path, monkeypatch):
     assert "row 4 column organism" in context
 
 
+def test_field_evidence_scans_only_entity_plan_authoritative_tables(
+    tmp_path, monkeypatch
+):
+    ws = _build_fixture(tmp_path)
+    agent = JSONGeneratorAgent()
+    seen_source_ids = []
+
+    def recording_search_table(workspace, query, **kwargs):
+        seen_source_ids.append(kwargs.get("source_ids"))
+        return search_table(workspace, query, **kwargs)
+
+    monkeypatch.setattr(
+        "fairifier.agents.json_generator.search_table", recording_search_table
+    )
+    agent._build_field_source_evidence_context(
+        _workspace_metadata(ws),
+        [{"name": "organism", "description": "Taxonomic organism name"}],
+        state={
+            "entity_plan": {
+                "source_coverage": {
+                    "tables": [{"source_id": "source_004", "table_name": "samples"}]
+                }
+            }
+        },
+    )
+
+    assert seen_source_ids
+    assert all(source_ids == ["source_004"] for source_ids in seen_source_ids)
+
+
 def test_field_evidence_sampling_site_from_main_manuscript(tmp_path, monkeypatch):
     ws = _build_fixture(tmp_path)
     agent = JSONGeneratorAgent()

@@ -234,6 +234,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         field_evidence_ctx, _ = _ctx_agent._build_field_source_evidence_context(
             source_ws,
             state.get("retrieved_knowledge", []),
+            state=state,
         )
 
         entity_plan_context = render_entity_plan_for_prompt(
