@@ -4,7 +4,7 @@
 [repository README](../README.md). Do not treat historical plans or archive
 notes as the current product contract.
 
-**Last updated:** 2026-09-10
+**Last updated:** 2026-09-23
 
 ---
 

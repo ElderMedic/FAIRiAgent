@@ -28,8 +28,9 @@ FAIRIFIER_LLM_MODEL=qwen3:8b
 # FAIR-DS
 FAIR_DS_API_URL=http://localhost:8083
 
-# LangSmith（可选）
+# LangSmith（可选；key 本身不会打开 tracing）
 # LANGSMITH_API_KEY=your_langsmith_key
+# LANGCHAIN_TRACING_V2=true
 # LANGSMITH_PROJECT=fairifier-test
 ```
 
@@ -37,8 +38,13 @@ FAIR_DS_API_URL=http://localhost:8083
 ```bash
 # Zhipu (GLM)
 LLM_PROVIDER=zhipu
-FAIRIFIER_LLM_MODEL=glm-5.1
+FAIRIFIER_LLM_MODEL=glm-5.2
 LLM_API_KEY=your_zhipu_api_key
+
+# DeepSeek
+LLM_PROVIDER=deepseek
+FAIRIFIER_LLM_MODEL=deepseek-v4-pro
+LLM_API_KEY=your_deepseek_api_key
 
 # Qwen
 LLM_PROVIDER=qwen
@@ -169,16 +175,19 @@ quality_metrics:
 ls -lh output_test_*/
 
 # 查看元数据（美化 JSON）
-cat output_test_*/metadata_json.json | jq '.'
+cat output_test_*/deliverables/metadata.json | jq '.'
 
 # 查看前 5 个字段
-cat output_test_*/metadata_json.json | jq '.metadata[0:5]'
+cat output_test_*/deliverables/metadata.json | jq '.metadata[0:5]'
 
 # 查看处理日志
-cat output_test_*/processing_log.jsonl | head -20
+cat output_test_*/logs/processing_log.jsonl | head -20
 
 # 查看 LLM 交互
-cat output_test_*/llm_responses.json | jq '.[0]'
+cat output_test_*/logs/llm_responses.json | jq '.[0]'
+
+# 查看工作流报告
+cat output_test_*/reports/workflow_report.json | jq '.performance'
 ```
 
 ### 在 LangSmith 查看（可选）
@@ -262,7 +271,7 @@ export LLM_MODEL=llama2:7b
 2. ✅ 整体置信度 > 75%
 3. ✅ 生成了 3-4 个输出文件
 4. ✅ LangSmith 显示完整的 trace
-5. ✅ `metadata_json.json` 包含 15-25 个字段
+5. ✅ `deliverables/metadata.json` 已生成，并包含本次运行抽出的字段
 
 ---
 

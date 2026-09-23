@@ -7,6 +7,7 @@ FAIRiAgent supports the following LLM providers:
 - `ollama` for local models
 - `openai`
 - `qwen`
+- `deepseek`
 - `gemini`
 - `anthropic`
 - `zhipu`
@@ -28,7 +29,7 @@ Notes:
 
 - `FAIRIFIER_LLM_BASE_URL` is mainly used for `ollama` and OpenAI-compatible endpoints.
 - `gemini` and `anthropic` use their official SDK/API endpoints and ignore `FAIRIFIER_LLM_BASE_URL`.
-- `LANGSMITH_API_KEY` is optional and only needed if you want tracing.
+- `LANGSMITH_API_KEY` does not turn tracing on by itself. Also set `LANGCHAIN_TRACING_V2=true` (or `LANGSMITH_TRACING` / `LANGSMITH_ENABLE`).
 
 ## Provider Examples
 
@@ -58,6 +59,21 @@ LLM_API_KEY=your_dashscope_api_key
 # DASHSCOPE_API_KEY=your_dashscope_api_key
 ```
 
+### DeepSeek
+
+```bash
+LLM_PROVIDER=deepseek
+FAIRIFIER_LLM_MODEL=deepseek-v4-pro
+LLM_API_KEY=your_deepseek_api_key
+
+# Optional fallback alias used by the app:
+# DEEPSEEK_API_KEY=your_deepseek_api_key
+# Optional base URL (default https://api.deepseek.com):
+# DEEPSEEK_API_BASE_URL=https://api.deepseek.com
+```
+
+`deepseek-v4-pro` is the model used when `FAIRIFIER_LLM_MODEL` is unset.
+
 ### Gemini
 
 ```bash
@@ -85,7 +101,7 @@ LLM_API_KEY=your_anthropic_api_key
 
 ```bash
 LLM_PROVIDER=zhipu
-FAIRIFIER_LLM_MODEL=glm-5.1
+FAIRIFIER_LLM_MODEL=glm-5.2
 LLM_API_KEY=your_zhipu_api_key
 
 # Optional fallback alias used by the app:
@@ -124,16 +140,20 @@ Supported LLM providers (configure via `.env` or the web UI where exposed):
 - OpenAI
 - Ollama
 - Anthropic
+- DeepSeek
 - Zhipu
+
+Kimi K3 is an OpenAI-compatible model name, not a separate provider. The client does not send `reasoning_effort=medium` to it when thinking is enabled. Set `LLM_REASONING_EFFORT` if you want an explicit depth.
 
 ## Recommended Defaults
 
 - Structured extraction: keep `LLM_TEMPERATURE=0.3`
+- `LLM_ENABLE_THINKING` defaults to `true` for models that accept a thinking or reasoning control. Set it to `false` for models with no thinking API, and for a frozen historical non-think protocol.
 - Development and local testing:
   - `qwen-flash`
   - `gemini-3.1-pro-preview`
   - local Ollama models if you want offline/local runs
-- Use `LANGSMITH_API_KEY` only when you want tracing and debugging
+- Tracing requires both an API key and `LANGCHAIN_TRACING_V2=true`
 
 ## Troubleshooting
 
@@ -146,6 +166,7 @@ Use one of:
 - `qwen`
 - `gemini`
 - `anthropic`
+- `deepseek`
 - `zhipu`
 
 Aliases normalized internally:
@@ -175,12 +196,20 @@ Set one of:
 - `LLM_API_KEY`
 - `ZHIPU_API_KEY`
 
+### DeepSeek API key not found
+
+Set one of:
+
+- `LLM_API_KEY`
+- `DEEPSEEK_API_KEY`
+
 ### Base URL confusion
 
 - `ollama`: uses `FAIRIFIER_LLM_BASE_URL`
 - `openai`: optional custom base URL, otherwise official API
 - `qwen`: uses Qwen/DashScope-compatible endpoint handling
 - `zhipu`: uses OpenAI-compatible endpoint with default base URL built-in
+- `deepseek`: uses `https://api.deepseek.com` unless `DEEPSEEK_API_BASE_URL` is set
 - `gemini` and `anthropic`: official SDK/API path, no custom base URL needed
 
 ## Related Pages

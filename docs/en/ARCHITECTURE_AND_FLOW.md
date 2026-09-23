@@ -208,7 +208,9 @@ Key artifacts include:
    tokens, configurable USD estimates, and report-only latency/token/cost
    gates. Usage or pricing that a provider does not expose is marked
    `insufficient_data` rather than estimated as zero.
-8. **`validation_report.txt`**: Shex/validator report (optional).
+8. **`reports/validation_report.txt`**: ShEx/validator report (optional).
+
+Preserved source files live under `workspace/source_workspace/`, not at the run root.
 
 Cost estimates use the run-specific rates configured through
 `FAIRIFIER_LLM_INPUT_COST_PER_MILLION_USD`,
@@ -222,7 +224,7 @@ diagnostic and do not change workflow completion status.
 
 ```json
 {
-  "fairifier_version": "V2.2.0",
+  "fairifier_version": "V2.3.0",
   "generated_at": "2026-07-17T18:00:00",
   "document_source": "paper.pdf",
   "overall_confidence": 0.85,

@@ -1,5 +1,68 @@
 # Changelog
 
+## [Unreleased]
+
+### Planned / in progress
+
+- End-to-end 3/6-document LLM re-evaluation after ISA single-projection sync
+  (offline replay on frozen artifacts showed compile is largely a no-op; metric
+  gains require a fresh workflow run).
+- FAIR-DS `/api/upload` as the external compatibility gate once structural
+  quality is stable.
+
+## [2.3.0] - 2026-09-23 – Entity structure planning and benchmark v2
+
+### Added
+
+- **EntityStructurePlanner** builds and audits the five-level ISA entity graph
+  (cardinality, scope, and parent links) before JSON generation. A validated
+  source-table plan can supply record identities. Downstream agents do not
+  merge or invent those rows.
+- Dataset mentions that exactly match metadata-table cell values are shown to
+  the planner as focal-subset candidates. Boilerplate words inside those
+  sentences are not treated as identifiers. Record-column review uses a
+  response contract that contains only `record_column_decisions`.
+- `reports/workflow_report.json` includes `performance`: workflow wall time,
+  per-phase duration, captured LLM latency, observed input/output tokens,
+  configurable USD estimates, and diagnostic latency/token/cost gates. Missing
+  usage or pricing is `insufficient_data`.
+- Provider-safe reasoning controls and persisted LLM usage provenance.
+- Evaluation harness contracts for benchmark v2, model cards, and
+  publication-oriented score reports. Campaign scores, dashboards, and
+  collaborator ground truth stay local and are not part of this release.
+
+### Changed
+
+- ISA value mapping projects source-backed values onto the locked entity plan
+  and enforces field contracts. Entity count is no longer a cutoff that skips
+  deep mapping.
+- When that plan names metadata-table sources, JSON field-evidence table
+  search stays on those source ids.
+- `LLM_ENABLE_THINKING` defaults to `true`, including Docker Compose when the
+  variable is unset. Set it `false` for models with no thinking API. LangSmith
+  tracing stays off until `LANGCHAIN_TRACING_V2=true` (or `LANGSMITH_TRACING` /
+  `LANGSMITH_ENABLE`) and an API key are both present.
+- Maintained English and Chinese guides now describe the entity-planning step,
+  `workspace/source_workspace/`, the `deliverables/` `logs/` `reports/` layout,
+  and the DeepSeek provider (`deepseek-v4-pro` when the model is unset). The
+  documentation catalog is `docs/INDEX.md`.
+
+### Fixed
+
+- Run directories and artifact folders are created on first write. API
+  validation and project registration finish before any run path is created.
+- Context-snapshot character offsets match the stripped text windows.
+- Structured-output transport retries follow `max_step_retries` and wait 5s,
+  then 15s, then 30s between attempts.
+- `fetch_external_url` rejects credentials, private or non-global hosts, and
+  unsafe redirects, and caps response bodies at 2 MiB.
+- FAIR-DS Excel workbooks fill ISA sheets from the compiled matrix.
+- Critic retry progress is deterministic and restorable.
+- Metadata keys are normalized, and structured response schemas reject
+  unexpected fields.
+- Manuscript figure regeneration is a slow test and no longer nests `mamba run`
+  inside `run_tests.py fast`.
+
 ## [2.2.1] - 2026-07-28 – Docker / local quickstart shipping readiness
 
 ### Fixed
@@ -17,53 +80,6 @@
 
 - Root README Docker + local (JAR) quickstart paths with smoke checks;
   `docker/.env.example` for Compose LLM configuration.
-
-## [Unreleased]
-
-### Changed
-
-- Documentation catalog is now a single map in `docs/INDEX.md`. Memory
-  overview flags live in `MEMORY_GUIDE.md`; upstream candidate consensus
-  lives in `SOURCE_GROUNDING_ARCHITECTURE.md`. Stale `TEST_SUMMARY.md` and
-  duplicate catalog pages were removed.
-- The entity planner now prefers metadata-table subsets that the source
-  describes as the focal study, and record-column review uses a single-purpose
-  response contract.
-
-### Added
-
-- `workflow_report.json` now includes `performance`: workflow wall time,
-  per-phase agent duration, captured LLM latency, normalized input/output token
-  usage, configurable token/compute cost estimates, and report-only latency,
-  token, and cost gates. Missing provider usage or pricing is reported as
-  `insufficient_data`, never silently treated as zero.
-
-### Fixed
-
-- Context-snapshot character offsets now match the stripped text windows.
-- JSON field-evidence search is limited to metadata tables named by the
-  locked entity plan.
-- Structured-output transport retries follow the configured step-retry budget
-  and wait longer between attempts.
-- Output directories are now materialized lazily on first write. API validation
-  and project registration occur before any run path is created, preventing
-  rejected or never-started requests from leaving empty timestamped stubs;
-  artifact and source-table directories are created only when used.
-- Hardened `fetch_external_url` against SSRF by rejecting credentials,
-  localhost/private/non-global DNS and connected peers, validating every
-  redirect, disabling automatic redirects, limiting redirect depth, restricting
-  readable content types, and capping responses at 2 MiB.
-- Marked manuscript figure regeneration as a slow test and removed its nested
-  `mamba run`, preventing `run_tests.py fast` from waiting indefinitely on a
-  second environment process.
-
-### Planned / in progress
-
-- End-to-end 3/6-document LLM re-evaluation after ISA single-projection sync
-  (offline replay on frozen artifacts showed compile is largely a no-op; metric
-  gains require a fresh workflow run).
-- FAIR-DS `/api/upload` as the external compatibility gate once structural
-  quality is stable.
 
 ## [2.2.0] - 2026-07-17 – Multi-source ingest, auto repair, ISA sync & provenance
 
@@ -702,6 +718,7 @@ python run_fairifier.py process document.pdf
 
 ## Version History
 
+- **v2.3.0** (2026-09-23): Entity structure planning and benchmark v2
 - **v2.2.1** (2026-07-28): Docker / local quickstart shipping readiness
 - **v2.2.0** (2026-07-17): Multi-source ingest, auto repair, ISA sync & provenance
 - **v2.1.0** (2026-07-14): DeepSeek Pro transition, A/B evaluation & hybrid retrieval

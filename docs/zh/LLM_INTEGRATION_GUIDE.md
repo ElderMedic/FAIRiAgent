@@ -7,6 +7,7 @@ FAIRiAgent 当前支持以下 LLM 提供商：
 - `ollama`：本地模型
 - `openai`
 - `qwen`
+- `deepseek`
 - `gemini`
 - `anthropic`
 - `zhipu`
@@ -28,7 +29,7 @@ FAIRIFIER_LLM_BASE_URL=http://localhost:11434
 
 - `FAIRIFIER_LLM_BASE_URL` 主要给 `ollama` 和 OpenAI-compatible 接口使用。
 - `gemini` 和 `anthropic` 使用官方 SDK/API，不依赖自定义 base URL。
-- `LANGSMITH_API_KEY` 是可选项，仅在需要 tracing 时使用。
+- 只设置 `LANGSMITH_API_KEY` 不会打开 tracing。还需要 `LANGCHAIN_TRACING_V2=true`（或 `LANGSMITH_TRACING` / `LANGSMITH_ENABLE`）。
 
 ## 各提供商配置示例
 
@@ -59,6 +60,21 @@ LLM_API_KEY=your_dashscope_api_key
 # DASHSCOPE_API_KEY=your_dashscope_api_key
 ```
 
+### DeepSeek
+
+```bash
+LLM_PROVIDER=deepseek
+FAIRIFIER_LLM_MODEL=deepseek-v4-pro
+LLM_API_KEY=your_deepseek_api_key
+
+# 也可以使用别名：
+# DEEPSEEK_API_KEY=your_deepseek_api_key
+# 可选 base URL（默认 https://api.deepseek.com）：
+# DEEPSEEK_API_BASE_URL=https://api.deepseek.com
+```
+
+未设置 `FAIRIFIER_LLM_MODEL` 时，DeepSeek 默认模型是 `deepseek-v4-pro`。
+
 ### Gemini
 
 ```bash
@@ -86,7 +102,7 @@ LLM_API_KEY=your_anthropic_api_key
 
 ```bash
 LLM_PROVIDER=zhipu
-FAIRIFIER_LLM_MODEL=glm-5.1
+FAIRIFIER_LLM_MODEL=glm-5.2
 LLM_API_KEY=your_zhipu_api_key
 
 # 也可以使用别名：
@@ -125,16 +141,20 @@ python run_fairifier.py webui
 - OpenAI
 - Ollama
 - Anthropic
+- DeepSeek
 - Zhipu
+
+Kimi K3 是 OpenAI 兼容接口上的模型名，不是单独的 provider。思考开关打开时，客户端也不会向它发送 `reasoning_effort=medium`。需要明确推理深度时设置 `LLM_REASONING_EFFORT`。
 
 ## 推荐设置
 
 - 结构化抽取建议保持 `LLM_TEMPERATURE=0.3`
+- `LLM_ENABLE_THINKING` 对支持思考或推理控制的模型默认为 `true`。没有思考接口的模型，以及已冻结的历史非思考协议，设为 `false`。
 - 开发测试可优先考虑：
   - `qwen-flash`
   - `gemini-3.1-pro-preview`
   - 本地 Ollama 模型
-- 只有在需要 tracing 和调试时再配置 `LANGSMITH_API_KEY`
+- tracing 需要同时具备 API key 和 `LANGCHAIN_TRACING_V2=true`
 
 ## 常见问题
 
@@ -147,6 +167,7 @@ python run_fairifier.py webui
 - `qwen`
 - `gemini`
 - `anthropic`
+- `deepseek`
 - `zhipu`
 
 内部还支持两个别名：
@@ -176,12 +197,20 @@ python run_fairifier.py webui
 - `LLM_API_KEY`
 - `ZHIPU_API_KEY`
 
+### DeepSeek API Key 未生效
+
+请设置以下任一变量：
+
+- `LLM_API_KEY`
+- `DEEPSEEK_API_KEY`
+
 ### base URL 应该怎么理解
 
 - `ollama`：使用 `FAIRIFIER_LLM_BASE_URL`
 - `openai`：可选自定义 base URL，不设置时走官方 API
 - `qwen`：走 Qwen/DashScope 的 OpenAI-compatible 配置路径
 - `zhipu`：走 OpenAI 兼容模式，默认 base URL 已经内置，无需额外配置
+- `deepseek`：默认 `https://api.deepseek.com`，可用 `DEEPSEEK_API_BASE_URL` 覆盖
 - `gemini` 和 `anthropic`：走官方 SDK/API 路径，不需要自定义 base URL
 
 ## 相关文档
