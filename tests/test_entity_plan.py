@@ -7,7 +7,10 @@ from openpyxl import load_workbook
 import fairifier.agents.entity_structure_planner as entity_planner_module
 from fairifier.agents.entity_structure_planner import EntityStructurePlannerAgent
 from fairifier.agents.isa_value_mapper import ISAValueMapperAgent
-from fairifier.agents.response_models import EntityPlanScopeAuditResponse
+from fairifier.agents.response_models import (
+    EntityPlanRecordColumnAuditResponse,
+    EntityPlanScopeAuditResponse,
+)
 from fairifier.graph.excel import _generate_xlsx_local
 from fairifier.graph.nodes import OrchestrateNode
 from fairifier.utils.entity_plan import (
@@ -1351,6 +1354,151 @@ def test_scope_audit_accepts_semantic_decision_alias_and_advisory_extras():
 
     assert parsed["record_column_decisions"][0]["disposition"] == "source_extension"
     assert parsed["record_column_decisions"][0]["source_id"] == ""
+
+
+def test_focused_record_column_audit_has_single_purpose_contract():
+    parsed = EntityPlanRecordColumnAuditResponse.model_validate(
+        {
+            "record_column_decisions": [
+                {
+                    "source_id": "source_001",
+                    "table_name": "Sample information",
+                    "column": "developmental.age",
+                    "disposition": "fairds_mapping",
+                    "level": "sample",
+                    "field_name": "dev_stage",
+                    "data_type": "string",
+                    "rationale": "Developmental labels match the field semantics.",
+                }
+            ]
+        }
+    ).model_dump()
+
+    assert parsed["record_column_decisions"][0]["field_name"] == "dev_stage"
+    with pytest.raises(Exception):
+        EntityPlanRecordColumnAuditResponse.model_validate(
+            {
+                "record_column_decisions": [],
+                "mapping_corrections": [],
+            }
+        )
+
+
+def test_design_dimension_accepts_local_ambiguity_without_discarding_plan():
+    from fairifier.agents.response_models import EntityDesignClaimsResponse
+
+    parsed = EntityDesignClaimsResponse.model_validate(
+        {
+            "investigations": [],
+            "studies": [],
+            "design_groups": [
+                {
+                    "group_id": "group_001",
+                    "label": "uneven design",
+                    "study_row_id": "study_001",
+                    "evidence": "The source reports an incomplete factor series.",
+                    "dimensions": [
+                        {
+                            "name": "input amount",
+                            "level_count": 4,
+                            "explicit_values": [],
+                            "origin": "derived",
+                            "semantic_role": "material_path",
+                            "known_values": [],
+                            "field_mappings": [],
+                            "field_name": None,
+                            "applies_to": ["sample", "assay"],
+                            "unresolved_ambiguities": [
+                                "The complete enumeration is not stated."
+                            ],
+                        }
+                    ],
+                    "unresolved_ambiguities": [],
+                }
+            ],
+            "record_table_plans": [],
+            "design_summary": [],
+            "unresolved_ambiguities": [],
+            "confidence": 0.5,
+        }
+    )
+
+    assert parsed.design_groups[0].dimensions[0].unresolved_ambiguities == [
+        "The complete enumeration is not stated."
+    ]
+
+
+def test_planner_requires_strong_focal_table_candidate_to_be_addressed():
+    profile = {
+        "source_id": "source_001",
+        "table_name": "Samples",
+        "record_count": 6,
+        "applied_filters": [{"column": "project", "value": "study-1"}],
+        "focal_evidence_score": 4,
+    }
+
+    errors = EntityStructurePlannerAgent._candidate_record_plan_errors(
+        {"record_table_plans": []}, [profile]
+    )
+    assert len(errors) == 1
+    assert "project=study-1" in errors[0]
+
+    errors = EntityStructurePlannerAgent._candidate_record_plan_errors(
+        {
+            "record_table_plans": [
+                {
+                    "source_id": "source_001",
+                    "table_name": "Samples",
+                    "filters": [{"column": "project", "value": "study-1"}],
+                }
+            ]
+        },
+        [profile],
+    )
+    assert len(errors) == 1
+    assert "marked incomplete" in errors[0]
+
+    errors = EntityStructurePlannerAgent._candidate_record_plan_errors(
+        {
+            "record_table_plans": [
+                {
+                    "source_id": "source_001",
+                    "table_name": "Samples",
+                    "covers_complete_focal_study": True,
+                    "filters": [{"column": "project", "value": "study-1"}],
+                }
+            ]
+        },
+        [profile],
+    )
+    assert errors == []
+
+
+def test_planner_recovers_focal_dataset_evidence_from_full_source_text():
+    profiles = [
+        {
+            "source_id": "source_001",
+            "table_name": "Samples",
+            "applied_filters": [{"column": "project", "value": "study-1"}],
+            "focal_evidence_score": 0,
+        },
+        {
+            "source_id": "source_001",
+            "table_name": "Samples",
+            "applied_filters": [{"column": "project", "value": "study-2"}],
+            "focal_evidence_score": 0,
+        },
+    ]
+
+    preferred = EntityStructurePlannerAgent._preferred_dataset_profiles(
+        profiles,
+        "All sequencing data generated in this study were submitted under "
+        "accession study-2. Study-1 was used as a reference dataset.",
+    )
+
+    assert len(preferred) == 1
+    assert preferred[0]["applied_filters"][0]["value"] == "study-2"
+    assert preferred[0]["focal_evidence_score"] > 0
 
 
 def test_record_column_audit_infers_omitted_table_context_only_when_unique():

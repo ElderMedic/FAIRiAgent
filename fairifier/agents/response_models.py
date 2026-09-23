@@ -164,6 +164,10 @@ class DesignClaimDimensionResponse(BaseModel):
         default_factory=list,
         description="Subset of observationunit, sample, assay",
     )
+    unresolved_ambiguities: List[str] = Field(
+        default_factory=list,
+        description="Dimension-local source uncertainty retained for audit",
+    )
 
 
 class DesignClaimGroupResponse(BaseModel):
@@ -440,6 +444,16 @@ class EntityPlanRecordColumnDecisionResponse(BaseModel):
     field_name: Optional[str] = None
     data_type: str = "string"
     rationale: str = ""
+
+
+class EntityPlanRecordColumnAuditResponse(BaseModel):
+    """Focused audit contract containing only complete source-column decisions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    record_column_decisions: List[EntityPlanRecordColumnDecisionResponse] = Field(
+        default_factory=list
+    )
 
 
 class EntityPlanScopeAuditResponse(BaseModel):

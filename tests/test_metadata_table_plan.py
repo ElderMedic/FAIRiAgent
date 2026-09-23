@@ -7,6 +7,7 @@ import json
 from fairifier.utils.metadata_table_plan import (
     materialize_record_table_plans,
     metadata_table_profiles,
+    metadata_table_profiles_for_document_datasets,
     metadata_table_profiles_for_record_plans,
     normalized_table_rows,
 )
@@ -171,6 +172,46 @@ def test_record_plan_profile_uses_only_exactly_filtered_focal_rows(tmp_path):
         "sample-a",
         "sample-b",
     }
+
+
+def test_dataset_evidence_exposes_exact_focal_table_profile_without_id_patterns(
+    tmp_path,
+):
+    workspace, _ = _workspace(tmp_path, _raw_rows())
+
+    profiles = metadata_table_profiles_for_document_datasets(
+        workspace,
+        ["study-1 (data generated in this work)"],
+    )
+
+    assert len(profiles) == 1
+    profile = profiles[0]
+    assert profile["record_count"] == 2
+    assert profile["unfiltered_record_count"] == 3
+    assert profile["applied_filters"] == [
+        {"column": "project", "value": "study-1"}
+    ]
+    assert profile["document_dataset_mentions"] == [
+        "study-1 (data generated in this work)"
+    ]
+    assert profile["candidate_filter_requires_planner_confirmation"] is True
+    assert profile["focal_evidence_score"] > 0
+
+
+def test_dataset_candidates_rank_source_declared_focal_data_before_context(tmp_path):
+    workspace, _ = _workspace(tmp_path, _raw_rows())
+
+    profiles = metadata_table_profiles_for_document_datasets(
+        workspace,
+        ["study-2", "study-1 (all sequencing data from this study)"],
+    )
+
+    assert [item["applied_filters"][0]["value"] for item in profiles] == [
+        "study-1",
+        "study-2",
+    ]
+    assert profiles[0]["focal_evidence_score"] > 0
+    assert profiles[1]["focal_evidence_score"] == 0
 
 
 def test_keeps_real_physical_headers(tmp_path):
