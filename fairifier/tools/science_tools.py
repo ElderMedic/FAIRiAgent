@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlsplit
 import requests
 from langchain_core.tools import tool
 
+from .. import __version__
 from ..config import config
 from ..services.retrieval_cache import get_cached_value, make_cache_key, store_cached_value
 
@@ -114,7 +115,7 @@ def _fetch_public_response(url: str) -> tuple[requests.Response, bytes]:
         response = requests.get(
             validated_url,
             timeout=10,
-            headers={"User-Agent": "FAIRiAgent/2.2.1"},
+            headers={"User-Agent": f"FAIRiAgent/{__version__}"},
             allow_redirects=False,
             stream=True,
         )

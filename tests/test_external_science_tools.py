@@ -2,6 +2,7 @@ import socket
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from fairifier import __version__
 from fairifier.tools.science_tools import create_science_tools
 
 
@@ -51,7 +52,7 @@ def test_fetch_external_url(mock_get, _mock_dns):
     mock_get.assert_called_once_with(
         "https://example.com",
         timeout=10,
-        headers={"User-Agent": "FAIRiAgent/2.2.1"},
+        headers={"User-Agent": f"FAIRiAgent/{__version__}"},
         allow_redirects=False,
         stream=True,
     )
