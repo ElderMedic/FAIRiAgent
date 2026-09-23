@@ -89,6 +89,15 @@ def _package_queries(package: Mapping[str, Any]) -> List[Dict[str, str]]:
     return queries
 
 
+def _stripped_source_span(source_start: int, raw: str) -> Tuple[int, int, str]:
+    """Map stripped content back to source offsets inside ``raw``."""
+
+    stripped = raw.strip()
+    lead = len(raw) - len(raw.lstrip())
+    start = source_start + lead
+    return start, start + len(stripped), stripped
+
+
 def _segments(source_id: str, text: str, *, max_chars: int) -> Iterable[Tuple[int, int, str]]:
     """Yield stable paragraph/window segments with source offsets."""
 
@@ -103,16 +112,16 @@ def _segments(source_id: str, text: str, *, max_chars: int) -> Iterable[Tuple[in
         end = start + len(paragraph)
         cursor = end
         if len(paragraph) <= max_chars:
-            yield start, end, paragraph.strip()
+            yield _stripped_source_span(start, paragraph)
             continue
         # Long PDF text blocks are split into overlapping fixed windows.  The
         # overlap preserves terms that happen to straddle a window boundary.
         step = max(1, max_chars - 120)
         for offset in range(0, len(paragraph), step):
-            window = paragraph[offset : offset + max_chars].strip()
-            if not window:
+            raw = paragraph[offset : offset + max_chars]
+            if not raw.strip():
                 continue
-            yield start + offset, start + offset + len(window), window
+            yield _stripped_source_span(start + offset, raw)
             if offset + max_chars >= len(paragraph):
                 break
 

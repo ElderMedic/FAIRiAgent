@@ -9,6 +9,7 @@ import pytest
 
 from evaluation.benchmark.context_snapshots import (
     ContextSnapshotError,
+    _segments,
     manifest_with_context_paths,
     materialize_context_snapshots,
 )
@@ -126,6 +127,17 @@ def test_materialize_context_snapshots_is_deterministic_and_excludes_ground_trut
     assert "standards_context_path" not in manifest["instances"][0]
     assert patched["instances"][0]["standards_context_path"].endswith("standards_context.json")
     assert patched["provenance"]["context_snapshot_retrieval_method"] == "lexical"
+
+
+def test_segments_character_offsets_match_stripped_windows() -> None:
+    padded = "   " + ("alpha beta gamma delta epsilon zeta eta theta iota kappa " * 40)
+    short = "Intro\n\n   short padded paragraph   \n\nNext"
+    for text, max_chars in ((padded, 80), (short, 1_200)):
+        yielded = list(_segments("src", text, max_chars=max_chars))
+        assert yielded
+        for start, end, window in yielded:
+            assert text[start:end] == window
+            assert 0 <= start < end <= len(text)
 
 
 def test_semantic_context_requires_an_explicit_non_token_free_campaign(tmp_path: Path) -> None:
