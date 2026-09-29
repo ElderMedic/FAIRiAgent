@@ -6,6 +6,7 @@ Comprehensive evaluation system for assessing FAIRiAgent's metadata extraction q
 [methodology](../docs/en/EVALUATION_METHODOLOGY.md) (scientific contract) →
 this README (commands) → [harness](harness/README.md) →
 [config](config/README.md). Full catalog: [docs/INDEX.md](../docs/INDEX.md).
+Local run inventory, kept separate for `evaluation/` and `output/`: `python evaluation/scripts/build_run_catalog.py` ([reports README](reports/README.md#run-catalog)).
 
 > **Benchmark redesign in progress (2026-07-21).** The authoritative scientific
 > contract is [Evaluation Benchmark Methodology](../docs/en/EVALUATION_METHODOLOGY.md),

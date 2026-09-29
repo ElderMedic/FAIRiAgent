@@ -13,6 +13,12 @@
   `sentence-transformers`. Local embeddings stay optional, and
   `validate-document` warns when the package is absent.
 
+### Added
+
+- `evaluation/scripts/build_run_catalog.py` writes a local inventory of
+  evaluation runs and output runs as two CSV tables under
+  `evaluation/reports/run_catalog/`. The tables are generated and gitignored.
+
 ### Planned / in progress
 
 - End-to-end 3/6-document LLM re-evaluation after ISA single-projection sync

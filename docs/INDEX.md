@@ -4,7 +4,7 @@
 [repository README](../README.md). Do not treat historical plans or archive
 notes as the current product contract.
 
-**Last updated:** 2026-09-23
+**Last updated:** 2026-09-24
 
 ---
 
@@ -71,6 +71,7 @@ publication condition names).
 | [Expected outcomes](../evaluation/expected_outcomes/README.md) | Local fixture protocol |
 | [Dataset notes](../evaluation/datasets/DATASET_README.md) | What the corpus is |
 | [Analysis](../evaluation/analysis/README.md) | How to inspect a run |
+| [Run catalog](../evaluation/reports/README.md#run-catalog) | Local inventory of evaluation and output runs |
 
 Campaign scores, dashboards, and manuscript drafts stay local and are not
 catalogued here.

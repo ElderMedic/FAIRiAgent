@@ -1,4 +1,7 @@
-.PHONY: paper-results paper-smoke paper-analysis paper-figures paper-clean
+.PHONY: paper-results paper-smoke paper-analysis paper-figures paper-clean run-catalog
+
+run-catalog:
+	$(PYTHON) evaluation/scripts/build_run_catalog.py
 
 PYTHON ?= python
 

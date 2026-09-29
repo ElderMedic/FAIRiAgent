@@ -28,6 +28,16 @@ For a workflow-oriented tutorial, start from:
 
 Campaign score packs and manuscript figures stay local and are not listed here.
 
+## Run catalog
+
+`evaluation/reports/run_catalog/` is a generated inventory of local runs, split into `evaluation_runs.csv` and `output_runs.csv`. Refresh it with:
+
+```bash
+mamba run -n FAIRiAgent python evaluation/scripts/build_run_catalog.py
+```
+
+The CSV files are overwritten on each refresh. `result_status=complete` means metadata exists and the workflow or eval record succeeded. `deliverable_only` means metadata exists without that success record. The script does not open `runtime_config.json` (those files hold API keys); model identity comes from the path, `eval_result.json`, and `run_index.json`. Campaign-level scores are copied onto each matching document and marked `score_scope=campaign_document`; `score_shared_across_runs=true` means that number is not unique to one repetition. Benchmark v2 axes from `run_index.json` are separate columns. This directory is gitignored.
+
 ## Key Figures
 
 - `evaluation/analysis/output/key_figures/evaluation_summary.png`

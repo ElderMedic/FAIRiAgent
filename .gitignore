@@ -431,6 +431,8 @@ evaluation/reports/*_RESULTS.md
 evaluation/reports/*.json
 evaluation/reports/*.csv
 evaluation/reports/*.png
+# Regenerated local run inventory (unpublished paths and scores)
+evaluation/reports/run_catalog/
 # Nested collaborator case audits (local paths, draft ground truth, unpublished scores)
 evaluation/reports/michael_case_audit_*/
 
