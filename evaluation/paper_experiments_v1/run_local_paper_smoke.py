@@ -30,6 +30,8 @@ MODEL_CONFIGS = {
     "laguna-xs-2.1": CONFIG_DIR / "ollama_laguna-xs-2.1_v1.4.0.env",
     "nemotron-cascade-2-30b": CONFIG_DIR / "ollama_nemotron-cascade-2-30b_v1.4.0.env",
     "qwen3-14b":   CONFIG_DIR / "ollama_qwen3-14b_v1.4.0.env",
+    "qwen3.8-27b": CONFIG_DIR / "ollama_qwen3.8-27b.env",
+    "qwen3.8-27b-vllm": CONFIG_DIR / "vllm_qwen3.8-27b.env",
 }
 
 

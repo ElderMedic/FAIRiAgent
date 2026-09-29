@@ -333,3 +333,27 @@ def test_reconcile_metadata_batch_preserves_multirow_duplicates():
     assert len(reconciled) == 4
     assert [item["entity_id"] for item in reconciled[:2]] == ["exp1_control", "exp1_zno"]
     assert [item["entity_id"] for item in reconciled[2:]] == ["exp1_control", "exp1_zno"]
+
+
+def test_qwen_extra_body_dashscope_keeps_enable_thinking_only(monkeypatch):
+    helper = LLMHelper.__new__(LLMHelper)
+    monkeypatch.setattr(config, "llm_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+    monkeypatch.setattr(config, "llm_top_k", None)
+    monkeypatch.setattr(config, "llm_reasoning_effort", None)
+
+    extra = helper._qwen_extra_body(True)
+    assert extra == {"enable_thinking": True}
+
+
+def test_qwen_extra_body_local_vllm_uses_chat_template_kwargs(monkeypatch):
+    helper = LLMHelper.__new__(LLMHelper)
+    monkeypatch.setattr(config, "llm_base_url", "http://127.0.0.1:8001/v1")
+    monkeypatch.setattr(config, "llm_top_k", 20)
+    monkeypatch.setattr(config, "llm_reasoning_effort", "xhigh")
+
+    extra = helper._qwen_extra_body(True)
+    assert extra["enable_thinking"] is True
+    assert extra["top_k"] == 20
+    assert extra["chat_template_kwargs"]["enable_thinking"] is True
+    assert extra["chat_template_kwargs"]["preserve_thinking"] is True
+    assert extra["chat_template_kwargs"]["reasoning_effort"] == "xhigh"

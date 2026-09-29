@@ -93,6 +93,37 @@ If a script expects `--model-configs` or looks for `model_configs/*.env`, you ca
 | `ollama_laguna-xs-2.1_v1.4.0.env` | `laguna-xs-2.1` | new, ~20GB |
 | `ollama_nemotron-cascade-2-30b_v1.4.0.env` | `nemotron-cascade-2:30b` | new, ~24GB |
 | `ollama_qwen3-14b_v1.4.0.env` | `qwen3:14b` | new, ~9.3GB |
+| `ollama_qwen3.8-27b.env` | `qwen3.8:27b` | official Ollama library, ~18GB, 256K ctx |
+
+## vLLM presets (local OpenAI-compatible)
+
+| Config file | Model | Notes |
+|---|---|---|
+| `vllm_qwen3.8-27b.env` | `Qwen/Qwen3.8-27B` | thinking mode sampling; API `http://127.0.0.1:8001/v1` |
+
+Copy the tracked template first (`vllm_qwen3.8-27b.env.template`). Serve on GPU 1 (leaves MinerU on GPU 0):
+
+```bash
+evaluation/scripts/serve_qwen3.8_27b_vllm.sh
+# wait until curl -s http://127.0.0.1:8001/v1/models succeeds
+
+mamba run -n FAIRiAgent python -m fairifier.cli process examples/inputs/sample_study.txt \
+  --output-dir output/smoke_qwen3.8-27b \
+  --env-file evaluation/config/model_configs/vllm_qwen3.8-27b.env \
+  --project-id smoke_qwen3.8-27b-vllm
+```
+
+Ollama library tag (`qwen3.8:27b`, ~18GB):
+
+```bash
+# After: docker exec ollama ollama pull qwen3.8:27b
+mamba run -n FAIRiAgent python -m fairifier.cli process examples/inputs/sample_study.txt \
+  --output-dir output/smoke_qwen3.8-27b-ollama \
+  --env-file evaluation/config/model_configs/ollama_qwen3.8-27b.env \
+  --project-id smoke_qwen3.8-27b-ollama
+```
+
+Official vLLM flags: `--reasoning-parser qwen3`, `--tool-call-parser qwen3_coder`, `--mm-encoder-tp-mode data`. Thinking-mode sampling: `temperature=1.0`, `top_p=0.95`, `top_k=20`, `reasoning_effort=xhigh`.
 
 ### Quick smoke (single document)
 

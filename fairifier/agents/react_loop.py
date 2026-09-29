@@ -127,6 +127,16 @@ class ReactLoopMixin:
             extra_body = {"thinking": {"type": "disabled"}}
         else:
             extra_body = {"enable_thinking": False}
+            base_url = (config.llm_base_url or "").lower()
+            if any(host in base_url for host in ("localhost", "127.0.0.1", "0.0.0.0")):
+                extra_body["chat_template_kwargs"] = {
+                    "enable_thinking": False,
+                    "preserve_thinking": False,
+                }
+
+        chat_kwargs = {}
+        if config.llm_top_p is not None:
+            chat_kwargs["top_p"] = config.llm_top_p
 
         return ChatOpenAI(
             model=config.llm_model,
@@ -135,8 +145,9 @@ class ReactLoopMixin:
             temperature=config.llm_temperature,
             max_tokens=self._resolved_react_max_tokens(),
             extra_body=extra_body,
-            timeout=180,
+            timeout=config.llm_timeout,
             max_retries=3,
+            **chat_kwargs,
         )
 
     def _get_openai_react_model(self, base_model: Any):

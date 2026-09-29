@@ -1108,7 +1108,29 @@ class LLMHelper:
     def build_usage_callback(self, operation_prefix: str) -> BaseCallbackHandler:
         """Capture deep-agent inner-loop model calls in the shared telemetry."""
         return _LLMUsageCallback(self, operation_prefix)
-    
+
+    @staticmethod
+    def _is_local_openai_compatible(base_url: Optional[str]) -> bool:
+        if not base_url:
+            return False
+        lowered = base_url.lower()
+        return any(host in lowered for host in ("localhost", "127.0.0.1", "0.0.0.0"))
+
+    def _qwen_extra_body(self, enable_thinking: bool) -> Dict[str, Any]:
+        """DashScope uses top-level enable_thinking; vLLM wants chat_template_kwargs."""
+        extra: Dict[str, Any] = {"enable_thinking": enable_thinking}
+        if config.llm_top_k is not None:
+            extra["top_k"] = config.llm_top_k
+        if self._is_local_openai_compatible(config.llm_base_url):
+            chat_kwargs: Dict[str, Any] = {
+                "enable_thinking": enable_thinking,
+                "preserve_thinking": enable_thinking,
+            }
+            if enable_thinking and config.llm_reasoning_effort:
+                chat_kwargs["reasoning_effort"] = config.llm_reasoning_effort
+            extra["chat_template_kwargs"] = chat_kwargs
+        return extra
+
     async def _call_llm_json_object(
         self,
         messages,
@@ -1128,7 +1150,7 @@ class LLMHelper:
             # DeepSeek JSON Output: https://api-docs.deepseek.com/guides/json_mode
             bind_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         elif self.provider == "qwen":
-            bind_kwargs["extra_body"] = {"enable_thinking": False}
+            bind_kwargs["extra_body"] = self._qwen_extra_body(False)
 
         try:
             llm_with_params = self.llm.bind(**bind_kwargs)
@@ -1221,10 +1243,11 @@ class LLMHelper:
 
         # For Qwen provider, use extra_body as per official documentation
         if self.provider == "qwen":
+            qwen_extra = self._qwen_extra_body(enable_thinking)
             if enable_thinking:
                 try:
                     llm_with_params = self.llm.bind(
-                        extra_body={"enable_thinking": True},
+                        extra_body=qwen_extra,
                         stream=True,
                     )
                     full_text = ""
@@ -1238,7 +1261,7 @@ class LLMHelper:
                     logger.warning(f"Streaming failed: {e}, trying non-streaming")
                     try:
                         llm_with_params = self.llm.bind(
-                            extra_body={"enable_thinking": True},
+                            extra_body=qwen_extra,
                         )
                         result = await llm_with_params.ainvoke(messages, config=run_config)
                         self._log_llm_response(result, messages, operation_name)
@@ -1250,7 +1273,7 @@ class LLMHelper:
                         return result
             else:
                 try:
-                    llm_with_params = self.llm.bind(extra_body={"enable_thinking": False})
+                    llm_with_params = self.llm.bind(extra_body=qwen_extra)
                     result = await llm_with_params.ainvoke(messages, config=run_config)
                     self._log_llm_response(result, messages, operation_name)
                     return result
@@ -1628,7 +1651,7 @@ class LLMHelper:
                 temperature=config.llm_temperature,
                 top_p=config.llm_top_p,
                 max_tokens=self._resolved_max_tokens(),  # DashScope rejects values above provider limit
-                timeout=180,
+                timeout=config.llm_timeout,
                 max_retries=3,
             )
         elif self.provider == "deepseek":

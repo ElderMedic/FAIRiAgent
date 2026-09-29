@@ -83,17 +83,18 @@ class FAIRifierConfig:
     # Optional provider/model-specific sampling controls.  These remain unset
     # by default so existing profiles keep their provider defaults.
     llm_top_p: Optional[float] = None
-    llm_top_k: Optional[int] = None
+    llm_top_k: Optional[int] = None  # Optional top-k; passed via extra_body for OpenAI-compatible APIs
     # Ollama's runtime name for the model-card ``repetition_penalty``
     # setting. Keep unset by default so legacy profiles retain provider
     # defaults.
     llm_repeat_penalty: Optional[float] = None
     # Passed through Ollama's per-call options when a model card recommends it.
     llm_presence_penalty: Optional[float] = None
+    llm_timeout: int = 180  # Per-call HTTP timeout (seconds) for OpenAI-compatible providers
     llm_max_tokens: int = 16384  # Conservative default for test/dev cost control
     llm_enable_thinking: bool = True  # Default ON for thinking-capable models; set False only for no-think models or a frozen non-think protocol
     llm_thinking_budget: int = 8192  # Token budget for thinking/reasoning (Gemini, Anthropic, Open Models). 0 = model default
-    # Provider reasoning effort when supported (e.g. Kimi K3: low|high|max). None = omit / provider default.
+    # Provider reasoning effort when supported (e.g. Kimi K3: low|high|max; Qwen3.8: xhigh|medium|low).
     llm_reasoning_effort: Optional[str] = None
     # OpenAI Responses API routing. None = auto (official api.openai.com → True so
     # Deep ReAct can combine function tools with reasoning_effort / high).
@@ -761,12 +762,12 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
 
     if os.getenv("LLM_TEMPERATURE"):
         config_instance.llm_temperature = float(os.getenv("LLM_TEMPERATURE"))
-
     if os.getenv("LLM_TOP_P"):
         config_instance.llm_top_p = float(os.getenv("LLM_TOP_P"))
-
     if os.getenv("LLM_TOP_K"):
         config_instance.llm_top_k = int(os.getenv("LLM_TOP_K"))
+    if os.getenv("LLM_TIMEOUT"):
+        config_instance.llm_timeout = int(os.getenv("LLM_TIMEOUT"))
 
     if os.getenv("LLM_REPEAT_PENALTY"):
         config_instance.llm_repeat_penalty = float(os.getenv("LLM_REPEAT_PENALTY"))
