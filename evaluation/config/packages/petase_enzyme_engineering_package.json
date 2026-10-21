@@ -1,6 +1,6 @@
 {
   "packageName": "petase_enzyme_engineering",
-  "itemCount": 59,
+  "itemCount": 93,
   "metadata": [
     {
       "label": "Associated publication",
@@ -12,7 +12,7 @@
         "syntax": "{DOI}",
         "example": "10.1038/s41586-020-2149-4",
         "preferredUnit": "",
-        "definition": "DOI of the source publication for this PETase investigation.",
+        "definition": "An identifier for a literature publication where the investigation is described. Use of DOIs is recommended.",
         "ontology": null,
         "regex": null,
         "file": false,
@@ -25,19 +25,19 @@
       "label": "study identifier",
       "sheetName": "Study",
       "packageName": "petase_enzyme_engineering",
-      "requirement": "RECOMMENDED",
+      "requirement": "MANDATORY",
       "term": {
-        "label": "study identifier",
-        "syntax": "{text}",
-        "example": "10.1038/s41586-020-2149-4",
+        "label": "Study identifier",
+        "syntax": "^{id}{5,50}$",
+        "example": "PETaseStudy01",
         "preferredUnit": "",
-        "definition": "Identifier of the PETase study, typically the DOI or internal study ID. This should match the Study row that owns the reaction observation units.",
+        "definition": "Identifier corresponding to the study",
         "ontology": null,
         "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
-        "url": null
+        "url": "http://schema.org/identifier"
       }
     },
     {
@@ -46,32 +46,32 @@
       "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
-        "label": "observation unit identifier",
+        "label": "Observation unit identifier",
         "syntax": "^{id}{5,50}$",
         "example": "PETaseOU01",
         "preferredUnit": "",
-        "definition": "Unique identifier for one PETase experimental subject under study, analogous to the individual, group, fermenter, or source-material object that receives treatments and is observed. For PETase studies this is usually an enzyme variant, substrate material, enzyme-substrate pair, enzyme panel, or substrate panel. Do not use this row for individual analytical measurements or for each reaction-condition readout.",
+        "definition": "Identifier corresponding to the entity that is being observed",
         "ontology": null,
         "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
-        "url": null
+        "url": "http://schema.org/identifier"
       }
     },
     {
-      "label": "observation unit type",
+      "label": "PETase observation unit type",
       "sheetName": "ObservationUnit",
       "packageName": "petase_enzyme_engineering",
       "requirement": "MANDATORY",
       "term": {
-        "label": "observation unit type",
-        "syntax": "{text}",
-        "example": "enzyme_substrate_pair",
+        "label": "PETase observation unit type",
+        "syntax": "(?:material_preparation|reaction_vessel)",
+        "example": "reaction_vessel",
         "preferredUnit": "",
-        "definition": "Type of PETase experimental subject. Controlled vocabulary: enzyme_variant | pet_substrate | proxy_substrate | enzyme_substrate_pair | enzyme_panel | substrate_panel | reaction_vessel | other.",
+        "definition": "Object independently observed: a material preparation or an individual reaction vessel. Repeated readings of one vessel keep its identifier; independent reactors use distinct identifiers.",
         "ontology": null,
-        "regex": "^(enzyme_variant|pet_substrate|proxy_substrate|enzyme_substrate_pair|enzyme_panel|substrate_panel|reaction_vessel|other)$",
+        "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
@@ -101,13 +101,13 @@
       "label": "enzyme sample identifier",
       "sheetName": "ObservationUnit",
       "packageName": "petase_enzyme_engineering",
-      "requirement": "MANDATORY",
+      "requirement": "RECOMMENDED",
       "term": {
         "label": "enzyme sample identifier",
-        "syntax": "{text}",
+        "syntax": "^{id}{5,50}$",
         "example": "ENZ_LCC_ICCG",
         "preferredUnit": "",
-        "definition": "Reference to the enzyme variant material used in this reaction ObservationUnit. Must match an enzyme identifier in the Sample sheet.",
+        "definition": "Reference to the Sample sample identifier for the enzyme material used in this reaction. Required for a reaction vessel; omit for a material preparation. Do not reference the optional material alias instead.",
         "ontology": null,
         "regex": null,
         "file": false,
@@ -120,279 +120,13 @@
       "label": "substrate sample identifier",
       "sheetName": "ObservationUnit",
       "packageName": "petase_enzyme_engineering",
-      "requirement": "MANDATORY",
-      "term": {
-        "label": "substrate sample identifier",
-        "syntax": "{text}",
-        "example": "SUB_GF_PET_amorphous",
-        "preferredUnit": "",
-        "definition": "Reference to the PET or proxy substrate material used in this reaction ObservationUnit. Must match a substrate identifier in the Sample sheet.",
-        "ontology": null,
-        "regex": null,
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "reaction scale",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "OPTIONAL",
-      "term": {
-        "label": "reaction scale",
-        "syntax": "{text}",
-        "example": "bioreactor",
-        "preferredUnit": "",
-        "definition": "Experimental scale used during the assay/treatment applied to the PETase subject. Controlled vocabulary: microplate | flask | bottle | bioreactor | pilot_scale | industrial | not_reported | other.",
-        "ontology": null,
-        "regex": "^(microplate|flask|bottle|bioreactor|pilot_scale|industrial|not_reported|other)$",
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "reactor volume",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "OPTIONAL",
-      "term": {
-        "label": "reactor volume",
-        "syntax": "{number} {unit}",
-        "example": "50 mL",
-        "preferredUnit": "mL",
-        "definition": "Total reaction volume or vessel scale for the assay/treatment condition. Keep the reported unit when litres, millilitres, or pilot-scale vessels are used.",
-        "ontology": null,
-        "regex": null,
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "enzyme loading",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "OPTIONAL",
-      "term": {
-        "label": "enzyme loading",
-        "syntax": "{text}",
-        "example": "0.2 mg enzyme/g PET",
-        "preferredUnit": "mg/g PET",
-        "definition": "Amount of enzyme applied in the assay/treatment condition. Preserve the reported basis, such as mg enzyme/g PET, micromolar enzyme, mg/mL, or mass fraction.",
-        "ontology": null,
-        "regex": null,
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "substrate solid loading",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "OPTIONAL",
-      "term": {
-        "label": "substrate solid loading",
-        "syntax": "{text}",
-        "example": "2 g PET/L",
-        "preferredUnit": "g/L",
-        "definition": "Concentration or fraction of PET substrate in the assay/treatment condition, reported as g/L, % w/w, g/kg, or the paper-specific basis.",
-        "ontology": null,
-        "regex": null,
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "buffer type",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
       "requirement": "RECOMMENDED",
       "term": {
-        "label": "buffer type",
-        "syntax": "{text}",
-        "example": "potassium phosphate",
+        "label": "substrate sample identifier",
+        "syntax": "^{id}{5,50}$",
+        "example": "SUB_GF_PET_amorphous",
         "preferredUnit": "",
-        "definition": "Buffer system or reaction medium used in the assay/treatment condition. Controlled vocabulary: potassium phosphate | sodium phosphate | glycine-NaOH | glycine-OH | Tris-HCl | HEPES | borate | water | phosphate | citrate | acetate | carbonate | other.",
-        "ontology": null,
-        "regex": "^(potassium phosphate|sodium phosphate|glycine-NaOH|glycine-OH|Tris-HCl|HEPES|borate|water|phosphate|citrate|acetate|carbonate|other)$",
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "buffer concentration",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "OPTIONAL",
-      "term": {
-        "label": "buffer concentration",
-        "syntax": "{number} {unit}",
-        "example": "100 mM",
-        "preferredUnit": "mM",
-        "definition": "Molar concentration of the reaction buffer when reported.",
-        "ontology": null,
-        "regex": null,
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "reaction pH",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "MANDATORY",
-      "term": {
-        "label": "reaction pH",
-        "syntax": "{number}",
-        "example": "8.0",
-        "preferredUnit": "",
-        "definition": "pH of the assay/treatment condition. If pH is controlled dynamically, record the set point and describe control in reaction condition notes.",
-        "ontology": null,
-        "regex": "^\\d+(\\.\\d+)?$",
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": "http://purl.obolibrary.org/obo/PATO_0001842"
-      }
-    },
-    {
-      "label": "reaction temperature",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "MANDATORY",
-      "term": {
-        "label": "reaction temperature",
-        "syntax": "{number} °C",
-        "example": "65 °C",
-        "preferredUnit": "°C",
-        "definition": "Temperature at which the assay/treatment condition was conducted. Create separate Assay rows when the same PETase subject is tested at multiple temperatures.",
-        "ontology": null,
-        "regex": null,
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": "http://purl.obolibrary.org/obo/PATO_0000146"
-      }
-    },
-    {
-      "label": "agitation rate",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "OPTIONAL",
-      "term": {
-        "label": "agitation rate",
-        "syntax": "{number} rpm",
-        "example": "250 rpm",
-        "preferredUnit": "rpm",
-        "definition": "Shaking or stirring speed during the assay/treatment condition.",
-        "ontology": null,
-        "regex": null,
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "reaction time",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "MANDATORY",
-      "term": {
-        "label": "reaction time",
-        "syntax": "{text}",
-        "example": "24 h",
-        "preferredUnit": "h",
-        "definition": "Duration of the assay/treatment condition. For time-series experiments, record the full time range here and individual measurement time points separately when available.",
-        "ontology": null,
-        "regex": null,
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "actual PET vs proxy substrate",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "MANDATORY",
-      "term": {
-        "label": "actual PET vs proxy substrate",
-        "syntax": "{text}",
-        "example": "actual_pet",
-        "preferredUnit": "",
-        "definition": "Whether this assay/treatment used real PET plastic, a soluble proxy substrate, or both. Controlled vocabulary: actual_pet | proxy_substrate | both | not_reported.",
-        "ontology": null,
-        "regex": "^(actual_pet|proxy_substrate|both|not_reported)$",
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "proxy substrate identity",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "OPTIONAL",
-      "term": {
-        "label": "proxy substrate identity",
-        "syntax": "{text}",
-        "example": "BHET",
-        "preferredUnit": "",
-        "definition": "Identity of a soluble or fluorescent proxy substrate used instead of PET, such as BHET, MHET, pNPB, or BHET-OH. Leave empty for actual PET-only reactions.",
-        "ontology": null,
-        "regex": null,
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "depolymerisation measurement design",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "OPTIONAL",
-      "term": {
-        "label": "depolymerisation measurement design",
-        "syntax": "{text}",
-        "example": "time_resolved",
-        "preferredUnit": "",
-        "definition": "Whether depolymerisation was followed as an endpoint, a time-resolved series, or both for this assay. Controlled vocabulary: endpoint | time_resolved | both | not_reported.",
-        "ontology": null,
-        "regex": "^(endpoint|time_resolved|both|not_reported)$",
-        "file": false,
-        "date": false,
-        "dateTime": false,
-        "url": null
-      }
-    },
-    {
-      "label": "reaction condition notes",
-      "sheetName": "Assay",
-      "packageName": "petase_enzyme_engineering",
-      "requirement": "OPTIONAL",
-      "term": {
-        "label": "reaction condition notes",
-        "syntax": "{text}",
-        "example": "pH regulated by NaOH addition; 75 °C tested but detrimental due to recrystallization",
-        "preferredUnit": "",
-        "definition": "Additional reaction-system details that affect interpretation, including pH-stat control, non-isothermal runs, recrystallization notes, or paper-specific condition caveats.",
+        "definition": "Reference to the Sample sample identifier for the PET or proxy material used in this reaction. Required for a reaction vessel; omit for a material preparation. Do not reference the optional material alias instead.",
         "ontology": null,
         "regex": null,
         "file": false,
@@ -408,12 +142,12 @@
       "requirement": "MANDATORY",
       "term": {
         "label": "PETase material type",
-        "syntax": "{text}",
+        "syntax": "(?:enzyme_variant|enzyme_preparation|pet_substrate|proxy_substrate|reaction_aliquot|other)",
         "example": "enzyme_variant",
         "preferredUnit": "",
-        "definition": "Type of material described in the Sample row. Controlled vocabulary: enzyme_variant | pet_substrate | proxy_substrate | reaction_aliquot | other.",
+        "definition": "Material class. Enzyme preparations may contain multiple components; record their identities and proportions in material composition.",
         "ontology": null,
-        "regex": "^(enzyme_variant|pet_substrate|proxy_substrate|reaction_aliquot|other)$",
+        "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
@@ -430,7 +164,7 @@
         "syntax": "{text}",
         "example": "ENZ_LCC_ICCG",
         "preferredUnit": "",
-        "definition": "Unique identifier for one enzyme variant Sample row. Every wild type, engineered mutation combination, and comparator enzyme should receive its own row and identifier. Populated when sample type is enzyme_variant.",
+        "definition": "Optional material alias. Cross-sheet references use the mandatory Sample sample identifier, not this alias.",
         "ontology": null,
         "regex": null,
         "file": false,
@@ -449,7 +183,7 @@
         "syntax": "{text}",
         "example": "SUB_GF_PET_amorphous",
         "preferredUnit": "",
-        "definition": "Unique identifier for one PET or proxy substrate Sample row. Every distinct material, supplier, physical form, crystallinity state, or preprocessing condition should receive its own row and identifier.",
+        "definition": "Optional material alias. Cross-sheet references use the mandatory Sample sample identifier, not this alias.",
         "ontology": null,
         "regex": null,
         "file": false,
@@ -468,13 +202,13 @@
         "syntax": "{text}",
         "example": "LCC ICCG",
         "preferredUnit": "",
-        "definition": "Name or identifier of the PET hydrolase enzyme variant, including wild-type enzymes and engineered variants. Populated when sample type is enzyme_variant.",
+        "definition": "Name or identifier of the PET hydrolase enzyme variant, including wild-type enzymes and engineered variants. Populated for enzyme_variant or enzyme_preparation materials.",
         "ontology": null,
         "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
-        "url": "http://purl.obolibrary.org/obo/PR_000000001"
+        "url": null
       }
     },
     {
@@ -487,7 +221,7 @@
         "syntax": "{text}",
         "example": "F243I/D238C/S283C/Y127G",
         "preferredUnit": "",
-        "definition": "Amino acid substitutions in the enzyme variant using standard notation. Multiple mutations should be separated by '/'. Populated when sample type is enzyme_variant.",
+        "definition": "Amino acid substitutions in the enzyme variant using standard notation. Multiple mutations should be separated by '/'. Populated for enzyme_variant or enzyme_preparation materials.",
         "ontology": null,
         "regex": null,
         "file": false,
@@ -519,13 +253,13 @@
       "label": "enzyme melting temperature",
       "sheetName": "Sample",
       "packageName": "petase_enzyme_engineering",
-      "requirement": "RECOMMENDED",
+      "requirement": "OPTIONAL",
       "term": {
         "label": "enzyme melting temperature",
-        "syntax": "{number} °C",
-        "example": "91.7 °C",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "91.7",
         "preferredUnit": "°C",
-        "definition": "Protein melting temperature (Tm) of the enzyme material. This is an enzyme property, not a reaction-condition or result row, and should be linked to the enzyme variant Sample.",
+        "definition": "Optional summary of an enzyme melting-temperature measurement. Record each determination, including method, conditions, uncertainty and evidence, as a material-characterisation Assay. Do not treat Tm as independent of measurement conditions.",
         "ontology": null,
         "regex": null,
         "file": false,
@@ -603,7 +337,7 @@
         "preferredUnit": "",
         "definition": "Physical form of the PET substrate. Controlled vocabulary: powder | film | flake | nanoparticle | microplastic | fibre | pellet | preform | textile | soluble | other.",
         "ontology": null,
-        "regex": "^(powder|film|flake|nanoparticle|microplastic|fibre|pellet|preform|textile|soluble|other)$",
+        "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
@@ -652,13 +386,13 @@
       "label": "PET crystallinity",
       "sheetName": "Sample",
       "packageName": "petase_enzyme_engineering",
-      "requirement": "RECOMMENDED",
+      "requirement": "OPTIONAL",
       "term": {
         "label": "PET crystallinity",
-        "syntax": "{number}%",
-        "example": "7.7%",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "7.7",
         "preferredUnit": "%",
-        "definition": "Percentage crystallinity of the PET substrate, usually measured by differential scanning calorimetry. This is a substrate material property and should be recorded on the substrate Sample row.",
+        "definition": "Percentage crystallinity of the PET substrate, usually measured by differential scanning calorimetry. This is a substrate material property and should be recorded on the substrate Sample row. This Sample field is an optional summary. Preserve each determination, material state, method and evidence in a material-characterisation Assay; background literature values are not sample measurements.",
         "ontology": null,
         "regex": null,
         "file": false,
@@ -674,10 +408,10 @@
       "requirement": "OPTIONAL",
       "term": {
         "label": "PET glass transition temperature",
-        "syntax": "{number} °C",
-        "example": "76.5 °C",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "76.5",
         "preferredUnit": "°C",
-        "definition": "Glass transition temperature (Tg) of the PET substrate material. Preserve first-heat and second-heat distinctions in notes when both are reported.",
+        "definition": "Glass transition temperature (Tg) of the PET substrate material. Preserve first-heat and second-heat distinctions in notes when both are reported. This Sample field is an optional summary. Preserve each determination, material state, method and evidence in a material-characterisation Assay; background literature values are not sample measurements.",
         "ontology": null,
         "regex": null,
         "file": false,
@@ -695,8 +429,388 @@
         "label": "PET molecular weight",
         "syntax": "{text}",
         "example": "Mn = 27000 g/mol",
-        "preferredUnit": "g/mol",
-        "definition": "Number-average or weight-average molecular weight of the PET substrate material, preserving whether Mn or Mw was reported.",
+        "preferredUnit": "",
+        "definition": "Number-average or weight-average molecular weight of the PET substrate material, preserving whether Mn or Mw was reported. This Sample field is an optional summary. Preserve each determination, material state, method and evidence in a material-characterisation Assay; background literature values are not sample measurements.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "enzyme sequence accession",
+      "sheetName": "Sample",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "enzyme sequence accession",
+        "syntax": "{text}",
+        "example": "UniProt:EXAMPLE",
+        "preferredUnit": "",
+        "definition": "Versioned protein sequence accession or stable sequence reference. Mutations refer to this parent sequence and its residue numbering.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "enzyme construct description",
+      "sheetName": "Sample",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "enzyme construct description",
+        "syntax": "{text}",
+        "example": "Example parent; His-tag; substitutions relative to the parent",
+        "preferredUnit": "",
+        "definition": "Parent sequence, substitutions, tags, fusion orientation and linkers defining the enzyme construct.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "enzyme preparation",
+      "sheetName": "Sample",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "enzyme preparation",
+        "syntax": "{text}",
+        "example": "Purified recombinant enzyme",
+        "preferredUnit": "",
+        "definition": "Expression host, purification and formulation of the enzyme material; include purity or concentration method when reported.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "material composition",
+      "sheetName": "Sample",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "material composition",
+        "syntax": "{text}",
+        "example": "PET with 30% glass fibre",
+        "preferredUnit": "",
+        "definition": "Components and their reported proportions, including polymer blends, fillers or enzyme mixtures. Preserve mass or molar basis.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "material preparation identifier",
+      "sheetName": "Sample",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "material preparation identifier",
+        "syntax": "{text}",
+        "example": "MaterialParent01",
+        "preferredUnit": "",
+        "definition": "Reference to an earlier Sample from which this material or aliquot was prepared. Omit if unavailable.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "material state",
+      "sheetName": "Sample",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "material state",
+        "syntax": "{text}",
+        "example": "before reaction",
+        "preferredUnit": "",
+        "definition": "State of the material at sampling, such as before reaction, after reaction, dry or hydrated.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "reaction scale",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "reaction scale",
+        "syntax": "{text}",
+        "example": "bioreactor",
+        "preferredUnit": "",
+        "definition": "Experimental scale used during the assay/treatment applied to the PETase subject. Controlled vocabulary: microplate | flask | bottle | bioreactor | pilot_scale | industrial | not_reported | other.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "reactor volume",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "reactor volume",
+        "syntax": "{number}\\s+\\S.*",
+        "example": "50 mL",
+        "preferredUnit": "",
+        "definition": "Total capacity of the vessel, including unit. Use reaction working volume for the volume of the reaction mixture; do not infer one from the other.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "enzyme loading",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "enzyme loading",
+        "syntax": "{text}",
+        "example": "0.2 mg enzyme/g PET",
+        "preferredUnit": "",
+        "definition": "Amount of enzyme applied in the assay/treatment condition. Preserve the reported basis, such as mg enzyme/g PET, micromolar enzyme, mg/mL, or mass fraction.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "substrate solid loading",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "substrate solid loading",
+        "syntax": "{text}",
+        "example": "2 g PET/L",
+        "preferredUnit": "",
+        "definition": "Concentration or fraction of PET substrate in the assay/treatment condition, reported as g/L, % w/w, g/kg, or the paper-specific basis.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "buffer type",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "buffer type",
+        "syntax": "{text}",
+        "example": "potassium phosphate",
+        "preferredUnit": "",
+        "definition": "Buffer system or reaction medium used in the assay/treatment condition. Controlled vocabulary: potassium phosphate | sodium phosphate | glycine-NaOH | glycine-OH | Tris-HCl | HEPES | borate | water | phosphate | citrate | acetate | carbonate | other.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "buffer concentration",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "buffer concentration",
+        "syntax": "{number}\\s+\\S.*",
+        "example": "100 mM",
+        "preferredUnit": "",
+        "definition": "Molar concentration of the reaction buffer when reported.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "reaction pH",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "reaction pH",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "8.0",
+        "preferredUnit": "",
+        "definition": "pH of the assay/treatment condition. If pH is controlled dynamically, record the set point and describe control in reaction condition notes.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": "http://purl.obolibrary.org/obo/PATO_0001842"
+      }
+    },
+    {
+      "label": "reaction temperature",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "reaction temperature",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "65",
+        "preferredUnit": "°C",
+        "definition": "Temperature at which the assay/treatment condition was conducted. Create separate Assay rows when the same PETase subject is tested at multiple temperatures.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": "http://purl.obolibrary.org/obo/PATO_0000146"
+      }
+    },
+    {
+      "label": "agitation rate",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "agitation rate",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "250",
+        "preferredUnit": "rpm",
+        "definition": "The speed of agitation or stirring in the vessel (rpm).",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": "https://ontology.ibisba.eu/mife/agitation_rate"
+      }
+    },
+    {
+      "label": "reaction time",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "reaction time",
+        "syntax": "{text}",
+        "example": "24 h",
+        "preferredUnit": "",
+        "definition": "Total reaction duration, including its reported unit. Individual sampling times and rate-fitting windows are recorded separately.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "actual PET vs proxy substrate",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "actual PET vs proxy substrate",
+        "syntax": "(?:actual_pet|proxy_substrate|not_applicable)",
+        "example": "actual_pet",
+        "preferredUnit": "",
+        "definition": "Classification of the substrate used in this assay. Controlled vocabulary: actual_pet | proxy_substrate | not_applicable. Use not_applicable for measurements without a PET or proxy reaction; omit when unreported.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "proxy substrate identity",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "proxy substrate identity",
+        "syntax": "{text}",
+        "example": "BHET",
+        "preferredUnit": "",
+        "definition": "Identity of a soluble or fluorescent proxy substrate used instead of PET, such as BHET, MHET, pNPB, or BHET-OH. Leave empty for actual PET-only reactions.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "depolymerisation measurement design",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "depolymerisation measurement design",
+        "syntax": "(?:endpoint|time_resolved|both)",
+        "example": "time_resolved",
+        "preferredUnit": "",
+        "definition": "Whether depolymerisation was followed as an endpoint, a time-resolved series, or both for this assay. Controlled vocabulary: endpoint | time_resolved | both. Omit when unreported.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "reaction condition notes",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "reaction condition notes",
+        "syntax": "{text}",
+        "example": "pH regulated by NaOH addition; 75 °C tested but detrimental due to recrystallization",
+        "preferredUnit": "",
+        "definition": "Additional reaction-system details that affect interpretation, including pH-stat control, non-isothermal runs, recrystallization notes, or paper-specific condition caveats.",
         "ontology": null,
         "regex": null,
         "file": false,
@@ -712,16 +826,16 @@
       "requirement": "MANDATORY",
       "term": {
         "label": "assay identifier",
-        "syntax": "{text}",
-        "example": "ASSAY_GF-PET_LCCICCG_HPLC_24H",
+        "syntax": "^{id}{5,50}$",
+        "example": "PETaseAssay01",
         "preferredUnit": "",
-        "definition": "Unique identifier for one analytical measurement or analysis performed on a reaction ObservationUnit. Create separate Assay rows for distinct analytes, measurement time points, or analytical methods.",
+        "definition": "Identifier that corresponds to this assay",
         "ontology": null,
         "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
-        "url": null
+        "url": "http://schema.org/identifier"
       }
     },
     {
@@ -734,13 +848,13 @@
         "syntax": "{text}",
         "example": "UHPLC quantification of TPA equivalents after 24 h",
         "preferredUnit": "",
-        "definition": "Descriptive name of the analytical assay or measurement, not the whole reaction system.",
+        "definition": "The name of this assay",
         "ontology": null,
         "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
-        "url": null
+        "url": "http://schema.org/name"
       }
     },
     {
@@ -750,12 +864,12 @@
       "requirement": "MANDATORY",
       "term": {
         "label": "PETase measurement category",
-        "syntax": "{text}",
+        "syntax": "(?:product_quantification|activity|kinetics|material_characterisation|stability|reaction_condition|other)",
         "example": "product_quantification",
         "preferredUnit": "",
-        "definition": "Type of analytical measurement. Controlled vocabulary: product_quantification | activity_screening | kinetic_parameter_estimation | thermal_stability | weight_loss | titration | other.",
+        "definition": "Type of measurement or reported reaction condition. Controlled vocabulary: product_quantification | activity | kinetics | material_characterisation | stability | reaction_condition | other.",
         "ontology": null,
-        "regex": "^(product_quantification|activity_screening|kinetic_parameter_estimation|thermal_stability|weight_loss|titration|other)$",
+        "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
@@ -793,7 +907,7 @@
         "preferredUnit": "",
         "definition": "Detector or readout used to quantify products or activity. Controlled vocabulary: absorbance | fluorescence | refractive_index | mass_spectrometry | NaOH_titration | pH_stat | gravimetric | other.",
         "ontology": null,
-        "regex": "^(absorbance|fluorescence|refractive_index|mass_spectrometry|NaOH_titration|pH_stat|gravimetric|other)$",
+        "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
@@ -807,8 +921,8 @@
       "requirement": "OPTIONAL",
       "term": {
         "label": "UV detection wavelength",
-        "syntax": "{number} nm",
-        "example": "240 nm",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "240",
         "preferredUnit": "nm",
         "definition": "UV wavelength used for absorbance-based detection. PET monomers are often detected near 240-242 nm, while EG may use another wavelength.",
         "ontology": null,
@@ -827,7 +941,7 @@
       "term": {
         "label": "analyte identity",
         "syntax": "{text}",
-        "example": "TPA | MHET | BHET | EG | total aromatic equivalents",
+        "example": "TPA",
         "preferredUnit": "",
         "definition": "Identity of the analyte or product basis quantified by the Assay row. This is critical for comparing depolymerisation percentage, product concentration, and activity values.",
         "ontology": null,
@@ -845,9 +959,9 @@
       "requirement": "OPTIONAL",
       "term": {
         "label": "measurement time point",
-        "syntax": "{number} {unit}",
+        "syntax": "{number}\\s+\\S.*",
         "example": "24 h",
-        "preferredUnit": "h",
+        "preferredUnit": "",
         "definition": "Time point at which the analytical measurement was taken, relative to reaction start. Required for time-resolved depolymerisation measurements.",
         "ontology": null,
         "regex": null,
@@ -864,8 +978,8 @@
       "requirement": "OPTIONAL",
       "term": {
         "label": "PET depolymerisation percentage",
-        "syntax": "{number}%",
-        "example": "90%",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "90",
         "preferredUnit": "%",
         "definition": "Percentage of PET substrate converted, solubilized, or degraded as reported by the analytical assay. Specify the analyte or calculation basis in analyte identity or measurement notes.",
         "ontology": null,
@@ -884,7 +998,7 @@
       "term": {
         "label": "product concentration",
         "syntax": "{text}",
-        "example": "42.1 g TPAeq/L",
+        "example": "1 mM",
         "preferredUnit": "",
         "definition": "Concentration of depolymerisation products measured by the analytical assay, preserving the reported product basis and unit.",
         "ontology": null,
@@ -902,7 +1016,7 @@
       "requirement": "OPTIONAL",
       "term": {
         "label": "specific activity",
-        "syntax": "{number} {unit}",
+        "syntax": "{number}\\s+\\S.*",
         "example": "93.2 mg_TAeq h^-1 mg_enzyme^-1",
         "preferredUnit": "",
         "definition": "Specific activity derived from the measured reaction products per unit enzyme. Preserve the reported unit and product basis; use activity unit for normalization.",
@@ -911,7 +1025,7 @@
         "file": false,
         "date": false,
         "dateTime": false,
-        "url": "http://purl.obolibrary.org/obo/REO_0001017"
+        "url": null
       }
     },
     {
@@ -921,7 +1035,7 @@
       "requirement": "OPTIONAL",
       "term": {
         "label": "initial reaction rate",
-        "syntax": "{number} {unit}",
+        "syntax": "{number}\\s+\\S.*",
         "example": "0.45 umol min^-1 mg^-1",
         "preferredUnit": "",
         "definition": "Initial rate of product formation measured in the linear phase. This is not the same as space-time yield or endpoint depolymerisation percentage.",
@@ -940,10 +1054,10 @@
       "requirement": "OPTIONAL",
       "term": {
         "label": "space-time yield",
-        "syntax": "{number} {unit}",
-        "example": "70.1 g TA L^-1 h^-1",
-        "preferredUnit": "g L^-1 h^-1",
-        "definition": "Volumetric productivity of the reaction, expressed as product amount per volume per time. Keep enzyme-normalized and non-normalized variants distinguishable in the unit.",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)? (?:g TA L\\^-1 h\\^-1|g TA L\\^-1 h\\^-1 g_enzyme\\^-1)",
+        "example": "42.1 g TA L^-1 h^-1",
+        "preferredUnit": "",
+        "definition": "Volumetric productivity. Distinguish enzyme-normalized productivity by retaining the enzyme-mass denominator. Record the averaging interval or maximum-rate basis.",
         "ontology": null,
         "regex": null,
         "file": false,
@@ -978,16 +1092,16 @@
       "requirement": "OPTIONAL",
       "term": {
         "label": "catalytic rate constant kcat",
-        "syntax": "{number} s^-1",
+        "syntax": "{number} s\\^-1",
         "example": "12.4 s^-1",
-        "preferredUnit": "s^-1",
-        "definition": "Catalytic rate constant or turnover number. Rare for heterogeneous PET depolymerisation and usually meaningful only with the kinetic substrate basis and kinetic model.",
+        "preferredUnit": "",
+        "definition": "Conventional turnover number per enzyme, in s^-1, with an explicit kinetic model and substrate basis. Inverse-MM substrate-mass-normalized parameters must use measurement quantity inverse_turnover, preserving their reported units.",
         "ontology": null,
         "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
-        "url": "http://purl.obolibrary.org/obo/REO_0001007"
+        "url": null
       }
     },
     {
@@ -997,16 +1111,16 @@
       "requirement": "OPTIONAL",
       "term": {
         "label": "Michaelis constant Km",
-        "syntax": "{number} {unit}",
+        "syntax": "{number}\\s+\\S.*",
         "example": "230 uM",
-        "preferredUnit": "uM",
-        "definition": "Michaelis-Menten constant. For PETase papers this is usually reported for soluble proxy substrates and should be interpreted with kinetic substrate basis and kinetic model.",
+        "preferredUnit": "",
+        "definition": "Conventional Michaelis constant expressed as substrate concentration. For inverse Michaelis-Menten, the half-saturation concentration is enzyme concentration: use measurement quantity inverse_Km instead.",
         "ontology": null,
         "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
-        "url": "http://purl.obolibrary.org/obo/REO_0001008"
+        "url": null
       }
     },
     {
@@ -1054,10 +1168,10 @@
       "requirement": "OPTIONAL",
       "term": {
         "label": "half inactivation temperature",
-        "syntax": "{number} °C",
-        "example": "68 °C",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "68",
         "preferredUnit": "°C",
-        "definition": "Temperature at which the enzyme loses 50% of its initial activity after a defined incubation. Include incubation duration in measurement notes.",
+        "definition": "Temperature at which half of the enzyme activity remains after a specified incubation and assay protocol. Record the incubation duration and conditions. This temperature is not an activity half-life (a time), nor a melting temperature.",
         "ontology": null,
         "regex": null,
         "file": false,
@@ -1073,12 +1187,12 @@
       "requirement": "OPTIONAL",
       "term": {
         "label": "replicate count",
-        "syntax": "{number}",
+        "syntax": "[1-9][0-9]*",
         "example": "3",
         "preferredUnit": "",
-        "definition": "Number of independent or technical replicates for the analytical measurement.",
+        "definition": "Positive integer number of replicates. Use PETase replicate type to distinguish independent reactions from repeated analytical measurements.",
         "ontology": null,
-        "regex": "^\\d+$",
+        "regex": null,
         "file": false,
         "date": false,
         "dateTime": false,
@@ -1115,6 +1229,538 @@
         "example": "Activity calculated from NaOH consumption between 10% and 90% conversion",
         "preferredUnit": "",
         "definition": "Additional notes about analytical methodology, calculation approach, normalization, data quality, or why a kinetic value is not comparable across studies.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement quantity",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "measurement quantity",
+        "syntax": "(?:inverse_turnover|inverse_Km|inverse_Vmax|inverse_efficiency|kcat|Km|Tm|Tg|crystallinity|Mn|Mw|Mp|dispersity|activity_half_life|half_inactivation_temperature|particle_size|thickness|surface_area|product_concentration|volumetric_productivity|enzyme_normalized_productivity|specific_activity|initial_rate|depolymerisation_percentage|relative_activity|activation_energy|additive_concentration|enzyme_dose|substrate_loading|working_volume|vessel_capacity|pH|fluorescence_rate|other)",
+        "example": "inverse_turnover",
+        "preferredUnit": "",
+        "definition": "Identity of the measured physical quantity. Inverse kinetic parameters are distinct from conventional ones. Use other only with an explicit reported parameter name.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement value",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "measurement value",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "539.9",
+        "preferredUnit": "",
+        "definition": "Scalar numeric value in measurement unit. Preserve uncertainty separately. Omit for a range-only or missing result.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement unit",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "measurement unit",
+        "syntax": "{text}",
+        "example": "nmol g^-1 s^-1",
+        "preferredUnit": "",
+        "definition": "Unit of this result; use 1 for a dimensionless ratio. Preserve the reported unit and normalization basis; use not reported if the source omits the unit.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement lower bound",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "measurement lower bound",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "60",
+        "preferredUnit": "",
+        "definition": "Lower limit of a reported interval, in measurement unit; do not invent its midpoint.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement upper bound",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "measurement upper bound",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "80",
+        "preferredUnit": "",
+        "definition": "Upper limit of a reported interval, in measurement unit.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "reported parameter name",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "reported parameter name",
+        "syntax": "{text}",
+        "example": "kcat (inverse Vmax / S0*)",
+        "preferredUnit": "",
+        "definition": "Parameter symbol or name exactly identifying the reported quantity, particularly for model-specific parameters.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "result material identifier",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "result material identifier",
+        "syntax": "^{id}{5,50}$",
+        "example": "ENZ_LCC_A2",
+        "preferredUnit": "",
+        "definition": "Sample sample identifier of the material being characterised; different from a reaction aliquot if applicable.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement context",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "measurement context",
+        "syntax": "{text}",
+        "example": "Example condition; record only source-reported details",
+        "preferredUnit": "",
+        "definition": "Conditions of this determination, including buffer, calcium, heating cycle, hydration, temperature or preparation state as applicable.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement uncertainty value",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "measurement uncertainty value",
+        "syntax": "[+]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "35.6",
+        "preferredUnit": "",
+        "definition": "Non-negative uncertainty magnitude, in the same unit as the result. Record interval limits separately.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement uncertainty type",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "measurement uncertainty type",
+        "syntax": "(?:SD|SE|CI|reported_unspecified)",
+        "example": "reported_unspecified",
+        "preferredUnit": "",
+        "definition": "Meaning of uncertainty; do not assume SD when the source does not state it.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "PETase replicate type",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "PETase replicate type",
+        "syntax": "(?:independent|technical|reported_unspecified)",
+        "example": "reported_unspecified",
+        "preferredUnit": "",
+        "definition": "Whether repetitions are independent reactions, technical measurements, or unspecified in the source.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement evidence type",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "measurement evidence type",
+        "syntax": "(?:measured|derived|background|not_reported|not_applicable|synthetic)",
+        "example": "measured",
+        "preferredUnit": "",
+        "definition": "Source status of the result. Background/reference values must not be presented as measured properties of this sample.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement source DOI",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "measurement source DOI",
+        "syntax": "{DOI}",
+        "example": "10.1021/acscatal.4c00400",
+        "preferredUnit": "",
+        "definition": "Publication providing evidence for this individual result.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement source location",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "measurement source location",
+        "syntax": "{text}",
+        "example": "Main text, PDF page 5, Table 1",
+        "preferredUnit": "",
+        "definition": "Main text or supplement and page/table/figure identifying the evidence.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "reported measurement",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "reported measurement",
+        "syntax": "{text}",
+        "example": "539.9 +/- 35.6 nmol g^-1 s^-1",
+        "preferredUnit": "",
+        "definition": "Source-reported value, unit and qualifiers, preserved before normalisation.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement conversion",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "measurement conversion",
+        "syntax": "{text}",
+        "example": "Example: hours = days * 24",
+        "preferredUnit": "",
+        "definition": "Conversion formula and original basis if measurement value or unit differs from the reported measurement.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "measurement normalization basis",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "RECOMMENDED",
+      "term": {
+        "label": "measurement normalization basis",
+        "syntax": "{text}",
+        "example": "Per gram PET substrate; enzyme excess",
+        "preferredUnit": "",
+        "definition": "Denominator and material basis, including enzyme mass, PET mass, area or liquid volume; distinguish maxima from averages.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "comparison assay identifier",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "comparison assay identifier",
+        "syntax": "^{id}{5,50}$",
+        "example": "AssayControl01",
+        "preferredUnit": "",
+        "definition": "Assay identifier of the comparator for a relative result. If unavailable, describe it explicitly in comparison reference.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "comparison reference",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "comparison reference",
+        "syntax": "{text}",
+        "example": "Wild-type enzyme under the same stated conditions",
+        "preferredUnit": "",
+        "definition": "Reported comparator identity and conditions when no linked comparator result is available.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "rate fitting interval",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "rate fitting interval",
+        "syntax": "{text}",
+        "example": "60-150 min",
+        "preferredUnit": "",
+        "definition": "Start and end times and unit used to estimate the rate, distinct from total reaction duration.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "quantification calibration",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "quantification calibration",
+        "syntax": "{text}",
+        "example": "Calibration against an authentic analyte standard",
+        "preferredUnit": "",
+        "definition": "Standards, calibration method, blank subtraction and product-equivalent calculation when reported.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "reaction working volume",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "reaction working volume",
+        "syntax": "{text}",
+        "example": "50 mL",
+        "preferredUnit": "",
+        "definition": "Volume of reaction mixture, with unit. Distinguish this from vessel capacity and identify compartments in measurement context.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "reaction additives",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "reaction additives",
+        "syntax": "{text}",
+        "example": "35 mM CaCl2",
+        "preferredUnit": "",
+        "definition": "Additives with identities, amounts/units and dosing times. Repeated quantitative entries may use reaction_condition Assays.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "reaction dosing schedule",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "reaction dosing schedule",
+        "syntax": "{text}",
+        "example": "Example: 5 mg enzyme at 36 h and 50 h",
+        "preferredUnit": "",
+        "definition": "Time, identity, amount and unit for each enzyme or reagent addition.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "pH control",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "pH control",
+        "syntax": "{text}",
+        "example": "pH regulated using NaOH",
+        "preferredUnit": "",
+        "definition": "Initial pH, permitted range, control method and titrant when reported.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "mixing method",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "mixing method",
+        "syntax": "{text}",
+        "example": "Orbital shaking",
+        "preferredUnit": "",
+        "definition": "Mixing device and mode; agitation rate alone does not define mixing conditions.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "fluorescence excitation wavelength",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "fluorescence excitation wavelength",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "340",
+        "preferredUnit": "nm",
+        "definition": "Excitation wavelength, when fluorescence is used.",
+        "ontology": null,
+        "regex": null,
+        "file": false,
+        "date": false,
+        "dateTime": false,
+        "url": null
+      }
+    },
+    {
+      "label": "fluorescence emission wavelength",
+      "sheetName": "Assay",
+      "packageName": "petase_enzyme_engineering",
+      "requirement": "OPTIONAL",
+      "term": {
+        "label": "fluorescence emission wavelength",
+        "syntax": "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?",
+        "example": "460",
+        "preferredUnit": "nm",
+        "definition": "Emission wavelength, when fluorescence is used.",
         "ontology": null,
         "regex": null,
         "file": false,
