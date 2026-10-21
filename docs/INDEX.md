@@ -4,7 +4,7 @@
 [repository README](../README.md). Do not treat historical plans or archive
 notes as the current product contract.
 
-**Last updated:** 2026-09-24
+**Last updated:** 2026-10-16
 
 ---
 
@@ -75,6 +75,31 @@ publication condition names).
 
 Campaign scores, dashboards, and manuscript drafts stay local and are not
 catalogued here.
+
+---
+
+## Workspace layout
+
+- `fairifier/`, `frontend/`, and `tests/` contain implementation and tests.
+- `evaluation/scripts/`, `evaluation/evaluators/`, `evaluation/schemas/`, and
+  `evaluation/config/` contain evaluation tooling and shared contracts.
+- `evaluation/datasets/annotated/` holds the current collection index and
+  per-document values; `raw/` holds source assets and `history/` retains earlier
+  annotation versions. See the [dataset README](../evaluation/datasets/DATASET_README.md)
+  for the current inventory and frozen benchmark split.
+- `evaluation/runs/` and `output/` hold run artifacts. Keep run-directory names
+  and source-workspace paths stable so manifests and evidence links resolve.
+- `docs/fairiagent-presentation/exports/` holds local presentation deliverables.
+  Presentation source and its web assets remain alongside it; its local
+  `README.md` lists the decks and entry points.
+- Local synchronization records and differing server versions live under the
+  corresponding `output/bioind4_sync_<date>/` directory. They remain separate
+  from active configuration and canonical annotations.
+
+Python/test caches, Finder metadata and LaTeX intermediates are regenerable.
+Keep original inputs, extraction evidence, run diagnostics, databases and
+checkpoint files. Compare file contents before removing apparent duplicate
+copies. Web presentation assets may be required by relative links in an export.
 
 ---
 

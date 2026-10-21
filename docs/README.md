@@ -4,6 +4,10 @@
 
 本目录的完整清单只维护在 [INDEX.md](INDEX.md)。下面是常用入口。
 
+项目目录、数据、运行结果和本地演示文稿的存放规则见
+[Workspace layout](INDEX.md#workspace-layout)。本地演示文稿的具体入口维护在
+`docs/fairiagent-presentation/README.md`（gitignored）。
+
 ## English
 
 - [Architecture & Flow](en/ARCHITECTURE_AND_FLOW.md)

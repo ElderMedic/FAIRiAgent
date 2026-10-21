@@ -768,7 +768,7 @@ FAIRIFIER_MAPREDUCE_MAX_PARALLEL_WORKERS=5
 `FAIRIFIER_MAPREDUCE_MAX_PARALLEL_WORKERS` controls within-document section
 worker concurrency. Document workers × section workers can multiply API
 pressure, so the evaluation README should warn users to reduce one when
-   increasing the other.
+increasing the other.
 
 ### 10.2 Phase 3 local shadow gate (2026-07-03)
 
