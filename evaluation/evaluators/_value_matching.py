@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import re
 import string
+from collections import Counter
+from math import isfinite
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -124,11 +126,12 @@ def token_f1(pred: str, gt: str) -> Tuple[float, float, float]:
         return (1.0, 1.0, 1.0) if not p_toks else (0.0, 1.0, 0.0)
     if not p_toks:
         return (0.0, 0.0, 0.0)
-    common = set(p_toks) & set(g_toks)
+    common = Counter(p_toks) & Counter(g_toks)
     if not common:
         return (0.0, 0.0, 0.0)
-    prec = len(common) / len(p_toks)
-    rec = len(common) / len(g_toks)
+    overlap = sum(common.values())
+    prec = overlap / len(p_toks)
+    rec = overlap / len(g_toks)
     f1 = 2 * prec * rec / (prec + rec)
     return (prec, rec, f1)
 
@@ -141,6 +144,8 @@ def combined_score(pred: str, gt: str) -> float:
     ``LCC`` vs ``leaf-branch compost cutinase (LCC) wild-type``) are not
     forced through token-F1 alone.
     """
+    if pred.strip() == gt.strip():
+        return 1.0
     _, _, tf1 = token_f1(pred, gt)
     if not pred.strip() or not gt.strip():
         return tf1
@@ -189,6 +194,8 @@ def identifier_match(pred: str, gt: str) -> float:
     g_norm = _normalize_identifier(gt)
     if not g_norm:
         return 1.0 if not p_norm else 0.0
+    if not p_norm:
+        return 0.0
     if p_norm == g_norm:
         return 1.0
 
@@ -244,18 +251,97 @@ def _extract_number(text: str) -> Optional[float]:
         return None
 
 
+# A deliberately small unit vocabulary. Unknown symbols compare only when
+# identical; unsupported expressions never fall back to comparing one number.
+_UNIT_BASES = {
+    "g": ({"mass": 1}, 1.0), "m": ({"length": 1}, 1.0),
+    "L": ({"volume": 1}, 1.0), "l": ({"volume": 1}, 1.0),
+    "mol": ({"amount": 1}, 1.0), "M": ({"amount": 1, "volume": -1}, 1.0),
+    "s": ({"time": 1}, 1.0), "min": ({"time": 1}, 60.0),
+    "h": ({"time": 1}, 3600.0), "d": ({"time": 1}, 86400.0),
+    "U": ({"activity": 1}, 1.0), "%": ({"fraction": 1}, 0.01),
+    "K": ({"kelvin": 1}, 1.0), "°C": ({"celsius": 1}, 1.0),
+}
+_UNIT_PREFIXES = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "m": 1e-3,
+                  "c": 1e-2, "d": 1e-1, "k": 1e3, "M": 1e6, "G": 1e9}
+_PREFIXABLE_UNITS = {"g", "m", "L", "l", "mol", "M", "s", "U"}
+_UNIT_TOKEN_RE = re.compile(r"([A-Za-z°%]+)(?:\^?([-+]?\d+))?")
+
+
+def _unit_signature(text: str) -> Optional[Tuple[dict, float]]:
+    text = text.replace("µ", "u").replace("μ", "u").replace("−", "-")
+    text = text.translate(str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁻", "0123456789-"))
+    text = text.replace("·", " ").replace("*", " ").strip()
+    if not text:
+        return {}, 1.0
+    dims, scale, unknown = Counter(), 1.0, False
+    for index, part in enumerate(text.split("/")):
+        tokens = part.split()
+        if not tokens:
+            return None
+        for token in tokens:
+            match = _UNIT_TOKEN_RE.fullmatch(token)
+            if not match:
+                return None
+            symbol, exponent = match.groups()
+            power = int(exponent or 1) * (1 if index == 0 else -1)
+            base = _UNIT_BASES.get(symbol)
+            if base is None and len(symbol) > 1 and symbol[0] in _UNIT_PREFIXES:
+                remainder = symbol[1:]
+                if remainder in _PREFIXABLE_UNITS:
+                    dimensions, factor = _UNIT_BASES[remainder]
+                    base = dimensions, factor * _UNIT_PREFIXES[symbol[0]]
+            dimensions, factor = base or ({"unknown:" + symbol: 1}, 1.0)
+            unknown = unknown or base is None
+            for dimension, exponent in dimensions.items():
+                dims[dimension] += exponent * power
+            try:
+                scale *= factor ** power
+            except OverflowError:
+                return None
+            if not isfinite(scale) or scale == 0:
+                return None
+    if unknown:
+        return {"unknown:" + " ".join(text.split()): 1}, 1.0
+    return {key: value for key, value in dims.items() if value}, scale
+
+
+def _quantity(text: str) -> Optional[Tuple[float, dict]]:
+    text = text.strip().replace("−", "-")
+    match = _NUMBER_RE.match(text)
+    if not match:
+        return None
+    signature = _unit_signature(text[match.end():].strip())
+    if signature is None:
+        return None
+    dimensions, factor = signature
+    number = float(match.group())
+    value = number * factor
+    if not isfinite(value) or (value == 0 and number != 0):
+        return None
+    if number == 0 and re.search(r"[1-9]", re.split(r"[eE]", match.group())[0]):
+        return None
+    return value, dimensions
+
+
 def numeric_tolerance_match(pred: str, gt: str, rel_tol: float = 0.02) -> float:
     """
     Graded numeric match: 1.0 within tolerance, partial credit when close.
 
-    Falls back to ``identifier_match`` when no parseable number exists.
+    Compare complete scalar quantities, including units. Complex expressions
+    (ranges, uncertainty, prose) require exact text until explicitly supported.
     """
-    p_num = _extract_number(pred)
-    g_num = _extract_number(gt)
-    if p_num is None or g_num is None:
-        return identifier_match(pred, gt)
+    if pred.strip() == gt.strip():
+        return 1.0
+    p_quantity, g_quantity = _quantity(pred), _quantity(gt)
+    if p_quantity is None or g_quantity is None:
+        return 0.0
+    p_num, p_units = p_quantity
+    g_num, g_units = g_quantity
+    if p_units != g_units:
+        return 0.0
     if g_num == 0:
-        return 1.0 if abs(p_num) < 1e-9 else 0.0
+        return 1.0 if p_num == 0 else 0.0
     rel_err = abs(p_num - g_num) / abs(g_num)
     if rel_err <= rel_tol:
         return 1.0
@@ -303,6 +389,10 @@ def classify_match_type(field_name: str) -> str:
     ``value_accuracy_evaluator.ValueAccuracyEvaluator``).
     """
     name = field_name.lower()
+    if normalise_field_name(name) == "measurement value":
+        return "numeric_tolerance"
+    if normalise_field_name(name) in {"unit", "units", "measurement unit"}:
+        return "unit"
     if any(k in name for k in _SEMANTIC_KEYWORDS):
         return "semantic"
     if any(k in name for k in _IDENTIFIER_KEYWORDS):
@@ -332,6 +422,8 @@ def match_value(
         return identifier_match(pred, gt)
     if match_type == "numeric_tolerance":
         return numeric_tolerance_match(pred, gt)
+    if match_type == "unit":
+        return numeric_tolerance_match("1 " + pred, "1 " + gt, rel_tol=0.0)
     if match_type == "categorical":
         return categorical_match(pred, gt)
     return combined_score(pred, gt)  # "semantic" (default)

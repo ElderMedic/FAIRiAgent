@@ -54,6 +54,8 @@ both agentic and baseline outputs can be scored with the same metric.
 
 from __future__ import annotations
 
+import re
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -68,6 +70,7 @@ from ._value_matching import (
     classify_match_type,
     classify_status,
     normalise_field_name,
+    numeric_tolerance_match,
 )
 
 # Maps baseline_single_prompt.py's flat top-level keys onto ISA sheet names.
@@ -86,6 +89,210 @@ FLAT_SHEET_ALIASES: Dict[str, str] = {
 }
 
 ISA_SHEET_NAMES = {"investigation", "study", "sample", "observationunit", "assay"}
+_ENTITY_ID_FIELDS = {
+    "investigation": "investigation identifier",
+    "study": "study identifier",
+    "observationunit": "observation unit identifier",
+    "sample": "sample identifier",
+    "assay": "assay identifier",
+}
+_EXTERNAL_ID_FIELDS = re.compile(r"accession|doi|url|uri|orcid|taxonomy|ontology|reference")
+
+
+class _EntityAlignment:
+    """Document-local row mappings; external identifiers keep normal scoring."""
+
+    def __init__(self, gt_sheets, pred_sheets):
+        self.gt_ids = self._counts(gt_sheets)
+        self.pred_ids = self._counts(pred_sheets)
+        self.id_map = {sheet: {} for sheet in _ENTITY_ID_FIELDS}
+        self.pairs = {}
+        self.row_sheets = {id(row): sheet for sheet, rows in gt_sheets.items() for row in rows}
+        self.content_scores = {}
+        self.overrides = {}
+
+    @staticmethod
+    def _counts(sheets):
+        return {
+            sheet: Counter(
+                row.get(field, "") for row in sheets.get(sheet, []) if row.get(field)
+            )
+            for sheet, field in _ENTITY_ID_FIELDS.items()
+        }
+
+    def target(self, field, gt_value):
+        field = normalise_field_name(field)
+        if _EXTERNAL_ID_FIELDS.search(field) or re.match(
+            r"(?:https?://|(?:doi:\s*)?10\.\d{4,9}/)", gt_value, re.I
+        ):
+            return None
+        for sheet, primary_field in _ENTITY_ID_FIELDS.items():
+            if field == primary_field:
+                return sheet if gt_value in self.gt_ids[sheet] else None
+        if not (field.endswith(" identifier") or field.endswith(" id")):
+            return None
+        targets = [sheet for sheet, counts in self.gt_ids.items() if gt_value in counts]
+        return targets[0] if len(targets) == 1 else None
+
+    def score(self, field, gt_value, pred_value):
+        target = self.target(field, gt_value)
+        if target is None:
+            return None
+        return float(
+            self.gt_ids[target][gt_value] == 1
+            and self.pred_ids[target][pred_value] == 1
+            and self.id_map[target].get(pred_value) == gt_value
+        )
+
+    def links_valid(self, gt_row, pred_row):
+        return all(
+            self.score(field, value, pred_row.get(normalise_field_name(field), "")) != 0.0
+            for field, value in gt_row.items()
+        )
+
+    def reference_similarity(self, gt_row, pred_row):
+        primary = _ENTITY_ID_FIELDS.get(self.row_sheets[id(gt_row)])
+        scores = [
+            self.score(field, value, pred_row.get(normalise_field_name(field), ""))
+            for field, value in gt_row.items() if field != primary
+        ]
+        scores = [score for score in scores if score is not None]
+        return sum(scores) / len(scores) if scores else 0.0
+
+    def resolve_reference_ties(self, evaluator, gt_sheets, pred_sheets, overrides):
+        """Resolve content ties using incoming and outgoing links, with a bounded search.
+
+        Candidate pairs must preserve the established content score. The search
+        cannot rescue wrong values, missing rows, duplicate IDs or broken links.
+        """
+        if all(self.links_valid(g, p) for pairs in self.pairs.values() for g, p in pairs if p):
+            return
+        candidates, gt_nodes, pred_nodes = {}, {}, {}
+        for sheet, pairs in self.pairs.items():
+            primary = _ENTITY_ID_FIELDS.get(sheet)
+            if primary is None:
+                continue
+            for pred_row in pred_sheets.get(sheet, []):
+                pred_id = pred_row.get(primary, "")
+                if self.pred_ids[sheet][pred_id] == 1:
+                    pred_nodes[sheet, pred_id] = pred_row
+            for gt_row, pred_row in pairs:
+                gt_id = gt_row.get(primary, "")
+                if not gt_id:
+                    continue
+                if pred_row is None or self.gt_ids[sheet][gt_id] != 1:
+                    continue
+                key = (sheet, gt_id)
+                score = evaluator._row_similarity(gt_row, pred_row, overrides.get(sheet), self, True)
+                if score < 0.3:
+                    continue
+                gt_nodes[key] = gt_row
+                candidates[key] = [
+                    pred_key for pred_key, row in pred_nodes.items()
+                    if pred_key[0] == sheet and abs(
+                        evaluator._row_similarity(gt_row, row, overrides.get(sheet), self, True) - score
+                    ) < 1e-12
+                ]
+        if not any(len(options) > 1 for options in candidates.values()):
+            return
+        outgoing = {key: {} for key in gt_nodes}
+        incoming = {key: [] for key in gt_nodes}
+        for key, row in gt_nodes.items():
+            for field, value in row.items():
+                target = self.target(field, value)
+                if target is None or field == _ENTITY_ID_FIELDS[key[0]]:
+                    continue
+                target_key = (target, value)
+                if target_key not in candidates:
+                    continue
+                outgoing[key][field] = target_key
+                incoming[target_key].append((key, field))
+        # Shared candidates and references define independent matching problems.
+        # Errors elsewhere must not disable alignment of an otherwise usable component.
+        adjacent = {key: set(outgoing[key].values()) | {s for s, _ in incoming[key]}
+                    for key in candidates}
+        owners = {}
+        for key, options in candidates.items():
+            for option in options:
+                if option in owners:
+                    adjacent[key].add(owners[option])
+                    adjacent[owners[option]].add(key)
+                else:
+                    owners[option] = key
+        unseen, resolved = set(candidates), {}
+        while unseen:
+            component, frontier = set(), [next(iter(unseen))]
+            while frontier:
+                key = frontier.pop()
+                if key not in component:
+                    component.add(key)
+                    frontier.extend(adjacent[key] - component)
+            unseen -= component
+            assignment = {key: candidates[key][0] for key in component if len(candidates[key]) == 1}
+            used = set(assignment.values())
+            if len(used) != len(assignment):
+                continue
+            pending = sorted(
+                (key for key in candidates if key in component and key not in assignment),
+                key=lambda key: (len(candidates[key]), -len(incoming[key])),
+            )
+            if not pending or len(pending) > 200:
+                continue
+            best, best_score, remaining = {}, (-1, -1), 5000
+
+            def bounds():
+                correct, possible, complete, possible_complete = 0, 0, 0, 0
+                for source in component:
+                    successes, unknown = 0, 0
+                    for field, target in outgoing[source].items():
+                        if source not in assignment or target not in assignment:
+                            unknown += 1
+                        elif pred_nodes[assignment[source]].get(field, "") == assignment[target][1]:
+                            successes += 1
+                    total = len(outgoing[source])
+                    correct += successes
+                    possible += successes + unknown
+                    complete += successes == total
+                    possible_complete += successes + unknown == total
+                return (correct, complete), (possible, possible_complete)
+
+            def search(index):
+                nonlocal remaining, best, best_score
+                score, upper = bounds()
+                if upper <= best_score or remaining <= 0:
+                    return
+                if index == len(pending):
+                    best, best_score = dict(assignment), score
+                    return
+                key = pending[index]
+                for pred_key in candidates[key]:
+                    if pred_key in used:
+                        continue
+                    remaining -= 1
+                    assignment[key] = pred_key
+                    used.add(pred_key)
+                    search(index + 1)
+                    used.remove(pred_key)
+                    del assignment[key]
+
+            search(0)
+            # Keep the established assignment if the bound prevented a full search.
+            if remaining > 0:
+                resolved.update(best)
+        for sheet, mappings in self.id_map.items():
+            self.id_map[sheet] = {
+                pred_id: gt_id for pred_id, gt_id in mappings.items()
+                if (sheet, gt_id) not in resolved
+            }
+        for (sheet, gt_id), (_, pred_id) in resolved.items():
+            self.id_map[sheet][pred_id] = gt_id
+        for sheet, pairs in self.pairs.items():
+            primary = _ENTITY_ID_FIELDS.get(sheet)
+            self.pairs[sheet] = [
+                (row, pred_nodes[resolved[sheet, row[primary]]])
+                if primary in row and (sheet, row[primary]) in resolved else (row, pred_row)
+                for row, pred_row in pairs
+            ]
 
 
 class ValueAccuracyEvaluator:
@@ -118,9 +325,9 @@ class ValueAccuracyEvaluator:
             cleaned: List[Dict[str, str]] = []
             for row in rows:
                 clean = {
-                    k: str(v).strip()
+                    normalise_field_name(k): str(v).strip()
                     for k, v in row.items()
-                    if k != "_evidence" and str(v).strip()
+                    if k != "_evidence" and v is not None and str(v).strip()
                 }
                 if clean:
                     cleaned.append(clean)
@@ -180,7 +387,8 @@ class ValueAccuracyEvaluator:
                     for field in sheet_data["fields"]:
                         if isinstance(field, dict):
                             name = normalise_field_name(field.get("field_name", ""))
-                            value = str(field.get("value", "")).strip()
+                            raw_value = field.get("value")
+                            value = str(raw_value).strip() if raw_value is not None else ""
                             if name and value:
                                 row_dict[name] = value
                     if row_dict:
@@ -193,7 +401,8 @@ class ValueAccuracyEvaluator:
                 for field in fields:
                     sheet = field.get("isa_sheet", "unknown")
                     name = normalise_field_name(field.get("field_name", ""))
-                    value = str(field.get("value", "")).strip()
+                    raw_value = field.get("value")
+                    value = str(raw_value).strip() if raw_value is not None else ""
                     if name and value:
                         by_sheet.setdefault(sheet, {})[name] = value
                 for sheet, row_dict in by_sheet.items():
@@ -261,32 +470,125 @@ class ValueAccuracyEvaluator:
         gt_row: Dict[str, str],
         pred_row: Dict[str, str],
         sheet_overrides: Optional[Dict[str, str]],
+        entity_alignment: Optional[_EntityAlignment] = None,
+        content_only: bool = False,
     ) -> float:
         if not gt_row:
             return 0.0
+        cache_key = (id(gt_row), id(pred_row))
+        if content_only and entity_alignment and cache_key in entity_alignment.content_scores:
+            return entity_alignment.content_scores[cache_key]
         total = 0.0
+        count = 0
         for field, gt_val in gt_row.items():
+            if content_only and entity_alignment and entity_alignment.target(field, gt_val):
+                continue
             pred_val = pred_row.get(field) or pred_row.get(normalise_field_name(field), "")
-            mt = self._match_type_for(field, sheet_overrides)
-            total += match_value(pred_val, gt_val, match_type=mt)
-        return total / len(gt_row)
+            total += self._field_score(
+                field, gt_val, pred_val, sheet_overrides, entity_alignment, gt_row, pred_row
+            )
+            count += 1
+        score = total / count if count else 0.0
+        if content_only and entity_alignment:
+            entity_alignment.content_scores[cache_key] = score
+        return score
+
+    def _field_score(
+        self, field, gt_val, pred_val, sheet_overrides=None, entity_alignment=None,
+        gt_row=None, pred_row=None,
+    ):
+        if not pred_val:
+            return 0.0
+        if sheet_overrides is None and entity_alignment and gt_row is not None:
+            sheet = entity_alignment.row_sheets.get(id(gt_row))
+            sheet_overrides = entity_alignment.overrides.get(sheet)
+        key = normalise_field_name(field)
+        if key in (sheet_overrides or {}) or key in self.global_overrides:
+            return match_value(
+                pred_val, gt_val, match_type=self._match_type_for(key, sheet_overrides)
+            )
+        if entity_alignment:
+            local_score = entity_alignment.score(field, gt_val, pred_val)
+            if local_score is not None:
+                return local_score
+        if (
+            gt_row and pred_row and field in {"measurement value", "measurement unit"}
+            and "measurement value" in gt_row and "measurement unit" in gt_row
+            and field not in (sheet_overrides or {}) and field not in self.global_overrides
+        ):
+            if not pred_row.get("measurement value") or not pred_row.get("measurement unit"):
+                return 0.0
+            return numeric_tolerance_match(
+                pred_row["measurement value"] + " " + pred_row["measurement unit"],
+                gt_row["measurement value"] + " " + gt_row["measurement unit"],
+            )
+        return match_value(
+            pred_val, gt_val, match_type=self._match_type_for(field, sheet_overrides)
+        )
+
+    def align_document(self, gt_sheets, pred_sheets, overrides_by_sheet):
+        """Align scientific content before resolving arbitrary local IDs.
+
+        ID-only rows cannot justify a mapping. Duplicate IDs remain unresolved,
+        so both their definitions and incoming links receive zero credit.
+        """
+        context = _EntityAlignment(gt_sheets, pred_sheets)
+        context.overrides = overrides_by_sheet
+        # Resolve parent references to break content ties. Local ID text never
+        # enters the content score, and a row's own ID cannot break its own tie.
+        for _ in range(len(_ENTITY_ID_FIELDS) + 1):
+            previous = {sheet: dict(mapping) for sheet, mapping in context.id_map.items()}
+            for sheet, gt_rows in gt_sheets.items():
+                overrides = overrides_by_sheet.get(sheet)
+                pairs = self.align_rows(
+                    gt_rows, pred_sheets.get(sheet, []), overrides, context, content_only=True
+                )
+                context.pairs[sheet] = pairs
+                primary = _ENTITY_ID_FIELDS.get(sheet)
+                if primary is None:
+                    continue
+                context.id_map[sheet] = {}
+                for gt_row, pred_row in pairs:
+                    if pred_row is None:
+                        continue
+                    gt_id, pred_id = gt_row.get(primary, ""), pred_row.get(primary, "")
+                    content_score = self._row_similarity(
+                        gt_row, pred_row, overrides, context, content_only=True
+                    )
+                    if (
+                        context.gt_ids[sheet][gt_id] == context.pred_ids[sheet][pred_id] == 1
+                        and content_score >= 0.3
+                    ):
+                        context.id_map[sheet][pred_id] = gt_id
+            if previous == context.id_map:
+                break
+        context.resolve_reference_ties(self, gt_sheets, pred_sheets, overrides_by_sheet)
+        return context
 
     def align_rows(
         self,
         gt_rows: List[Dict[str, str]],
         pred_rows: List[Dict[str, str]],
         sheet_overrides: Optional[Dict[str, str]] = None,
+        entity_alignment: Optional[_EntityAlignment] = None,
+        content_only: bool = False,
     ) -> List[Tuple[Dict[str, str], Optional[Dict[str, str]]]]:
         """Hungarian-algorithm (or greedy fallback) alignment of GT rows to prediction rows."""
         if not pred_rows:
             return [(r, None) for r in gt_rows]
         n, m = len(gt_rows), len(pred_rows)
 
+        def similarity(gr, pr):
+            score = self._row_similarity(gr, pr, sheet_overrides, entity_alignment, content_only)
+            if content_only and entity_alignment:
+                score += 1e-6 * entity_alignment.reference_similarity(gr, pr)
+            return score
+
         if _SCIPY:
             cost = np.zeros((n, m))
             for i, gr in enumerate(gt_rows):
                 for j, pr in enumerate(pred_rows):
-                    cost[i, j] = -self._row_similarity(gr, pr, sheet_overrides)
+                    cost[i, j] = -similarity(gr, pr)
             row_ind, col_ind = linear_sum_assignment(cost)
             matched: Dict[int, int] = dict(zip(row_ind.tolist(), col_ind.tolist()))
         else:
@@ -297,7 +599,7 @@ class ValueAccuracyEvaluator:
                 for j, pr in enumerate(pred_rows):
                     if j in used:
                         continue
-                    s = self._row_similarity(gr, pr, sheet_overrides)
+                    s = similarity(gr, pr)
                     if s > best_s:
                         best_j, best_s = j, s
                 if best_j >= 0:
@@ -319,8 +621,13 @@ class ValueAccuracyEvaluator:
         gt_rows: List[Dict[str, str]],
         pred_rows: List[Dict[str, str]],
         sheet_overrides: Optional[Dict[str, str]] = None,
+        entity_alignment: Optional[_EntityAlignment] = None,
     ) -> Dict[str, Any]:
-        pairs = self.align_rows(gt_rows, pred_rows, sheet_overrides)
+        if entity_alignment is None:
+            entity_alignment = self.align_document(
+                {sheet_name: gt_rows}, {sheet_name: pred_rows}, {sheet_name: sheet_overrides}
+            )
+        pairs = entity_alignment.pairs[sheet_name]
 
         total_fields = 0
         match_count = 0
@@ -346,7 +653,9 @@ class ValueAccuracyEvaluator:
                     score = 0.0
                     missing_count += 1
                 else:
-                    score = match_value(pred_val, gt_val, match_type=mt)
+                    score = self._field_score(
+                        field, gt_val, pred_val, sheet_overrides, entity_alignment, gt_row, pred_row
+                    )
                     status = classify_status(score, mt)
                     if status == "match":
                         match_count += 1
@@ -403,12 +712,13 @@ class ValueAccuracyEvaluator:
         """
         gt_sheets, overrides_by_sheet = self.load_gt_sheets(ground_truth_values_doc)
         pred_sheets = self.load_pred_sheets(fairifier_output, adapter=adapter)
+        entity_alignment = self.align_document(gt_sheets, pred_sheets, overrides_by_sheet)
 
         per_sheet: Dict[str, Any] = {}
         for sheet_name, gt_rows in gt_sheets.items():
             pred_rows = pred_sheets.get(sheet_name, [])
             per_sheet[sheet_name] = self.evaluate_sheet(
-                sheet_name, gt_rows, pred_rows, overrides_by_sheet.get(sheet_name)
+                sheet_name, gt_rows, pred_rows, overrides_by_sheet.get(sheet_name), entity_alignment
             )
 
         total_fields = sum(s["total_fields"] for s in per_sheet.values())

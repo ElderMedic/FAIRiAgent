@@ -41,8 +41,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from ._value_matching import match_value, normalise_field_name
-from .value_accuracy_evaluator import ValueAccuracyEvaluator
+from ._value_matching import normalise_field_name
+from .value_accuracy_evaluator import ValueAccuracyEvaluator, _EntityAlignment
 
 # Sheets that can contain more than one real-world entity (rows).
 MULTI_ROW_SHEETS = {"sample", "observationunit", "assay"}
@@ -144,6 +144,7 @@ class StructuralEvaluator:
         gt_rows: List[Dict[str, str]],
         pred_rows: List[Dict[str, str]],
         sheet_overrides: Optional[Dict[str, str]] = None,
+        entity_alignment: Optional[_EntityAlignment] = None,
     ) -> Dict[str, Any]:
         if not gt_rows:
             return {
@@ -167,15 +168,22 @@ class StructuralEvaluator:
                 "matched_pairs": [],
             }
 
-        pairs = self.value_evaluator.align_rows(gt_rows, pred_rows, sheet_overrides)
+        if entity_alignment is None:
+            entity_alignment = self.value_evaluator.align_document(
+                {sheet_name: gt_rows}, {sheet_name: pred_rows}, {sheet_name: sheet_overrides}
+            )
+        pairs = entity_alignment.pairs[sheet_name]
 
         acceptable_pairs: List[Tuple[Dict[str, str], Dict[str, str]]] = []
         low_confidence_alignments: List[Dict[str, Any]] = []
         for gt_row, pred_row in pairs:
             if pred_row is None:
                 continue
-            sim = self.value_evaluator._row_similarity(gt_row, pred_row, sheet_overrides)
-            if sim >= ROW_ALIGNMENT_THRESHOLD:
+            sim = self.value_evaluator._row_similarity(
+                gt_row, pred_row, sheet_overrides, entity_alignment, content_only=bool(entity_alignment)
+            )
+            links_valid = not entity_alignment or entity_alignment.links_valid(gt_row, pred_row)
+            if sim >= ROW_ALIGNMENT_THRESHOLD and links_valid:
                 acceptable_pairs.append((gt_row, pred_row))
                 if sim < ROW_ALIGNMENT_THRESHOLD + 0.15:
                     low_confidence_alignments.append({
@@ -187,6 +195,7 @@ class StructuralEvaluator:
                 low_confidence_alignments.append({
                     "similarity": round(sim, 4),
                     "below_threshold": True,
+                    "invalid_entity_links": not links_valid,
                     "gt_row_preview": self._row_preview(gt_row),
                     "pred_row_preview": self._row_preview(pred_row),
                 })
@@ -248,6 +257,7 @@ class StructuralEvaluator:
         self,
         pairs: List[Tuple[Dict[str, str], Dict[str, str]]],
         sheet_overrides: Optional[Dict[str, str]] = None,
+        entity_alignment: Optional[_EntityAlignment] = None,
     ) -> Dict[str, float]:
         """Layer-2-style scoring, restricted to already-aligned (acceptable) row pairs."""
         total, match_count, partial_count = 0, 0, 0
@@ -263,7 +273,9 @@ class StructuralEvaluator:
                 if not pred_val:
                     missing_count += 1
                     continue
-                score = match_value(pred_val, gt_val, match_type=mt)
+                score = self.value_evaluator._field_score(
+                    field, gt_val, pred_val, sheet_overrides, entity_alignment, gt_row, pred_row
+                )
                 score_sum += score
                 from ._value_matching import classify_status
                 status = classify_status(score, mt)
@@ -294,6 +306,7 @@ class StructuralEvaluator:
     ) -> Dict[str, Any]:
         gt_sheets, overrides_by_sheet = self.value_evaluator.load_gt_sheets(ground_truth_values_doc)
         pred_sheets = self.value_evaluator.load_pred_sheets(fairifier_output, adapter=adapter)
+        entity_alignment = self.value_evaluator.align_document(gt_sheets, pred_sheets, overrides_by_sheet)
 
         sheet_placement = self.evaluate_sheet_placement(gt_sheets, pred_sheets)
 
@@ -305,7 +318,7 @@ class StructuralEvaluator:
                 continue
             pred_rows = pred_sheets.get(sheet_name, [])
             result = self.evaluate_row_alignment(
-                sheet_name, gt_rows, pred_rows, overrides_by_sheet.get(sheet_name)
+                sheet_name, gt_rows, pred_rows, overrides_by_sheet.get(sheet_name), entity_alignment
             )
             all_acceptable_pairs.extend(result.pop("_matched_pairs"))
             per_sheet_alignment[sheet_name] = result
@@ -316,12 +329,14 @@ class StructuralEvaluator:
             if not gt_rows:
                 continue
             pred_rows = pred_sheets.get(sheet_name, [])
-            if pred_rows:
+            for gt_row, pred_row in entity_alignment.pairs.get(sheet_name, []):
+                if pred_row is None:
+                    continue
                 sim = self.value_evaluator._row_similarity(
-                    gt_rows[0], pred_rows[0], overrides_by_sheet.get(sheet_name)
+                    gt_row, pred_row, overrides_by_sheet.get(sheet_name), entity_alignment, content_only=True
                 )
-                if sim >= ROW_ALIGNMENT_THRESHOLD:
-                    all_acceptable_pairs.append((gt_rows[0], pred_rows[0]))
+                if sim >= ROW_ALIGNMENT_THRESHOLD and entity_alignment.links_valid(gt_row, pred_row):
+                    all_acceptable_pairs.append((gt_row, pred_row))
 
         if per_sheet_alignment:
             total_gt = sum(r["gt_rows"] for r in per_sheet_alignment.values())
@@ -341,7 +356,7 @@ class StructuralEvaluator:
             row_count_ratio = 0.0
 
         value_accuracy_given_correct_structure = self._value_accuracy_within_pairs(
-            all_acceptable_pairs
+            all_acceptable_pairs, entity_alignment=entity_alignment
         )
 
         return {
