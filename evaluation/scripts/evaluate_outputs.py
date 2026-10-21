@@ -134,11 +134,58 @@ class EvaluationOrchestrator:
                 doc['document_id']: doc 
                 for doc in gt_data.get('documents', [])
             }
+        attached = self._attach_fields_from_values()
         
         print(f"📊 Loaded ground truth for {len(self.ground_truth_docs)} documents")
+        if attached:
+            print(f"📎 Derived field lists from values files for {attached} documents")
         
         # Initialize evaluators
         self._initialize_evaluators()
+
+    def _attach_fields_from_values(self) -> int:
+        """Fill ground_truth_fields from the values file when the collection has none.
+
+        The public curated collection stores annotations in per-document values
+        files. Completeness and field-presence scoring read ground_truth_fields.
+        This only changes the in-memory document; the collection file is not rewritten.
+        """
+        project_root = Path(__file__).parents[2]
+        attached = 0
+        for doc in self.ground_truth_docs.values():
+            if doc.get("ground_truth_fields"):
+                continue
+            raw_path = doc.get("ground_truth_values_path")
+            if not raw_path:
+                continue
+            path = Path(raw_path)
+            if not path.is_absolute():
+                path = project_root / path
+            if not path.is_file():
+                continue
+            try:
+                values = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            fields = []
+            seen = set()
+            for sheet, block in (values.get("isa_sheets") or {}).items():
+                rows = (block or {}).get("expected_rows") or []
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    for name, value in row.items():
+                        if str(name).startswith("_") or not str(value or "").strip():
+                            continue
+                        key = (str(sheet), str(name))
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        fields.append({"field_name": str(name), "isa_sheet": str(sheet)})
+            if fields:
+                doc["ground_truth_fields"] = fields
+                attached += 1
+        return attached
     
     def _initialize_evaluators(self):
         """Initialize all evaluators."""
@@ -317,9 +364,15 @@ class EvaluationOrchestrator:
         
         # Track output directories for loading workflow_report.json
         output_dirs = {}
+        run_accounting = {
+            "documents_seen": 0,
+            "with_metadata": 0,
+            "without_metadata": 0,
+        }
         
         for doc_dir in doc_dirs:
             doc_id = doc_dir.name
+            run_accounting["documents_seen"] += 1
             
             # Find all run directories for this document
             run_dirs = [d for d in doc_dir.iterdir() if d.is_dir() and d.name.startswith('run_')]
@@ -408,9 +461,11 @@ class EvaluationOrchestrator:
             # A single successful run is retained for historical compatibility.
             # Repeated runs are rejected above and must use the v2 run index.
             if not successful_runs:
+                run_accounting["without_metadata"] += 1
                 print(f"  ⚠️  No successful runs for {doc_id}, skipping from analysis")
                 # Store failure info for statistics
                 continue
+            run_accounting["with_metadata"] += 1
             
             selected_run = successful_runs[0]
             metadata_file = selected_run['metadata_file']
@@ -456,9 +511,15 @@ class EvaluationOrchestrator:
                 continue
         
         print(f"  📄 Loaded {len(fairifier_outputs)} outputs")
+        print(
+            "  📒 Run accounting: "
+            f"{run_accounting['with_metadata']} with metadata, "
+            f"{run_accounting['without_metadata']} without, "
+            f"of {run_accounting['documents_seen']} seen"
+        )
         
         # Run all evaluators
-        results = {}
+        results = {"run_accounting": run_accounting}
         
         # 1. Completeness
         print(f"  🔍 Running completeness evaluation...")
@@ -487,12 +548,21 @@ class EvaluationOrchestrator:
             fairifier_outputs
         )
         
-        # 5. LLM Judge (holistic)
+        # 5. LLM Judge (holistic). A judge outage must not discard the
+        # deterministic ground-truth scores already computed above.
         print(f"  🔍 Running LLM judge evaluation...")
-        results['llm_judge'] = self.llm_judge_evaluator.evaluate_batch(
-            fairifier_outputs,
-            self.ground_truth_docs
-        )
+        try:
+            results['llm_judge'] = self.llm_judge_evaluator.evaluate_batch(
+                fairifier_outputs,
+                self.ground_truth_docs
+            )
+        except Exception as exc:
+            print(f"  ⚠️  LLM judge failed: {exc}")
+            results['llm_judge'] = {
+                'error': str(exc),
+                'per_document': {},
+                'aggregated': {},
+            }
         
         # 6. Internal Metrics (from FAIRiAgent workflow)
         print(f"  🔍 Extracting internal metrics from FAIRiAgent workflow...")
