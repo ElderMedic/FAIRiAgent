@@ -22,3 +22,10 @@ system). Do not put `phase4` or `tuned` on figures or manifests.
 not new publication conditions. Parameter history:
 [Hybrid Retrieval and Coverage Upgrade Plan](../../docs/en/development/HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md)
 §10.3–10.4.
+
+## Local package injection
+
+`packages/petase_enzyme_engineering_package.json` is a temporary PETase field
+package. Its canonical home is the public `fairds-metadata` repository. This
+copy is not loaded by default. Set `FAIRIFIER_LOCAL_PACKAGE_PATHS` to the file,
+or to `evaluation/config/packages/`, to inject it beside the FAIR-DS API catalog.
