@@ -13,10 +13,14 @@ This module provides:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, fields
 from typing import Any, Dict, Iterable, List, Optional, Union
 
 from ..models import PlannerTask
+from .workflow_contract import SKIPPABLE_AGENTS
+
+logger = logging.getLogger(__name__)
 
 
 PlanTaskLike = Union[PlannerTask, Dict[str, Any]]
@@ -76,7 +80,7 @@ def _coerce_to_planner_task(entry: Dict[str, Any]) -> PlannerTask:
         priority_packages=_to_str_list(entry.get("priority_packages")),
         search_terms=_to_str_list(entry.get("search_terms")),
         focus_sheets=_to_str_list(entry.get("focus_sheets")),
-        skip_if=_clean_optional_str(entry.get("skip_if")),
+        skip_if=_clean_skip_if(entry.get("skip_if"), agent_name),
         notes=str(entry.get("notes") or "").strip(),
     )
 
@@ -111,6 +115,28 @@ def _clean_optional_str(value: Any) -> Optional[str]:
         return None
     s = str(value).strip()
     return s or None
+
+
+def _clean_skip_if(value: Any, agent_name: str) -> Optional[str]:
+    """Keep ``skip_if`` only when it is an enumerated condition for ``agent_name``.
+
+    Free text and conditions for nodes that may not be skipped are dropped and
+    logged. The orchestrator computes the real skip decision from run state
+    (see ``workflow_contract.skip_reason_for_agent``); this field only declares
+    intent.
+    """
+    cleaned = _clean_optional_str(value)
+    if cleaned is None:
+        return None
+    if cleaned in SKIPPABLE_AGENTS.get(agent_name, frozenset()):
+        return cleaned
+    logger.warning(
+        "Dropping invalid skip_if %r for %s (allowed: %s)",
+        cleaned,
+        agent_name or "<unnamed>",
+        sorted(SKIPPABLE_AGENTS.get(agent_name, frozenset())) or "none",
+    )
+    return None
 
 
 def planner_task_to_dict(task: PlannerTask) -> Dict[str, Any]:

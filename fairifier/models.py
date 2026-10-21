@@ -107,8 +107,11 @@ class PlannerTask:
         search_terms: Domain terms the agent should search for or focus on.
         focus_sheets: ISA sheets to prioritize ("investigation", "study",
             "assay", "sample", "observationunit").
-        skip_if: Optional condition string. Reserved for future native LangGraph
-            conditional routing (see refactor §7); not consumed yet.
+        skip_if: Optional enumerated condition (see
+            ``workflow_contract.SKIPPABLE_AGENTS``; currently only
+            ``no_bio_files`` for BioMetadataAgent). Anything else is dropped at
+            parse time. The orchestrator computes the actual skip from run
+            state, so this field only declares intent.
         notes: Human-readable guidance (replaces the per-agent string in
             the legacy ``special_instructions`` dict).
     """

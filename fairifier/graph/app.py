@@ -1247,6 +1247,8 @@ class FAIRifierLangGraphApp:
                 "errors": [],
                 "agent_guidance": {},
                 "plan_tasks": [],
+                "workflow_trace": [],
+                "fill_tasks": {},
                 "selected_packages": [],
                 "metadata_gap_hints": [],
                 "inferred_metadata_extensions": [],

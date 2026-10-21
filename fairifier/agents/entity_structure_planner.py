@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage
 from langsmith import traceable
 
 from .base import BaseAgent
+from ..config import FAIRifierConfig, config
 from .response_models import (
     EntityDesignClaimsResponse,
     EntityPlanRecordColumnAuditResponse,
@@ -738,9 +739,15 @@ class EntityStructurePlannerAgent(BaseAgent):
             ]
         correction = ""
         if prior_errors:
+            shown = prior_errors[:20]
+            omitted = len(prior_errors) - len(shown)
             correction = (
-                "\nThe previous plan failed deterministic validation. Correct every issue:\n- "
-                + "\n- ".join(prior_errors[:12])
+                "\nThe previous plan failed deterministic validation. Correct every issue below. "
+                "If one issue cannot be removed without dropping the study, keep the closest "
+                "complete plan and record that residual in unresolved_ambiguities. Always return "
+                "a plan:\n- "
+                + "\n- ".join(shown)
+                + (f"\n- {omitted} further issues were omitted; fix the same patterns." if omitted else "")
             )
         return f"""
 You are the structure-planning stage of FAIRiAgent. Determine the ISA entity
@@ -1906,13 +1913,30 @@ Authoritative table profiles with value distributions and example rows:
         )
         plan: Dict[str, Any] = {}
         errors: List[str] = []
+        lessons: List[str] = []
         best_plan: Dict[str, Any] = {}
         best_errors: List[str] = []
         best_rank: tuple[int, int, int, int] | None = None
-        for attempt in range(1, 3):
+
+        def _remember(items: List[str]) -> None:
+            for item in items:
+                if item and item not in lessons:
+                    lessons.append(item)
+
+        max_attempts = max(
+            1,
+            int(
+                getattr(
+                    config,
+                    "entity_plan_max_attempts",
+                    FAIRifierConfig.entity_plan_max_attempts,
+                )
+            ),
+        )
+        for attempt in range(1, max_attempts + 1):
             parsed = await invoke_structured_output(
                 self.llm_helper,
-                [HumanMessage(content=self._prompt(state, prior_errors=errors or None))],
+                [HumanMessage(content=self._prompt(state, prior_errors=lessons or None))],
                 EntityDesignClaimsResponse,
                 operation_name=f"EntityStructurePlanner.attempt_{attempt}",
                 max_tokens=32768,
@@ -1924,6 +1948,7 @@ Authoritative table profiles with value distributions and example rows:
                     errors = [*best_errors, transport_error]
                 else:
                     errors = [transport_error]
+                _remember(errors)
                 continue
             claims = self._claims_payload(parsed)
             claims = normalize_claim_measurement_units(claims, source_text)
@@ -1932,6 +1957,7 @@ Authoritative table profiles with value distributions and example rows:
             )
             if candidate_errors:
                 errors = candidate_errors
+                _remember(errors)
                 continue
             audit_table_profiles = metadata_table_profiles_for_record_plans(
                 state.get("source_workspace") or {},
@@ -2105,9 +2131,11 @@ Authoritative table profiles with value distributions and example rows:
             )
             plan["source_fingerprint"] = source_fingerprint
             errors = self._plan_errors(plan)
-            if not record_plan_succeeded:
-                errors.extend(scope_audit_errors)
-            elif scope_audit_errors:
+            # The scope audit may repair a draft, but a disagreement or an
+            # out-of-contract scope is not evidence that the materialized
+            # entity graph is unusable. Those notes used to veto the whole
+            # run. Keep them reviewable, as mapping-audit diagnostics already are.
+            if scope_audit_errors:
                 plan.setdefault("unresolved_ambiguities", []).extend(
                     item
                     for item in scope_audit_errors
@@ -2133,6 +2161,7 @@ Authoritative table profiles with value distributions and example rows:
                 best_plan = plan
                 best_errors = list(errors)
                 best_rank = candidate_rank
+            _remember(errors)
             if not errors:
                 break
 

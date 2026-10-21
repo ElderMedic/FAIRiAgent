@@ -80,6 +80,15 @@ from ..utils.planner_tasks import (
     parse_plan_tasks_from_llm_output,
     planner_task_to_dict,
 )
+from ..utils.workflow_contract import (
+    compile_fill_tasks,
+    evaluate_completion_contract,
+    fill_tasks_artifact,
+    react_budget_snapshot,
+    reconcile_fill_tasks_from_matrix,
+    record_node_trace,
+    skip_reason_for_agent,
+)
 from ..services.source_workspace import (
     SourceRecord,
     build_source_workspace,
@@ -1139,7 +1148,12 @@ class OrchestrateNode:
         
         # Step 1b: Active Bioinfo Analysis (if raw bio data present)
         bio_file_paths = state.get("bio_file_paths", []) or []
-        has_bio_raw = bool(bio_file_paths)
+        bio_skip_reason = skip_reason_for_agent("BioMetadataAgent", state)
+        has_bio_raw = bool(bio_file_paths) and bio_skip_reason is None
+        if bio_skip_reason:
+            record_node_trace(
+                state, "BioMetadataAgent", status="skipped", skip_reason=bio_skip_reason
+            )
 
         if has_bio_raw:
             logger.info("\n" + "="*70)
@@ -1158,6 +1172,14 @@ class OrchestrateNode:
         logger.info("🧠 Step 2: Planning workflow strategy")
         logger.info("="*70)
         state = await self._plan_workflow_internal(state)
+        record_node_trace(
+            state,
+            "Planner",
+            status="executed",
+            planned_agents=[
+                task.get("agent_name") for task in state.get("plan_tasks") or []
+            ],
+        )
         if run_id and run_stop_requested(run_id):
             return self._mark_interrupted_state(state)
         
@@ -1177,16 +1199,11 @@ class OrchestrateNode:
         logger.info("🧱 Step 3.5: EntityStructurePlanner")
         logger.info("="*70)
         state = await self.entity_structure_planner.execute(state)
+        self._trace_entity_planner(state)
         if run_id and run_stop_requested(run_id):
             return self._mark_interrupted_state(state)
-        if not (state.get("entity_plan_validation") or {}).get("passed", False):
-            logger.error(
-                "🚫 EntityStructurePlanner hard gate failed; metadata generation "
-                "and workbook materialization are not permitted."
-            )
-            state["needs_human_review"] = True
-            state["entity_plan_hard_gate_failed"] = True
-            return state
+        self._continue_with_best_entity_plan(state)
+        self._compile_fill_tasks(state)
 
         # Step 4: Generate JSON (with optional cross-layer rollback to retrieval)
         cross_layer_retries_used = 0
@@ -1261,19 +1278,11 @@ class OrchestrateNode:
                     lambda s: s.get("retrieved_knowledge", []) and len(s["retrieved_knowledge"]) > 0
                 )
             state = await self.entity_structure_planner.execute(state)
+            self._trace_entity_planner(state)
             if run_id and run_stop_requested(run_id):
                 return self._mark_interrupted_state(state)
-            if not (state.get("entity_plan_validation") or {}).get(
-                "passed", False
-            ):
-                logger.error(
-                    "🚫 EntityStructurePlanner hard gate failed after cross-layer "
-                    "rollback; metadata generation and workbook materialization "
-                    "are not permitted."
-                )
-                state["needs_human_review"] = True
-                state["entity_plan_hard_gate_failed"] = True
-                return state
+            self._continue_with_best_entity_plan(state, after_rollback=True)
+            self._compile_fill_tasks(state)
         state["cross_layer_retries_used"] = cross_layer_retries_used
 
         # ── Step 4.5: ISAValueMapper ─────────────────────────────────
@@ -1834,7 +1843,91 @@ class OrchestrateNode:
         state.get("context", {}).pop("retry_best_outputs", None)
         state.get("context", {}).pop("retry_observation", None)
 
+        self._trace_agent_node(state, agent_name)
         return state
+
+    def _trace_agent_node(self, state: FAIRifierState, agent_name: str) -> None:
+        """Record attempts, completion contract and inner-loop budget for one node.
+
+        Observational only: the contract result never changes routing, retries
+        or ``needs_human_review``, so runs stay comparable with earlier ones.
+        """
+        try:
+            trajectory = (state.get("retry_trajectory") or {}).get(agent_name) or []
+            last = trajectory[-1] if trajectory else {}
+            contract = evaluate_completion_contract(agent_name, state)
+            record_node_trace(
+                state,
+                agent_name,
+                status="executed",
+                attempts=len(trajectory),
+                last_score=last.get("score"),
+                last_progress_status=last.get("status"),
+                contract_passed=contract["passed"],
+                contract_issues=contract["issues"] or None,
+                contract_metrics=contract["metrics"] or None,
+                react_budget=react_budget_snapshot(state, agent_name),
+            )
+        except Exception as exc:  # tracing must never break the workflow
+            logger.warning("Workflow trace failed for %s: %s", agent_name, exc)
+
+    def _trace_entity_planner(self, state: FAIRifierState) -> None:
+        try:
+            contract = evaluate_completion_contract("EntityStructurePlanner", state)
+            record_node_trace(
+                state,
+                "EntityStructurePlanner",
+                status="executed" if contract["passed"] else "gate_failed",
+                contract_passed=contract["passed"],
+                contract_issues=contract["issues"] or None,
+                entity_counts={
+                    str(item.get("level")): len(item.get("entities") or [])
+                    for item in (state.get("entity_plan") or {}).get("levels") or []
+                    if isinstance(item, dict)
+                },
+            )
+        except Exception as exc:
+            logger.warning("Workflow trace failed for EntityStructurePlanner: %s", exc)
+
+    def _continue_with_best_entity_plan(
+        self, state: FAIRifierState, *, after_rollback: bool = False
+    ) -> None:
+        """Keep generating when the entity plan is still invalid.
+
+        Bounded planner retries already receive the validation errors. A plan
+        that is still imperfect is marked for review and used anyway, so the
+        run still writes metadata and a workbook.
+        """
+        if (state.get("entity_plan_validation") or {}).get("passed", False):
+            return
+        where = "after cross-layer rollback" if after_rollback else "after bounded retries"
+        logger.warning(
+            "Entity structure plan is still invalid %s. Generating a review-required "
+            "deliverable from the best plan. Errors: %s",
+            where,
+            (state.get("entity_plan_validation") or {}).get("errors"),
+        )
+        state["needs_human_review"] = True
+        state["entity_plan_hard_gate_failed"] = True
+
+    def _compile_fill_tasks(self, state: FAIRifierState) -> None:
+        """Compile the entity x field cell list from the current entity plan."""
+        try:
+            fill_tasks = compile_fill_tasks(
+                state.get("entity_plan") or {},
+                state.get("retrieved_knowledge") or [],
+            )
+            state["fill_tasks"] = fill_tasks
+            state.setdefault("artifacts", {})["fill_tasks"] = fill_tasks_artifact(fill_tasks)
+            summary = fill_tasks["summary"]
+            logger.info(
+                "🧮 Fill tasks compiled: %s cells (%s)",
+                summary["total_cells"],
+                summary["per_level"],
+            )
+        except Exception as exc:
+            logger.warning("Fill-task compilation failed (non-fatal): %s", exc)
+            state["fill_tasks"] = {}
 
     def _critic_is_disabled(self) -> bool:
         return bool(getattr(config, "disable_critic", False))
@@ -3909,10 +4002,35 @@ class FinalizeNode:
     def global_retry_count(self):
         return self.app.global_retry_count if self.app else 0
 
+    @staticmethod
+    def _reconcile_fill_tasks(state: FAIRifierState) -> None:
+        """Mark compiled cells filled / blank / row_missing from the final matrix."""
+        try:
+            fill_tasks = state.get("fill_tasks") or {}
+            if not fill_tasks.get("cells"):
+                return
+            matrix = IsaMatrixCompilerNode._load_matrix_from_state(state)
+            if not matrix:
+                return
+            reconcile_fill_tasks_from_matrix(fill_tasks, matrix)
+            state["fill_tasks"] = fill_tasks
+            state.setdefault("artifacts", {})["fill_tasks"] = fill_tasks_artifact(fill_tasks)
+            summary = fill_tasks.get("summary") or {}
+            logger.info(
+                "🧮 Fill cells (final matrix): %s, fill rate %s, entities with rows %s/%s",
+                summary.get("status_counts"),
+                summary.get("fill_rate"),
+                summary.get("entities_with_rows"),
+                summary.get("entities_planned"),
+            )
+        except Exception as exc:
+            logger.warning("Fill-cell reconciliation failed (non-fatal): %s", exc)
+
     @traceable(name="Finalize", tags=["workflow", "finalization"])
     async def __call__(self, state: FAIRifierState) -> FAIRifierState:
         """Finalize workflow and generate summary."""
         logger.info("✅ Finalizing workflow")
+        self._reconcile_fill_tasks(state)
         
         # Generate execution summary
         execution_history = state.get("execution_history", [])

@@ -128,6 +128,37 @@ deliverable-quality verdict.
 - **Cross-Layer Rollback (ρ)**: A validation failure in JSON generation routes feedback back to the Knowledge Retriever rather than just retrying JSON mapping.
 - **Feedback Deduplication**: Limits guidelines to 10 items per agent to prevent token accumulation.
 
+### Fixed contract, planned cells
+
+The node order is fixed; the model does not add, reorder or drop nodes. Code
+owns four parts of the contract (`fairifier/utils/workflow_contract.py`):
+
+- **Skip conditions.** Only `BioMetadataAgent` may be skipped, and only for the
+  enumerated `no_bio_files` condition, computed from run state. A Planner
+  `skip_if` outside the enumeration is dropped at parse time.
+- **Completion contracts.** Each node's output is checked deterministically
+  (selected packages exist in FAIR-DS, the entity plan gate passed, confirmed
+  values carry evidence, and so on). The result is recorded; it does not change
+  retries, routing or `needs_human_review`. An entity plan that is still invalid
+  after its bounded retries is kept, marked for review, and still used to write
+  metadata and the workbook. The inner ReAct budget
+  (`REACT_LOOP_MAX_ITERATIONS`, `REACT_LOOP_MAX_TOOL_CALLS`) is unchanged.
+- **Node trace.** `reports/workflow_trace.json` records, per node, executed or
+  skipped, attempts, last score, contract result and inner-loop budget use.
+- **Fill tasks.** After the entity plan is available, one cell per
+  planned entity and selected field of its level is compiled into
+  `reports/fill_tasks.json`. At finalization each cell is marked from the final
+  ISA matrix as `filled`, `blank` (row exists, column empty) or `row_missing`;
+  the summary carries `fill_rate` and per-level counts. The generation pass
+  emits fields under its own group labels and rows are expanded onto planned
+  entities later, so the summary also records `first_pass.multirow_entity_alignment`
+  (share of first-pass multi-row fields whose `entity_id` equals a planned
+  entity) as a diagnostic of that granularity. It is not a fill status.
+
+Fill rate is a coverage measure that needs no ground truth. It does not say
+whether a filled value is correct; value accuracy still comes from the
+evaluation harness.
+
 ---
 
 ## 4. State Persistence & Checkpointers

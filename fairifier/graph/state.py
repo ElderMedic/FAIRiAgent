@@ -73,6 +73,8 @@ class FAIRifierState(TypedDict):
     execution_plan: Dict[str, Any]  # Current execution plan
     execution_summary: Dict[str, Any]  # Summary of execution (completed, failed, etc.)
     plan_tasks: List[Dict[str, Any]]  # Structured per-agent tasks (refactor §4)
+    workflow_trace: List[Dict[str, Any]]  # Per-node record: executed/skipped, attempts, contract result, inner-loop budget
+    fill_tasks: Dict[str, Any]  # Cells (entity x field) compiled from the entity plan; statuses set after generation
     
     # Context for retry and memory (contains critic_feedback, retrieved_memories, etc.)
     context: Dict[str, Any]

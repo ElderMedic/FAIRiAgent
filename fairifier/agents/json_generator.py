@@ -31,6 +31,7 @@ from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.grounding import SOURCE_REF_PATTERN, SOURCE_TABLE_PATTERN
 from ..utils.isa_order import ISA_LEVEL_ORDER
 from ..utils.isa_matrix_compiler import compile_isa_matrix, matrix_id_for
+from ..utils.workflow_contract import first_pass_entity_alignment
 
 
 @dataclass
@@ -391,6 +392,7 @@ class JSONGeneratorAgent(BaseAgent):
                 knowledge_items=knowledge_items,
                 entity_plan=state.get("entity_plan") or {},
             )
+            self._record_first_pass_alignment(state, metadata_fields)
             self.log_execution(
                 state, 
                 f"✅ LLM generated {len(metadata_fields)} fields with values"
@@ -457,6 +459,35 @@ class JSONGeneratorAgent(BaseAgent):
                 state["metadata_fields"] = []
         
         return state
+
+    def _record_first_pass_alignment(
+        self, state: FAIRifierState, metadata_fields: List[MetadataField]
+    ) -> None:
+        """Record how many first-pass multi-row fields name a planned entity.
+
+        Diagnostic only. The generator emits fields under its own group labels and
+        rows are expanded onto planned entities later, so per-cell fill status is
+        taken from the final matrix at finalization, not from this pass.
+        """
+        try:
+            fill_tasks = state.get("fill_tasks") or {}
+            if not fill_tasks.get("entities"):
+                return
+            first_pass = first_pass_entity_alignment(
+                fill_tasks, [self._field_to_dict(item) for item in metadata_fields]
+            )
+            state["fill_tasks"] = fill_tasks
+            self.log_execution(
+                state,
+                "🧮 First-pass entity alignment: "
+                f"{first_pass['multirow_entity_alignment']} of "
+                f"{first_pass['populated_multirow_fields']} multi-row fields, "
+                f"{first_pass['distinct_entity_labels']} distinct entity labels",
+            )
+        except Exception as exc:
+            self.log_execution(
+                state, f"⚠️ First-pass alignment failed (non-fatal): {exc}", "warning"
+            )
 
     def _build_source_workspace_context(self, source_workspace: Dict[str, Any]) -> str:
         """Build a compact source inventory for metadata generation prompts."""

@@ -254,6 +254,9 @@ class FAIRifierConfig:
     react_loop_max_iterations: int = 6
     react_loop_max_tool_calls: int = 18
     cross_layer_max_restarts: int = 1  # Max rollback cycles from JSON -> retrieval
+    # EntityStructurePlanner: total planning attempts before the hard gate. Each
+    # attempt after the first receives the previous validation errors as feedback.
+    entity_plan_max_attempts: int = 3
     disable_critic: bool = False
     disable_api_grounding: bool = False
     disable_hard_gate: bool = False
@@ -610,6 +613,10 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("FAIRIFIER_CROSS_LAYER_MAX_RESTARTS"):
         config_instance.cross_layer_max_restarts = int(
             os.getenv("FAIRIFIER_CROSS_LAYER_MAX_RESTARTS")
+        )
+    if os.getenv("FAIRIFIER_ENTITY_PLAN_MAX_ATTEMPTS"):
+        config_instance.entity_plan_max_attempts = max(
+            1, min(int(os.getenv("FAIRIFIER_ENTITY_PLAN_MAX_ATTEMPTS")), 5)
         )
     if os.getenv("FAIRIFIER_DISABLE_CRITIC"):
         v = os.getenv("FAIRIFIER_DISABLE_CRITIC", "").strip().lower()

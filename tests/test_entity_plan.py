@@ -1844,7 +1844,7 @@ def test_complete_mapping_audit_rejects_bad_target_but_keeps_cardinality_claim()
 
 
 @pytest.mark.anyio
-async def test_orchestrator_stops_before_json_when_entity_plan_is_invalid(monkeypatch):
+async def test_orchestrator_still_generates_when_entity_plan_is_invalid(monkeypatch):
     calls = []
 
     class Planner:
@@ -1887,7 +1887,8 @@ async def test_orchestrator_stops_before_json_when_entity_plan_is_invalid(monkey
 
     result = await node({"context": {}, "execution_history": [], "errors": []})
 
-    assert calls == ["DocumentParser", "KnowledgeRetriever"]
+    assert calls[:2] == ["DocumentParser", "KnowledgeRetriever"]
+    assert "JSONGenerator" in calls
     assert result["entity_plan_hard_gate_failed"] is True
     assert result["needs_human_review"] is True
 
