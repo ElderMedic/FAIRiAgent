@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+### Planned / in progress
+
+- End-to-end 3/6-document LLM re-evaluation after ISA single-projection sync
+  (offline replay on frozen artifacts showed compile is largely a no-op; metric
+  gains require a fresh workflow run).
+- FAIR-DS `/api/upload` as the external compatibility gate once structural
+  quality is stable.
+
+## [2.3.1] - 2026-10-21 – Reviewable entity plans and quantity scoring
+
+### Added
+
+- The workflow contract records skip reasons, completion checks, a per-node
+  trace, and one fill-task cell per planned entity and selected field. An
+  entity plan that is still invalid after its bounded retries is kept, marked
+  for review, and still used to write metadata and the workbook.
+- `FAIRIFIER_ENTITY_PLAN_MAX_ATTEMPTS` bounds entity-plan attempts (default 3,
+  clamped to 1–5).
+- `evaluation/scripts/build_run_catalog.py` writes a local inventory of
+  evaluation runs and output runs as two CSV tables under
+  `evaluation/reports/run_catalog/`. The tables are generated and gitignored.
+
+### Changed
+
+- Scope-audit disagreements stay on the plan as reviewable ambiguities.
+  Record-column audit failures still fail plan validation.
+- Numeric evaluation compares complete quantities, including units. Token
+  overlap counts repeated tokens, and document-local ISA identifiers stay
+  local during row alignment.
+- The evaluation harness derives missing `ground_truth_fields` from
+  per-document values files, counts runs with and without metadata, and keeps
+  deterministic scores when the LLM judge fails.
+- `evaluation/config/packages/petase_enzyme_engineering_package.json` is a
+  temporary 93-field PETase package. Its canonical home is the public
+  `fairds-metadata` repository. It is injected only when
+  `FAIRIFIER_LOCAL_PACKAGE_PATHS` points at it.
+- The dataset README describes the current 56-document collection.
+
 ### Fixed
 
 - Compose again pulls the official FAIR-DS image and pins `linux/amd64`.
@@ -12,20 +50,6 @@
 - The default install no longer pulls CUDA or Triton through
   `sentence-transformers`. Local embeddings stay optional, and
   `validate-document` warns when the package is absent.
-
-### Added
-
-- `evaluation/scripts/build_run_catalog.py` writes a local inventory of
-  evaluation runs and output runs as two CSV tables under
-  `evaluation/reports/run_catalog/`. The tables are generated and gitignored.
-
-### Planned / in progress
-
-- End-to-end 3/6-document LLM re-evaluation after ISA single-projection sync
-  (offline replay on frozen artifacts showed compile is largely a no-op; metric
-  gains require a fresh workflow run).
-- FAIR-DS `/api/upload` as the external compatibility gate once structural
-  quality is stable.
 
 ## [2.3.0] - 2026-09-23 – Entity structure planning and benchmark v2
 
@@ -735,6 +759,7 @@ python run_fairifier.py process document.pdf
 
 ## Version History
 
+- **v2.3.1** (2026-10-21): Reviewable entity plans, quantity scoring, temporary PETase package injection
 - **v2.3.0** (2026-09-23): Entity structure planning and benchmark v2
 - **v2.2.1** (2026-07-28): Docker / local quickstart shipping readiness
 - **v2.2.0** (2026-07-17): Multi-source ingest, auto repair, ISA sync & provenance
