@@ -671,3 +671,83 @@ def test_selector_result_preserves_semantically_selected_packages():
     )
 
     assert finalized == ["default", "short-read-assay"]
+
+
+def test_burden_arbitration_keeps_domain_package_over_equally_unsupported_peer():
+    domain = {
+        "name": "petase_enzyme_engineering",
+        "description": "PET hydrolase engineering and depolymerisation assays.",
+        "sheets": ["Sample", "Assay"],
+        "mandatory_count": 7,
+        "mandatory_fields": [f"petase requirement {index}" for index in range(7)],
+        "field_contract": [],
+    }
+    smaller = {
+        "name": "MIFE",
+        "description": "Enzyme assay compounds, reaction and kinetic measurements.",
+        "sheets": ["Sample"],
+        "mandatory_count": 3,
+        "mandatory_fields": [f"mife requirement {index}" for index in range(3)],
+        "field_contract": [],
+    }
+    source = "The engineered PET hydrolase was assayed for enzyme kinetics on PET film."
+
+    selected, decisions = prefer_lower_burden_package_set(
+        ["default", "petase_enzyme_engineering"],
+        [domain, smaller],
+        source,
+    )
+
+    assert selected == ["default", "petase_enzyme_engineering"]
+    assert decisions[0]["action"] == "retain"
+
+
+def test_isa_row_identifiers_are_not_counted_as_mandatory_burden():
+    package = {
+        "name": "petase_enzyme_engineering",
+        "sheets": ["Study", "ObservationUnit", "Sample", "Assay"],
+        "mandatory_count": 7,
+        "mandatory_fields": [
+            "study identifier",
+            "observation unit identifier",
+            "PETase observation unit type",
+            "PETase material type",
+            "assay identifier",
+            "assay name",
+            "PETase measurement category",
+        ],
+        "field_contract": [],
+    }
+
+    burden = mandatory_source_support(package, "PET film was hydrolysed.")
+
+    assert burden["mandatory_count"] == 3
+
+
+def test_burden_arbitration_keeps_domain_package_with_few_non_identifier_requirements():
+    domain = {
+        "name": "petase_enzyme_engineering",
+        "description": "PET hydrolase engineering.",
+        "sheets": ["Sample", "Assay"],
+        "mandatory_count": 7,
+        "mandatory_fields": [
+            "study identifier", "observation unit identifier", "assay identifier", "assay name",
+            "PETase observation unit type", "PETase material type", "PETase measurement category",
+        ],
+        "field_contract": [],
+    }
+    lean = {
+        "name": "ENA default sample checklist",
+        "description": "Default sample checklist for PET hydrolase samples.",
+        "sheets": ["Sample"],
+        "mandatory_count": 0,
+        "mandatory_fields": [],
+        "field_contract": [],
+    }
+
+    selected, decisions = prefer_lower_burden_package_set(
+        ["default", "petase_enzyme_engineering"], [domain, lean], "PET hydrolase samples were assayed."
+    )
+
+    assert selected == ["default", "petase_enzyme_engineering"]
+    assert decisions == []

@@ -68,6 +68,10 @@ class FAIRifierConfig:
     # publishing them to the FAIR Data Station API.
     local_package_paths: Tuple[Path, ...] = ()
     local_package_include_recommended: bool = True
+    # Keep a selected local package's OPTIONAL fields too. Its curated fields
+    # are the domain contract; the optional-field LLM dropped measurement fields
+    # (buffer concentration, measurement value) that curators fill.
+    local_package_include_optional: bool = True
     # When true, also load ~/.claude/skills and <project>/.claude/skills if present (Claude Code layout).
     import_claude_skills: bool = False
     
@@ -165,9 +169,13 @@ class FAIRifierConfig:
     retrieval_rerank_timeout_seconds: float = 5.0
     retrieval_embedding_model: str = "BAAI/bge-small-en-v1.5"
     retrieval_rerank_model: str = "BAAI/bge-reranker-base"
+    # "auto" picks the forwarded Ollama service or Jina; it never falls back to a
+    # local model. "local" opts in to a local SentenceTransformer.
     retrieval_embedding_backend: str = "auto"   # "auto" | "local" | "ollama" | "jina_api"
     retrieval_embedding_base_url: str = ""      # e.g. "http://bioind4.wur.nl:11434"
-    retrieval_rerank_backend: str = "auto"      # "auto" | "local" | "jina_api"
+    # "auto" uses Jina when a key is set and otherwise skips reranking; it never
+    # runs a model on this machine. "local" opts in to a local cross-encoder.
+    retrieval_rerank_backend: str = "auto"      # "auto" | "none" | "local" | "jina_api"
     retrieval_embedding_dims: int = 384
     jina_api_key: str = ""                      # Jina AI key for fallback API calls
     retrieval_near_duplicate_threshold: float = 0.92
@@ -429,6 +437,13 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
             "FAIRIFIER_LOCAL_PACKAGE_INCLUDE_RECOMMENDED", ""
         ).strip().lower()
         config_instance.local_package_include_recommended = value in (
+            "1", "true", "yes", "on"
+        )
+    if os.getenv("FAIRIFIER_LOCAL_PACKAGE_INCLUDE_OPTIONAL"):
+        value = os.getenv(
+            "FAIRIFIER_LOCAL_PACKAGE_INCLUDE_OPTIONAL", ""
+        ).strip().lower()
+        config_instance.local_package_include_optional = value in (
             "1", "true", "yes", "on"
         )
 

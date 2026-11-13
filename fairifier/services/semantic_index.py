@@ -43,8 +43,12 @@ class EmbeddingClient:
                 self.backend = "jina_api"
                 logger.info("Using Jina API backend for embedding")
             else:
-                self.backend = "local"
-                logger.info("Using local SentenceTransformer backend for embedding")
+                # Models run on the forwarded services, never on this machine.
+                # A local model is used only when the backend is set to "local".
+                raise RuntimeError(
+                    "No remote embedding service reachable; set "
+                    "FAIRIFIER_RETRIEVAL_EMBEDDING_BACKEND=local to embed on this machine."
+                )
 
         if self.backend == "local":
             try:
@@ -178,8 +182,11 @@ class RerankerClient:
                 self.backend = "jina_api"
                 logger.info("Using Jina API backend for reranker")
             else:
-                self.backend = "local"
-                logger.info("Using local CrossEncoder backend for reranker")
+                # No remote reranker: keep the fused order rather than run a
+                # cross-encoder on this machine. Set "local" to opt in.
+                self.backend = "none"
+        if self.backend == "none":
+            raise RuntimeError("reranking disabled (no remote reranker configured)")
 
         if self.backend == "local":
             try:

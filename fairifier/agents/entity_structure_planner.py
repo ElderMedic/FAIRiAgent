@@ -44,6 +44,11 @@ from ..utils.fairds_value_contracts import (
     is_field_selector_contract,
 )
 
+# The largest curated FAIRiBench workbook has 40 rows at one level. A design
+# group that crosses dimensions beyond this needs a source statement that every
+# combination was run; otherwise the cross-product invents untested rows.
+MAX_UNCONFIRMED_CROSSED_ROWS = 48
+
 
 class EntityStructurePlannerAgent(BaseAgent):
     """Create an evidence-grounded cardinality and linkage plan.
@@ -463,9 +468,9 @@ class EntityStructurePlannerAgent(BaseAgent):
             if isinstance(group, Mapping)
         }
         entities_by_level_group: Dict[str, Dict[str, int]] = {
-            level: {} for level in ("sample", "assay")
+            level: {} for level in ("observationunit", "sample", "assay")
         }
-        for level in ("sample", "assay"):
+        for level in ("observationunit", "sample", "assay"):
             for entity in (levels.get(level) or {}).get("entities") or []:
                 if not isinstance(entity, Mapping):
                     continue
@@ -497,6 +502,43 @@ class EntityStructurePlannerAgent(BaseAgent):
                     "preparation/measurement dimension through Sample, or provide "
                     "verbatim sample_reuse_evidence."
                 )
+        if not coverage_tables:
+            for group_id, claim in claims_groups.items():
+                group_evidence = " ".join(str(claim.get("evidence") or "").split())
+                factorial_quote = " ".join(
+                    str(claim.get("full_factorial_evidence") or "").split()
+                )
+                if factorial_quote and factorial_quote.lower() in group_evidence.lower():
+                    continue
+                for level in ("observationunit", "sample", "assay"):
+                    crossed = []
+                    for dimension in claim.get("dimensions") or []:
+                        if not isinstance(dimension, Mapping):
+                            continue
+                        scope = {
+                            str(item).strip().lower()
+                            for item in dimension.get("applies_to") or []
+                        }
+                        try:
+                            level_count = int(dimension.get("level_count") or 0)
+                        except (TypeError, ValueError):
+                            level_count = 0
+                        if level in scope and level_count > 1:
+                            crossed.append(
+                                f"{dimension.get('name')} ({level_count})"
+                            )
+                    rows = entities_by_level_group[level].get(group_id, 0)
+                    if len(crossed) >= 2 and rows > MAX_UNCONFIRMED_CROSSED_ROWS:
+                        errors.append(
+                            f"Design group {group_id} crosses {' x '.join(crossed)} "
+                            f"into {rows} {level} rows. Code builds every combination "
+                            "of a group's dimensions. Keep them in one group only if "
+                            "the source states that every combination was run, and "
+                            "copy that sentence into full_factorial_evidence. "
+                            "Otherwise split the group into one design group per "
+                            "tested branch, each with only the levels it received."
+                        )
+                        break
         return errors
 
     @staticmethod
@@ -833,6 +875,15 @@ Hard rules:
     that exact phrase into sample_reuse_evidence. Otherwise propagate the
     assay-varying preparation dimension through Sample so each assay retains a
     one-to-one physical input path.
+11. Code builds EVERY combination of the dimensions in a design group. Put two
+    multi-level dimensions in the same group only when the source states that
+    every combination was run, and copy that sentence into
+    full_factorial_evidence. When the source tested a subset (for example
+    different enzyme variants under different conditions, or one assay type on
+    only some samples), use one design group per tested branch, each with only
+    the levels that branch received. A group that crosses dimensions into more
+    than {MAX_UNCONFIRMED_CROSSED_ROWS} rows at one level is rejected unless
+    full_factorial_evidence quotes the group evidence.
 11. Give every design group a concise scientific label derived from its stated
     purpose or factors. group_id is an internal key and must not be used as the
     human-readable label.
@@ -917,6 +968,7 @@ not a design to copy):
     "study_row_id": "study_001", "evidence": "...",
     "reuse_same_sample_for_multiple_assays": false,
     "sample_reuse_evidence": null,
+    "full_factorial_evidence": null,
     "dimensions": [{{
       "name": "factor_name", "level_count": 2,
       "explicit_values": ["control", "treated"], "origin": "explicit",

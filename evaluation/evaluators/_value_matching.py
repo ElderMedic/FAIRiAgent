@@ -32,9 +32,13 @@ per-type scorer based on ``match_type``:
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import string
+import urllib.request
 from collections import Counter
+from functools import lru_cache
 from math import isfinite
 from typing import List, Optional, Tuple
 
@@ -66,15 +70,24 @@ def disable_semantic_similarity(disabled: bool = True) -> None:
         _ST_AVAILABLE = False
 
 
+# Embeddings come from the forwarded Ollama service by default. The local
+# all-MiniLM-L6-v2 model runs only when FAIRIFIER_EVAL_SEMANTIC_BACKEND=local.
+_BACKEND = os.getenv("FAIRIFIER_EVAL_SEMANTIC_BACKEND", "ollama").strip().lower()
+_OLLAMA_URL = os.getenv("FAIRIFIER_EVAL_EMBEDDING_BASE_URL", "http://localhost:11434").rstrip("/")
+_OLLAMA_MODEL = os.getenv("FAIRIFIER_EVAL_EMBEDDING_MODEL", "nomic-embed-text-v2-moe")
+
+
 def semantic_similarity_available() -> bool:
-    if _ST_DISABLED:
+    if _ST_DISABLED or _BACKEND == "none":
         return False
+    if _BACKEND == "ollama":
+        return _ollama_embedding("ping") is not None
     return _get_st_model() is not None
 
 
 def _get_st_model():
     global _ST_MODEL, _ST_AVAILABLE
-    if _ST_DISABLED:
+    if _ST_DISABLED or _BACKEND != "local":
         _ST_AVAILABLE = False
         return None
     if _ST_MODEL is not None:
@@ -89,10 +102,34 @@ def _get_st_model():
     return _ST_MODEL
 
 
+@lru_cache(maxsize=50000)
+def _ollama_embedding(text: str) -> Optional[Tuple[float, ...]]:
+    """Unit-normalised embedding from the Ollama service, or None on failure."""
+    body = json.dumps({"model": _OLLAMA_MODEL, "input": [text]}).encode()
+    request = urllib.request.Request(f"{_OLLAMA_URL}/api/embed", data=body,
+                                     headers={"Content-Type": "application/json"})
+    for _ in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                vector = np.asarray(json.loads(response.read())["embeddings"][0], dtype=float)
+            norm = float(np.linalg.norm(vector))
+            return tuple(vector / norm) if norm else None
+        except Exception:
+            continue
+    return None
+
+
 def semantic_sim(a: str, b: str) -> float:
-    """Cosine similarity in [0,1] using all-MiniLM-L6-v2; fallback 0.0."""
+    """Cosine similarity in [0,1]; fallback 0.0. Backend: FAIRIFIER_EVAL_SEMANTIC_BACKEND."""
+    if _ST_DISABLED or _BACKEND == "none" or not a.strip() or not b.strip():
+        return 0.0
+    if _BACKEND == "ollama":
+        ea, eb = _ollama_embedding(a), _ollama_embedding(b)
+        if ea is None or eb is None:
+            return 0.0
+        return float(np.clip(float(np.dot(ea, eb)), 0.0, 1.0))
     model = _get_st_model()
-    if model is None or not a.strip() or not b.strip():
+    if model is None:
         return 0.0
     try:
         embs = model.encode([a, b], convert_to_numpy=True, normalize_embeddings=True)

@@ -185,6 +185,7 @@ class DesignClaimGroupResponse(BaseModel):
     dimensions: List[DesignClaimDimensionResponse] = Field(default_factory=list)
     reuse_same_sample_for_multiple_assays: bool = False
     sample_reuse_evidence: Optional[str] = None
+    full_factorial_evidence: Optional[str] = None
     unresolved_ambiguities: List[str] = Field(default_factory=list)
 
 

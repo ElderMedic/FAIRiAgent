@@ -1420,15 +1420,21 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
             final_selected_fields = list(all_mandatory_fields)
 
             # A selected local package is an explicit runtime contract. Retain
-            # its RECOMMENDED fields deterministically instead of allowing the
-            # optional-field LLM to silently prune the domain schema.
+            # its RECOMMENDED (and, by default, OPTIONAL) fields deterministically
+            # instead of allowing the optional-field LLM to silently prune the
+            # domain schema.
+            retained_requirements = set()
             if config.local_package_include_recommended:
+                retained_requirements.add("RECOMMENDED")
+            if config.local_package_include_optional:
+                retained_requirements.add("OPTIONAL")
+            if retained_requirements:
                 recommended_local_fields = [
                     field
                     for field in all_packages_metadata
                     if field.get("packageName") in local_package_registry
                     and field.get("packageName") in selected_package_names
-                    and str(field.get("requirement", "")).upper() == "RECOMMENDED"
+                    and str(field.get("requirement", "")).upper() in retained_requirements
                 ]
                 existing_keys = {
                     (
@@ -1454,7 +1460,8 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                 if added_recommended:
                     self.log_execution(
                         state,
-                        f"   🧩 Retained {added_recommended} RECOMMENDED field(s) "
+                        f"   🧩 Retained {added_recommended} "
+                        f"{'/'.join(sorted(retained_requirements))} field(s) "
                         "from selected local packages",
                     )
             

@@ -2738,3 +2738,47 @@ def test_dimension_scope_audit_fails_when_any_dimension_is_unreviewed():
     assert errors == [
         "Independent scope audit omitted or duplicated group_001:condition."
     ]
+
+
+def _crossed_variant_plan(full_factorial_evidence=None):
+    """Five variants x four temperatures x four times, all crossed to Assay."""
+    evidence = (
+        "Five PETase variants were incubated at four temperatures and sampled "
+        "at four time points."
+    )
+    claims = {
+        "investigations": [{"row_id": "investigation_001", "label": "PETase"}],
+        "studies": [{"row_id": "study_001", "label": "PETase", "parent_row_id": "investigation_001"}],
+        "design_groups": [
+            {
+                "group_id": "group_001",
+                "study_row_id": "study_001",
+                "evidence": evidence,
+                "full_factorial_evidence": full_factorial_evidence,
+                "dimensions": [
+                    {"name": name, "level_count": count, "explicit_values": [], "origin": "derived",
+                     "applies_to": scope}
+                    for name, count, scope in (
+                        ("variant", 5, ["observationunit", "sample", "assay"]),
+                        ("temperature", 4, ["sample", "assay"]),
+                        ("time", 4, ["sample", "assay"]),
+                    )
+                ],
+            }
+        ],
+    }
+    return normalize_entity_plan(materialize_entity_claims(claims))
+
+
+def test_plan_validation_rejects_crossed_dimensions_without_full_factorial_quote():
+    errors = EntityStructurePlannerAgent._plan_errors(_crossed_variant_plan())
+
+    assert any("crosses variant (5) x temperature (4) x time (4) into 80 sample rows" in error for error in errors)
+
+
+def test_plan_validation_allows_crossed_dimensions_with_verbatim_full_factorial_quote():
+    errors = EntityStructurePlannerAgent._plan_errors(
+        _crossed_variant_plan("incubated at four temperatures and sampled at four time points")
+    )
+
+    assert not any("crosses" in error for error in errors)
