@@ -106,6 +106,11 @@ class FAIRifierConfig:
     llm_use_responses_api: Optional[bool] = None
     enable_deep_agents: bool = True  # Use deepagents inner loops when dependency is available
     enable_a2a: bool = True  # Structured in-process agent-to-agent handoff (AgentMailbox)
+    # ISAValueMapper: re-judge partially filled per-record columns record by record
+    # (only when a planned multi-row level has a column filled on some rows only).
+    record_value_resolution_enabled: bool = True
+    record_value_resolution_batch_size: int = 25
+    record_value_resolution_max_records: int = 400
     
     # Document parsing context limits (characters)
     # Modern LLMs support 200K+ tokens (~800K chars), these limits are conservative
@@ -457,6 +462,9 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("FAIRIFIER_ENABLE_DEEP_AGENTS"):
         value = os.getenv("FAIRIFIER_ENABLE_DEEP_AGENTS").strip().lower()
         config_instance.enable_deep_agents = value in ("1", "true", "yes", "on")
+    if os.getenv("FAIRIFIER_RECORD_VALUE_RESOLUTION"):
+        value = os.getenv("FAIRIFIER_RECORD_VALUE_RESOLUTION").strip().lower()
+        config_instance.record_value_resolution_enabled = value in ("1", "true", "yes", "on")
     if os.getenv("FAIRIFIER_ENABLE_A2A"):
         value = os.getenv("FAIRIFIER_ENABLE_A2A").strip().lower()
         config_instance.enable_a2a = value in ("1", "true", "yes", "on")

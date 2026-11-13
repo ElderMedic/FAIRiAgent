@@ -53,6 +53,16 @@ from ..utils.fairds_value_contracts import (
     contract_for,
     is_field_selector_contract,
 )
+from ..utils.record_value_resolution import (
+    RESOLUTION_SYSTEM_PROMPT,
+    apply_resolutions,
+    build_record_payloads,
+    build_resolution_prompt,
+    build_source_context,
+    collect_candidates,
+    find_partial_columns,
+    record_group_values,
+)
 from ..tools.isa_structure_tools import create_isa_structure_tools
 from ..skills import load_skill_files, skills_catalog_seed_files
 
@@ -409,6 +419,15 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                 )
             )
             tool_issues.extend(group_scope_issues)
+            if config.record_value_resolution_enabled:
+                matrix, record_issues = await self._resolve_partial_record_values(
+                    matrix,
+                    fields_by_level,
+                    entity_plan,
+                    document_text,
+                    state,
+                )
+                tool_issues.extend(record_issues)
         matrix = self._normalize_source_measurement_units(matrix, document_text)
         matrix, provisional_issues = self._clear_unverified_provisional_values(
             matrix,
@@ -1284,6 +1303,103 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     f"{level}.{field_name}={value!r} outside "
                     f"{sorted(supported)}."
                 )
+        return matrix, issues
+
+    async def _resolve_partial_record_values(
+        self,
+        matrix: Dict[str, Dict[str, Any]],
+        fields_by_level: Dict[str, List[Dict[str, Any]]],
+        entity_plan: Dict[str, Any],
+        document_text: str,
+        state: FAIRifierState,
+    ) -> tuple[Dict[str, Dict[str, Any]], List[str]]:
+        """Re-judge partially filled per-record columns for every planned record.
+
+        The matrix mapper may fill a row-varying column only on one
+        representative row per group; projection then (correctly) refuses to
+        copy it to siblings. Here every record is judged with its own plan
+        attributes and source passages, and only values passing the
+        deterministic checks in ``record_value_resolution`` are written.
+        """
+        partial = find_partial_columns(matrix, entity_plan, fields_by_level)
+        if not partial:
+            return matrix, []
+        try:
+            llm = self._get_llm(state)
+        except Exception as exc:
+            self.logger.warning("Record-level resolution skipped (no LLM): %s", exc)
+            return matrix, []
+        batch_size = max(1, int(config.record_value_resolution_batch_size or 25))
+        max_records = max(0, int(config.record_value_resolution_max_records or 0))
+        issues: List[str] = []
+        for level, columns in partial.items():
+            rows = matrix[level]["rows"]
+            fields = fields_by_level.get(level) or []
+            candidates = {
+                column: collect_candidates(rows, column, fields) for column in columns
+            }
+            records = build_record_payloads(level, entity_plan, rows, columns)
+            if max_records and len(records) > max_records:
+                self.logger.info(
+                    "Record-level resolution skipped for %s: %d records exceed cap %d",
+                    level,
+                    len(records),
+                    max_records,
+                )
+                continue
+            source_context = build_source_context(
+                level,
+                columns,
+                candidates,
+                fields,
+                entity_plan,
+                document_text,
+                group_values=record_group_values(records),
+            )
+            from langchain_core.messages import HumanMessage, SystemMessage
+
+            responses: List[Dict[str, Any]] = []
+            for start in range(0, len(records), batch_size):
+                prompt = build_resolution_prompt(
+                    level,
+                    columns,
+                    candidates,
+                    source_context,
+                    records[start:start + batch_size],
+                )
+                try:
+                    response = await llm._call_llm(
+                        [
+                            SystemMessage(content=RESOLUTION_SYSTEM_PROMPT),
+                            HumanMessage(content=prompt),
+                        ],
+                        operation_name="ISA Record Value Resolution",
+                    )
+                except Exception as exc:
+                    self.logger.warning(
+                        "Record-level resolution call failed for %s: %s", level, exc
+                    )
+                    continue
+                content = (
+                    response.content if hasattr(response, "content") else str(response)
+                )
+                parsed = safe_json_parse(content)
+                if isinstance(parsed, dict):
+                    responses.append(parsed)
+            level_issues, stats = apply_resolutions(
+                level,
+                rows,
+                records,
+                columns,
+                candidates,
+                responses,
+                source_context,
+                document_text,
+            )
+            self.logger.info(
+                "🔎 Record-level resolution %s %s: %s", level, columns, stats
+            )
+            issues.extend(level_issues)
         return matrix, issues
 
     @staticmethod
