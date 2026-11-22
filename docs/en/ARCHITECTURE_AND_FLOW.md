@@ -94,6 +94,7 @@ flowchart TD
 ## 2. Agent & Node Breakdown
 
 1. **Document Parser**: Extracts structured information from documents using LLM.
+   - PDF ingestion retains native first-page text omitted by MinerU, with page and bounding-box references. Original conversion files remain unchanged; retrieval and value checks use the supplemented working text.
    - Routed to **Critic evaluation** → ACCEPT / RETRY (up to 2×)
 2. **BioMetadataAgent** *(conditional)*: Recovers metadata from raw bioinformatics files (BAM, VCF, FASTQ) using Dockerised biocontainers (Samtools, Bcftools) from `quay.io/biocontainers`.
 3. **Planner**: Analyzes document domain and generates per-agent guidance instructions.
@@ -106,17 +107,89 @@ flowchart TD
    identities through an agent-selected, deterministically validated table
    plan, avoiding false Cartesian expansion of incomplete designs. It owns row
    structure; downstream agents may not merge or invent entities.
+   Initial planning and scope review read the same complete working text;
+   later sections must be available before the entity graph is fixed.
 6. **JSON Generator**: Maps extracted info to selected FAIR-DS field contracts.
    - **Recursive Batch Splitting**: Auto-detects truncation and splits batches (16→8→4→2→1 fields) to prevent token window overflow.
    - Routed to **Critic evaluation** → ACCEPT / RETRY.
    - **Cross-layer rollback** (ρ mechanism): JSON hard-gate failure triggers KnowledgeRetriever redo.
 7. **ISA Value Mapper**: Projects source-backed values onto the locked entity
    graph, enforces field/value contracts and evidence scope, and compiles the
-   canonical JSON/Excel matrix.
+   canonical JSON/Excel matrix. Large planned matrices use batches of at most
+   16 entities, 12 columns, and 16,000 estimated output characters. Each batch
+   receives complete target identities, ancestors, field definitions, and a
+   separate source-evidence budget. Missing rows, conflicting identities, and
+   truncated responses require review; successful batches remain intact.
+   Batching preserves the planned entity counts and repeated contact rows.
+   Partially filled columns are reviewed in batches of at most 8 columns and
+   64 cells. Original source passages are balanced across fields before
+   generated hints consume the context budget. Truncated review responses
+   cannot overwrite cells; a service failure stops further review calls while
+   retaining completed decisions.
+   Nonliteral vocabulary labels and summaries also receive record-level review,
+   including fully populated columns. Empty selected columns with extracted
+   candidates receive the same review, including candidates quoted verbatim.
+   Accepted values remain bound to their exact cells through literal checks;
+   declared value contracts still apply. Selected schema columns remain in
+   JSON and Excel even when no value is available. Rejected optional values
+   become blank cells; retaining a column does not count as extracting its
+   values. The review ledger remains outside ISA rows.
+   Quote authentication joins wrapped lowercase prose fragments and decodes
+   numeric micro-unit prefixes, degree notation and labelled subscripts rendered
+   by MinerU. Unit case, magnitudes, signs, subscript labels and inline hyphens
+   remain significant.
+   A numeric value absent from the candidates must match a complete quantity
+   in the authenticated quote for that record. Signs, bounds, exponents, and
+   reported uncertainty cannot be removed to obtain a match.
+   Consistency checks compare records within their planned source group.
+   A cited attribute with an unknown group keeps the global check; conflicting
+   values for one cell remain invalid regardless of group.
 8. **Critic Agent**: Embedded after most nodes; rubric-driven LLM-as-Judge.
+   Matrix review receives every output column and the selected package field
+   contracts. Shared non-identity metadata does not establish duplicate entities;
+   field placement and value constraints remain fixed. Failed plan or matrix
+   validation still requires resolution.
 
 A workflow completion status or an LLM critic score is not, by itself, a
 deliverable-quality verdict.
+
+Prompt-based structured output includes the complete JSON Schema, including
+nested item types and constraints. DeepSeek JSON output preserves the configured
+thinking mode and output budget; a format fallback removes only the JSON-format
+parameter. The DeepSeek adapter sends the provider's `max_tokens` parameter.
+For thinking models, entity planning requests 65,536 output tokens and its
+reviews request 32,768, including reasoning; non-thinking requests remain
+32,768 and 8,192. Provider adapters determine the effective request limit.
+Independent reported-record review retains each rejection rationale so the
+next planning attempt can correct the source identity or relationship.
+Each planning retry receives the latest candidate's validation errors;
+resolved errors from older candidates cannot displace the current feedback.
+Different source labels can identify the same material only after independent
+review verifies that association. The alias handoff is bound to the exact
+proposal, material parent and source; it cannot override a conflicting material
+identity or select an arbitrary physical replicate.
+After material proposals pass structural and source checks, independently
+reviewed results are materialized separately. A rejected result cannot discard
+another accepted result. Rejected parents cannot retain their descendants,
+and unresolved records still fail whole-plan validation. Among invalid drafts,
+current source-bound result reviews take precedence over fewer error messages.
+The JSON reader can escape a literal backslash when the decoder identifies an
+invalid string escape. It preserves source text and logs the correction; it
+does not complete truncated objects or supply missing values.
+
+Reported-result proposals use a separate Assay contract for aggregate, fitted,
+and qualitative results. Source-described preparations and material identities
+can supply ObservationUnit and Sample records without inventing vessels,
+aliquots or replicate counts. Each result references a declared Sample and
+carries a source quote. Independent review checks material roles, parent links,
+including ambiguity among material identities rather than their physical
+replicates, as well as
+result grain and field meaning; deterministic checks enforce identity, literal
+values and field contracts. A reviewed analysis record does not add a physical
+replicate. Its exported description identifies the result type and any reported
+uncertainty about the underlying design. Review receipts bind the source,
+record and parent; changes require re-review. These receipts stay in the entity
+plan, outside the metadata sheet rows.
 
 ---
 

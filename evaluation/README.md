@@ -8,6 +8,21 @@ this README (commands) → [harness](harness/README.md) →
 [config](config/README.md). Full catalog: [docs/INDEX.md](../docs/INDEX.md).
 Local run inventory, kept separate for `evaluation/` and `output/`: `python evaluation/scripts/build_run_catalog.py` ([reports README](reports/README.md#run-catalog)).
 
+### Run directories
+
+Each evaluation run is an independent `fairifier.cli process` execution. Keep
+its complete output together: `deliverables/`, `logs/`, `reports/`, `workspace/`,
+parser artifacts when generated, `cli_output.txt`, and workflow reports.
+Evaluation reads these artifacts and adds scores; it does not replace them with
+an export-only directory. Preserve failed-attempt evidence, and distinguish CLI
+completion, fallback execution, and scientific validation in reported results.
+
+Keep runnable configurations and manifests in `evaluation/config/`, raw sources
+and canonical ground truth in `evaluation/datasets/`, and cross-run audits in
+`evaluation/reports/`. Superseded development attempts belong in
+`evaluation/archive/runs/`. Do not place source-code copies, Python environments,
+service databases, or debugging workspaces inside `evaluation/runs/`.
+
 > **Benchmark redesign in progress (2026-07-21).** The authoritative scientific
 > contract is [Evaluation Benchmark Methodology](../docs/en/EVALUATION_METHODOLOGY.md),
 > and the complete maintained work plan is

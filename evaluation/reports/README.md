@@ -10,7 +10,8 @@ Main reports for sharing/pushing.
 
 | Location | What it is |
 |----------|------------|
-| `evaluation/runs/` | Raw batch outputs per model/campaign (each run dir: `metadata.json` or legacy `metadata_json.json`, `workflow_report.json`, `eval_result.json`, …) |
+| `evaluation/runs/` | Complete independent FAIRiAgent outputs, including deliverables, logs, reports, source workspace, and generated parser artifacts; evaluation scores are additional artifacts. |
+| `evaluation/archive/runs/` | Preserved superseded development attempts and their original execution evidence. |
 | `evaluation/runs/archive/` | Older or ad hoc batches (including small API smoke dirs and `openai_test`) |
 | `evaluation/analysis/output/` | Regenerated analysis: `key_figures/`, `figures/`, `tables/`, `biological_insights.json` |
 | `evaluation/analysis/output/archive/` | Older analysis snapshots, smoke runs, archived reports under `archive/reports/` |
