@@ -24,6 +24,9 @@ Design
 
 from __future__ import annotations
 
+import asyncio
+from copy import deepcopy
+from functools import lru_cache
 import json
 import logging
 import re
@@ -32,7 +35,13 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from .base import BaseAgent
 from ..utils.json_parse import safe_json_parse
-from ..utils.document_text import read_document_text
+from ..utils.document_text import read_document_text, without_reference_list
+from ..services.publication_tables import (
+    header_unit_for_value,
+    unit_key,
+    with_derived_table_rows,
+)
+from ..utils.llm_helper import thinking_override
 from .react_loop import ReactLoopMixin
 from .response_models import ISAValueMappingResponse
 from ..models import FAIRifierState
@@ -41,8 +50,11 @@ from ..config import config
 from ..utils.isa_order import ISA_LEVEL_ORDER, MULTI_ROW_ISA_LEVELS
 from ..utils.isa_matrix_projection import sync_compiled_matrix_to_state
 from ..utils.entity_plan import (
+    _CONTACT_FIELDS,
     _entity_description,
+    normalize_matrix_row_keys,
     normalize_source_measurement_value,
+    source_measurement_unit_aliases,
     project_matrix_onto_entity_plan,
     render_entity_plan_for_prompt,
     validate_entity_matrix_against_plan,
@@ -55,10 +67,19 @@ from ..utils.fairds_value_contracts import (
 )
 from ..utils.record_value_resolution import (
     RESOLUTION_SYSTEM_PROMPT,
+    _source_contains,
+    _source_norm,
     apply_resolutions,
     build_record_payloads,
     build_resolution_prompt,
     build_source_context,
+    align_cells_with_source_tables,
+    COMPACT_RESOLUTION_SYSTEM_PROMPT,
+    expand_compact_response,
+    render_numbered_units,
+    segment_source_units,
+    derived_table_rows_matching,
+    RESERVED_COLUMNS,
     collect_candidates,
     find_partial_columns,
     record_group_values,
@@ -70,6 +91,11 @@ from ..skills import load_skill_files, skills_catalog_seed_files
 _MAX_EVIDENCE_CANDIDATES_PER_FIELD = 5
 
 logger = logging.getLogger(__name__)
+
+
+class _MappingServiceError(RuntimeError):
+    """A failed model call, distinct from a returned invalid matrix."""
+
 
 # ── Constants ──────────────────────────────────────────────────────────
 
@@ -172,12 +198,139 @@ _ENTITY_DESCRIPTION_FIELDS = {
 }
 
 
+# Providers whose JSON mode leaves the configured thinking mode untouched
+# (Ollama ``format``; DeepSeek json_object with its own thinking switch).
+_JSON_MODE_PROVIDERS = frozenset({"ollama", "deepseek"})
+
+
 def _is_synthetic_id(field_name: str) -> bool:
     return field_name.strip().lower() in _SYNTHETIC_ID_FIELDS
 
 
 def _norm_cell(value: Any) -> str:
-    return " ".join(str(value or "").strip().lower().split())
+    return " ".join(str(value if value is not None else "").strip().lower().split())
+
+
+_SOURCE_QUANTITY_RE = re.compile(
+    r"(?<![\w.+-])([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+    r"\s*(°?[A-Za-z\u00b5\u03bc]+|%)(?!\w)"
+)
+
+
+def _source_evidence_text(value: Any, unit_aliases: Mapping[str, str]) -> str:
+    """Normalize quantity typography without changing magnitudes or unit case."""
+    text = _source_norm(value)
+
+    def quantity(match: re.Match[str]) -> str:
+        magnitude, unit = match.groups()
+        return f"{magnitude} {unit_aliases.get(unit.lower(), unit)}"
+
+    return _SOURCE_QUANTITY_RE.sub(quantity, text)
+
+
+def _evidence_cell_key(value: Any, unit_aliases: Mapping[str, str]) -> str:
+    return _source_evidence_text(value, unit_aliases)
+
+
+def _source_supports_cell(
+    normalized_source: str, value: Any, unit_aliases: Mapping[str, str],
+) -> bool:
+    fragment = _source_evidence_text(value, unit_aliases)
+    # Keep case even for standalone tokens and prose. Without a semantic
+    # contract, this guard cannot infer whether a token is a unit or a word.
+    if not _SOURCE_QUANTITY_RE.search(fragment):
+        return _source_contains(normalized_source, fragment)
+    for match in re.finditer(re.escape(fragment), normalized_source):
+        suffix = normalized_source[match.end():]
+        if re.match(r"\s*(?:[/⁄^*·⋅⁺⁻]|[+-]\d)", suffix) or re.match(
+            r"\s+[A-Za-z\u00b5\u03bc]+\s*(?:\^\s*)?-\d+(?!\w)", suffix,
+        ):
+            # A quantity cannot authenticate a lower-dimensional prefix of
+            # a compound unit or an exponent: 2 mg in 2 mg/mL or 2 mg mL-1.
+            continue
+        # Reuse the established signed/decimal numeric boundary check for
+        # this occurrence, including its immediate preceding/following text.
+        context = normalized_source[max(0, match.start() - 1):match.end() + 2]
+        if _source_contains(context, fragment):
+            return True
+    return _table_header_supports(normalized_source, str(value))
+
+
+def _mapping_source(state: Mapping[str, Any]) -> str:
+    """The paper as every mapping and review call sees it.
+
+    The reference list is dropped (it describes other papers and costs about a
+    quarter of the prompt); pivoted tables gain header-labelled rows so a value
+    can be tied to its row label and column header (see publication_tables).
+    """
+    return with_derived_table_rows(without_reference_list(read_document_text(state)))
+
+
+# Record-review call size. Every call re-reads the whole source (no prefix
+# cache for long prompts on hybrid models), so fewer, fuller calls are faster;
+# the compact protocol reports decided cells only, keeping answers short.
+_REVIEW_COLUMNS_PER_CALL = 8
+_REVIEW_CELLS_PER_CALL = 128
+
+
+# A derived table cell: "<column header> | <row column> = <cell value>".
+_DERIVED_CELL_RE = re.compile(r"([^;|]*)\|[^;|=]*=\s*([^;|]*)")
+_CELL_QUANTITY_RE = re.compile(
+    r"\s*((?:\d+(?:\.\d+)?|\.\d+)(?:\s*±\s*(?:\d+(?:\.\d+)?|\.\d+))?)\s+(\S.*?)\s*"
+)
+
+
+def _table_header_supports(normalized_source: str, value: str) -> bool:
+    """A quantity whose unit the source states once, in its column header.
+
+    The magnitude (with or without its ± term) must be the whole value of one
+    derived table cell, and the cell's own column header must carry the unit.
+    """
+    match = _CELL_QUANTITY_RE.fullmatch(value)
+    if not match:
+        return False
+    magnitude, unit = re.sub(r"\s+", "", match.group(1)), unit_key(match.group(2))
+    if len(unit) < 2 and unit != "%":
+        return False
+    return any(
+        magnitude in (cell, cell.partition("±")[0]) and unit in header
+        for header, cell in _derived_cells(normalized_source)
+    )
+
+
+@lru_cache(maxsize=4)
+def _derived_cells(normalized_source: str) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (unit_key(header), re.sub(r"\s+", "", cell))
+        for header, cell in _DERIVED_CELL_RE.findall(normalized_source)
+    )
+
+
+def _verified_cell_matches(
+    verified_cells: Mapping[str, Mapping[tuple[int, str], str]] | None,
+    level: str,
+    row_index: int,
+    column: str,
+    value: Any,
+    unit_aliases: Mapping[str, str],
+    value_contracts: Dict[tuple[str, str], Dict[str, Any]] | None = None,
+) -> bool:
+    """Match an exact cell to an accepted source-quoted record review.
+
+    The ledger is local to this mapping pass, outside the ISA matrix. Only
+    deterministic unit and FAIR-DS canonicalization may change its value.
+    """
+    accepted = ((verified_cells or {}).get(level) or {}).get((row_index, column))
+    if accepted is None:
+        return False
+    contract = contract_for(value_contracts or {}, level, column)
+    if contract:
+        accepted = canonicalize_value(accepted, contract)
+    return (
+        accepted is not None
+        and _evidence_cell_key(accepted, unit_aliases)
+        == _evidence_cell_key(value, unit_aliases)
+    )
 
 
 def _is_missing_cell(value: Any) -> bool:
@@ -221,7 +374,10 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         # Read once at the execution boundary so both agentic and deterministic
         # mapping paths use the same source when deciding whether an optional
         # value is genuinely evidenced.
-        document_text = read_document_text(state)
+        # Pivoted publication tables are appended as header-labelled rows so
+        # mapping, record review and evidence checks can tie a value to both
+        # its row label and its column header (see publication_tables).
+        document_text = _mapping_source(state)
 
         # §4.1 — Load EvidenceStore JSONL to surface section-level FieldCandidates
         # to ISAValueMapper (previously this layer was invisible to it).
@@ -247,19 +403,9 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             state=state,
         )
 
-        entity_plan_context = render_entity_plan_for_prompt(
-            state.get("entity_plan") or {}
-        )
-        context_parts = [
-            p
-            for p in (
-                entity_plan_context,
-                evidence_ctx,
-                workspace_ctx,
-                field_evidence_ctx,
-            )
-            if p
-        ]
+        # Identities have their own complete prompt/file. They must not consume
+        # the separate evidence budget for the document and field snippets.
+        context_parts = [p for p in (evidence_ctx, workspace_ctx, field_evidence_ctx) if p]
         document_context = "\n\n".join(context_parts)
 
         knowledge_items: List[Dict[str, Any]] = state.get(
@@ -302,19 +448,45 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         matrix: Dict[str, Dict[str, Any]]
         tool_metrics: Dict[str, Any] = {}
         tool_issues: List[str] = []
+        # A Critic retry repairs the previous matrix in place: only the cells
+        # the feedback points at are re-reviewed. The full mapping is redone
+        # only when there is no previous matrix.
+        repair_targets: List[Dict[str, Any]] | None = None
+        previous_matrix = (
+            self._previous_matrix(state)
+            if critic_feedback and getattr(config, "isa_targeted_repair", True)
+            else None
+        )
+        if previous_matrix:
+            repair_targets = await self._plan_targeted_repair(
+                previous_matrix, critic_feedback, state
+            )
+            self.logger.info(
+                "🩹 Targeted repair instead of full re-mapping: %d target(s) %s",
+                len(repair_targets),
+                [(t["level"], t["columns"], len(t.get("row_ids") or [])) for t in repair_targets],
+            )
+        state.setdefault("artifacts", {}).pop("isa_mapping_batches", None)
 
         # Tool-driven mapping is useful for real tables and multi-file bundles,
         # not for repeatedly rereading one abstract. Entity count is deliberately
         # not used as a cutoff: cardinality belongs to the structure plan.
-        use_deep_mapping = config.enable_deep_agents and (
+        bounded_mapping = self._requires_batched_mapping(fields_by_level, entity_plan)
+        use_deep_mapping = config.enable_deep_agents and not bounded_mapping and (
             not entity_plan or self._needs_tool_mapping(source_ws)
         )
-        if config.enable_deep_agents and not use_deep_mapping:
+        if bounded_mapping:
+            self.logger.info(
+                "Mapping the planned matrix in bounded entity/field batches using source evidence",
+            )
+        elif config.enable_deep_agents and not use_deep_mapping:
             self.logger.info(
                 "⏭️  Source workspace has no tables or supplementary sources; "
                 "using one structured mapping call plus deterministic plan compilation",
             )
-        if use_deep_mapping:
+        if repair_targets is not None:
+            matrix = previous_matrix
+        elif use_deep_mapping:
             inner_agent = self._build_ivm_inner_agent(
                 source_workspace=source_ws,
                 critic_feedback=critic_feedback,
@@ -326,7 +498,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                 "Use grep, targeted reads, table search, and read-only shell commands when useful. "
                 "Do not rely on unstated assumptions or hardcoded extraction rules. "
                 "Respect ISA unfold order: investigation -> study -> observationunit -> sample -> assay. "
-                "The entity plan in /workspace/ivm_context.md is authoritative: fill its rows and links; "
+                "The entity plan in /workspace/entity_plan.json is authoritative: fill its rows and links; "
                 "do not merge rows or replace internal row IDs with series-level identifiers. "
                 "Column keys must be the exact field_name strings from the metadata fields; "
                 "renaming, reformatting, or wrapping terms is not allowed. "
@@ -341,6 +513,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     source_workspace=source_ws,
                     document_context=document_context,
                     evidence_summary=evidence_summary,
+                    entity_plan=entity_plan,
                 ),
                 thread_id=f"{state.get('session_id', 'default')}-ivm-inner",
                 state=state,
@@ -354,7 +527,9 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     self.logger.warning(
                         "ISAValueMapper inner loop returned an empty matrix; using deterministic field fallback"
                     )
-                    matrix = self._build_matrix_heuristic(fields_by_level, evidence_summary)
+                    matrix = self._build_matrix_heuristic(
+                        fields_by_level, evidence_summary, entity_plan=entity_plan
+                    )
                     matrix = self._merge_source_workspace_entity_rows(matrix, source_ws)
                 else:
                     matrix = self._enforce_field_name_passthrough(
@@ -381,8 +556,14 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                 )
             except Exception as exc:
                 self.logger.error("ISA value mapping failed: %s", exc)
-                matrix = self._build_matrix_heuristic(fields_by_level, evidence_summary)
+                matrix = self._build_matrix_heuristic(
+                    fields_by_level, evidence_summary, entity_plan=entity_plan
+                )
                 matrix = self._merge_source_workspace_entity_rows(matrix, source_ws)
+
+        batch_report = state.get("artifacts", {}).get("isa_mapping_batches")
+        if batch_report:
+            tool_issues.extend(json.loads(batch_report).get("issues") or [])
 
         # ── Post-process: normalize, project entities, align columns ───
         matrix = self._seed_missing_planned_levels(matrix, entity_plan)
@@ -391,6 +572,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             fields_by_level,
             value_contracts,
             entity_plan,
+            allow_multi_entity_broadcast=not bounded_mapping,
         )
         # The structure planner is authoritative when present.  Delimiter-based
         # splitting is only a legacy fallback; applying it before projection can
@@ -399,6 +581,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             matrix = self._split_entities_heuristic(matrix)
         matrix = self._normalize_row_columns(matrix)
         matrix = self._ensure_core_linkage_fields(matrix, state)
+        verified_cells: Dict[str, Dict[tuple[int, str], str]] = {}
         if entity_plan:
             matrix = project_matrix_onto_entity_plan(matrix, entity_plan)
             matrix = self._normalize_row_columns(matrix)
@@ -416,16 +599,37 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     matrix,
                     fields_by_level,
                     entity_plan,
+                    source_text=document_text,
                 )
             )
             tool_issues.extend(group_scope_issues)
-            if config.record_value_resolution_enabled:
+            for level, block in matrix.items():
+                if isinstance(block, dict) and block.get("rows"):
+                    tool_issues.extend(align_cells_with_source_tables(
+                        level, entity_plan, block["rows"], document_text,
+                    ))
+            if repair_targets is not None:
+                verified_cells.update(self._load_verified_cells(state))
+                if repair_targets:
+                    matrix, record_issues = await self._resolve_partial_record_values(
+                        matrix,
+                        fields_by_level,
+                        entity_plan,
+                        document_text,
+                        state,
+                        verified_cells=verified_cells,
+                        forced_targets=repair_targets,
+                        keep_verified=True,
+                    )
+                    tool_issues.extend(record_issues)
+            elif config.record_value_resolution_enabled:
                 matrix, record_issues = await self._resolve_partial_record_values(
                     matrix,
                     fields_by_level,
                     entity_plan,
                     document_text,
                     state,
+                    verified_cells=verified_cells,
                 )
                 tool_issues.extend(record_issues)
         matrix = self._normalize_source_measurement_units(matrix, document_text)
@@ -434,6 +638,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             fields_by_level,
             entity_plan,
             document_text,
+            verified_cells=verified_cells,
         )
         tool_issues.extend(provisional_issues)
         matrix = self._ensure_selected_field_columns(matrix, fields_by_level)
@@ -464,13 +669,24 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             fields_by_level,
             entity_plan,
             source_text=document_text,
+            verified_cells=verified_cells,
+            value_contracts=value_contracts,
         )
         if pruned_columns:
             self.logger.info(
-                "🧹 Removed %d uninformative optional/recommended columns: %s",
+                "🧹 Cleared unsupported optional/recommended values in %d columns; "
+                "retaining the selected schema: %s",
                 sum(len(items) for items in pruned_columns.values()),
                 pruned_columns,
             )
+        matrix, unit_issues = self._attach_table_header_units(
+            matrix, knowledge_items, document_text
+        )
+        tool_issues.extend(unit_issues)
+        # Evidence rejection clears values, not the already selected schema.
+        # Restore removed selected columns as blank cells before compiling both
+        # deliverables; do not restore the rejected values or create new rows.
+        matrix = self._ensure_selected_field_columns(matrix, fields_by_level)
         # Single projection: compile once, write sidecar + metadata.json together.
         projected = sync_compiled_matrix_to_state(
             state,
@@ -479,6 +695,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             compiler_tag="isa_value_mapper",
         )
         matrix = projected["matrix"]
+        self._store_verified_cells(state, verified_cells)
         quality = self._compute_matrix_quality(matrix, tool_metrics, tool_issues)
         if entity_plan:
             structure_validation = validate_entity_matrix_against_plan(
@@ -505,7 +722,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         )
         quality["entity_plan_validation"] = structure_validation
         quality["semantic_metrics"] = structure_validation.get("semantic_metrics", {})
-        quality["pruned_uninformative_columns"] = pruned_columns
+        quality["cleared_uninformative_optional_columns"] = pruned_columns
         quality["issues"] = list(
             dict.fromkeys(
                 list(quality.get("issues") or [])
@@ -585,16 +802,20 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         """Keep every selected FAIR-DS term as a matrix column on every row."""
         for level in ISA_LEVELS:
             block = matrix.setdefault(level, {"columns": [], "rows": []})
-            columns = [str(column).strip().lower() for column in block.get("columns") or []]
+            columns = list(dict.fromkeys(
+                str(column).strip().lower() for column in block.get("columns") or []
+            ))
             for field in fields_by_level.get(level) or []:
                 field_name = str(field.get("field_name") or "").strip().lower()
                 if field_name and field_name not in columns:
                     columns.append(field_name)
             block["columns"] = columns
             block["rows"] = [
-                {column: row.get(column, "") for column in columns}
+                {column: normalized.get(column, "") for column in columns}
                 for row in (block.get("rows") or [])
                 if isinstance(row, dict)
+                for normalized in [normalize_matrix_row_keys(row)]
+                if normalized is not None
             ]
         return matrix
 
@@ -632,12 +853,15 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         fields_by_level: Dict[str, List[Dict[str, Any]]],
         value_contracts: Dict[tuple[str, str], Dict[str, Any]] | None = None,
         entity_plan: Dict[str, Any] | None = None,
+        *,
+        allow_multi_entity_broadcast: bool = True,
     ) -> Dict[str, Dict[str, Any]]:
         """Restore source-backed values that the row mapper dropped or paraphrased.
 
         JSONGenerator has already extracted field values with provenance.  The
         mapper may reorganize rows, but it must not degrade a confirmed global
-        value. At root levels a unique confirmed value is authoritative. At
+        value. At root levels a unique confirmed value is authoritative, except
+        for Investigation contact details, which remain bound to each person. At
         multi-entity levels, a unique value is *not* sufficient evidence of
         universality: the extractor must explicitly mark it as level-wide, and
         the structure plan must not assign that field to only a subset of rows.
@@ -658,12 +882,24 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             "sample identifier",
         }
         for level, fields in fields_by_level.items():
+            if level not in {"investigation", "study"} and not allow_multi_entity_broadcast:
+                # Each scheduled row was judged separately. A shared upstream
+                # proposal cannot fill cells omitted/rejected by that mapping,
+                # including cells in a failed batch.
+                continue
             block = matrix.get(level)
             if not isinstance(block, dict):
                 continue
             rows = [row for row in block.get("rows") or [] if isinstance(row, dict)]
             if not rows:
                 continue
+            level_entities = [
+                entity
+                for level_plan in (entity_plan or {}).get("levels") or []
+                if isinstance(level_plan, Mapping) and level_plan.get("level") == level
+                for entity in level_plan.get("entities") or []
+                if isinstance(entity, Mapping)
+            ]
             candidates: Dict[str, List[tuple[str, str]]] = {}
             level_field_names = [
                 str(field.get("field_name") or "").strip()
@@ -674,6 +910,11 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                 if not isinstance(field, dict):
                     continue
                 name = str(field.get("field_name") or "").strip().lower()
+                if level == "investigation" and name in _CONTACT_FIELDS:
+                    # An Investigation ID is shared by its contact rows. A
+                    # unique contact value (even labeled level-wide) does not
+                    # identify its owner; retain mapped rows and plan contacts.
+                    continue
                 value = str(field.get("value") or "").strip()
                 status = str(field.get("status") or "").strip().lower()
                 evidence = str(field.get("evidence") or "").strip()
@@ -707,10 +948,20 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                 if level not in {"investigation", "study"}:
                     if value_scope != "level":
                         # Unknown, entity, and group scope are never safe to
-                        # broadcast across a multi-row ISA level.  A conflicting
-                        # synthetic entity_id does not overrule an explicit
-                        # level-wide scope: the locked plan below is the
-                        # authoritative check for whether broadcast is valid.
+                        # broadcast across a multi-row ISA level.
+                        continue
+                    entity_id = str(field.get("entity_id") or "").strip()
+                    if level_entities and entity_id and sum(
+                        entity_id in {
+                            str(entity.get("row_id") or "").strip(),
+                            str(entity.get("external_identifier") or "").strip(),
+                        }
+                        for entity in level_entities
+                    ) != 1:
+                        # With an authoritative target-level plan, a level-wide
+                        # label cannot override an unknown, ambiguous, or
+                        # different-level association.
+                        # Leave that proposal unbound for the row mapper.
                         continue
                     if not ISAValueMapperAgent._plan_allows_level_broadcast(
                         entity_plan or {},
@@ -1036,15 +1287,19 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         fields_by_level: Dict[str, List[Dict[str, Any]]],
         entity_plan: Dict[str, Any],
         source_text: str,
+        *,
+        verified_cells: Mapping[str, Mapping[tuple[int, str], str]] | None = None,
     ) -> tuple[Dict[str, Dict[str, Any]], List[str]]:
         """Prevent the mapper from upgrading unsupported provisional prose.
 
         JSONGenerator records whether a field extraction is confirmed. The row
-        mapper may reorganize those values, but it has no per-cell evidence
-        contract that would justify turning a provisional paraphrase into a
-        sheet-wide fact. A provisional value is therefore retained only when
-        it occurs literally in the source or is owned by an independently
-        audited entity-plan mapping. Entity identifiers, names, descriptions,
+        mapper may reorganize those values. Provisional paraphrases and
+        vocabulary mappings require a validated per-record source review.
+        Otherwise a provisional value is retained only when
+        it matches source evidence after typography and declared-unit
+        normalization or is owned by an independently audited entity-plan
+        mapping. Magnitudes, signs, exponents and unit case remain significant.
+        Entity identifiers, names, descriptions,
         and investigation contacts are deterministic presentation fields and
         are exempt from this source-literal test.
         """
@@ -1101,14 +1356,15 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     if field_name:
                         plan_mapped.setdefault(level, set()).add(field_name)
 
-        normalized_source = _norm_cell(source_text)
+        unit_aliases = source_measurement_unit_aliases(source_text)
+        normalized_source = _source_evidence_text(source_text, unit_aliases)
 
         issues: List[str] = []
         seen: set[tuple[str, str, str]] = set()
         for level, block in matrix.items():
             if not isinstance(block, Mapping):
                 continue
-            for row in block.get("rows") or []:
+            for row_index, row in enumerate(block.get("rows") or []):
                 if not isinstance(row, dict):
                     continue
                 for raw_field_name, value in list(row.items()):
@@ -1120,7 +1376,10 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                         or field_name in confirmed.get(level, set())
                         or field_name not in provisional.get(level, set())
                         or field_name in plan_mapped.get(level, set())
-                        or normalized_value in normalized_source
+                        or _verified_cell_matches(
+                            verified_cells, level, row_index, field_name, value, unit_aliases,
+                        )
+                        or _source_supports_cell(normalized_source, value, unit_aliases)
                     ):
                         continue
                     row[raw_field_name] = ""
@@ -1166,20 +1425,30 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             }
             if not entities or len(rows) != len(entities):
                 continue
-            mapped_fields: set[str] = set()
+            # A broadcast is only detectable among siblings of one design group:
+            # the planner mapped the field for some members and withheld it
+            # from others. A group whose plan never considered the field gives
+            # no evidence against the mapper's value (e.g. a substrate-kind
+            # field mapped only on PET-hydrolysis assays must not erase it on
+            # proxy-substrate kinetics assays).
+            mapped_by_group: Dict[str, set[str]] = {}
             fields_by_entity: List[set[str]] = []
+            group_by_entity: List[str] = []
             for entity in entities:
                 fields = {
                     str(attribute.get("field_name") or "").strip().lower()
                     for attribute in entity.get("attributes") or []
                     if isinstance(attribute, Mapping) and attribute.get("field_name")
                 }
-                mapped_fields.update(fields)
+                group = str(entity.get("source_group") or "").strip()
+                mapped_by_group.setdefault(group, set()).update(fields)
                 fields_by_entity.append(fields)
+                group_by_entity.append(group)
             for index, row in enumerate(rows):
                 if not isinstance(row, dict):
                     continue
-                for field_name in mapped_fields - fields_by_entity[index]:
+                group_fields = mapped_by_group.get(group_by_entity[index], set())
+                for field_name in group_fields - fields_by_entity[index]:
                     if field_name in shared_columns:
                         continue
                     if _is_missing_cell(row.get(field_name)):
@@ -1194,15 +1463,18 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         matrix: Dict[str, Dict[str, Any]],
         fields_by_level: Dict[str, List[Dict[str, Any]]],
         entity_plan: Dict[str, Any],
+        *,
+        source_text: str = "",
     ) -> tuple[Dict[str, Dict[str, Any]], List[str]]:
-        """Limit level-wide values whose literal support is group-specific.
+        """Limit level-wide values whose source support is group-specific.
 
         A confirmed extractor record may still overstate ``value_scope=level``.
-        When its literal value occurs in the evidence of only a proper subset
+        When its value occurs in the evidence of only a proper subset
         of design groups, that evidence is stronger than the scope label. The
         projected plan supplies each row's source group, so the value can be
         removed from unsupported sibling branches without domain-specific
-        field names or value patterns.
+        field names or value patterns. Quantity typography and declared-unit
+        aliases are normalized; same-row plan-owned cells remain authoritative.
 
         Values absent from every group evidence remain eligible as true global
         document facts. Numeric-only values are excluded because a short number
@@ -1218,9 +1490,13 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         if len(groups) < 2:
             return matrix, []
 
+        alias_context = source_text or "\n".join(
+            str(group.get("evidence") or "") for group in groups
+        )
+        unit_aliases = source_measurement_unit_aliases(alias_context)
         group_evidence = {
-            str(group.get("group_id") or "").strip(): _norm_cell(
-                group.get("evidence")
+            str(group.get("group_id") or "").strip(): _source_evidence_text(
+                group.get("evidence"), unit_aliases,
             )
             for group in groups
         }
@@ -1260,7 +1536,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                 if str(field.get("value_scope") or "").strip().lower() != "level":
                     continue
                 field_name = str(field.get("field_name") or "").strip().lower()
-                value = _norm_cell(field.get("value"))
+                value = _evidence_cell_key(field.get("value"), unit_aliases)
                 if (
                     not field_name
                     or not value
@@ -1270,7 +1546,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                 supported = {
                     group_id
                     for group_id in level_groups
-                    if value in group_evidence.get(group_id, "")
+                    if _source_supports_cell(group_evidence.get(group_id, ""), value, unit_aliases)
                 }
                 if supported and supported != level_groups:
                     scoped_candidates.append((field_name, value, supported))
@@ -1283,7 +1559,16 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     source_group = str(entity.get("source_group") or "").strip()
                     if source_group in supported:
                         continue
-                    if _norm_cell(row.get(field_name)) != value:
+                    if _evidence_cell_key(row.get(field_name), unit_aliases) != value:
+                        continue
+                    if any(
+                        isinstance(attribute, Mapping)
+                        and str(attribute.get("field_name") or "").strip().lower() == field_name
+                        and _evidence_cell_key(attribute.get("value"), unit_aliases) == value
+                        for attribute in entity.get("attributes") or []
+                    ):
+                        # This exact cell is already owned by the authoritative
+                        # entity plan; a shorter group summary cannot revoke it.
                         continue
                     row[field_name] = ""
                     cleared_groups.add(source_group)
@@ -1312,8 +1597,16 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         entity_plan: Dict[str, Any],
         document_text: str,
         state: FAIRifierState,
+        *,
+        verified_cells: Dict[str, Dict[tuple[int, str], str]] | None = None,
+        forced_targets: List[Dict[str, Any]] | None = None,
+        keep_verified: bool = False,
     ) -> tuple[Dict[str, Dict[str, Any]], List[str]]:
-        """Re-judge partially filled per-record columns for every planned record.
+        """Review incomplete columns and nonliteral values by record.
+
+        ``forced_targets`` (a targeted repair) replaces the automatic column
+        selection with explicit ``{level, columns, row_ids, instruction}``
+        targets; only those rows are sent for review. Levels run concurrently.
 
         The matrix mapper may fill a row-varying column only on one
         representative row per group; projection then (correctly) refuses to
@@ -1321,18 +1614,82 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         attributes and source passages, and only values passing the
         deterministic checks in ``record_value_resolution`` are written.
         """
-        partial = find_partial_columns(matrix, entity_plan, fields_by_level)
+        if verified_cells is not None and not keep_verified:
+            verified_cells.clear()
+        # Controlled vocabulary labels and summaries need not occur verbatim.
+        # Schedule their source review even if the mapper filled every row or
+        # omitted the column completely; never promote them by confidence alone.
+        unit_aliases = source_measurement_unit_aliases(document_text)
+        normalized_source = _source_evidence_text(document_text, unit_aliases)
+        additional_columns: Dict[str, set[str]] = {}
+        for level, fields in fields_by_level.items():
+            for field in fields:
+                if not isinstance(field, Mapping):
+                    continue
+                name = str(field.get("field_name") or "").strip().lower()
+                if str(field.get("status") or "").strip().lower() not in {"confirmed", "provisional"}:
+                    continue
+                row_values = [
+                    row.get(name) for row in (matrix.get(level) or {}).get("rows") or []
+                    if isinstance(row, Mapping)
+                ]
+                missing_column = (
+                    not any(not _is_missing_cell(value) for value in row_values)
+                    and not _is_missing_cell(field.get("value"))
+                )
+                values = [field.get("value"), *row_values]
+                if missing_column or any(
+                    not _is_missing_cell(value)
+                    and not _source_supports_cell(normalized_source, value, unit_aliases)
+                    for value in values
+                ):
+                    additional_columns.setdefault(level, set()).add(name)
+        row_filter: Dict[str, set[str]] = {}
+        instructions: Dict[str, List[str]] = {}
+        if forced_targets is not None:
+            partial: Dict[str, List[str]] = {}
+            for target in forced_targets:
+                level = target["level"]
+                partial.setdefault(level, [])
+                partial[level].extend(c for c in target["columns"] if c not in partial[level])
+                if target.get("row_ids"):
+                    row_filter.setdefault(level, set()).update(target["row_ids"])
+                elif level in row_filter:
+                    row_filter[level] = set()  # an all-rows target covers every row
+                if target.get("instruction"):
+                    instructions.setdefault(level, []).append(str(target["instruction"]))
+            row_filter = {level: ids for level, ids in row_filter.items() if ids}
+        else:
+            partial = find_partial_columns(
+                matrix, entity_plan, fields_by_level, additional_columns=additional_columns,
+            )
+            # Review truly partial columns (the purpose of this pass) before
+            # the additional non-literal ones, so a call budget cuts the latter.
+            core = find_partial_columns(matrix, entity_plan, fields_by_level)
+            partial = {
+                level: sorted(columns, key=lambda c, k=set(core.get(level) or []): c not in k)
+                for level, columns in partial.items()
+            }
         if not partial:
             return matrix, []
         try:
-            llm = self._get_llm(state)
+            llm = self._get_mapping_llm(state)
         except Exception as exc:
             self.logger.warning("Record-level resolution skipped (no LLM): %s", exc)
             return matrix, []
         batch_size = max(1, int(config.record_value_resolution_batch_size or 25))
         max_records = max(0, int(config.record_value_resolution_max_records or 0))
         issues: List[str] = []
-        for level, columns in partial.items():
+        semaphore = asyncio.Semaphore(max(1, int(config.llm_batch_concurrency or 1)))
+        compact = bool(getattr(config, "record_review_compact", True))
+        source_units = segment_source_units(document_text) if compact else []
+        source_prefix = (
+            "Numbered source:\n" + render_numbered_units(source_units)
+            if compact else "Complete source document:\n" + document_text
+        )
+        system_prompt = COMPACT_RESOLUTION_SYSTEM_PROMPT if compact else RESOLUTION_SYSTEM_PROMPT
+
+        async def review_level(level: str, columns: List[str]):
             rows = matrix[level]["rows"]
             fields = fields_by_level.get(level) or []
             candidates = {
@@ -1346,46 +1703,145 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     len(records),
                     max_records,
                 )
-                continue
-            source_context = build_source_context(
-                level,
-                columns,
-                candidates,
-                fields,
-                entity_plan,
-                document_text,
-                group_values=record_group_values(records),
-            )
+                return [], False
+            wanted = row_filter.get(level)
+            reviewed_rows = None
+            review_records = records
+            if wanted:
+                reviewed_rows = [
+                    index for index, record in enumerate(records)
+                    if record.get("identifier") in wanted or record.get("record_id") in wanted
+                ]
+                review_records = [records[index] for index in reviewed_rows]
+                if not review_records:
+                    return [], False
+            note = " ".join(instructions.get(level, []))[:600]
             from langchain_core.messages import HumanMessage, SystemMessage
 
             responses: List[Dict[str, Any]] = []
-            for start in range(0, len(records), batch_size):
-                prompt = build_resolution_prompt(
+            source_context = ""
+            service_failed = False
+            # Each cell requires a decision, record attribute, and source quote.
+            # Bound cells as well as records; wide sheets otherwise require an
+            # output larger than the provider's completion allowance.
+            jobs: List[tuple] = []
+            for column_start in range(0, len(columns), _REVIEW_COLUMNS_PER_CALL):
+                batch_columns = columns[column_start:column_start + _REVIEW_COLUMNS_PER_CALL]
+                record_limit = min(batch_size, max(1, _REVIEW_CELLS_PER_CALL // len(batch_columns)))
+                batch_candidates = {column: candidates[column] for column in batch_columns}
+                # The compact protocol already carries the whole numbered
+                # source; excerpts would only repeat it.
+                source_context = "" if compact else build_source_context(
                     level,
-                    columns,
-                    candidates,
-                    source_context,
-                    records[start:start + batch_size],
+                    batch_columns,
+                    batch_candidates,
+                    fields,
+                    entity_plan,
+                    document_text,
+                    group_values=record_group_values(records),
                 )
-                try:
-                    response = await llm._call_llm(
-                        [
-                            SystemMessage(content=RESOLUTION_SYSTEM_PROMPT),
-                            HumanMessage(content=prompt),
-                        ],
-                        operation_name="ISA Record Value Resolution",
+                for start in range(0, len(review_records), record_limit):
+                    batch_records = [
+                        {**record, "current": {
+                            column: record["current"].get(column, "") for column in batch_columns
+                        }}
+                        for record in review_records[start:start + record_limit]
+                    ]
+                    prompt = build_resolution_prompt(
+                        level, batch_columns, batch_candidates, source_context, batch_records,
                     )
-                except Exception as exc:
-                    self.logger.warning(
-                        "Record-level resolution call failed for %s: %s", level, exc
+                    if note:
+                        prompt = (
+                            "Reviewer feedback to address for these cells (accept a value only "
+                            "with source support as required below): " + note + "\n\n" + prompt
+                        )
+                    if (compact or getattr(config, "full_source_context", True)) and document_text:
+                        # Same stable prefix for every review call of this paper.
+                        prompt = source_prefix + "\n\n" + prompt
+                    jobs.append((column_start, start, batch_columns, batch_records, prompt))
+
+            call_budget = max(0, int(getattr(config, "record_value_resolution_max_calls_per_level", 0) or 0))
+            if call_budget and len(jobs) > call_budget:
+                # Bounded cost per paper: large screens otherwise need hundreds
+                # of calls. Remaining cells keep their mapped values for review.
+                self.logger.info(
+                    "Record-level review %s: %d calls exceed budget %d; reviewing partial columns first",
+                    level, len(jobs), call_budget,
+                )
+                issues.append(
+                    f"Record-level review for {level} limited to {call_budget} of {len(jobs)} calls; "
+                    "remaining cells were not re-reviewed."
+                )
+                jobs = jobs[:call_budget]
+
+            # Independent calls: run up to N concurrently, consume in order.
+            stop = asyncio.Event()
+
+            async def review(job):
+                column_start, start, batch_columns, batch_records, prompt = job
+                async with semaphore:
+                    if stop.is_set():
+                        return None
+                    self.logger.info(
+                        "Record-level review %s: records %d-%d, columns %d-%d",
+                        level, start + 1, start + len(batch_records),
+                        column_start + 1, column_start + len(batch_columns),
                     )
+                    try:
+                        with thinking_override(config.mapping_llm_thinking):
+                            return await llm._call_llm(
+                                [SystemMessage(content=system_prompt), HumanMessage(content=prompt)],
+                                operation_name="ISA Record Value Resolution",
+                                json_mode=getattr(llm, "provider", None) in _JSON_MODE_PROVIDERS,
+                            )
+                    except Exception as exc:
+                        stop.set()
+                        self.logger.warning("Record-level resolution call failed for %s: %s", level, exc)
+                        return exc
+
+            outcomes = await asyncio.gather(*(review(job) for job in jobs))
+            for job, response in zip(jobs, outcomes):
+                _, _, batch_columns, batch_records, _ = job
+                if response is None:
                     continue
-                content = (
-                    response.content if hasattr(response, "content") else str(response)
-                )
+                if isinstance(response, Exception):
+                    if not service_failed:
+                        issues.append(f"Record-level resolution service failure for {level}; subsequent calls stopped.")
+                    service_failed = True
+                    continue
+                metadata = getattr(response, "response_metadata", {}) or {}
+                finish_reason = str(
+                    metadata.get("finish_reason") or metadata.get("stop_reason")
+                    or metadata.get("done_reason") or ""
+                ).lower()
+                if finish_reason in {"length", "max_tokens", "max_output_tokens"}:
+                    issues.append(f"Truncated record-level resolution for {level}; batch values left unchanged for review.")
+                    continue
+                content = response.content if hasattr(response, "content") else str(response)
                 parsed = safe_json_parse(content)
-                if isinstance(parsed, dict):
-                    responses.append(parsed)
+                if compact and isinstance(parsed, dict):
+                    parsed = expand_compact_response(parsed, source_units)
+                if not isinstance(parsed, dict) or not isinstance(parsed.get("records"), list):
+                    issues.append(f"Invalid record-level resolution for {level}; batch values left unchanged for review.")
+                    continue
+                batch_ids = {record["record_id"] for record in batch_records}
+                bounded_records = []
+                for item in parsed["records"]:
+                    if (
+                        not isinstance(item, Mapping)
+                        or item.get("record_id") not in batch_ids
+                        or not isinstance(item.get("values"), Mapping)
+                    ):
+                        issues.append(f"Out-of-scope or malformed record-level decision for {level}; ignored.")
+                        continue
+                    returned_columns = {str(column).strip().lower() for column in item["values"]}
+                    if returned_columns - set(batch_columns):
+                        issues.append(f"Out-of-scope record-level columns for {level}; ignored.")
+                    bounded_records.append({**item, "values": {
+                        column: decision for column, decision in item["values"].items()
+                        if str(column).strip().lower() in batch_columns
+                    }})
+                responses.append({"records": bounded_records})
             level_issues, stats = apply_resolutions(
                 level,
                 rows,
@@ -1395,10 +1851,19 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                 responses,
                 source_context,
                 document_text,
+                verified_cells=(verified_cells.setdefault(level, {})
+                                if verified_cells is not None else None),
+                reviewed_rows=reviewed_rows,
             )
             self.logger.info(
                 "🔎 Record-level resolution %s %s: %s", level, columns, stats
             )
+            return level_issues, service_failed
+
+        level_outcomes = await asyncio.gather(*(
+            review_level(level, columns) for level, columns in partial.items()
+        ))
+        for level_issues, _failed in level_outcomes:
             issues.extend(level_issues)
         return matrix, issues
 
@@ -1420,12 +1885,57 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         return matrix
 
     @staticmethod
+    def _attach_table_header_units(
+        matrix: Dict[str, Dict[str, Any]],
+        knowledge_items: List[Dict[str, Any]],
+        source_text: str,
+    ) -> tuple[Dict[str, Dict[str, Any]], List[str]]:
+        """Complete bare table quantities with the unit their header declares.
+
+        Applies only to fields whose FAIR-DS example is a quantity with a unit
+        (e.g. ``230 uM``), never to scalar fields with a separate unit column.
+        Runs after evidence checks, which therefore judged the source value.
+        A value whose table occurrences disagree on the unit is left as is.
+        """
+        quantity_with_unit = re.compile(r"^\s*[+-]?\d[\d.]*(?:\s*±\s*[\d.]+)?\s+\S")
+        unit_fields: set[tuple[str, str]] = set()
+        for item in knowledge_items or []:
+            meta = item.get("metadata", {}) if isinstance(item, Mapping) else {}
+            example = str(meta.get("example") or "")
+            if quantity_with_unit.match(example):
+                level = FAIRDSAPIParser.normalize_isa_sheet(
+                    meta.get("isa_sheet") or meta.get("sheet")
+                )
+                unit_fields.add((level, str(item.get("term") or "").strip().lower()))
+        attached = 0
+        for level, block in matrix.items():
+            if not isinstance(block, Mapping):
+                continue
+            for row in block.get("rows") or []:
+                if not isinstance(row, dict):
+                    continue
+                for column, value in list(row.items()):
+                    if (level, str(column).strip().lower()) not in unit_fields:
+                        continue
+                    unit = header_unit_for_value(source_text, value)
+                    if unit:
+                        row[column] = f"{str(value).strip()} {unit}"
+                        attached += 1
+        issues = (
+            [f"Attached source table-header units to {attached} bare quantities."]
+            if attached else []
+        )
+        return matrix, issues
+
+    @staticmethod
     def _prune_uninformative_optional_columns(
         matrix: Dict[str, Dict[str, Any]],
         fields_by_level: Dict[str, List[Dict[str, Any]]],
         entity_plan: Dict[str, Any],
         *,
         source_text: str = "",
+        verified_cells: Mapping[str, Mapping[tuple[int, str], str]] | None = None,
+        value_contracts: Dict[tuple[str, str], Dict[str, Any]] | None = None,
     ) -> tuple[Dict[str, Dict[str, Any]], Dict[str, List[str]]]:
         """Keep optional schema columns only when their evidence is usable.
 
@@ -1514,7 +2024,8 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                         plan_values_by_level[level].add(value)
                 mapped_values_by_row[level].append(entity_mapped_values)
 
-        normalized_source = _norm_cell(source_text)
+        unit_aliases = source_measurement_unit_aliases(source_text)
+        normalized_source = _source_evidence_text(source_text, unit_aliases)
 
         def is_explicit_plan_cell(
             level: str,
@@ -1572,63 +2083,65 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             removed: List[str] = []
             for raw_column in block.get("columns") or []:
                 column = str(raw_column).strip().lower()
-                informative = any(not _is_missing_cell(row.get(column)) for row in rows)
-                can_prune = requirement.get(column) in {"OPTIONAL", "RECOMMENDED"}
-                normalized_nonempty = {
-                    _norm_cell(row.get(column))
-                    for row in rows
-                    if not _is_missing_cell(row.get(column))
-                }
-                source_supported = bool(normalized_nonempty) and all(
-                    value in normalized_source
-                    or value in plan_values_by_level.get(level, set())
-                    for value in normalized_nonempty
+                can_prune = (
+                    requirement.get(column) in {"OPTIONAL", "RECOMMENDED"}
+                    and column not in structural
+                    and column not in mapped_by_level.get(level, set())
                 )
+                if not can_prune:
+                    keep.append(column)
+                    continue
+                extracted_values = confirmed_values.get(column, set())
+
+                def cell_supported(
+                    row_index: int, value: Any, *, allow_field_status: bool = True
+                ) -> bool:
+                    # Evidence is judged per cell. One unsupported cell must not
+                    # erase supported cells of the same column (e.g. a column of
+                    # source-quoted kinetic constants with one prose outlier).
+                    if allow_field_status and column in supported_optional and (
+                        not extracted_values or _norm_cell(value) in extracted_values
+                    ):
+                        return True
+                    return (
+                        _source_supports_cell(normalized_source, value, unit_aliases)
+                        or _verified_cell_matches(
+                            verified_cells, level, row_index, column, value,
+                            unit_aliases, value_contracts,
+                        )
+                        or _norm_cell(value) in plan_values_by_level.get(level, set())
+                    )
+
+                filled = [
+                    (row_index, row)
+                    for row_index, row in enumerate(rows)
+                    if not _is_missing_cell(row.get(column))
+                ]
+                supported = {
+                    row_index
+                    for row_index, row in filled
+                    if cell_supported(row_index, row.get(column))
+                }
                 repeated_level_narrative = (
                     level in MULTI_ROW_ISA_LEVELS
                     and len(rows) > 1
-                    and len(normalized_nonempty) == 1
-                    and all(not _is_missing_cell(row.get(column)) for row in rows)
+                    and len(filled) == len(rows)
+                    and len({_norm_cell(row.get(column)) for _, row in filled}) == 1
                 )
-                extracted_values = confirmed_values.get(column, set())
-                field_value_supported = column in supported_optional and (
-                    not extracted_values
-                    or normalized_nonempty.issubset(extracted_values)
-                )
-                redundant_with_plan_mapping = bool(normalized_nonempty) and all(
-                    any(
-                        candidate_value == mapped_value
-                        for mapped_field, mapped_value in (
-                            mapped_values_by_row.get(level, [{}])[row_index]
-                            if row_index
-                            < len(mapped_values_by_row.get(level, []))
-                            else {}
-                        ).items()
-                        if mapped_field != column
-                    )
-                    for row_index, row in enumerate(rows)
-                    if (candidate_value := _norm_cell(row.get(column)))
-                )
-                if (
-                    can_prune
-                    and column not in structural
-                    and column not in mapped_by_level.get(level, set())
-                    and (
-                        not informative
-                        or (
-                            not field_value_supported
-                            and not source_supported
-                        )
-                        or (
-                            repeated_level_narrative
-                            and not source_supported
-                        )
-                        or redundant_with_plan_mapping
-                    )
+                if repeated_level_narrative and not all(
+                    cell_supported(row_index, row.get(column), allow_field_status=False)
+                    for row_index, row in filled
                 ):
-                    removed.append(column)
-                else:
+                    # One study-wide sentence copied onto every row is a
+                    # narrative, not a per-record value, unless the source has it.
+                    supported = set()
+                for row_index, row in filled:
+                    if row_index not in supported:
+                        row[column] = ""
+                if supported:
                     keep.append(column)
+                else:
+                    removed.append(column)
             block["columns"] = keep
             block["rows"] = [
                 {
@@ -1656,6 +2169,9 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         This uses FAIR-DS ``data_type`` declarations rather than field-name or
         document-specific patterns. Missing-value sentinels remain intact;
         valid lexical numbers remain strings so Excel presentation is stable.
+        Composite numeric templates override stale inferred scalar types. Their
+        explicit regex contracts are enforced separately before this step; this
+        sanitizer does not attempt to validate arbitrary syntax templates.
         """
         numeric_types = {
             "number",
@@ -1675,10 +2191,8 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         for level, block in matrix.items():
             if not isinstance(block, dict):
                 continue
-            type_by_field = {
-                str(field.get("field_name") or "").strip().lower(): str(
-                    field.get("data_type") or ""
-                ).strip().lower()
+            schema_by_field = {
+                str(field.get("field_name") or "").strip().lower(): field
                 for field in (fields_by_level.get(level) or [])
                 if str(field.get("field_name") or "").strip()
             }
@@ -1686,10 +2200,17 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                 if not isinstance(row, dict):
                     continue
                 for field_name, value in list(row.items()):
-                    data_type = type_by_field.get(
-                        str(field_name).strip().lower(), ""
+                    schema = schema_by_field.get(
+                        str(field_name).strip().lower(), {}
                     )
+                    data_type = str(schema.get("data_type") or "").strip().lower()
                     if data_type not in numeric_types or value is None:
+                        continue
+                    syntax = str(schema.get("syntax") or "").strip()
+                    if (
+                        ("{number}" in syntax or "{float}" in syntax)
+                        and FAIRDSAPIParser._infer_data_type({"syntax": syntax}) != "number"
+                    ):
                         continue
                     text = str(value).strip()
                     if text.lower() in _PLACEHOLDER_CELL_VALUES:
@@ -1746,9 +2267,20 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         source_workspace: Dict[str, Any],
         document_context: str,
         evidence_summary: Optional[Dict[str, Any]] = None,
+        entity_plan: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Build virtual files for the ISA value-mapping inner loop."""
         seed_files: Dict[str, Any] = {}
+
+        if entity_plan:
+            plan_file = self._maybe_create_file_data(
+                json.dumps(entity_plan, indent=2, ensure_ascii=False)
+            )
+            if plan_file is not None:
+                seed_files["/workspace/entity_plan.json"] = plan_file
+            identity_context = render_entity_plan_for_prompt(entity_plan)
+            if document_context.startswith(identity_context):
+                document_context = document_context[len(identity_context):].lstrip()
 
         field_file = self._maybe_create_file_data(
             json.dumps(fields_by_level, indent=2, ensure_ascii=False)
@@ -1757,7 +2289,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             seed_files["/workspace/metadata_fields_by_isa.json"] = field_file
 
         knowledge_file = self._maybe_create_file_data(
-            json.dumps(knowledge_items[:80], indent=2, ensure_ascii=False)
+            json.dumps(knowledge_items, indent=2, ensure_ascii=False)
         )
         if knowledge_file is not None:
             seed_files["/workspace/retrieved_knowledge.json"] = knowledge_file
@@ -2146,6 +2678,21 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
 
     # ── LLM-based matrix construction ─────────────────────────────────
 
+    @staticmethod
+    def _requires_batched_mapping(fields_by_level, entity_plan) -> bool:
+        from ..utils.isa_mapping_batches import MAX_BATCH_OUTPUT_CHARS, plan_mapping_batches
+
+        try:
+            batches = plan_mapping_batches(fields_by_level, entity_plan)
+        except ValueError:
+            # An individual value exceeding the batch budget must remain
+            # reviewable, rather than silently reverting to an unbounded call.
+            return True
+        levels = {batch["target_level"] for batch in batches}
+        return (len(batches) > len(levels)
+                or sum(batch["estimated_output_chars"] for batch in batches)
+                > MAX_BATCH_OUTPUT_CHARS)
+
     async def _build_matrix_with_llm(
         self,
         fields_by_level: Dict[str, List[Dict[str, Any]]],
@@ -2156,11 +2703,209 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         prior_memory_context: Optional[str],
         state: FAIRifierState,
     ) -> Dict[str, Dict[str, Any]]:
-        """Use the LLM to produce a structured columns×rows matrix."""
+        """Map large planned matrices without a single unbounded response."""
+        from ..utils.isa_mapping_batches import (
+            merge_mapping_batch, plan_mapping_batches, seed_mapping_matrix,
+        )
+        from ..utils.llm_helper import LLMHelper
+
+        plan = state.get("entity_plan") or {}
+        if not self._requires_batched_mapping(fields_by_level, plan):
+            return await self._build_matrix_with_llm_single(
+                fields_by_level, knowledge_items, document_context,
+                critic_feedback, planner_instruction, prior_memory_context, state,
+            )
+        matrix = seed_mapping_matrix(fields_by_level, plan)
+        issues: List[str] = []
+        diagnostics: List[Dict[str, Any]] = []
+        root_diagnostic = None
+        service_failed = False
+        # Fields whose value the entity plan already fixes for every entity of a
+        # level are written by plan projection; mapping them again only spends
+        # model calls. Keep them out of the batches.
+        determined = self._plan_determined_fields(plan)
+        batch_fields = {
+            level: [
+                field for field in fields
+                if str(field.get("field_name") or "").strip().lower() not in determined.get(level, set())
+            ]
+            for level, fields in fields_by_level.items()
+        }
+        skipped = {level: sorted(names) for level, names in determined.items() if names}
+        if skipped:
+            self.logger.info("⏭️  Not re-mapping plan-determined fields: %s", skipped)
+        try:
+            batches = plan_mapping_batches(batch_fields, plan)
+        except ValueError as exc:
+            batches = []
+            issues.append(str(exc))
+        identity_context = render_entity_plan_for_prompt(plan)
+        if identity_context and document_context.startswith(identity_context):
+            document_context = document_context[len(identity_context):].lstrip()
+        renderer = object.__new__(LLMHelper)
+
+        source_text = _mapping_source(state)
+
+        def batch_table_rows(batch):
+            # Source table rows naming this batch's entities (row labels,
+            # materials, conditions). Field-name retrieval alone misses result
+            # tables whose headers use symbols (e.g. "k_{cat}").
+            if not batch:
+                return ""
+            needles = [
+                str(attribute.get("value") or "")
+                for level_plan in (batch.get("entity_plan") or {}).get("levels") or []
+                for entity in level_plan.get("entities") or []
+                if isinstance(entity, Mapping)
+                for attribute in entity.get("attributes") or []
+                if isinstance(attribute, Mapping)
+            ]
+            rows = derived_table_rows_matching(source_text, needles, max_chars=6000)
+            return ("[source table rows]\n" + "\n".join(rows)) if rows else ""
+
+        def source_context(batch_fields, field_names=None, batch=None):
+            requested = ([{"field_name": name} for name in field_names]
+                         if field_names is not None else
+                         [field for fields in batch_fields.values() for field in fields])
+            evidence = renderer._render_batch_field_evidence(
+                requested, state.get("_field_evidence_by_name") or {}, max_chars=6000,
+            )
+            tables = batch_table_rows(batch)
+            return "\n\n".join(part for part in (
+                tables, evidence, document_context[:max(0, 8000-len(evidence)-2)],
+            ) if part).strip()
+
+        # Contact rows intentionally share one Investigation identifier. Keep
+        # their existing path outside the one-entity-per-row batch assembler.
+        root_fields = {
+            level: fields_by_level.get(level) or []
+            for level in ("investigation", "study")
+        }
+        if any(root_fields.values()):
+            for level in root_fields:
+                matrix[level] = {"columns": [], "rows": []}
+            root_state = dict(state)
+            root_state["entity_plan"] = {
+                **plan, "levels": [level for level in plan.get("levels") or []
+                                   if level.get("level") in root_fields],
+            }
+            root_knowledge = [item for item in knowledge_items if
+                FAIRDSAPIParser.normalize_isa_sheet(
+                    (item.get("metadata") or {}).get("isa_sheet")
+                    or (item.get("metadata") or {}).get("sheet")
+                ) in root_fields]
+            try:
+                root_matrix = await self._build_matrix_with_llm_single(
+                    root_fields, root_knowledge, source_context(root_fields),
+                    critic_feedback, planner_instruction, prior_memory_context, root_state,
+                    strict_response=True,
+                )
+            except (ValueError, TypeError) as exc:
+                root_issues = [f"Incomplete root mapping: {exc}"]
+                issues.extend(root_issues)
+                root_diagnostic = {"status": "incomplete", "issues": root_issues}
+            except Exception as exc:
+                service_failed = True
+                root_issues = [f"Root mapping failed: {type(exc).__name__}; "
+                               f"{len(batches)} non-root batches not attempted."]
+                issues.extend(root_issues)
+                root_diagnostic = {"status": "failed", "issues": root_issues}
+            else:
+                for level in root_fields:
+                    matrix[level] = root_matrix.get(level) or {"columns": [], "rows": []}
+                root_diagnostic = {"status": "parsed", "issues": []}
+
+        import asyncio
+
+        # Batches are independent LLM calls; run up to N at once and merge in
+        # schedule order, so "an earlier value is never overwritten" holds
+        # exactly as in the serial loop. A service failure stops unstarted
+        # batches (with N=1 this is the serial behaviour).
+        semaphore = asyncio.Semaphore(max(1, int(config.llm_batch_concurrency or 1)))
+        stop = asyncio.Event()
+
+        async def call_batch(index, batch):
+            async with semaphore:
+                if stop.is_set():
+                    return None
+                batch_state = dict(state)
+                batch_state["entity_plan"] = batch["entity_plan"]
+                names = set(batch["field_names"])
+                batch_knowledge = [item for item in knowledge_items if
+                    str(item.get("term") or "").strip().lower() in names
+                    and FAIRDSAPIParser.normalize_isa_sheet(
+                        (item.get("metadata") or {}).get("isa_sheet")
+                        or (item.get("metadata") or {}).get("sheet")
+                    ) == batch["target_level"]]
+                self.logger.info(
+                    "ISA mapping batch %d/%d: %s, %d entities, %d columns",
+                    index, len(batches), batch["target_level"],
+                    len(batch["row_ids"]), len(batch["field_names"]),
+                )
+                try:
+                    return await self._build_matrix_with_llm_single(
+                        batch["fields_by_level"], batch_knowledge,
+                        source_context(batch["fields_by_level"], batch["field_names"], batch),
+                        critic_feedback,
+                        planner_instruction, prior_memory_context, batch_state, batch=batch,
+                    )
+                except (ValueError, TypeError) as exc:
+                    return exc
+                except Exception as exc:
+                    stop.set()
+                    return exc
+
+        outcomes = await asyncio.gather(*(
+            call_batch(index, batch)
+            for index, batch in enumerate([] if service_failed else batches, start=1)
+        ))
+        for index, (batch, outcome) in enumerate(zip(batches, outcomes), start=1):
+            if outcome is None:
+                continue
+            batch_issues = []
+            if isinstance(outcome, (ValueError, TypeError)):
+                batch_issues = [f"Incomplete mapping batch: {outcome}"]
+            elif isinstance(outcome, Exception):
+                # Successful batches remain in the matrix; unstarted cells stay blank.
+                not_attempted = sum(1 for item in outcomes if item is None)
+                batch_issues = [f"Mapping service failure: {type(outcome).__name__}; "
+                                f"{not_attempted} batches not attempted."]
+                issues.extend(batch_issues)
+                diagnostics.append({"batch": index, "status": "failed", "issues": batch_issues})
+                continue
+            else:
+                try:
+                    batch_issues = merge_mapping_batch(matrix, outcome, batch, plan)
+                except (ValueError, TypeError) as exc:
+                    batch_issues = [f"Incomplete mapping batch: {exc}"]
+            issues.extend(batch_issues)
+            diagnostics.append({
+                "batch": index, "level": batch["target_level"],
+                "rows": len(batch["row_ids"]), "columns": len(batch["field_names"]),
+                "status": "incomplete" if batch_issues else "parsed",
+                "issues": batch_issues,
+            })
+        state.setdefault("artifacts", {})["isa_mapping_batches"] = json.dumps({
+            "scheduled_batches": len(batches), "batches": diagnostics,
+            "root_mapping": root_diagnostic,
+            "issues": issues,
+            "missing_cells": "Unresolved; sparse omission is not evidence of source absence.",
+        }, ensure_ascii=False)
+        if issues:
+            state["needs_human_review"] = True
+            state.setdefault("errors", []).extend(f"ISAValueMapper: {issue}" for issue in issues)
+        return matrix
+
+    async def _build_matrix_with_llm_single(
+        self, fields_by_level, knowledge_items, document_context,
+        critic_feedback, planner_instruction, prior_memory_context, state, *, batch=None,
+        strict_response=False,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Map one small matrix or a bounded set of planned cells."""
 
         from ..utils.llm_helper import LLMHelper
 
-        llm = self._get_llm(state)
+        llm = self._get_mapping_llm(state)
 
         # ── Build system prompt ─────────────────────────────────────
         system = (
@@ -2174,8 +2919,10 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             "Never use an experimental group summary as a substitute for its planned entities.\n"
             "3. Every row MUST have exactly the same column keys. "
             "   Use empty string '' for missing values — NEVER omit a column.\n"
-            "4. Do NOT invent synthetic identifiers (no auto-generated IDs). "
-            "   Use values from the document or leave empty.\n"
+            "4. Use identifiers declared in the authoritative entity plan: "
+            "external_identifier when provided, otherwise its canonical row_id; "
+            "copy the declared parent links. Do NOT invent identifiers outside that plan. "
+            "If no plan is supplied, use source identifiers or leave empty.\n"
             "5. Shared fields (same value across all entities) go in every row; "
             "   entity-specific fields use the value for that entity.\n"
             "   Do not broadcast one entity's narrative, timepoint, treatment, or method to siblings.\n"
@@ -2193,25 +2940,82 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             "Do not add, merge, or reinterpret its entities.\n"
             "10. FAIR-DS field definitions may declare regex/syntax constraints. "
             "Every non-empty cell MUST full-match that contract. Convert an explicitly "
-            "supported source phrase to the canonical listed value; otherwise leave it blank.\n\n"
+            "supported source phrase to the canonical listed value; otherwise leave it blank.\n"
+            "11. preferred_unit is an output-unit contract, not evidence of the source unit. "
+            "Convert only from a stated source unit with an unambiguous conversion; "
+            "otherwise leave the quantity blank.\n\n"
             "**Output format (JSON):**\n"
             "Wrap in ```json ... ```. Return a dict with one key per ISA level:\n"
             '{"investigation": {"columns": [...], "rows": [{...}]}, ...}'
         )
+        if batch:
+            from ..utils.isa_mapping_batches import _IDS
+            id_field = _IDS.get(batch["target_level"], "row identifier")
+            example_id = (batch.get("row_ids") or ["row_001"])[0]
+            system = system.replace(
+                "4. Use identifiers declared in the authoritative entity plan: "
+                "external_identifier when provided, otherwise its canonical row_id; "
+                "copy the declared parent links. Do NOT invent identifiers outside that plan. "
+                "If no plan is supplied, use source identifiers or leave empty.\n",
+                f"4. Write each canonical row_id from Mapping batch scope, unchanged, as the "
+                f"value of \"{id_field}\" (e.g. \"{id_field}\": \"{example_id}\"). "
+                "Never create, renumber or relabel identifiers; external identifiers are "
+                "context only. Copy declared parent links when supplied.\n",
+            )
+            system = system.replace(
+                "3. Every row MUST have exactly the same column keys. "
+                "   Use empty string '' for missing values — NEVER omit a column.\n",
+                "3. Return sparse rows: omit missing scientific cells; code fills blank cells. "
+                "Every requested entity MUST appear with its identifier, even if all values are unknown.\n",
+            )
+            # Rule 7's "every field_name appears, using ''" contradicts sparse
+            # rows; models followed it and spent ~25% of batch output on "".
+            system = system.replace(
+                "7. NEVER add columns that are not in the input field list, and "
+                "   never drop an input field: every field_name appears exactly "
+                "   once as a column, using '' when there is no value.\n",
+                "7. NEVER add columns that are not in Mapping batch scope field_names. "
+                "Never write '' cells; leave the key out instead.\n",
+            )
+            system += (
+                "\nReturn only the target ISA level in Mapping batch scope. Ancestors are "
+                "context, not additional output rows. Use only the requested row IDs and "
+                "columns. Do not apply a batch-local value to other entities.\n"
+            )
 
         # ── Build user prompt ───────────────────────────────────────
         user_parts = []
+        if getattr(config, "full_source_context", True):
+            # The complete source comes first and is identical for every call
+            # of this paper, so provider prefix caching (Ollama KV cache,
+            # DeepSeek context caching) reuses it; batch-specific parts follow.
+            full_source = _mapping_source(state)
+            if full_source:
+                user_parts.append("Complete source document:\n" + full_source)
+        if batch:
+            user_parts.append("Mapping batch scope:\n" + json.dumps({
+                key: batch[key] for key in ("target_level", "row_ids", "field_names")
+            }, ensure_ascii=False))
 
         entity_plan_context = render_entity_plan_for_prompt(
             state.get("entity_plan") or {}
         )
         if entity_plan_context:
             user_parts.append(entity_plan_context)
+            # Older callers prepend the same complete plan to the source
+            # context. Remove that exact prefix before the source-only budget;
+            # otherwise a large plan hides every following evidence passage.
+            if document_context.startswith(entity_plan_context):
+                document_context = document_context[len(entity_plan_context):].lstrip()
 
         # Extracted fields summary
         field_summary = {}
         for lvl in ISA_LEVELS:
-            fds = fields_by_level.get(lvl, [])
+            fds = list(fields_by_level.get(lvl, []))
+            if batch and lvl == batch["target_level"]:
+                supplied_names = {str(field.get("field_name") or "").strip().lower() for field in fds}
+                fds.extend({"field_name": name, "value": None, "origin": "planned_column"}
+                           for name in batch["field_names"] if name not in supplied_names)
             field_summary[lvl] = {
                 "count": len(fds),
                 "fields": [
@@ -2220,12 +3024,16 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                         # Preserve narrative fields instead of silently cutting
                         # descriptions mid-sentence. The cap is only a context
                         # guardrail; ordinary FAIR-DS values pass through whole.
-                        "value": str(f.get("value", ""))[:1200] if f.get("value") else "",
+                        "value": (str(f.get("value")) if batch else str(f.get("value"))[:1200]) if f.get("value") is not None else "",
                         "confidence": f.get("confidence", 0),
                         "required": f.get("required", False),
                         "status": f.get("status", ""),
                         "status_reason": f.get("status_reason", ""),
                         "origin": f.get("origin", ""),
+                        # Keep the association supplied by extraction. Missing
+                        # scope remains unknown rather than becoming shared.
+                        "entity_id": f.get("entity_id"),
+                        "value_scope": f.get("value_scope"),
                         "evidence": str(f.get("evidence", ""))[:240],
                     }
                     for f in fds
@@ -2239,7 +3047,7 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         # Knowledge items summary (field definitions from FAIR-DS)
         if knowledge_items:
             ki_summary = []
-            for ki in knowledge_items[:50]:
+            for ki in knowledge_items:
                 meta = ki.get("metadata", {}) if isinstance(ki, dict) else {}
                 ki_summary.append({
                     "term": ki.get("term", "") if isinstance(ki, dict) else "",
@@ -2253,14 +3061,16 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     "syntax": meta.get("syntax", ""),
                     "regex": meta.get("regex", ""),
                     "example": meta.get("example", ""),
+                    "preferred_unit": meta.get("preferred_unit") or meta.get("preferredUnit", ""),
                 })
             user_parts.append(
                 "FAIR-DS field definitions:\n"
                 + json.dumps(ki_summary, indent=2, ensure_ascii=False)
             )
 
-        # Structured document context (source workspace + evidence + field candidates)
-        if document_context:
+        # Structured document context (source workspace + evidence + field
+        # candidates): excerpts of the source, redundant beside the complete one.
+        if document_context and not (user_parts and user_parts[0].startswith("Complete source document:")):
             user_parts.append(
                 "Structured source context (evidence packets, workspace, field candidates):\n"
                 + document_context[:8000]
@@ -2291,26 +3101,69 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
 
         # ── Call LLM ────────────────────────────────────────────────
         try:
-            response = await llm._call_llm(
-                messages, operation_name="ISA Value Mapping"
-            )
+            with thinking_override(config.mapping_llm_thinking):
+                response = await llm._call_llm(
+                    messages, operation_name="ISA Value Mapping",
+                    # Constrained JSON only where it keeps the thinking setting.
+                    json_mode=getattr(llm, "provider", None) in _JSON_MODE_PROVIDERS,
+                )
             content = response.content if hasattr(response, "content") else str(response)
-        except Exception:
+        except Exception as exc:
+            if batch or strict_response:
+                raise _MappingServiceError(
+                    f"{type(exc).__name__} during mapping model call"
+                ) from exc
             self.logger.warning("LLM call failed for ISA value mapping; using heuristic")
-            return self._build_matrix_heuristic(fields_by_level)
+            return self._build_matrix_heuristic(
+                fields_by_level, entity_plan=state.get("entity_plan") or {}
+            )
 
         # ── Parse response ──────────────────────────────────────────
         # Use brace-balanced extraction (via safe_json_parse); naive regex
         # ``\{.*?\}`` stops at the first ``}`` and breaks nested ISA matrices.
-        parsed = safe_json_parse(content)
+        if batch or strict_response:
+            response_metadata = getattr(response, "response_metadata", {}) or {}
+            finish_reason = str(
+                response_metadata.get("finish_reason")
+                or response_metadata.get("stop_reason")
+                or response_metadata.get("done_reason") or ""
+            ).lower()
+            if finish_reason in {"length", "max_tokens", "max_output_tokens"}:
+                raise ValueError("Provider truncated the mapping response at its output limit.")
+            payload = str(content).strip()
+            if payload.startswith("```json") and payload.endswith("```"):
+                payload = payload[7:-3].strip()
+            elif payload.startswith("```") and payload.endswith("```"):
+                payload = payload[3:-3].strip()
+            # Never repair an incomplete batch into an apparently complete one.
+            parsed = json.loads(payload)
+        else:
+            parsed = safe_json_parse(content)
         if not isinstance(parsed, dict):
+            if batch or strict_response:
+                raise ValueError("Mapping batch did not return a JSON object.")
             self.logger.warning("Failed to parse LLM JSON; falling back to heuristic")
-            return self._build_matrix_heuristic(fields_by_level)
+            return self._build_matrix_heuristic(
+                fields_by_level, entity_plan=state.get("entity_plan") or {}
+            )
 
         # ── Validate & merge ────────────────────────────────────────
         result: Dict[str, Dict[str, Any]] = {}
-        for lvl in ISA_LEVELS:
+        requested_levels = ([batch["target_level"]] if batch else
+                            [level for level in ISA_LEVELS if fields_by_level.get(level)]
+                            if strict_response else ISA_LEVELS)
+        for lvl in requested_levels:
             lvl_data = parsed.get(lvl, {})
+            if (batch or strict_response) and (
+                not isinstance(lvl_data, dict) or not isinstance(lvl_data.get("rows"), list)
+            ):
+                raise ValueError(f"Mapping batch has no valid {lvl} rows array.")
+            if strict_response and not batch:
+                columns = lvl_data.get("columns", [])
+                if not isinstance(columns, list) or any(not isinstance(name, str) for name in columns):
+                    raise ValueError(f"Root mapping {lvl} columns must be a list of field names.")
+                if any(not isinstance(row, dict) for row in lvl_data["rows"]):
+                    raise ValueError(f"Root mapping {lvl} rows must contain only JSON objects.")
             result[lvl] = {
                 "columns": lvl_data.get("columns", []),
                 "rows": lvl_data.get("rows", []),
@@ -2547,13 +3400,18 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         self,
         fields_by_level: Dict[str, List[Dict[str, Any]]],
         evidence_summary: Optional[Dict[str, Any]] = None,
+        *,
+        entity_plan: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """Build a matrix from flat fields WITHOUT LLM (deterministic fallback).
 
         Fields emitted by JSONGenerator already carry ``entity_id`` when the
         model identifies separate samples, observation units, or assays. Use
-        that as the authoritative row grouping before falling back to a single
-        row per sheet.
+        that as the row grouping before falling back to a single row per sheet.
+        Preserve supplied structural identifiers, or carry an explicit group
+        identity into a missing identifier. When a target-level plan exists,
+        differing identifiers must resolve to the same planned entity; without
+        one, a synthetic grouping label must not replace a source identifier.
 
         If ``evidence_summary`` is provided (§4.1 EvidenceStore integration),
         empty cells are back-filled with the highest-confidence candidate from
@@ -2576,12 +3434,36 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
             columns: List[str] = []
             rows_by_entity: Dict[str, Dict[str, Any]] = {}
             row_order: List[str] = []
+            explicit_entity_ids: set[str] = set()
+            identifier_column = {
+                "investigation": "investigation identifier",
+                "study": "study identifier",
+                "observationunit": "observation unit identifier",
+                "sample": "sample identifier",
+                "assay": "assay identifier",
+            }[lvl]
+            level_entities = [
+                entity
+                for level_plan in (entity_plan or {}).get("levels") or []
+                if isinstance(level_plan, Mapping) and level_plan.get("level") == lvl
+                for entity in level_plan.get("entities") or []
+                if isinstance(entity, Mapping)
+            ]
+            identity_owners: Dict[str, set[int]] = {}
+            for index, entity in enumerate(level_entities):
+                for key in ("row_id", "external_identifier"):
+                    identifier = str(entity.get(key) or "").strip()
+                    if identifier:
+                        identity_owners.setdefault(identifier, set()).add(index)
             for f in fds:
                 name = (f.get("field_name") or "").strip().lower()
                 if not name:
                     continue
                 columns.append(name)
-                entity_id = str(f.get("entity_id") or lvl).strip() or lvl
+                supplied_entity_id = str(f.get("entity_id") or "").strip()
+                entity_id = supplied_entity_id or lvl
+                if supplied_entity_id:
+                    explicit_entity_ids.add(entity_id)
                 if entity_id not in rows_by_entity:
                     rows_by_entity[entity_id] = {}
                     row_order.append(entity_id)
@@ -2592,7 +3474,28 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
                     cell_value = evidence_fields[name]
                 rows_by_entity[entity_id][name] = cell_value
 
-            rows = [rows_by_entity[eid] for eid in row_order if rows_by_entity[eid]]
+            rows = []
+            for entity_id in row_order:
+                row = rows_by_entity[entity_id]
+                if not row:
+                    continue
+                if entity_id in explicit_entity_ids:
+                    supplied_identifier = str(row.get(identifier_column) or "").strip()
+                    if (level_entities and supplied_identifier
+                            and supplied_identifier != entity_id):
+                        group_owners = identity_owners.get(entity_id, set())
+                        source_owners = identity_owners.get(supplied_identifier, set())
+                        if len(group_owners) != 1 or group_owners != source_owners:
+                            logger.warning(
+                                "Heuristic fallback skipped %s group %s: explicit %s "
+                                "%r conflicts with entity_id; source fields are retained.",
+                                lvl, entity_id, identifier_column, supplied_identifier,
+                            )
+                            continue
+                    if not supplied_identifier:
+                        row[identifier_column] = entity_id
+                    columns.append(identifier_column)
+                rows.append(row)
             result[lvl] = {
                 "columns": sorted(set(columns)),
                 "rows": rows,
@@ -2675,40 +3578,31 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         self,
         matrix: Dict[str, Dict[str, Any]],
     ) -> Dict[str, Dict[str, Any]]:
-        """Ensure every row in a sheet has the same column keys without case duplicate artifacts."""
+        """Align lowercase field keys without choosing conflicting source values."""
         for _lvl, sheet in matrix.items():
             rows = sheet.get("rows", [])
             if not rows:
                 continue
 
-            col_canonical_map: Dict[str, str] = {}
-            for row in rows:
-                if isinstance(row, dict):
-                    for k in row.keys():
-                        k_clean = str(k).strip()
-                        k_lower = k_clean.lower()
-                        if k_lower not in col_canonical_map or (k_clean != k_lower and col_canonical_map[k_lower] == k_lower):
-                            col_canonical_map[k_lower] = k_clean
-
-            for c in sheet.get("columns", []):
-                c_clean = str(c).strip()
-                c_lower = c_clean.lower()
-                if c_lower not in col_canonical_map:
-                    col_canonical_map[c_lower] = c_clean
-
             norm_rows: List[Dict[str, Any]] = []
             for row in rows:
-                if not isinstance(row, dict):
+                if isinstance(row, dict):
+                    normalized = normalize_matrix_row_keys(row)
+                    if normalized is not None:
+                        norm_rows.append(normalized)
+                else:
                     norm_rows.append(row)
-                    continue
-                norm_row: Dict[str, Any] = {}
-                for k, v in row.items():
-                    k_lower = str(k).strip().lower()
-                    canon_key = col_canonical_map.get(k_lower, str(k).strip())
-                    existing_v = norm_row.get(canon_key)
-                    if existing_v is None or (str(existing_v).strip() == "" and str(v).strip() != ""):
-                        norm_row[canon_key] = v
-                norm_rows.append(norm_row)
+
+            col_canonical_map: Dict[str, str] = {}
+            for row in norm_rows:
+                if isinstance(row, dict):
+                    for key in row:
+                        col_canonical_map[key] = key
+
+            for c in sheet.get("columns", []):
+                c_lower = str(c).strip().lower()
+                if c_lower not in col_canonical_map:
+                    col_canonical_map[c_lower] = c_lower
 
             sheet["rows"] = norm_rows
             existing_order = [
@@ -2861,6 +3755,182 @@ class ISAValueMapperAgent(ReactLoopMixin, BaseAgent):
         return slug or "document"
 
     # ── Helpers ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _plan_determined_fields(plan: Mapping[str, Any]) -> Dict[str, set[str]]:
+        """Fields with an explicit plan value on every entity of a level."""
+        determined: Dict[str, set[str]] = {}
+        for level_plan in plan.get("levels") or []:
+            if not isinstance(level_plan, Mapping):
+                continue
+            level = str(level_plan.get("level") or "").strip().lower()
+            if level not in MULTI_ROW_ISA_LEVELS:
+                continue
+            entities = [e for e in level_plan.get("entities") or [] if isinstance(e, Mapping)]
+            if not entities:
+                continue
+            per_entity = [
+                {
+                    str(a.get("field_name") or "").strip().lower()
+                    for a in entity.get("attributes") or []
+                    if isinstance(a, Mapping) and a.get("field_name")
+                    and not _is_missing_cell(a.get("value"))
+                }
+                for entity in entities
+            ]
+            common = set.intersection(*per_entity) if per_entity else set()
+            if common:
+                determined[level] = common
+        return determined
+
+    @staticmethod
+    def _previous_matrix(state: FAIRifierState) -> Dict[str, Dict[str, Any]] | None:
+        raw = (state.get("artifacts") or {}).get("isa_values")
+        if not raw:
+            return None
+        try:
+            matrix = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(matrix, dict) or not any(
+            isinstance(block, Mapping) and block.get("rows") for block in matrix.values()
+        ):
+            return None
+        return deepcopy(matrix)
+
+    @staticmethod
+    def _store_verified_cells(state: FAIRifierState, verified_cells: Mapping[str, Mapping]) -> None:
+        state.setdefault("context", {})["isa_verified_cells"] = [
+            [level, index, column, value]
+            for level, cells in (verified_cells or {}).items()
+            for (index, column), value in cells.items()
+        ]
+
+    @staticmethod
+    def _load_verified_cells(state: FAIRifierState) -> Dict[str, Dict[tuple[int, str], str]]:
+        loaded: Dict[str, Dict[tuple[int, str], str]] = {}
+        for item in (state.get("context") or {}).get("isa_verified_cells") or []:
+            try:
+                level, index, column, value = item
+                loaded.setdefault(str(level), {})[(int(index), str(column))] = value
+            except (TypeError, ValueError):
+                continue
+        return loaded
+
+    async def _plan_targeted_repair(
+        self,
+        matrix: Dict[str, Dict[str, Any]],
+        critic_feedback: Mapping[str, Any],
+        state: FAIRifierState,
+    ) -> List[Dict[str, Any]]:
+        """Repair sub-agent: turn Critic feedback into cell-level targets.
+
+        Returns ``[{level, columns, row_ids, instruction}]`` restricted to
+        existing non-structural columns and row identifiers. An empty list
+        means the feedback names nothing fixable by editing cells (e.g. it
+        concerns the entity plan), so no model work is redone.
+        """
+        feedback_items = [
+            str(item).strip()
+            for key in ("issues", "suggestions", "improvement_ops")
+            for item in (critic_feedback.get(key) or [])
+            if str(item).strip()
+        ]
+        feedback_items = list(dict.fromkeys(feedback_items))[:12]
+        if not feedback_items:
+            return []
+        columns_by_level: Dict[str, Dict[str, str]] = {}
+        rows_by_level: Dict[str, List[str]] = {}
+        for level, block in matrix.items():
+            if not isinstance(block, Mapping) or level not in ISA_LEVELS:
+                continue
+            columns_by_level[level] = {
+                str(column).strip().lower(): str(column)
+                for column in block.get("columns") or []
+                if str(column).strip().lower() not in RESERVED_COLUMNS
+            }
+            id_field = _IDENTIFIER_FIELDS.get(level, "")
+            rows_by_level[level] = [
+                str(row.get(id_field) or "") for row in block.get("rows") or []
+                if isinstance(row, Mapping) and row.get(id_field)
+            ]
+        prompt = (
+            "You plan targeted repairs of an ISA metadata matrix. A reviewer raised the "
+            "points below. Map each point that can be fixed by re-checking specific cells "
+            "to a target: the ISA level, the exact column names to re-check, the row "
+            "identifiers (empty list = every row of that level) and a one-sentence "
+            "instruction. Use only columns and row identifiers listed here. Points about "
+            "the entity structure itself (missing or extra rows, wrong parents) are not "
+            "cell repairs: list them under not_cell_level.\n\n"
+            "Reviewer points:\n- " + "\n- ".join(feedback_items)
+            + "\n\nColumns by level:\n" + json.dumps(
+                {level: list(cols.values()) for level, cols in columns_by_level.items()},
+                ensure_ascii=False,
+            )
+            + "\n\nRow identifiers by level:\n" + json.dumps(
+                {level: ids[:80] for level, ids in rows_by_level.items()}, ensure_ascii=False
+            )
+            + '\n\nReturn JSON only: {"targets": [{"level": "...", "columns": ["..."], '
+            '"row_ids": [], "instruction": "..."}], "not_cell_level": ["..."]}'
+        )
+        parsed: Any = None
+        try:
+            from langchain_core.messages import HumanMessage
+
+            llm = self._get_mapping_llm(state)
+            with thinking_override(config.mapping_llm_thinking):
+                response = await llm._call_llm(
+                    [HumanMessage(content=prompt)], operation_name="ISA Targeted Repair Plan",
+                )
+            parsed = safe_json_parse(getattr(response, "content", str(response)))
+        except Exception as exc:
+            self.logger.warning("Targeted repair planning failed: %s", exc)
+        targets: List[Dict[str, Any]] = []
+        for item in (parsed or {}).get("targets") or [] if isinstance(parsed, Mapping) else []:
+            if not isinstance(item, Mapping):
+                continue
+            level = str(item.get("level") or "").strip().lower()
+            known = columns_by_level.get(level) or {}
+            columns = [
+                known[str(c).strip().lower()]
+                for c in item.get("columns") or []
+                if str(c).strip().lower() in known
+            ]
+            if not columns:
+                continue
+            known_rows = set(rows_by_level.get(level) or [])
+            row_ids = [str(r) for r in item.get("row_ids") or [] if str(r) in known_rows]
+            if not row_ids and len(columns) > _REVIEW_COLUMNS_PER_CALL:
+                # Every row of a wide column set is the first pass again, not
+                # a repair: the same model on the same evidence adds nothing.
+                self.logger.info(
+                    "Targeted repair skips %s: %d columns on every row is a full re-review",
+                    level, len(columns),
+                )
+                continue
+            targets.append({
+                "level": level,
+                "columns": list(dict.fromkeys(columns)),
+                "row_ids": row_ids,
+                "instruction": str(item.get("instruction") or "")[:300],
+            })
+        if not targets and parsed is None:
+            # Deterministic fallback: columns named verbatim in the feedback.
+            text = " ".join(feedback_items).lower()
+            for level, known in columns_by_level.items():
+                named = [original for lowered, original in known.items() if lowered in text]
+                if named:
+                    targets.append({"level": level, "columns": named, "row_ids": [],
+                                    "instruction": "; ".join(feedback_items)[:300]})
+        return targets
+
+    def _get_mapping_llm(self, state: FAIRifierState):
+        """LLM for mechanical mapping/review: optional smaller model."""
+        if (getattr(config, "mapping_llm_model", "") or "").strip():
+            from ..utils.llm_helper import get_mapping_llm_helper
+
+            return get_mapping_llm_helper()
+        return self._get_llm(state)
 
     def _get_llm(self, state: FAIRifierState):
         """Get or create an LLMHelper instance configured from config."""

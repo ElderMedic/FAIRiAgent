@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +16,7 @@ from fairifier.agents import knowledge_retriever_llm_methods as kr_llm_methods
 from fairifier.agents.response_models import DocumentInfoResponse, KnowledgeResponse
 from fairifier.config import FAIRifierConfig, apply_budget_guardrails, config
 from fairifier.models import MetadataField
+from fairifier.utils.document_text import read_document_text
 
 
 @dataclass
@@ -25,6 +28,76 @@ class StubTool:
 
     def invoke(self, payload):
         return self.responder(payload)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("persist_working_text", [False, True])
+async def test_document_parser_direct_mineru_fallback_excludes_chart_reconstruction(
+    tmp_path, monkeypatch, persist_working_text,
+):
+    monkeypatch.setattr(config, "mineru_enabled", False)
+    monkeypatch.setattr(config, "enable_deep_agents", False)
+    agent = DocumentParserAgent()
+    raw_path = tmp_path / "converted.md"
+    native_table = "<table><tr><td>Reported duration</td><td>48 h</td></tr></table>"
+    raw = (
+        "# Incubation study\n\nThe experiment ended at 48 h.\n\n"
+        + native_table
+        + "\n\n![](images/chart.png)\n\nFigure 1. Recorded signal.\n\n"
+        + "<details><summary>line chart</summary>\n"
+        + "| Time (h) | Signal |\n| --- | --- |\n| 51 | 999.25 |\n</details>\n"
+    )
+    raw_path.write_text(raw, encoding="utf-8")
+    agent.mineru_tool = StubTool("convert_document", lambda _: {
+        "success": True,
+        "markdown_text": raw,
+        "markdown_path": str(raw_path),
+        "output_dir": str(tmp_path),
+        "images_dir": str(tmp_path / "images"),
+        "method": "mineru",
+    })
+    captured = {}
+
+    async def fake_extract(text, *_args, **_kwargs):
+        captured["text"] = text
+        return {
+            "title": "Incubation study",
+            "authors": ["A. Researcher"],
+            "research_domain": "analytical chemistry",
+        }
+
+    monkeypatch.setattr(agent.llm_helper, "extract_document_info", fake_extract)
+    state = {
+        "document_path": str(tmp_path / "paper.pdf"),
+        "document_content": None,
+        "context": {},
+        "confidence_scores": {},
+        "errors": [],
+    }
+    if persist_working_text:
+        state["output_dir"] = str(tmp_path / "run")
+
+    result = await agent.execute(state)
+
+    working = read_document_text(result)
+    assert "999.25" not in working
+    assert captured["text"] == working
+    assert native_table in working and "Figure 1. Recorded signal." in working
+    assert "unverified" in working.lower()
+    conversion = result["document_conversion"]
+    evidence = conversion["source_evidence"]
+    assert conversion["markdown_path"] == str(raw_path)
+    assert evidence["raw_markdown_path"] == str(raw_path)
+    assert evidence["raw_markdown_sha256"] == hashlib.sha256(raw_path.read_bytes()).hexdigest()
+    assert raw_path.read_text(encoding="utf-8") == raw
+    region = evidence["derived_regions"][0]
+    assert "999.25" in raw[region["raw_start"]:region["raw_end"]]
+    if persist_working_text:
+        assert Path(result["document_text_path"]) != raw_path
+        assert conversion["working_text_path"] == result["document_text_path"]
+    else:
+        assert result.get("document_text_path") is None
+        assert result["document_content"] == working
 
 
 @pytest.mark.anyio
@@ -1013,6 +1086,81 @@ async def test_knowledge_retriever_fetches_metadata_for_guided_selected_packages
     assert "miappe" in result["selected_packages"]
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("converged", [True, False])
+async def test_knowledge_retriever_reconciles_coverage_without_losing_convergence(
+    monkeypatch, converged,
+):
+    monkeypatch.setattr(config, "enable_deep_agents", False)
+    monkeypatch.setattr(config, "fair_ds_api_url", "")
+    agent = KnowledgeRetrieverAgent()
+    monkeypatch.setattr(agent, "_load_local_package_registry", lambda: {})
+    names = ["default", "spectral", "broad"]
+    monkeypatch.setattr(agent, "_build_candidate_package_names", lambda *a, **k: names)
+
+    def fields(package):
+        levels = ["Investigation", "Study"] if package == "default" else ["Sample", "Assay"]
+        return [
+            {
+                "sheetName": level,
+                "packageName": package,
+                "requirement": "MANDATORY",
+                "label": f"{level.lower()} identifier",
+                "term": {"definition": f"{level} identifier"},
+            }
+            for level in levels
+        ]
+
+    agent.fair_ds_client = object()
+    agent.tools = {
+        "get_package_summaries": StubTool("get_package_summaries", lambda _: {
+            "success": True, "data": [
+                {"name": name, "levels": [field["sheetName"].lower() for field in fields(name)]}
+                for name in names
+            ],
+        }),
+        "get_package": StubTool("get_package", lambda payload: {
+            "success": True, "data": {"metadata": fields(payload["package_name"])},
+        }),
+        "get_terms": StubTool("get_terms", lambda _: {"success": True, "data": {}}),
+        "search_terms_for_fields": StubTool("search_terms_for_fields", lambda _: {
+            "success": True, "data": [],
+        }),
+        "search_fields_in_packages": StubTool("search_fields_in_packages", lambda _: {
+            "success": True, "data": [],
+        }),
+    }
+    # A lexical shortlist can omit a selected contract with the same ISA coverage.
+    monkeypatch.setattr("fairifier.agents.knowledge_retriever.source_schema_matches", lambda *a, **k: [
+        {"package": "broad", "levels": ["sample", "assay"], "score": 5.0},
+    ])
+    selections = iter(
+        [["default", "spectral"]] * 2 if converged else
+        [["default", "spectral"], ["default", "broad"],
+         ["default", "spectral"], ["default", "broad"]]
+    )
+
+    async def select_packages(*args, **kwargs):
+        return next(selections)
+
+    async def select_fields(*args, **kwargs):
+        return {"selected_fields": [], "terms_to_search": []}
+
+    monkeypatch.setattr(kr_llm_methods, "llm_select_relevant_packages", select_packages)
+    monkeypatch.setattr(kr_llm_methods, "llm_select_fields_from_package", select_fields)
+    result = await agent.execute({
+        "document_info": {"title": "Spectral measurements of material samples"},
+        "context": {}, "confidence_scores": {}, "errors": [], "evidence_packets": [],
+    })
+
+    assert not result["errors"]
+    trace = result["package_selection_trace"]
+    assert trace["uncovered_schema_levels"] == []
+    assert trace["coverage_resolved"] is True
+    assert trace["stable"] is converged
+    assert result["selected_packages"] == ["default", "spectral" if converged else "broad"]
+
+
 def test_knowledge_retriever_skips_deep_react_for_broad_qwen_candidate_set(monkeypatch):
     agent = KnowledgeRetrieverAgent.__new__(KnowledgeRetrieverAgent)
 
@@ -1452,3 +1600,99 @@ def test_json_generator_warning_separates_grounding_from_low_confidence():
 
     assert any("Source grounding issue for field 'sampling site'" in warning for warning in output["warnings"])
     assert not any("Low confidence extraction for field 'sampling site'" in warning for warning in output["warnings"])
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("length_stop", [False, True])
+async def test_large_mapping_batches_preserve_cells_and_reject_truncated_output(monkeypatch, length_stop):
+    import json
+    from types import SimpleNamespace
+    from fairifier.agents.isa_value_mapper import ISAValueMapperAgent
+    from fairifier.utils.isa_mapping_batches import MAX_BATCH_ENTITIES
+
+    names = [f"attribute {i:03d}" for i in range(14)]
+    row_ids = [f"assay_{i:03d}" for i in range(40)]
+    plan = {"levels": [
+        {"level": "investigation", "entities": [{"row_id": "investigation_a"}]},
+        {"level": "study", "entities": [{"row_id": "study_a", "parent_row_id": "investigation_a"}]},
+        {"level": "observationunit", "entities": [{"row_id": "unit_a", "parent_row_id": "study_a"}]},
+        {"level": "sample", "entities": [{"row_id": "sample_a", "parent_row_id": "unit_a"}]},
+        {"level": "assay", "entities": [
+            {"row_id": row_id, "parent_row_id": "sample_a", "attributes": []}
+            for row_id in row_ids
+        ]},
+    ]}
+    fields = {"assay": [
+        {"field_name": name, "value": 0 if name == names[0] else row_id + ":" + name,
+         "entity_id": row_id, "value_scope": "entity", "evidence": "source_001:120"}
+        for row_id in row_ids for name in names
+    ]}
+    calls = []
+    failed = []
+
+    async def call(messages, **kwargs):
+        assert not kwargs.get("json_mode"), "Mapping must preserve the configured thinking mode"
+        prompt = messages[-1].content
+        if "Mapping batch scope:\n" in prompt:
+            scope, _ = json.JSONDecoder().raw_decode(prompt.split("Mapping batch scope:\n", 1)[1])
+            selected_rows = scope["row_ids"]
+            selected_names = scope["field_names"]
+        else:
+            selected_rows, selected_names = row_ids, names
+        calls.append((selected_rows, selected_names, prompt))
+        stop = length_stop and len(calls) == 1
+        if stop:
+            failed.extend((row_id, name) for row_id in selected_rows for name in selected_names if name in names)
+        rows = [{"assay identifier": row_id, **{
+            name: 0 if name == names[0] else row_id + ":" + name
+            for name in selected_names if name in names
+        }} for row_id in selected_rows]
+        # Even parseable output must be rejected when the provider says it
+        # exhausted capacity: the remaining planned content may be missing.
+        return SimpleNamespace(
+            content=json.dumps({"assay": {"columns": selected_names, "rows": rows}}),
+            response_metadata={"finish_reason": "length" if stop else "stop"},
+        )
+
+    agent = object.__new__(ISAValueMapperAgent)
+    agent.logger = logging.getLogger("test.mapping_batches")
+    monkeypatch.setattr(agent, "_get_llm", lambda state: SimpleNamespace(_call_llm=call))
+    evidence = "source_001:999 Evidence for the last requested attribute."
+    state = {"entity_plan": plan, "_field_evidence_by_name": {names[-1]: [evidence]}}
+    result = await agent._build_matrix_with_llm(fields, [], "General context. " * 1000, None, None, None, state)
+
+    assert len(calls) > 1
+    assert all(len(rows) <= MAX_BATCH_ENTITIES and len(columns) <= 12 for rows, columns, _ in calls)
+    assert all(evidence in prompt for _, columns, prompt in calls if names[-1] in columns)
+    observed = {row["assay identifier"]: row for row in result["assay"]["rows"]}
+    assert set(observed) == set(row_ids)
+    assert set(result["assay"]["columns"]) >= set(names)
+    for row_id in row_ids:
+        for name in names:
+            expected = "" if (row_id, name) in failed else "0" if name == names[0] else row_id + ":" + name
+            assert observed[row_id][name] == expected
+    if length_stop:
+        assert state["needs_human_review"] is True
+        assert any("truncat" in error.lower() for error in state["errors"])
+
+
+def test_batched_mapping_does_not_restore_shared_values_into_unresolved_cells():
+    from fairifier.agents.isa_value_mapper import ISAValueMapperAgent
+
+    matrix = {
+        "investigation": {"columns": ["description"], "rows": [{"description": ""}]},
+        "assay": {"columns": ["assay identifier", "measurement"], "rows": [
+            {"assay identifier": "assay_a", "measurement": ""},
+            {"assay identifier": "assay_b", "measurement": ""},
+        ]},
+    }
+    fields = {
+        level: [{"field_name": name, "value": "shared proposal", "confidence": 0.99,
+                 "status": "confirmed", "evidence": "source_001:12", "value_scope": "level"}]
+        for level, name in (("investigation", "description"), ("assay", "measurement"))
+    }
+    restored = ISAValueMapperAgent._restore_high_confidence_shared_values(
+        matrix, fields, allow_multi_entity_broadcast=False,
+    )
+    assert restored["investigation"]["rows"][0]["description"] == "shared proposal"
+    assert [row["measurement"] for row in restored["assay"]["rows"]] == ["", ""]

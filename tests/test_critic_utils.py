@@ -198,6 +198,79 @@ class TestBuildIsaMapperContext:
         assert ctx["total_rows"] == 0
         assert ctx["sheets_populated"] == []
 
+    def test_mapper_context_keeps_columns_beyond_the_first_ten(self):
+        import json
+        from fairifier.agents.critic import CriticAgent
+
+        columns = [f"measurement {i}" for i in range(15)]
+        state = self._make_state({"assay": {"columns": columns, "rows": []}})
+        agent = CriticAgent.__new__(CriticAgent)
+
+        context = json.loads(agent._build_isa_mapper_context(state))
+
+        assert context["sheet_summaries"]["assay"]["columns"] == columns
+
+    def test_mapper_context_preserves_package_levels_and_value_contracts(self):
+        import json
+        from fairifier.agents.critic import CriticAgent
+
+        state = self._make_state({"sample": {"columns": [], "rows": []}})
+        field = {
+            "term": "material state",
+            "metadata": {
+                "isa_sheet": "Sample",
+                "definition": "Physical state of the sampled material.",
+                "regex": "^(solid|liquid)$",
+                "syntax": "{controlled value}",
+                "requirement": "recommended",
+            },
+        }
+        state["retrieved_knowledge"] = [field, field]
+        state["api_capabilities"] = {"selected_package_field_contracts": [
+            field,
+            {"term": "reaction temperature", "metadata": {
+                "isa_sheet": "Assay", "definition": "Temperature during measurement."
+            }},
+            {"term": "reaction temperature", "metadata": {
+                "isa_sheet": "Sample", "definition": "Temperature during preparation."
+            }},
+        ]}
+        agent = CriticAgent.__new__(CriticAgent)
+
+        context = json.loads(agent._build_isa_mapper_context(state))
+
+        catalog = context["selected_field_contracts"]
+        sample = {item["field_name"]: item for item in catalog["sample"]}
+        assay = {item["field_name"]: item for item in catalog["assay"]}
+        assert len(catalog["sample"]) == 2
+        assert sample["material state"]["regex"] == "^(solid|liquid)$"
+        assert sample["material state"]["syntax"] == "{controlled value}"
+        assert sample["material state"]["requirement"] == "recommended"
+        assert assay["reaction temperature"]["definition"] == "Temperature during measurement."
+        assert sample["reaction temperature"]["definition"] == "Temperature during preparation."
+
+    def test_shared_metadata_context_does_not_override_failed_plan(self):
+        import json
+        from fairifier.agents.critic import CriticAgent
+
+        state = self._make_state({"observationunit": {"columns": [], "rows": []}})
+        state["entity_plan_validation"] = {
+            "passed": False, "errors": ["Unresolved physical sample relation."]
+        }
+        state["entity_matrix_validation"] = {
+            "passed": False, "errors": ["Unknown parent."],
+            "semantic_metrics": {"observationunit": {"duplicate_identity_stripped_rows": 14}},
+        }
+        verdict = {"decision": "ESCALATE", "score": 0.3,
+                   "issues": ["Unknown parent."], "improvement_ops": []}
+        agent = CriticAgent.__new__(CriticAgent)
+
+        context = json.loads(agent._build_isa_mapper_context(state))
+
+        assert context["entity_plan_errors"]["errors"] == ["Unresolved physical sample relation."]
+        assert context["entity_matrix_validation"] == state["entity_matrix_validation"]
+        assert agent._postprocess_entity_plan_evaluation(verdict, state) == verdict
+
 
 class TestBuildBioMetadataContext:
     """Critic must receive structured BioMetadata signals (not 'No context available')."""

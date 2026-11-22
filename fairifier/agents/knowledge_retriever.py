@@ -1061,9 +1061,9 @@ class KnowledgeRetrieverAgent(ReactLoopMixin, BaseAgent):
                     )
                 )
                 coverage_resolved = not uncovered_schema_levels
-                package_selection_stable = (
-                    package_selection_stable and coverage_resolved
-                )
+                # Preserve the contract audit's convergence result here. The
+                # lexical shortlist can omit an equivalent selected package;
+                # final level coverage is reconciled below against its fields.
                 package_selection_trace.append(
                     {
                         "basis": "source_schema_coverage",

@@ -22,6 +22,7 @@ from ..utils.json_parse import safe_json_parse
 from ..utils.llm_helper import get_llm_helper
 from ..utils.structured_output import invoke_structured_output
 from ..utils.retry_progress import build_retry_contract
+from ..utils.workflow_contract import mapper_fixable_structure_issues
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from pydantic import BaseModel, Field
 
@@ -1320,6 +1321,38 @@ class CriticAgent(BaseAgent):
         }
         return json.dumps(summary, indent=2, ensure_ascii=False)
 
+    @staticmethod
+    def _selected_field_contracts(state: FAIRifierState) -> Dict[str, List[Dict[str, Any]]]:
+        """Keep package placement and value constraints visible to the reviewer."""
+        catalog: Dict[str, List[Dict[str, Any]]] = {}
+        seen: set[tuple[str, str]] = set()
+        knowledge = list(state.get("retrieved_knowledge") or []) + list(
+            (state.get("api_capabilities") or {}).get("selected_package_field_contracts") or []
+        )
+        for item in knowledge:
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata")
+            metadata = metadata if isinstance(metadata, dict) else item
+            level = FAIRDSAPIParser.normalize_isa_sheet(
+                metadata.get("isa_sheet") or metadata.get("sheet")
+            )
+            name = " ".join(str(
+                item.get("term") or item.get("field_name") or item.get("name")
+                or metadata.get("label") or ""
+            ).split())
+            key = (level, name.lower())
+            if not level or not name or key in seen:
+                continue
+            seen.add(key)
+            contract = {"field_name": name}
+            for attribute in ("definition", "syntax", "regex", "requirement"):
+                value = metadata.get(attribute) or item.get(attribute)
+                if value is not None and value != "":
+                    contract[attribute] = value
+            catalog.setdefault(level, []).append(contract)
+        return catalog
+
     def _build_isa_mapper_context(self, state: FAIRifierState) -> str:
         """Build evaluation context for ISAValueMapper."""
         isa_values = state.get("artifacts", {}).get("isa_values_json")
@@ -1354,7 +1387,7 @@ class CriticAgent(BaseAgent):
                                 if isinstance(row, dict) and row.get(id_field)
                             ]
                         sheet_summaries[sheet_name] = {
-                            "columns": cols[:10] if isinstance(cols, list) else [],
+                            "columns": cols if isinstance(cols, list) else [],
                             "row_count": n_rows,
                             "identifiers": identifiers[:6] + identifiers[-2:] if len(identifiers) > 8 else identifiers,
                         }
@@ -1367,6 +1400,16 @@ class CriticAgent(BaseAgent):
             1 for f in metadata_fields
             if f.get("status") == "confirmed" and f.get("value")
         )
+        # Judge the mapper only on what it controls; entity-plan defects are
+        # shown separately so they cannot trigger a futile mapper retry.
+        matrix_validation = state.get("entity_matrix_validation") or {}
+        mapper_errors = mapper_fixable_structure_issues(state)
+        plan_errors = list(dict.fromkeys(
+            [e for e in matrix_validation.get("errors") or [] if e not in mapper_errors]
+            + list((state.get("entity_plan_validation") or {}).get("errors") or [])
+        ))
+        quality = dict(state.get("isa_value_quality") or {})
+        quality["issues"] = [i for i in quality.get("issues") or [] if i not in plan_errors]
         summary = {
             "isa_mapper_contract": (
                 "Evaluate whether ISAValueMapper produced a complete, well-structured "
@@ -1374,6 +1417,8 @@ class CriticAgent(BaseAgent):
                 "Every sheet (investigation, study, observationunit, sample, assay) should "
                 "preserve entity rows, parent linkage fields, and tool-backed evidence gathered from source workspace inspection. "
                 "A validated entity plan is a hard cardinality contract: never recommend merging or collapsing its rows. "
+                "Selected package contracts define field placement and allowed values. "
+                "Never move a field to another ISA level or invent ontology constraints to make rows look distinct. "
                 "Declared replicates may share non-identity metadata when no FAIR-DS replicate term exists; their plan labels and links still distinguish them. "
                 "Explicit unresolved source ambiguities are review notes, not retryable mapper defects."
                 " FAIR-DS regex enforcement is a hard boundary: never recommend restoring a value "
@@ -1383,7 +1428,8 @@ class CriticAgent(BaseAgent):
             "sheets_populated": sheets_populated,
             "total_rows": row_count,
             "sheet_summaries": sheet_summaries,
-            "isa_value_quality": state.get("isa_value_quality", {}),
+            "selected_field_contracts": self._selected_field_contracts(state),
+            "isa_value_quality": quality,
             "entity_plan": {
                 "levels": [
                     {
@@ -1403,8 +1449,22 @@ class CriticAgent(BaseAgent):
                     "unresolved_ambiguities", []
                 ),
             },
-            "entity_plan_validation": state.get("entity_plan_validation", {}),
-            "entity_matrix_validation": state.get("entity_matrix_validation", {}),
+            "entity_matrix_validation": {
+                **matrix_validation, "errors": mapper_errors,
+            },
+            "entity_plan_errors": {
+                "errors": plan_errors,
+                "note": (
+                    "Owned by the structure planner and already flagged for human review. "
+                    "Re-running ISAValueMapper cannot change them: do not score the mapper on them."
+                ),
+            },
+            "identity_stripped_metric_semantics": (
+                "These signatures exclude entity identifiers, names, descriptions, and parent links. "
+                "Equal signatures describe shared metadata, not duplicate identities or incorrect cardinality. "
+                "Check source-backed plan identities and relationships instead of using a duplicate-percentage cutoff. "
+                "Plan and matrix validation errors remain failures requiring resolution; this diagnostic does not override them."
+            ),
             "source_authors": (state.get("document_info") or {}).get("authors", []),
             "inner_loop_telemetry": (state.get("react_scratchpad") or {}).get("ISAValueMapper", {}),
             "confirmed_metadata_fields_available": mapped_count,

@@ -301,13 +301,23 @@ def test_excel_help_sheet_fills_definition_from_explicit_local_package(
     tmp_path, monkeypatch
 ):
     """Help definitions should come from the local package catalog when fields omit them."""
-    from pathlib import Path
     from fairifier.graph import excel as excel_module
 
-    package_path = (
-        Path(__file__).resolve().parents[1]
-        / "evaluation/config/packages/petase_enzyme_engineering_package.json"
-    )
+    package_path = tmp_path / "example_materials_package.json"
+    definition = "Category of the experimental material being observed."
+    package_path.write_text(json.dumps({
+        "packageName": "example_materials",
+        "metadata": [{
+            "label": "observation unit category",
+            "sheetName": "ObservationUnit",
+            "requirement": "MANDATORY",
+            "term": {
+                "label": "observation unit category",
+                "definition": definition,
+                "example": "reference_material",
+            },
+        }],
+    }), encoding="utf-8")
     monkeypatch.setattr(
         "fairifier.config.config.local_package_paths",
         (str(package_path),),
@@ -315,15 +325,15 @@ def test_excel_help_sheet_fills_definition_from_explicit_local_package(
     )
     excel_module._LOCAL_TERM_CATALOG = None
     metadata = {
-        "packages_used": ["petase_enzyme_engineering"],
+        "packages_used": ["example_materials"],
         "isa_structure": {
             "observationunit": {
                 "fields": [
                     {
-                        "field_name": "observation unit type",
-                        "value": "enzyme_substrate_pair",
+                        "field_name": "observation unit category",
+                        "value": "reference_material",
                         "requirement": "MANDATORY",
-                        "package_source": "petase_enzyme_engineering",
+                        "package_source": "example_materials",
                     }
                 ],
             }
@@ -331,8 +341,8 @@ def test_excel_help_sheet_fills_definition_from_explicit_local_package(
     }
     isa_values = {
         "observationunit": {
-            "columns": ["observation unit type"],
-            "rows": [{"observation unit type": "enzyme_substrate_pair"}],
+            "columns": ["observation unit category"],
+            "rows": [{"observation unit category": "reference_material"}],
         }
     }
     (tmp_path / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
@@ -342,11 +352,11 @@ def test_excel_help_sheet_fills_definition_from_explicit_local_package(
 
     assert out is not None
     rows = _help_rows(load_workbook(out, data_only=True))
-    type_row = next(row for row in rows if row and row[0] == "observation unit type")
-    assert "PETase experimental subject" in str(type_row[1] or "")
+    type_row = next(row for row in rows if row and row[0] == "observation unit category")
+    assert type_row[1] == definition
     assert str(type_row[2]).upper() == "MANDATORY"
-    assert type_row[3] == "petase_enzyme_engineering"
-    assert type_row[4] == "enzyme_substrate_pair"
+    assert type_row[3] == "example_materials"
+    assert type_row[4] == "reference_material"
     excel_module._LOCAL_TERM_CATALOG = None
 
 

@@ -15,6 +15,7 @@ from ..models import FAIRifierState, MetadataField
 from ..config import config
 from ..services.evidence_packets import build_evidence_context
 from ..services.source_workspace import (
+    compact_table_context,
     grep_sources,
     hybrid_search_sources,
     load_source_workspace,
@@ -26,7 +27,6 @@ from ..services.semantic_index import SemanticIndex
 from ..services.section_field_candidates import field_candidate_record_to_dict
 from ..utils.llm_helper import get_llm_helper
 from ..utils.document_text import read_document_text
-from ..utils.entity_plan import render_entity_plan_for_prompt
 from ..services.fairds_api_parser import FAIRDSAPIParser
 from ..utils.grounding import SOURCE_REF_PATTERN, SOURCE_TABLE_PATTERN
 from ..utils.isa_order import ISA_LEVEL_ORDER
@@ -284,6 +284,7 @@ class JSONGeneratorAgent(BaseAgent):
                 knowledge_items,
                 state=state,
             )
+            field_evidence_by_name = dict(state.get("_field_evidence_by_name") or {})
             # Store candidates in state so _generate_with_llm or postcheck can access them
             state["_field_candidates"] = all_candidates
 
@@ -292,11 +293,18 @@ class JSONGeneratorAgent(BaseAgent):
             )
 
             # ── START UPSTREAM RECONCILIATION ──
-            if all_candidates:
+            # The generation batches already read each field's evidence, so an
+            # LLM pre-normalization pass repeated that extraction (~60% of this
+            # step on Qwen). It is opt-in; without it no raw snippets are
+            # injected as "exact values".
+            normalize = bool(getattr(config, "jsongen_normalize_candidates", False))
+            if all_candidates and normalize:
                 await self._normalize_candidates_with_llm(all_candidates)
-            pre_reconciled = self._upstream_reconcile_candidates(all_candidates)
-            state["_field_candidates"] = pre_reconciled
-            
+            pre_reconciled = (
+                self._upstream_reconcile_candidates(all_candidates) if normalize else {}
+            )
+            state["_field_candidates"] = pre_reconciled or all_candidates
+
             # Inject reconciled values into context to guide LLM
             if pre_reconciled:
                 reconciled_lines = [
@@ -315,18 +323,21 @@ class JSONGeneratorAgent(BaseAgent):
                     val = getattr(primary, "normalized_value", None) or getattr(primary, "value", None)
                     if val:
                         reconciled_lines.append(f"- {fname}: {val}")
+                        if field_evidence_by_name:
+                            field_evidence_by_name.setdefault(fname, []).append(
+                                f"Pre-reconciled source value for {fname}: {val}"
+                            )
                         added = True
-                if added:
+                if added and not field_evidence_by_name:
                     field_evidence_context += "\n" + "\n".join(reconciled_lines)
             # ── END UPSTREAM RECONCILIATION ──
 
             context_parts = [
                 part
                 for part in (
-                    render_entity_plan_for_prompt(state.get("entity_plan") or {}),
                     evidence_context,
                     workspace_context,
-                    field_evidence_context,
+                    "" if field_evidence_by_name else field_evidence_context,
                     a2a_handoff_context,
                 )
                 if part
@@ -382,6 +393,16 @@ class JSONGeneratorAgent(BaseAgent):
                 selected_packages=state.get("selected_packages"),
                 source_workspace=state.get("source_workspace", {}) or {},
                 field_candidates=pre_reconciled,
+                field_evidence_by_name=field_evidence_by_name or None,
+                # With an entity plan, per-entity values are filled by
+                # ISAValueMapper (bounded batches + record review). Expanding
+                # every entity here as well doubled the model work; extract
+                # document-level values only unless explicitly configured.
+                entity_plan=(
+                    state.get("entity_plan") or None
+                    if getattr(config, "jsongen_per_entity", False)
+                    else None
+                ),
             )
             metadata_fields = self._ensure_mandatory_fields_present(
                 metadata_fields=metadata_fields,
@@ -527,6 +548,10 @@ class JSONGeneratorAgent(BaseAgent):
         - De-duplicates overlapping text spans from the same source.
         - Formats evidence with structured source coordinates for traceability.
         """
+        if state is not None:
+            # Keep a per-field index independently of the compact shared summary.
+            # Generation batches select their own evidence from this index.
+            state["_field_evidence_by_name"] = {}
         if not (config.metadata_field_search_enabled and source_workspace and knowledge_items):
             return "", {}
         try:
@@ -550,6 +575,7 @@ class JSONGeneratorAgent(BaseAgent):
         total = sum(len(line) for line in lines)
 
         all_candidates: Dict[str, List[FieldCandidate]] = {}
+        field_evidence_by_name: Dict[str, List[str]] = {}
         prompt_budget_exhausted = False
 
         semantic_index = None
@@ -664,10 +690,11 @@ class JSONGeneratorAgent(BaseAgent):
             if not ranked_snippets:
                 continue
 
+            snippets = ranked_snippets[:max_snippets]
+            field_evidence_by_name[field_name_lower] = snippets
             if prompt_budget_exhausted:
                 continue
 
-            snippets = ranked_snippets[:max_snippets]
             block = [f"\nField: {field_name}", *snippets]
             block_text = "\n".join(block)
             if total + len(block_text) > budget:
@@ -683,6 +710,7 @@ class JSONGeneratorAgent(BaseAgent):
         # LangGraph state merges top-level keys only; reassign so telemetry
         # survives checkpointing and appears in workflow_report.json.
         if state is not None:
+            state["_field_evidence_by_name"] = field_evidence_by_name
             state["retrieval_telemetry"] = dict(retrieval_telemetry)
             self._merge_section_field_candidates(state, all_candidates)
 
@@ -815,55 +843,68 @@ class JSONGeneratorAgent(BaseAgent):
         return unique_candidates
 
     async def _normalize_candidates_with_llm(self, all_candidates: Dict[str, List[FieldCandidate]]) -> None:
-        """Batch-normalize candidate values using the LLM."""
+        """Batch-normalize candidate values using the LLM.
+
+        Mechanical extraction: candidates are split into chunks that run
+        concurrently (``llm_batch_concurrency``) with thinking off, instead of
+        one very long call.
+        """
         if not all_candidates:
             return
-            
-        candidate_map = {}
-        idx = 0
-        prompt_parts = [
+        import asyncio
+        from langchain_core.messages import SystemMessage, HumanMessage
+        from fairifier.utils.llm_helper import _parse_json_with_fallback, thinking_override
+
+        header = [
             "Extract the exact, concise, normalized field value from the following evidence snippets or table rows.",
             "Do not include surrounding context, explanation, or markdown formatting.",
             "If the evidence does not clearly contain a value for the field, return an empty string.",
             "Return a JSON object mapping the Candidate ID to the extracted normalized value string.",
-            ""
+            "",
         ]
-        
+        entries = []
+        idx = 0
         for field_name, candidates in all_candidates.items():
             for c in candidates:
-                cid = f"c_{idx}"
-                candidate_map[cid] = c
                 # Cap the evidence length to avoid huge prompts
                 evidence_text = c.evidence[:1500] if c.evidence else ""
-                prompt_parts.append(
-                    f"Candidate ID: {cid}\nField Name: {field_name}\nEvidence: {evidence_text}\n"
-                )
+                entries.append((
+                    f"c_{idx}", c,
+                    f"Candidate ID: c_{idx}\nField Name: {field_name}\nEvidence: {evidence_text}\n",
+                ))
                 idx += 1
+        chunk_size = 40
+        chunks = [entries[i:i + chunk_size] for i in range(0, len(entries), chunk_size)]
+        semaphore = asyncio.Semaphore(max(1, int(getattr(config, "llm_batch_concurrency", 1) or 1)))
 
-        prompt = "\n".join(prompt_parts)
-        
-        try:
-            from langchain_core.messages import SystemMessage, HumanMessage
-            from fairifier.utils.llm_helper import _parse_json_with_fallback
-            
+        async def normalize(chunk):
             messages = [
                 SystemMessage(content="You are a data extraction assistant. Return only the requested JSON object mapping Candidate IDs to their extracted normalized string values."),
-                HumanMessage(content=prompt)
+                HumanMessage(content="\n".join(header + [text for _, _, text in chunk])),
             ]
-            
-            result = await self.llm_helper._call_llm(messages, "Candidate Normalization")
+            async with semaphore:
+                try:
+                    helper = self.llm_helper
+                    if (getattr(config, "mapping_llm_model", "") or "").strip():
+                        from fairifier.utils.llm_helper import get_mapping_llm_helper
+
+                        helper = get_mapping_llm_helper()
+                    with thinking_override(False):
+                        result = await helper._call_llm(messages, "Candidate Normalization")
+                except Exception as e:
+                    self.log_execution({}, f"Failed to normalize candidates with LLM: {e}", "warning")
+                    return
             content = result.content if hasattr(result, "content") else str(result)
-            
             parsed = _parse_json_with_fallback(content)
             if parsed and isinstance(parsed, dict):
+                by_id = {cid: candidate for cid, candidate, _ in chunk}
                 for cid, normalized in parsed.items():
-                    if cid in candidate_map and normalized:
+                    if cid in by_id and normalized:
                         val_str = str(normalized).strip()
                         if val_str:
-                            candidate_map[cid].normalized_value = val_str
-                            
-        except Exception as e:
-            self.log_execution({}, f"Failed to normalize candidates with LLM: {e}", "warning")
+                            by_id[cid].normalized_value = val_str
+
+        await asyncio.gather(*(normalize(chunk) for chunk in chunks))
 
     @staticmethod
     def _should_inject_pre_reconciled_value(
@@ -1047,16 +1088,31 @@ class JSONGeneratorAgent(BaseAgent):
                 f"- {sid}:{m.get('start')}-{m.get('end')} "
                 f"[role={role}] ({m.get('source_path')}): {excerpt}"
             )
+        included_table_contexts: set[tuple[str, str]] = set()
         for m in sorted_table:
             sid = m.get("source_id")
             meta = source_meta.get(str(sid), {})
             role = meta.get("source_role", "unknown")
             row = m.get("row") or {}
-            snippets.append(
+            snippet = (
                 f"- {sid} table {m.get('table')} "
                 f"row {m.get('row_index')} column {m.get('column')} "
                 f"[role={role}]: {row}"
             )
+            if m.get("source_row_index") is not None:
+                snippet += f"; source_row_index={m['source_row_index']}"
+            table_key = (str(sid), str(m.get("table") or ""))
+            context = m.get("table_context")
+            if isinstance(context, Mapping) and context:
+                if table_key not in included_table_contexts:
+                    compact = compact_table_context(context, max_chars=1500)
+                    snippet += "; table_context=" + json.dumps(
+                        compact, ensure_ascii=False, separators=(",", ":")
+                    )
+                    included_table_contexts.add(table_key)
+                else:
+                    snippet += f"; table_context_ref={sid}:{m.get('table')}"
+            snippets.append(snippet)
         return snippets
 
     def _field_search_queries(self, field_name: str, description: str) -> List[str]:
@@ -1155,6 +1211,8 @@ class JSONGeneratorAgent(BaseAgent):
         selected_packages: Optional[List[str]] = None,
         source_workspace: Optional[Dict[str, Any]] = None,
         field_candidates: Optional[Dict[str, List[FieldCandidate]]] = None,
+        field_evidence_by_name: Optional[Dict[str, List[str]]] = None,
+        entity_plan: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[MetadataField], Optional[int]]:
         """
         Generate metadata fields with LLM-based value extraction.
@@ -1189,10 +1247,26 @@ class JSONGeneratorAgent(BaseAgent):
         
         # Generate values for all selected fields
         self.logger.info("Generating metadata values for all selected fields...")
-        mapped_fields = await self.llm_helper.generate_complete_metadata(
-            doc_info, selected_fields, document_text, critic_feedback, planner_instruction,
-            prior_memory_context=prior_memory_context
+        from ..utils.llm_helper import thinking_override
+
+        # Document-level candidate extraction is mechanical; thinking tokens
+        # dominated its cost. Per-entity generation keeps the main setting.
+        jsongen_thinking = (
+            None if entity_plan else getattr(config, "jsongen_thinking", False)
         )
+        generator = self.llm_helper
+        if not entity_plan and (getattr(config, "mapping_llm_model", "") or "").strip():
+            # Document-level candidate extraction can use the lighter mapping model.
+            from ..utils.llm_helper import get_mapping_llm_helper
+
+            generator = get_mapping_llm_helper()
+        with thinking_override(jsongen_thinking):
+            mapped_fields = await generator.generate_complete_metadata(
+                doc_info, selected_fields, document_text, critic_feedback, planner_instruction,
+                prior_memory_context=prior_memory_context,
+                **({"field_evidence_by_name": field_evidence_by_name} if field_evidence_by_name else {}),
+                **({"entity_plan": entity_plan} if entity_plan else {}),
+            )
         
         # Order items so KnowledgeRetriever's selected_packages wins duplicate MIxS labels
         pref_index = {
@@ -1388,6 +1462,7 @@ class JSONGeneratorAgent(BaseAgent):
             "data_type": metadata.get("data_type") or metadata.get("type", "string"),
             "definition": metadata.get("definition", ""),
             "syntax": metadata.get("syntax", ""),
+            "preferred_unit": metadata.get("preferred_unit") or metadata.get("preferredUnit", ""),
             "regex": metadata.get("regex", ""),
             "example": metadata.get("example", ""),
             "entity_id": getattr(field, "entity_id", None) or None,
