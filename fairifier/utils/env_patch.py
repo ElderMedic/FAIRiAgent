@@ -11,26 +11,27 @@ def apply_libstdcxx_fix():
     
     On some Linux systems, the system-wide libstdc++.so.6 is older than the one
     required by libraries in the Conda environment (like libicu, used by sqlite3).
-    This function pre-loads the environment's version of libstdc++.so.6 to ensure
-    it is used instead of the system version.
+    Pre-load the environment's version before importing native extensions.
+    Loading it after another extension selected the system library cannot
+    replace that library's already-bound ABI. A nested venv may keep native
+    libraries in its base interpreter environment rather than in sys.prefix.
     """
     if not sys.platform.startswith("linux"):
         return
 
-    # Path to the environment's libstdc++
-    # Usually in <sys.prefix>/lib/libstdc++.so.6
-    env_lib_path = os.path.join(sys.prefix, "lib", "libstdc++.so.6")
-    
-    if os.path.exists(env_lib_path):
+    for prefix in dict.fromkeys((sys.prefix, sys.base_prefix)):
+        env_lib_path = os.path.join(prefix, "lib", "libstdc++.so.6")
+        if not os.path.exists(env_lib_path):
+            logger.debug("Environment libstdc++ not found at %s", env_lib_path)
+            continue
         try:
             # Pre-load the correct libstdc++ with global scope
             # mode=ctypes.RTLD_GLOBAL ensures it's available for other libraries
             ctypes.CDLL(env_lib_path, mode=ctypes.RTLD_GLOBAL)
-            logger.debug(f"Pre-loaded environment libstdc++ from {env_lib_path}")
+            logger.debug("Pre-loaded environment libstdc++ from %s", env_lib_path)
+            return
         except Exception as e:
             logger.warning(f"Failed to pre-load environment libstdc++ from {env_lib_path}: {e}")
-    else:
-        logger.debug(f"Environment libstdc++ not found at {env_lib_path}, skipping patch")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)

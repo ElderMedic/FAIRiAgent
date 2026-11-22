@@ -150,6 +150,7 @@ celerybeat.pid
 .env
 .envrc
 .venv
+/.runtime/
 env/
 venv/
 ENV/
@@ -435,6 +436,7 @@ evaluation/reports/*.png
 evaluation/reports/run_catalog/
 # Nested collaborator case audits (local paths, draft ground truth, unpublished scores)
 evaluation/reports/michael_case_audit_*/
+evaluation/reports/petase_development_*/
 
 # Collaborator case-study scripts and dashboards (override !evaluation/scripts/)
 evaluation/scripts/analyze_michael_case.py
