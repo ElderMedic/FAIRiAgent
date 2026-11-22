@@ -99,6 +99,7 @@ def main():
                         help="env file applied after --env (e.g. evaluation/config/production/*.overlay.env)")
     parser.add_argument("--set", action="append", default=[], help="KEY=VALUE env override")
     parser.add_argument("--skip-done", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="print how many papers would run, then exit")
     args = parser.parse_args()
     args.out = args.out if args.out.is_absolute() else ROOT / args.out
     args.out.mkdir(parents=True, exist_ok=True)
@@ -123,6 +124,8 @@ def main():
                 if line.strip() and json.loads(line)["exit"] == 0}
         instances = [i for i in instances if i["instance_id"] not in done]
     print(f"{len(instances)} papers, {args.workers} workers -> {args.out}", flush=True)
+    if args.dry_run:
+        return 0
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         list(pool.map(lambda inst: run_one(inst, args, env_file, status_path), instances))
 
