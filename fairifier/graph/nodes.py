@@ -18,6 +18,7 @@ import os
 import re
 import csv
 import gzip
+import hashlib
 import shutil
 import tarfile
 import zipfile
@@ -58,6 +59,12 @@ from ..services.mineru_client import (
     mineru_client_from_config,
 )
 from ..services.mineru_paths import find_markdown_in_tree
+from ..services.publication_tables import extract_publication_tables
+from ..services.mineru_evidence import (
+    MinerUEvidenceError,
+    prepare_mineru_evidence,
+    supplement_pdf_first_page,
+)
 from ..services import mineru_cache as mineru_cache_service
 from ..services.confidence_aggregator import aggregate_confidence
 from ..services.auto_repair import (
@@ -84,6 +91,7 @@ from ..utils.workflow_contract import (
     compile_fill_tasks,
     evaluate_completion_contract,
     fill_tasks_artifact,
+    mapper_fixable_structure_issues,
     react_budget_snapshot,
     reconcile_fill_tasks_from_matrix,
     record_node_trace,
@@ -155,6 +163,53 @@ def _filesystem_document_path(document_path: str):
 
 
 
+
+_MISSING = object()
+
+
+def merge_parallel_states(before: Dict[str, Any], first: Dict[str, Any], second: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge two states that diverged from ``before`` in parallel branches.
+
+    A key changed by one branch takes that branch's value. A key changed by
+    both: lists keep ``first`` plus the items ``second`` appended; dicts are
+    merged per sub-key the same way; review flags are OR-ed; otherwise
+    ``first`` wins.
+    """
+    merged = first
+    for key, second_value in second.items():
+        base = before.get(key, _MISSING)
+        if base is not _MISSING and base == second_value:
+            continue  # second branch left it unchanged
+        first_value = first.get(key, _MISSING)
+        if first_value is _MISSING or (base is not _MISSING and base == first_value):
+            merged[key] = second_value
+        elif isinstance(first_value, list) and isinstance(second_value, list):
+            start = len(base) if isinstance(base, list) else 0
+            merged[key] = first_value + [
+                item for item in second_value[start:] if item not in first_value
+            ]
+        elif isinstance(first_value, dict) and isinstance(second_value, dict):
+            merged[key] = merge_parallel_states(
+                base if isinstance(base, dict) else {}, dict(first_value), second_value
+            )
+        elif isinstance(first_value, bool) and isinstance(second_value, bool):
+            merged[key] = first_value or second_value
+    return merged
+
+
+def agent_max_retries(agent_name: str, default: int) -> int:
+    """Per-agent Critic retry budget from config.agent_max_retries.
+
+    e.g. FAIRIFIER_AGENT_MAX_RETRIES="JSONGenerator=0" keeps a Critic RETRY of
+    JSONGenerator as a review flag instead of regenerating every field.
+    """
+    overrides = getattr(config, "agent_max_retries", {}) or {}
+    try:
+        return max(0, int(overrides.get(agent_name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
 class ReadFileNode:
     """Node class to read document file content from disk."""
     
@@ -198,7 +253,15 @@ class ReadFileNode:
             logger.info(f"✅ Loaded {len(text)} characters from document")
             
             # Save to file if not already persisted (e.g. by MinerU)
-            markdown_path = conversion_info.get("markdown_path")
+            evidence = conversion_info.get("source_evidence") or {}
+            working_text_changed = bool(
+                evidence.get("derived_regions") or evidence.get("native_pdf_regions")
+            )
+            markdown_path = (
+                conversion_info.get("working_text_path")
+                if working_text_changed
+                else conversion_info.get("markdown_path")
+            )
             if not markdown_path and output_dir:
                 try:
                     out_path = Path(output_dir) / "extracted_document_content.txt"
@@ -207,6 +270,8 @@ class ReadFileNode:
                     markdown_path = str(out_path)
                 except Exception as e:
                     logger.warning(f"Failed to write extracted content to disk: {e}")
+            if working_text_changed and markdown_path:
+                conversion_info["working_text_path"] = markdown_path
                     
             state["document_text_path"] = markdown_path
             # Document text is persisted on disk via document_text_path. We no
@@ -239,6 +304,7 @@ class ReadFileNode:
                         "method": conversion_info.get("method", "direct_read"),
                         "content_type": conversion_info.get("content_type", "text"),
                         "tables": conversion_info.get("tables", []),
+                        "source_evidence": conversion_info.get("source_evidence", {}),
                     }
                 ]
             state["input_documents"] = input_documents
@@ -363,6 +429,7 @@ class ReadFileNode:
                 content=text,
                 content_type=conversion_info.get("content_type", "text"),
                 tables=conversion_info.get("tables", []),
+                source_evidence=conversion_info.get("source_evidence", {}),
             )
         ]
 
@@ -389,6 +456,7 @@ class ReadFileNode:
                                     content=supp_text,
                                     content_type=supp_info.get("content_type", "text"),
                                     tables=supp_info.get("tables", []),
+                                    source_evidence=supp_info.get("source_evidence", {}),
                                 )
                             )
                             supp_idx += 1
@@ -428,14 +496,58 @@ class ReadFileNode:
             },
             "manifest": workspace.manifest,
         }
-        structured_blocks = conversion_info.get("structured_blocks")
-        if structured_blocks:
-            workspace_meta["mineru_structured_blocks"] = structured_blocks
-        if conversion_info.get("content_list_v2_path"):
-            workspace_meta["mineru_content_list_v2_path"] = conversion_info[
-                "content_list_v2_path"
-            ]
+        has_working_changes = any(
+            (record.source_evidence or {}).get("derived_regions")
+            or (record.source_evidence or {}).get("native_pdf_regions")
+            for record in records
+        )
+        if not has_working_changes:
+            structured_blocks = conversion_info.get("structured_blocks")
+            if structured_blocks:
+                workspace_meta["mineru_structured_blocks"] = structured_blocks
+            if conversion_info.get("content_list_v2_path"):
+                workspace_meta["mineru_content_list_v2_path"] = conversion_info[
+                    "content_list_v2_path"
+                ]
+        # Raw structured blocks remain in conversion metadata for inspection.
+        # Chunking filtered sources must read the same canonical working text.
         conversion_info["source_workspace"] = workspace_meta
+        evidence = conversion_info.get("source_evidence") or {}
+        if evidence.get("derived_regions") or evidence.get("native_pdf_regions"):
+            # The original MinerU Markdown stays in conversion metadata. Every
+            # downstream text reader must use this same filtered working view.
+            primary_path = workspace.source_paths.get("source_001")
+            if primary_path is not None:
+                conversion_info["working_text_path"] = str(primary_path)
+
+    @staticmethod
+    def _prepare_mineru_source_text(
+        markdown_text: str,
+        markdown_path: Path,
+        conversion_info: Dict[str, Any],
+        source_path: Optional[Path] = None,
+    ) -> str:
+        """Create a working view while table provenance retains raw offsets."""
+        working_text, evidence = prepare_mineru_evidence(markdown_text, markdown_path)
+        if source_path is not None:
+            working_text, native_evidence = supplement_pdf_first_page(working_text, source_path)
+            evidence.update(native_evidence)
+        if evidence:
+            evidence.setdefault("raw_markdown_path", str(markdown_path))
+            evidence.setdefault(
+                "raw_markdown_sha256", hashlib.sha256(markdown_path.read_bytes()).hexdigest(),
+            )
+            conversion_info["source_evidence"] = evidence
+        excluded_spans = [
+            (region["raw_start"], region["raw_end"])
+            for region in evidence.get("derived_regions", [])
+        ]
+        conversion_info["tables"] = extract_publication_tables(
+            markdown_text,
+            markdown_path,
+            excluded_markdown_spans=excluded_spans,
+        )
+        return working_text
 
     def _read_single_document_content(
         self,
@@ -623,12 +735,19 @@ class ReadFileNode:
                     }
                     if file_digest:
                         conversion_info["source_sha256"] = file_digest
+                    working_text = self._prepare_mineru_source_text(
+                        markdown_text, Path(markdown_path), conversion_info, fs_path,
+                    )
                     logger.info(
                         "✅ Loaded MinerU markdown (%s chars, %s)",
                         len(markdown_text),
                         src_label,
                     )
-                    return markdown_text, conversion_info
+                    return working_text, conversion_info
+                except MinerUEvidenceError:
+                    # A valid raw artifact with ambiguous evidence boundaries
+                    # must not be retried or reused as canonical source text.
+                    raise
                 except Exception as e:
                     logger.warning("⚠️ Failed to read MinerU reuse result: %s", e)
 
@@ -683,6 +802,9 @@ class ReadFileNode:
                     from ..services.mineru_popo import try_enrich_conversion_with_popo
 
                     conversion_info = try_enrich_conversion_with_popo(conversion_info)
+                    working_text = self._prepare_mineru_source_text(
+                        result["markdown_text"], Path(result["markdown_path"]), conversion_info, fs_path,
+                    )
                     if (
                         file_digest
                         and config.mineru_cache_enabled
@@ -696,7 +818,7 @@ class ReadFileNode:
                             )
                         except OSError as exc:
                             logger.warning("MinerU cache store failed: %s", exc)
-                    return result["markdown_text"], conversion_info
+                    return working_text, conversion_info
                 logger.warning(
                     "MinerU conversion failed (%s). Falling back to PyMuPDF.",
                     result["error"],
@@ -744,6 +866,8 @@ class ReadFileNode:
             text = file.read()
         conversion_info["method"] = "direct_read"
         conversion_info["content_type"] = "markdown" if suffix in {".md", ".markdown"} else "text"
+        if suffix in {".md", ".markdown", ".html", ".htm"}:
+            conversion_info["tables"] = extract_publication_tables(text, fs_path)
         return text, conversion_info
 
     def _is_supported_bundle_file(self, path: "Path") -> bool:
@@ -864,6 +988,7 @@ class ReadFileNode:
                 "method": info.get("method", "unknown"),
                 "content_type": info.get("content_type", "text"),
                 "tables": info.get("tables", []),
+                "source_evidence": info.get("source_evidence", {}),
             }
             if info.get("host_path"):
                 doc_entry["host_path"] = info.get("host_path")
@@ -900,6 +1025,7 @@ class ReadFileNode:
                     content=str(input_doc.get("content") or ""),
                     content_type=str(input_doc.get("content_type") or "text"),
                     tables=input_doc.get("tables", []) or [],
+                    source_evidence=input_doc.get("source_evidence", {}) or {},
                 )
                 for idx, input_doc in enumerate(input_documents, start=1)
             ],
@@ -1194,27 +1320,43 @@ class OrchestrateNode:
         if run_id and run_stop_requested(run_id):
             return self._mark_interrupted_state(state)
 
-        # Step 3.5: establish entity cardinality and links before values are filled.
-        logger.info("\n" + "="*70)
-        logger.info("🧱 Step 3.5: EntityStructurePlanner")
-        logger.info("="*70)
-        state = await self.entity_structure_planner.execute(state)
-        self._trace_entity_planner(state)
+        # Step 3.5 + 4: JSONGenerator extracts document-level values and no
+        # longer needs the entity plan, so it runs alongside the planner.
+        json_generated = False
+        if not getattr(config, "jsongen_per_entity", False) and getattr(
+            config, "parallel_plan_and_json", True
+        ):
+            parallel_state = await self._plan_and_generate_in_parallel(state)
+            if parallel_state is not None:
+                state = parallel_state
+                json_generated = True
+        if not json_generated:
+            # Step 3.5: establish entity cardinality and links before values are filled.
+            logger.info("\n" + "="*70)
+            logger.info("🧱 Step 3.5: EntityStructurePlanner")
+            logger.info("="*70)
+            state = await self.entity_structure_planner.execute(state)
+            self._trace_entity_planner(state)
         if run_id and run_stop_requested(run_id):
             return self._mark_interrupted_state(state)
         self._continue_with_best_entity_plan(state)
         self._compile_fill_tasks(state)
+        if json_generated:
+            self._backfill_plan_mapped_fields(state)
 
         # Step 4: Generate JSON (with optional cross-layer rollback to retrieval)
         cross_layer_retries_used = 0
         while True:
-            logger.info("\n" + "="*70)
-            logger.info("📝 Step 4: JSONGenerator")
-            logger.info("="*70)
-            state = await self._execute_agent_with_retry(
-                state, self.json_generator, "JSONGenerator",
-                lambda s: s.get("metadata_fields", []) and len(s["metadata_fields"]) > 0
-            )
+            if json_generated:
+                json_generated = False  # first pass already ran in parallel
+            else:
+                logger.info("\n" + "="*70)
+                logger.info("📝 Step 4: JSONGenerator")
+                logger.info("="*70)
+                state = await self._execute_agent_with_retry(
+                    state, self.json_generator, "JSONGenerator",
+                    lambda s: s.get("metadata_fields", []) and len(s["metadata_fields"]) > 0
+                )
             if run_id and run_stop_requested(run_id):
                 return self._mark_interrupted_state(state)
 
@@ -1304,6 +1446,63 @@ class OrchestrateNode:
         
         return state
 
+    async def _plan_and_generate_in_parallel(
+        self, state: FAIRifierState
+    ) -> Optional[FAIRifierState]:
+        """Run EntityStructurePlanner and JSONGenerator concurrently.
+
+        Each works on its own copy of the state; afterwards every key is taken
+        from the agent that changed it (both-changed lists are concatenated,
+        dicts merged per key, review flags OR-ed). Returns None when the state
+        cannot be copied, so the caller falls back to the serial order.
+        """
+        import asyncio
+        import copy
+
+        try:
+            before = copy.deepcopy(state)
+            json_state = copy.deepcopy(state)
+        except Exception as exc:  # non-copyable runtime object in state
+            logger.warning("Parallel plan+JSON unavailable (%s); running serially", exc)
+            return None
+        logger.info("\n" + "="*70)
+        logger.info("🧱📝 Steps 3.5 + 4: EntityStructurePlanner ∥ JSONGenerator")
+        logger.info("="*70)
+
+        async def plan():
+            planned = await self.entity_structure_planner.execute(state)
+            self._trace_entity_planner(planned)
+            return planned
+
+        async def generate():
+            return await self._execute_agent_with_retry(
+                json_state, self.json_generator, "JSONGenerator",
+                lambda s: s.get("metadata_fields", []) and len(s["metadata_fields"]) > 0,
+            )
+
+        plan_state, gen_state = await asyncio.gather(plan(), generate())
+        return merge_parallel_states(before, gen_state, plan_state)
+
+    def _backfill_plan_mapped_fields(self, state: FAIRifierState) -> None:
+        """Add plan-mapped fields the parallel JSONGenerator could not see."""
+        from types import SimpleNamespace
+
+        ensure = getattr(self.json_generator, "_ensure_plan_mapped_fields_present", None)
+        to_dict = getattr(self.json_generator, "_field_to_dict", None)
+        if not callable(ensure) or not callable(to_dict):
+            return
+        plan = state.get("entity_plan") or {}
+        current = [
+            SimpleNamespace(field_name=f.get("field_name"), isa_sheet=f.get("isa_sheet"))
+            for f in state.get("metadata_fields") or [] if isinstance(f, dict)
+        ]
+        size = len(current)
+        extended = ensure(current, state.get("retrieved_knowledge") or [], plan)
+        added = [to_dict(f) for f in extended[size:]]
+        if added:
+            state.setdefault("metadata_fields", []).extend(added)
+            logger.info("🧩 Added %d plan-mapped fields after parallel generation", len(added))
+
     async def _execute_agent_with_retry(
         self,
         state: FAIRifierState,
@@ -1334,6 +1533,7 @@ class OrchestrateNode:
             Updated state after execution (with or without retries)
         """
         run_id = state.get("session_id")
+        max_retries = agent_max_retries(agent_name, self.max_step_retries)
         if "execution_history" not in state:
             state["execution_history"] = []
         if "context" not in state:
@@ -1361,7 +1561,7 @@ class OrchestrateNode:
         prior_issues: list = []
 
         # Retry loop
-        for attempt in range(1, self.max_step_retries + 2):  # +2 = initial + max_retries
+        for attempt in range(1, max_retries + 2):  # +2 = initial + max_retries
             if run_id and run_stop_requested(run_id):
                 logger.warning(
                     "⏹ Stop requested before %s attempt %s; exiting retry loop.",
@@ -1406,7 +1606,7 @@ class OrchestrateNode:
             if attempt == 1:
                 logger.info(f"▶️  Executing {agent_name}")
             else:
-                logger.info(f"🔄 Retry {attempt-1}/{self.max_step_retries} for {agent_name}")
+                logger.info(f"🔄 Retry {attempt-1}/{max_retries} for {agent_name}")
                 if enforce_global_retry_limit:
                     self.global_retry_count += 1
                 # Strip verbose Critic prose / failed-output detail from earlier
@@ -1476,7 +1676,7 @@ class OrchestrateNode:
                 # --- END NEW DISK APPEND ---
                 
                 # On error, try next attempt if available
-                if attempt <= self.max_step_retries:
+                if attempt <= max_retries:
                     continue
                 else:
                     break
@@ -1492,12 +1692,15 @@ class OrchestrateNode:
                 return self._mark_interrupted_state(state)
             
             last_execution = state["execution_history"][-1]
-            if self._critic_is_disabled():
-                critic_eval = {"decision": "ACCEPT", "score": 1.0, "issues": [], "suggestions": []}
+            if self._critic_is_disabled() or max_retries == 0:
+                # With no retry budget an LLM verdict cannot change the output;
+                # deterministic gates below still run.
+                critic_eval = {"decision": "ACCEPT", "score": 1.0, "issues": [], "suggestions": [],
+                               "critic_skipped": "disabled" if self._critic_is_disabled() else "no retry budget"}
                 last_execution["critic_evaluation"] = critic_eval
                 decision = "ACCEPT"
                 score = 1.0
-                logger.info("⏭ Critic disabled via FAIRIFIER_DISABLE_CRITIC; auto-accepting %s", agent_name)
+                logger.info("⏭ Critic skipped for %s (%s)", agent_name, critic_eval["critic_skipped"])
             else:
                 # Call Critic
                 logger.info(f"🔍 Critic evaluating {agent_name}...")
@@ -1618,8 +1821,17 @@ class OrchestrateNode:
                 and not self._hard_gate_is_disabled()
             ):
                 structure_gate = state.get("entity_matrix_validation") or {}
-                if not structure_gate.get("passed", False):
-                    gate_issues = list(structure_gate.get("errors") or [])
+                gate_issues = list(structure_gate.get("errors") or [])
+                mapper_fixable = mapper_fixable_structure_issues(state)
+                if not structure_gate.get("passed", False) and gate_issues and not mapper_fixable:
+                    logger.warning(
+                        "⚠️ ISA structure gate failed only on entity-plan errors (%d); "
+                        "not re-running the mapper, flagging for review.",
+                        len(gate_issues),
+                    )
+                    state["needs_human_review"] = True
+                elif not structure_gate.get("passed", False):
+                    gate_issues = mapper_fixable or gate_issues
                     logger.warning(
                         "🚫 ISA entity-structure hard gate failed: %s", gate_issues
                     )
@@ -1671,7 +1883,7 @@ class OrchestrateNode:
                 f"   📊 Critic: {decision} (score: {score:.2f}, "
                 f"progress: {observation.get('status')}, "
                 f"output_changed: {observation.get('feedback_applied')}, "
-                f"attempt: {attempt}/{self.max_step_retries + 1})"
+                f"attempt: {attempt}/{max_retries + 1})"
             )
 
             # --- START NEW DISK APPEND ---
@@ -1778,7 +1990,7 @@ class OrchestrateNode:
                 break
             
             # Check if more retries available
-            if attempt > self.max_step_retries:
+            if attempt > max_retries:
                 # Max retries reached - check if we have usable output
                 best_candidate = state["context"].get("retry_best_outputs", {}).get(agent_name)
                 if best_candidate and best_candidate.get("attempt") != attempt:
@@ -1787,7 +1999,7 @@ class OrchestrateNode:
                     state["retry_best_attempt"] = best_candidate.get("attempt")
                 if check_output_fn(state):
                     logger.warning(
-                        f"⚠️ Max retries reached ({attempt-1}/{self.max_step_retries}) "
+                        f"⚠️ Max retries reached ({attempt-1}/{max_retries}) "
                         f"but {agent_name} has usable output - accepting with review flag\n"
                         f"  Final Critic decision: {decision} (score: {score:.2f})\n"
                         f"  Note: Workflow continues because output is usable, but needs human review"
@@ -1796,7 +2008,7 @@ class OrchestrateNode:
                     break
                 else:
                     logger.error(
-                        f"❌ Max retries reached ({attempt-1}/{self.max_step_retries}) "
+                        f"❌ Max retries reached ({attempt-1}/{max_retries}) "
                         f"with no usable output from {agent_name}\n"
                         f"  Final Critic decision: {decision} (score: {score:.2f})\n"
                         f"  Workflow will continue but may fail at finalization"
@@ -1806,7 +2018,7 @@ class OrchestrateNode:
                 # More retries available - provide feedback and continue
                 logger.info(
                     f"   🔄 {agent_name} needs improvement (score: {score:.2f}), "
-                    f"preparing retry {attempt}/{self.max_step_retries}..."
+                    f"preparing retry {attempt}/{max_retries}..."
                 )
                 # Accumulate issues for targeted memory retrieval on next attempt
                 new_issues = critic_eval.get("issues", [])
@@ -2832,6 +3044,10 @@ class OrchestrateNode:
             len(input_documents),
         )
         base_document_path = state.get("document_path", "")
+        # Per-source parsing clears the merged-text pointer; every downstream
+        # agent reads the source through it, so it must be restored afterwards.
+        merged_text_path = state.get("document_text_path")
+        merged_content = state.get("document_content")
         source_outputs: List[Dict[str, Any]] = []
         merged_packets: List[Dict[str, Any]] = []
         context = state.setdefault("context", {})
@@ -2917,6 +3133,8 @@ class OrchestrateNode:
                 enriched.setdefault("source_document", source_path)
                 merged_packets.append(enriched)
 
+        if merged_text_path:
+            state["document_text_path"] = merged_text_path
         if not source_outputs:
             state["errors"] = state.get("errors", []) + ["Multi-file parsing failed: no source could be parsed"]
             return state
@@ -2931,8 +3149,9 @@ class OrchestrateNode:
         state["document_path"] = base_document_path
         # Transient per-source document_content (used during the parse loop) is
         # no longer needed after synthesis — clear it so the merged state does
-        # not carry the last source's full text (refactor §5).
-        state["document_content"] = None
+        # not carry the last source's full text (refactor §5). Without an
+        # on-disk merged text, keep the merged in-memory text instead.
+        state["document_content"] = None if merged_text_path else merged_content
         context.pop("current_source_path", None)
         context.pop("current_source_index", None)
         context.pop("current_source_total", None)

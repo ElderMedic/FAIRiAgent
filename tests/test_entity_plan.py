@@ -1,3 +1,5 @@
+import json
+from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from fairifier.utils.entity_plan import (
     normalize_source_measurement_value,
     normalize_entity_plan,
     project_matrix_onto_entity_plan,
+    render_entity_plan_for_prompt,
     validate_entity_matrix_against_plan,
 )
 from fairifier.utils.isa_matrix_projection import apply_matrix_to_metadata
@@ -389,11 +392,13 @@ def test_child_links_on_shared_dimensions_when_parent_has_level_only_constant():
     assert all(entity["parent_row_id"] for entity in assays)
 
 
-def test_shared_dimension_parent_join_fails_when_parent_only_factor_is_varying():
+def test_parent_level_factor_is_propagated_to_child_levels():
+    """A factor that splits samples must split their assays too (one parent each)."""
     claims = _embryo_study_claims()
+    baseline = materialize_entity_claims(deepcopy(claims))
     claims["design_groups"][0]["dimensions"].append(
         {
-            "name": "unpropagated_parent_factor",
+            "name": "parent_factor",
             "level_count": 2,
             "explicit_values": ["left", "right"],
             "origin": "explicit",
@@ -404,10 +409,9 @@ def test_shared_dimension_parent_join_fails_when_parent_only_factor_is_varying()
 
     materialized = materialize_entity_claims(claims)
 
-    assert any(
-        "matches 2 sample parents" in error
-        for error in materialized["materialization_errors"]
-    )
+    assert not any("sample parents" in e for e in materialized["materialization_errors"])
+    count = lambda plan, level: len(next(l for l in plan["levels"] if l["level"] == level)["entities"])
+    assert count(materialized, "assay") > count(baseline, "assay")
 
 
 def test_contacts_repeat_in_investigation_without_person_level():
@@ -890,6 +894,350 @@ def test_projection_does_not_broadcast_one_entity_narrative_to_siblings():
         row["assay description"] == f"Assay for sample {row['sample identifier']}"
         for row in matrix["assay"]["rows"]
     )
+
+
+def _two_assay_matrix_and_plan():
+    plan = {
+        "levels": [
+            {
+                "level": "sample",
+                "entities": [
+                    {
+                        "row_id": f"sample_{suffix}",
+                        "parent_row_id": f"unit_{suffix}",
+                        "source_group": f"group_{suffix}",
+                        "attributes": [],
+                    }
+                    for suffix in ("a", "b")
+                ],
+            },
+            {
+                "level": "assay",
+                "entities": [
+                    {
+                        "row_id": f"assay_{suffix}",
+                        "parent_row_id": f"sample_{suffix}",
+                        "source_group": f"group_{suffix}",
+                        "attributes": [],
+                    }
+                    for suffix in ("a", "b")
+                ],
+            },
+        ]
+    }
+    matrix = {
+        "assay": {
+            "columns": [
+                "assay identifier", "sample identifier",
+                "measurement value", "measurement unit",
+            ],
+            "rows": [
+                {
+                    "assay identifier": f"assay_{suffix}",
+                    "sample identifier": f"sample_{suffix}",
+                    "measurement value": value,
+                    "measurement unit": "mM",
+                }
+                for suffix, value in (("a", "2.5"), ("b", "7.5"))
+            ],
+        }
+    }
+    return matrix, plan
+
+
+@pytest.mark.parametrize("reverse_rows", [False, True])
+def test_projection_retains_distinct_values_by_planned_internal_id(reverse_rows):
+    matrix, plan = _two_assay_matrix_and_plan()
+    if reverse_rows:
+        matrix["assay"]["rows"].reverse()
+    original = deepcopy(matrix)
+
+    projected = project_matrix_onto_entity_plan(matrix, plan)
+
+    assert matrix == original
+    assert [row["measurement value"] for row in projected["assay"]["rows"]] == [
+        "2.5", "7.5",
+    ]
+    assert [row["sample identifier"] for row in projected["assay"]["rows"]] == [
+        "sample_a", "sample_b",
+    ]
+    assert {row["measurement unit"] for row in projected["assay"]["rows"]} == {"mM"}
+    assert project_matrix_onto_entity_plan(projected, plan) == projected
+
+
+def test_projection_internal_id_accepts_resolved_external_parent_identifier():
+    matrix, plan = _two_assay_matrix_and_plan()
+    for suffix, entity, row in zip(
+        ("a", "b"), plan["levels"][0]["entities"], matrix["assay"]["rows"]
+    ):
+        entity["external_identifier"] = f"source_sample_{suffix}"
+        row["sample identifier"] = entity["external_identifier"]
+
+    rows = project_matrix_onto_entity_plan(matrix, plan)["assay"]["rows"]
+
+    assert [row["measurement value"] for row in rows] == ["2.5", "7.5"]
+    assert [row["sample identifier"] for row in rows] == [
+        "source_sample_a", "source_sample_b",
+    ]
+
+
+@pytest.mark.parametrize("parent_value", [None, ""])
+def test_projection_canonical_id_recovers_omitted_parent_from_authoritative_plan(
+    parent_value,
+):
+    matrix, plan = _two_assay_matrix_and_plan()
+    for suffix, entity, row in zip(
+        ("a", "b"), plan["levels"][0]["entities"], matrix["assay"]["rows"]
+    ):
+        entity["external_identifier"] = f"source_sample_{suffix}"
+        if parent_value is None:
+            row.pop("sample identifier")
+        else:
+            row["sample identifier"] = parent_value
+    original = deepcopy(matrix)
+
+    projected = project_matrix_onto_entity_plan(matrix, plan)
+    rows = projected["assay"]["rows"]
+
+    assert matrix == original
+    assert [row["measurement value"] for row in rows] == ["2.5", "7.5"]
+    assert [row["measurement unit"] for row in rows] == ["mM", "mM"]
+    assert [row["sample identifier"] for row in rows] == [
+        "source_sample_a", "source_sample_b",
+    ]
+    assert project_matrix_onto_entity_plan(projected, plan) == projected
+
+
+@pytest.mark.parametrize("omit_parent", [False, True])
+def test_projection_unique_canonical_ids_survive_duplicate_external_aliases(omit_parent):
+    matrix, plan = _two_assay_matrix_and_plan()
+    for entity in plan["levels"][1]["entities"]:
+        entity["external_identifier"] = "reused_source_label"
+    if omit_parent:
+        for row in matrix["assay"]["rows"]:
+            row.pop("sample identifier")
+
+    projected = project_matrix_onto_entity_plan(matrix, plan)
+    rows = projected["assay"]["rows"]
+
+    assert [row["measurement value"] for row in rows] == ["2.5", "7.5"]
+    assert [row["measurement unit"] for row in rows] == ["mM", "mM"]
+    assert [row["assay identifier"] for row in rows] == ["assay_a", "assay_b"]
+    assert [row["sample identifier"] for row in rows] == ["sample_a", "sample_b"]
+    assert project_matrix_onto_entity_plan(projected, plan) == projected
+
+
+def test_projection_ambiguous_external_aliases_cannot_supply_entity_values():
+    matrix, plan = _two_assay_matrix_and_plan()
+    for entity in plan["levels"][1]["entities"]:
+        entity["external_identifier"] = "reused_source_label"
+    for row in matrix["assay"]["rows"]:
+        row["assay identifier"] = "reused_source_label"
+        row["measurement value"] = "2.5"
+
+    rows = project_matrix_onto_entity_plan(matrix, plan)["assay"]["rows"]
+
+    assert [row["measurement value"] for row in rows] == ["", ""]
+
+
+def test_validator_checks_mapped_values_after_duplicate_alias_projection():
+    matrix, plan = _two_assay_matrix_and_plan()
+    for level in plan["levels"]:
+        level["cardinality"] = len(level["entities"])
+    for entity, duration in zip(plan["levels"][1]["entities"], ("24 h", "48 h")):
+        entity["external_identifier"] = "reused_source_label"
+        entity["attributes"] = [{
+            "dimension_name": "incubation_time",
+            "field_name": "incubation time",
+            "value": duration,
+        }]
+    projected = project_matrix_onto_entity_plan(matrix, plan)
+    projected["assay"]["rows"][0]["incubation time"] = "48 h"
+
+    validation = validate_entity_matrix_against_plan(projected, plan)
+
+    assert validation["mapped_attribute_errors"] == [
+        "assay row assay_a does not preserve mapped dimension incubation time='24 h'.",
+    ]
+    assert validation["semantic_metrics"]["assay"]["unique_identity_stripped_signatures"] == 2
+
+
+@pytest.mark.parametrize("conflict", ["wrong_parent", "wrong_group"])
+def test_projection_rejects_conflicting_internal_id_scope(conflict):
+    matrix, plan = _two_assay_matrix_and_plan()
+    rows = matrix["assay"]["rows"]
+    # Identical magnitudes must not let the shared-value fallback bypass an
+    # explicit identity conflict.
+    rows[1]["measurement value"] = "2.5"
+    if conflict == "wrong_parent":
+        rows[0]["sample identifier"] = "sample_b"
+    else:
+        rows[0]["source_group"] = "group_b"
+
+    projected = project_matrix_onto_entity_plan(matrix, plan)["assay"]["rows"]
+
+    assert projected[0]["measurement value"] == ""
+    assert projected[1]["measurement value"] == "2.5"
+
+
+@pytest.mark.parametrize("bad_identity", ["duplicate", "unknown", "wrong_level"])
+def test_projection_does_not_broadcast_identified_rows_with_unresolved_identity(
+    bad_identity,
+):
+    matrix, plan = _two_assay_matrix_and_plan()
+    rows = matrix["assay"]["rows"]
+    for row in rows:
+        row["measurement value"] = "2.5"
+        row["assay identifier"] = {
+            "duplicate": "assay_a",
+            "unknown": "unplanned_assay",
+            "wrong_level": "sample_a",
+        }[bad_identity]
+
+    projected = project_matrix_onto_entity_plan(matrix, plan)["assay"]["rows"]
+
+    assert [row["measurement value"] for row in projected] == ["", ""]
+
+
+def test_projection_rejects_internal_external_identifier_collision():
+    matrix, plan = _two_assay_matrix_and_plan()
+    plan["levels"][1]["entities"][0]["external_identifier"] = "assay_b"
+
+    rows = project_matrix_onto_entity_plan(matrix, plan)["assay"]["rows"]
+
+    assert [row["measurement value"] for row in rows] == ["", ""]
+
+
+def test_projection_external_identifiers_are_scoped_to_their_isa_level():
+    matrix, plan = _two_assay_matrix_and_plan()
+    plan["levels"][0]["entities"][0]["external_identifier"] = "source_001"
+    plan["levels"][1]["entities"][0]["external_identifier"] = "source_001"
+    matrix["assay"]["rows"][0]["assay identifier"] = "source_001"
+    matrix["assay"]["rows"][0]["sample identifier"] = "source_001"
+
+    rows = project_matrix_onto_entity_plan(matrix, plan)["assay"]["rows"]
+
+    assert [row["measurement value"] for row in rows] == ["2.5", "7.5"]
+    assert rows[0]["assay identifier"] == rows[0]["sample identifier"] == "source_001"
+
+
+@pytest.mark.parametrize("scope", ["identified", "shared"])
+def test_projection_retains_numeric_zero_values(scope):
+    matrix, plan = _two_assay_matrix_and_plan()
+    matrix["assay"]["rows"][0]["measurement value"] = 0
+    expected = [0, "7.5"]
+    if scope == "shared":
+        for row in matrix["assay"]["rows"]:
+            row.pop("assay identifier")
+            row["measurement value"] = 0
+        expected = [0, 0]
+
+    rows = project_matrix_onto_entity_plan(matrix, plan)["assay"]["rows"]
+
+    assert [row["measurement value"] for row in rows] == expected
+
+
+@pytest.mark.parametrize(
+    "scope", ["valid_parent", "missing_parent", "wrong_parent", "wrong_group"]
+)
+def test_projection_checks_scope_of_id_free_singleton_row(scope):
+    matrix, plan = _two_assay_matrix_and_plan()
+    for level in plan["levels"]:
+        level["entities"] = level["entities"][:1]
+    matrix["assay"]["rows"] = matrix["assay"]["rows"][:1]
+    row = matrix["assay"]["rows"][0]
+    row.pop("assay identifier")
+    if scope == "missing_parent":
+        row.pop("sample identifier")
+    elif scope == "wrong_parent":
+        row["sample identifier"] = "sample_b"
+    elif scope == "wrong_group":
+        row["source_group"] = "group_b"
+
+    rows = project_matrix_onto_entity_plan(matrix, plan)["assay"]["rows"]
+
+    expected = "" if scope in {"wrong_parent", "wrong_group"} else "2.5"
+    assert rows[0]["measurement value"] == expected
+
+
+def test_projection_preserves_common_investigation_values_across_contact_rows():
+    plan = {
+        "levels": [
+            {
+                "level": "investigation",
+                "entities": [{"row_id": "investigation_a", "attributes": []}],
+            }
+        ],
+        "investigation_contacts": [
+            {"firstname": "Alice", "lastname": "Example"},
+            {"firstname": "Bob", "lastname": "Tester"},
+        ],
+    }
+    matrix = {
+        "investigation": {
+            "columns": [
+                "investigation identifier", "submission date", "public release date",
+                "firstname", "lastname", "email address",
+            ],
+            "rows": [
+                {
+                    "investigation identifier": "investigation_a",
+                    "submission date": "2025-01-01",
+                    "public release date": "2025-02-01",
+                    "firstname": "Alice",
+                    "lastname": "Example",
+                    "email address": "alice@example.test",
+                },
+                {
+                    "investigation identifier": "investigation_a",
+                    "submission date": "2025-01-01",
+                    "public release date": "2025-03-01",
+                    "firstname": "Bob",
+                    "lastname": "Tester",
+                    "email address": "bob@example.test",
+                },
+            ],
+        }
+    }
+
+    rows = project_matrix_onto_entity_plan(matrix, plan)["investigation"]["rows"]
+
+    assert [row["submission date"] for row in rows] == ["2025-01-01"] * 2
+    assert [row["public release date"] for row in rows] == [""] * 2
+    assert [(row["firstname"], row["email address"]) for row in rows] == [
+        ("Alice", "alice@example.test"), ("Bob", "bob@example.test"),
+    ]
+
+
+def test_entity_prompt_preserves_complete_identity_graph_when_budget_is_small():
+    plan = _embryo_study_plan()
+    for level in plan["levels"]:
+        level["evidence"] = ["Repeated explanatory narrative. " * 100]
+    original = deepcopy(plan)
+
+    prompt = render_entity_plan_for_prompt(plan, max_chars=500)
+    rendered = json.loads(prompt.split("\n", 1)[1])
+
+    assert plan == original
+    assert "entity plan truncated" not in prompt
+    assert [level["level"] for level in rendered["levels"]] == [
+        level["level"] for level in plan["levels"]
+    ]
+    expected = {
+        (level["level"], row["row_id"]): row
+        for level in plan["levels"]
+        for row in level["entities"]
+    }
+    actual = {
+        (level["level"], row["row_id"]): row
+        for level in rendered["levels"]
+        for row in level["entities"]
+    }
+    assert actual.keys() == expected.keys()
+    for key, entity in expected.items():
+        for identity_key in ("parent_row_id", "external_identifier", "source_group"):
+            assert actual[key].get(identity_key) == entity.get(identity_key)
+        assert actual[key]["attributes"] == entity["attributes"]
 
 
 def test_validation_rejects_collapsed_mapped_dimension_values():
@@ -2322,7 +2670,7 @@ def test_reuse_audit_accepts_only_verbatim_independent_proof():
     }
 
     rejected = EntityStructurePlannerAgent._enforce_independent_reuse_audit(
-        claims, audit
+        claims, audit, source_text=claims["design_groups"][0]["evidence"]
     )
 
     assert rejected == []
@@ -2646,17 +2994,685 @@ def test_design_claim_response_allows_unknown_contextual_dimension_count():
     assert parsed.design_groups[0].dimensions[0].level_count is None
 
 
-def test_rejected_reuse_propagates_varying_assay_branch_through_sample():
+def _partially_enumerated_design_claims(count=None, values=None, origin="derived"):
+    return {
+        "investigations": [{
+            "row_id": "investigation_a", "label": "Synthetic experiment",
+            "evidence": "Two independent experimental branches were reported.",
+        }],
+        "studies": [{
+            "row_id": "study_a", "parent_row_id": "investigation_a",
+            "label": "Material measurements", "evidence": "Two branches were measured.",
+        }],
+        "design_groups": [
+            {
+                "group_id": "known_branch", "label": "Known branch",
+                "study_row_id": "study_a",
+                "evidence": "Independent materials alpha and beta were measured.",
+                "dimensions": [{
+                    "name": "material", "level_count": 2,
+                    "explicit_values": ["alpha", "beta"], "origin": "explicit",
+                    "semantic_role": "material_path", "field_name": "material label",
+                    "applies_to": ["observationunit", "sample", "assay"],
+                }],
+            },
+            {
+                "group_id": "unresolved_branch", "label": "Second branch",
+                "study_row_id": "study_a",
+                "evidence": "The second branch used a series whose total was not stated.",
+                "dimensions": [{
+                    "name": "series", "level_count": count,
+                    "explicit_values": list(values or []), "origin": origin,
+                    "semantic_role": "observation_condition", "field_name": "series label",
+                    "applies_to": ["observationunit", "sample", "assay"],
+                }],
+                "unresolved_ambiguities": ["The source does not establish the full series count."],
+            },
+        ],
+        "unresolved_ambiguities": [],
+    }
+
+
+@pytest.mark.parametrize("count", [None, 0])
+def test_unknown_count_keeps_branch_without_expanding_the_factor(count):
+    claims = _partially_enumerated_design_claims(count=count)
+    original = deepcopy(claims)
+    plan = materialize_entity_claims(claims)
+    levels = {level["level"]: level for level in plan["levels"]}
+
+    for level in ("observationunit", "sample", "assay"):
+        rows = levels[level]["entities"]
+        assert len([r for r in rows if r["source_group"] == "known_branch"]) == 2
+        # the branch stays (its reported results need rows) but the factor with
+        # an unstated level count is not expanded and carries no invented value
+        unresolved = [r for r in rows if r["source_group"] == "unresolved_branch"]
+        assert len(unresolved) == 1
+        assert not any(a["dimension_name"] == "series" for a in unresolved[0]["attributes"])
+    for parent, child in (("observationunit", "sample"), ("sample", "assay")):
+        assert {row["parent_row_id"] for row in levels[child]["entities"]} <= {
+            row["row_id"] for row in levels[parent]["entities"]
+        }
+    assert claims == original
+    assert plan["design_claims"] == original
+    assert any("unresolved_branch" in note and "series" in note
+               for note in plan["unresolved_ambiguities"])
+
+
+def test_null_count_uses_complete_source_explicit_enumeration_without_changing_claim():
+    claims = _partially_enumerated_design_claims(values=["low", "high"], origin="explicit")
+    claims["design_groups"][1]["evidence"] = "The complete second series comprised low and high."
+    claims["design_groups"][1]["unresolved_ambiguities"] = []
+    plan = materialize_entity_claims(claims)
+
+    assert plan["materialization_errors"] == []
+    for level in plan["levels"]:
+        if level["level"] not in {"observationunit", "sample", "assay"}:
+            continue
+        rows = [row for row in level["entities"] if row["source_group"] == "unresolved_branch"]
+        assert len(rows) == 2
+        assert {row["attributes"][0]["value"] for row in rows} == {"low", "high"}
+    assert plan["design_claims"]["design_groups"][1]["dimensions"][0]["level_count"] is None
+    assert EntityStructurePlannerAgent._plan_errors(plan) == []
+
+
+def test_source_explicit_constant_still_materializes_one_record_per_level():
+    claims = _partially_enumerated_design_claims(count=1, values=["fixed"], origin="explicit")
+    claims["design_groups"][1]["evidence"] = "The second branch used one fixed material."
+    claims["design_groups"][1]["unresolved_ambiguities"] = []
+    plan = materialize_entity_claims(claims)
+
+    assert plan["materialization_errors"] == []
+    for level in plan["levels"]:
+        if level["level"] in {"observationunit", "sample", "assay"}:
+            rows = [row for row in level["entities"] if row["source_group"] == "unresolved_branch"]
+            assert len(rows) == 1
+            assert rows[0]["attributes"][0]["value"] == "fixed"
+    assert EntityStructurePlannerAgent._plan_errors(plan) == []
+
+
+def test_unknown_count_cannot_be_inferred_from_partial_known_positions():
+    claims = _partially_enumerated_design_claims()
+    dimension = claims["design_groups"][1]["dimensions"][0]
+    dimension["known_values"] = [{"position": 1, "value": "first reported condition"}]
+    plan = materialize_entity_claims(claims)
+
+    unresolved = [
+        row for level in plan["levels"] for row in level["entities"]
+        if row["source_group"] == "unresolved_branch"
+    ]
+    assert len(unresolved) == 3  # one per level, no series expansion
+    assert all(a["value"] != "first reported condition"
+               for row in unresolved for a in row["attributes"])
+    assert plan["design_claims"]["design_groups"][1]["dimensions"][0] == dimension
+
+
+def test_matrix_validation_cannot_override_retained_materialization_failure():
+    claims = _partially_enumerated_design_claims(count=1, values=["fixed"], origin="explicit")
+    claims["design_groups"][1]["unresolved_ambiguities"] = []
+    plan = materialize_entity_claims(claims)
+    plan["materialization_errors"] = ["A source branch has unresolved cardinality."]
+    matrix = project_matrix_onto_entity_plan({}, plan)
+    validation = validate_entity_matrix_against_plan(matrix, plan)
+
+    assert validation["passed"] is False
+    assert validation["submission_ready"] is False
+    assert "A source branch has unresolved cardinality." in validation["errors"]
+
+
+def _reported_fit_fixture():
+    claims = _partially_enumerated_design_claims()
+    claims["design_groups"] = claims["design_groups"][:1]
+    plan = materialize_entity_claims(claims)
+    sample = next(x for x in plan["levels"] if x["level"] == "sample")["entities"][0]
+    source = "Material alpha was characterised. For alpha the fitted response was 0.7 using three replicates."
+    record = {
+        "record_id": "reported_fit_a", "sample_row_id": sample["row_id"],
+        "record_kind": "fitted_result", "source_subject": "alpha",
+        "source_quote": "For alpha the fitted response was 0.7 using three replicates.",
+        "label": "Fitted response for alpha", "source_group": "fit_branch",
+        "attributes": [{"field_name": "fitted response", "value": "0.7"}],
+        "unreported_design": ["Underlying concentration count is not reported."],
+    }
+    return plan, record, source
+
+
+def _reported_material_fixture():
+    claims = _partially_enumerated_design_claims()
+    claims["design_groups"] = []
+    plan = materialize_entity_claims(claims)
+    source = "Material alpha was purified before characterisation."
+    records = [
+        {"record_id": "prep_alpha", "level": "observationunit", "parent_row_id": "study_a",
+         "record_kind": "material_preparation", "source_subject": "alpha", "source_quote": source,
+         "label": "Alpha preparation", "source_group": "materials"},
+        {"record_id": "material_alpha", "level": "sample", "parent_row_id": "prep_alpha",
+         "record_kind": "material_identity", "source_subject": "alpha", "source_quote": source,
+         "label": "Alpha material", "source_group": "materials"},
+    ]
+    return plan, records, source
+
+
+def test_reported_material_inventory_does_not_create_unreported_assays():
+    from fairifier.utils.entity_plan import materialize_reported_materials
+    plan, records, source = _reported_material_fixture()
+    result = materialize_reported_materials(plan, list(reversed(records)), source_text=source)
+    levels = {level["level"]: level for level in result["levels"]}
+    assert levels["observationunit"]["cardinality"] == 1
+    assert levels["sample"]["cardinality"] == 1
+    assert levels["assay"]["cardinality"] == 0
+    assert levels["sample"]["entities"][0]["parent_row_id"] == "prep_alpha"
+    assert levels["sample"]["entities"][0]["attributes"][0]["value"] == "alpha"
+    assert plan["levels"][2]["cardinality"] == 0
+
+
+@pytest.mark.parametrize("source_detail,quoted_detail,accepted", [
+    (r"$60^{\circ}$ C", "60°C", True),
+    (r"$-2.5^{\circ}$ C", "-2.5 °C", True),
+    (r"$60^{\circ}$ C", "6°C", False),
+    (r"$60^{\circ}$ C", "60°F", False),
+    (r"$-2.5^{\circ}$ C", "2.5°C", False),
+    (r"50 mg $_{protein}$ /L", "50 mg_protein/L", True),
+    (r"50 mg $_{protein}$ /L", "50 mg/L", False),
+    (r"50 mg $_{protein}$ /L", "50 mg_substrate/L", False),
+    (r"50 mg $_{protein}$ /L", "5 mg_protein/L", False),
+])
+def test_material_quote_accepts_equivalent_math_markup_without_changing_quantities(
+    source_detail, quoted_detail, accepted,
+):
+    from fairifier.utils.entity_plan import materialize_reported_materials
+    plan, records, _ = _reported_material_fixture()
+    source = f"Material alpha was purified at {source_detail} before characterisation."
+    for record in records:
+        record["source_quote"] = f"Material alpha was purified at {quoted_detail} before characterisation."
+    result = materialize_reported_materials(plan, records, source_text=source)
+    assert bool(result.get("materialization_errors")) is not accepted
+    if not accepted:
+        assert result["levels"] == plan["levels"]
+
+
+@pytest.mark.parametrize("source_identifier", [r"alpha\_1", "alpha_1"])
+def test_reported_material_accepts_escaped_markdown_identifier(source_identifier):
+    from fairifier.utils.entity_plan import materialize_reported_materials
+
+    plan, records, source = _reported_material_fixture()
+    source = source.replace("alpha", source_identifier)
+    for record in records:
+        record["source_subject"] = "alpha_1"
+        record["source_quote"] = "Material alpha_1 was purified before characterisation."
+    result = materialize_reported_materials(plan, records, source_text=source)
+    assert not result.get("materialization_errors")
+    assert sum(len(level["entities"]) for level in result["levels"]) == 4
+
+    # Display markup equivalence cannot merge distinct scientific identifiers.
+    rejected = materialize_reported_materials(
+        plan, records, source_text=source.replace(source_identifier, "alpha-1")
+    )
+    assert rejected.get("materialization_errors")
+    assert rejected["levels"] == plan["levels"]
+
+
+@pytest.mark.parametrize(
+    "field,value,required_diagnostic",
+    [
+        ("parent_row_id", "study_a", ("parent_row_id", "observationunit")),
+        ("source_subject", "purified alpha", ("source_subject", "source_quote")),
+        ("source_quote", "Material alpha came from elsewhere.", ("source_quote", "source")),
+    ],
+)
+def test_reported_material_rejection_identifies_the_failed_constraint(
+    field, value, required_diagnostic
+):
+    from fairifier.utils.entity_plan import materialize_reported_materials
+
+    plan, records, source = _reported_material_fixture()
+    records[1][field] = value
+    result = materialize_reported_materials(plan, records, source_text=source)
+    assert result["levels"] == plan["levels"]
+    diagnostic = " ".join(result["materialization_errors"])
+    assert "material_alpha" in diagnostic
+    assert all(term in diagnostic for term in required_diagnostic)
+
+
+@pytest.mark.parametrize("problem", ["invented_material", "wrong_parent", "wrong_level", "duplicate", "invented_quote"])
+def test_reported_material_inventory_rejects_ungrounded_records(problem):
+    from fairifier.utils.entity_plan import materialize_reported_materials
+    plan, records, source = _reported_material_fixture()
+    if problem == "invented_material": records[1]["source_subject"] = "beta"
+    if problem == "wrong_parent": records[1]["parent_row_id"] = "study_a"
+    if problem == "wrong_level": records[1]["level"] = "assay"
+    if problem == "duplicate": records.append(deepcopy(records[1]))
+    if problem == "invented_quote": records[0]["source_quote"] = "Material alpha was isolated elsewhere."
+    result = materialize_reported_materials(plan, records, source_text=source)
+    assert result["levels"] == plan["levels"]
+    assert result["materialization_errors"]
+
+
+@pytest.mark.anyio
+async def test_reviewed_material_and_fit_form_complete_isosa_without_raw_run_inventory(monkeypatch):
+    plan, materials, source = _reported_material_fixture()
+    _, record, fit_source = _reported_fit_fixture()
+    record["sample_row_id"] = "material_alpha"
+    source += " " + fit_source
+    plan["design_claims"]["reported_materials"] = materials
+    plan["design_claims"]["reported_assays"] = [record]
+    async def review(*args, **kwargs):
+        return {"decisions": [{"record_id": item["record_id"], "approved": True,
+                               "evidence_quote": item["source_quote"], "rationale": "Supported source identity and grain."}
+                              for item in [*materials, record]]}
+    monkeypatch.setattr(entity_planner_module, "invoke_structured_output", review)
+    planner = object.__new__(EntityStructurePlannerAgent)
+    planner.llm_helper = object()
+    knowledge = [{"term": "fitted response", "metadata": {"isa_sheet": "assay", "syntax": "{float}"}}]
+    result = await planner._materialize_reviewed_results(plan, [record], knowledge, source, materials=materials)
+    assert planner._plan_errors(result, source_text=source) == []
+    assert [level["cardinality"] for level in result["levels"]] == [1, 1, 1, 1, 1]
+    matrix = project_matrix_onto_entity_plan({}, result)
+    assert validate_entity_matrix_against_plan(matrix, result)["passed"] is True
+    assert "Fitted result" in matrix["assay"]["rows"][0]["assay description"]
+    assert record["unreported_design"][0] in matrix["assay"]["rows"][0]["assay description"]
+    matrix["assay"]["rows"][0]["assay description"] = "One individual experiment"
+    restored = project_matrix_onto_entity_plan(matrix, result)
+    assert "Fitted result" in restored["assay"]["rows"][0]["assay description"]
+    altered = deepcopy(result)
+    next(level for level in altered["levels"] if level["level"] == "observationunit")["entities"][0]["source_subject"] = "beta"
+    assert planner._plan_errors(altered, source_text=source)
+
+
+@pytest.mark.anyio
+async def test_misquoted_material_drops_alone_and_well_quoted_materials_keep_their_rows(monkeypatch):
+    plan, materials, source = _reported_material_fixture()
+    beta = "Material beta was synthesised in house."
+    source += " " + beta
+    materials += [
+        {"record_id": "prep_beta", "level": "observationunit", "parent_row_id": "study_a",
+         "record_kind": "material_preparation", "source_subject": "beta",
+         "source_quote": "Material beta was bought commercially.",
+         "label": "Beta preparation", "source_group": "materials"},
+        {"record_id": "material_beta", "level": "sample", "parent_row_id": "prep_beta",
+         "record_kind": "material_identity", "source_subject": "beta", "source_quote": beta,
+         "label": "Beta material", "source_group": "materials"},
+    ]
+    reviewed = []
+
+    async def review(*args, **kwargs):
+        prompt = args[1][0].content
+        decisions = [{"record_id": item["record_id"], "approved": True,
+                      "evidence_quote": item["source_quote"], "rationale": "Supported."}
+                     for item in materials if f'"{item["record_id"]}"' in prompt.split("Proposed materials:")[1]]
+        reviewed.extend(item["record_id"] for item in decisions)
+        return {"decisions": decisions}
+
+    monkeypatch.setattr(entity_planner_module, "invoke_structured_output", review)
+    planner = object.__new__(EntityStructurePlannerAgent)
+    planner.llm_helper = object()
+    result = await planner._materialize_reviewed_results(plan, [], [], source, materials=materials)
+
+    rows = {row["row_id"] for level in result["levels"] for row in level.get("entities") or []}
+    assert {"prep_alpha", "material_alpha"} <= rows
+    assert not {"prep_beta", "material_beta"} & rows
+    assert sorted(reviewed) == ["material_alpha", "prep_alpha"]
+    diagnostic = " ".join(result["materialization_errors"])
+    assert "prep_beta" in diagnostic and "source_quote" in diagnostic
+    assert planner._blocking_plan_errors(result["materialization_errors"]) == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("approved", [True, False])
+async def test_reviewed_result_can_use_a_source_alias_of_its_material(monkeypatch, approved):
+    from fairifier.utils.entity_plan import materialize_reported_assays, materialize_reported_materials
+
+    plan, materials, source = _reported_material_fixture()
+    _, record, _ = _reported_fit_fixture()
+    alias_evidence = "Material alpha is labelled A in the results table."
+    result_evidence = "For A the fitted response was 0.7 using three replicates."
+    source += " " + alias_evidence + " " + result_evidence
+    record.update(sample_row_id="material_alpha", source_subject="A", source_quote=result_evidence)
+    plan["design_claims"].update(reported_materials=materials, reported_assays=[record])
+    knowledge = [{"term": "fitted response", "metadata": {"isa_sheet": "assay", "syntax": "{float}"}}]
+
+    # A quoted alias by itself does not verify which material it identifies.
+    unreviewed = materialize_reported_assays(
+        materialize_reported_materials(plan, materials, source_text=source),
+        [record], source_text=source, field_catalog={"assay": ["fitted response"]},
+    )
+    assert unreviewed.get("materialization_errors")
+
+    async def review(*args, **kwargs):
+        return {"decisions": [
+            {"record_id": item["record_id"], "approved": approved if item is record else True,
+             "evidence_quote": alias_evidence if item is record else item["source_quote"],
+             "rationale": "Source establishes the alias and planned material parent."
+             if approved else "Material parent is not established."}
+            for item in [*materials, record]
+        ]}
+
+    monkeypatch.setattr(entity_planner_module, "invoke_structured_output", review)
+    planner = object.__new__(EntityStructurePlannerAgent)
+    planner.llm_helper = object()
+    result = await planner._materialize_reviewed_results(
+        plan, [record], knowledge, source, materials=materials,
+    )
+    if not approved:
+        assert planner._plan_errors(result, source_text=source)
+        assert not next(level for level in result["levels"] if level["level"] == "assay")["entities"]
+        assert "material_alpha" in result["reported_material_reviews"]
+        return
+    assert planner._plan_errors(result, source_text=source) == []
+    assay = next(level for level in result["levels"] if level["level"] == "assay")["entities"][0]
+    assert assay["parent_row_id"] == "material_alpha"
+    assert assay["source_subject"] == "A"
+    assert assay["attributes"][0]["value"] == "0.7"
+    assert planner._plan_errors(result, source_text=source + " Revised source.")
+    assay["parent_row_id"] = "different_material"
+    assert planner._plan_errors(result, source_text=source)
+
+
+@pytest.mark.parametrize("change", [None, "record", "parent", "source", "conflicting_identity", "physical_parent"])
+def test_reviewed_alias_binding_is_specific_to_record_parent_and_source(change):
+    from fairifier.utils.entity_plan import (
+        materialize_reported_assays, materialize_reported_materials,
+        reported_parent_binding_digest,
+    )
+
+    plan, materials, source = _reported_material_fixture()
+    _, record, _ = _reported_fit_fixture()
+    record.update(sample_row_id="material_alpha", source_subject="A",
+                  source_quote="For A the fitted response was 0.7 using three replicates.")
+    source += " Material alpha is labelled A in the results table. " + record["source_quote"]
+    plan = materialize_reported_materials(plan, materials, source_text=source)
+    samples = next(level for level in plan["levels"] if level["level"] == "sample")
+    parent = samples["entities"][0]
+    bindings = {record["record_id"]: reported_parent_binding_digest(record, parent, source)}
+    if change == "record":
+        record["label"] = "Revised claim"
+    elif change == "parent":
+        parent["label"] = "Revised material"
+    elif change == "source":
+        source += " Revised source."
+    elif change == "conflicting_identity":
+        other = deepcopy(parent)
+        other.update(row_id="other_material", source_subject="A")
+        other["attributes"][0]["value"] = "A"
+        samples["entities"].append(other)
+        samples["cardinality"] += 1
+    elif change == "physical_parent":
+        parent.pop("record_kind")
+        bindings[record["record_id"]] = reported_parent_binding_digest(record, parent, source)
+    result = materialize_reported_assays(
+        plan, [record], source_text=source, field_catalog={"assay": ["fitted response"]},
+        reviewed_parent_bindings=bindings,
+    )
+    assert bool(result.get("materialization_errors")) is (change is not None)
+    # A binding is a scoped handoff, not a complete semantic-review receipt.
+    assert EntityStructurePlannerAgent._plan_errors(result, source_text=source)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("problem", ["rejected_result", "rejected_parent", "invalid_value", "invalid_review_quote"])
+async def test_reported_review_preserves_valid_records_without_accepting_failed_records(monkeypatch, problem):
+    plan, materials, source = _reported_material_fixture()
+    beta_materials = json.loads(json.dumps(materials).replace("alpha", "beta"))
+    materials += beta_materials
+    source += " Material beta was purified before characterisation."
+    _, alpha, _ = _reported_fit_fixture()
+    alpha["sample_row_id"] = "material_alpha"
+    beta = json.loads(json.dumps(alpha).replace("alpha", "beta"))
+    beta["record_id"] = "reported_fit_b"
+    records = [alpha, beta]
+    source += " " + alpha["source_quote"] + " " + beta["source_quote"]
+    if problem == "invalid_value":
+        beta["attributes"][0]["value"] = "0.8"
+    plan["design_claims"].update(reported_materials=materials, reported_assays=records)
+    original = deepcopy(plan)
+
+    async def review(*args, **kwargs):
+        decisions = []
+        for item in [*materials, *records]:
+            rejected = (problem == "rejected_result" and item is beta) or (
+                problem == "rejected_parent" and item["record_id"] == "material_beta"
+            )
+            decisions.append({
+                "record_id": item["record_id"], "approved": not rejected,
+                "evidence_quote": "Evidence absent from source."
+                if problem == "invalid_review_quote" and item is beta else item["source_quote"],
+                "rationale": "Parent identity is not established." if rejected else "Source-supported record.",
+            })
+        return {"decisions": decisions}
+
+    monkeypatch.setattr(entity_planner_module, "invoke_structured_output", review)
+    planner = object.__new__(EntityStructurePlannerAgent)
+    planner.llm_helper = object()
+    result = await planner._materialize_reviewed_results(
+        plan, records, [{"term": "fitted response", "metadata": {"isa_sheet": "assay", "syntax": "{float}"}}],
+        source, materials=materials,
+    )
+
+    assays = next(level for level in result["levels"] if level["level"] == "assay")["entities"]
+    assert [row["row_id"] for row in assays] == [alpha["record_id"]]
+    assert assays[0]["parent_row_id"] == "material_alpha"
+    assert alpha["record_id"] in result["reported_assay_reviews"]
+    assert beta["record_id"] not in result["reported_assay_reviews"]
+    errors = planner._plan_errors(result, source_text=source)
+    assert errors and any(beta["record_id"] in error for error in errors)
+    if problem != "invalid_value":
+        assert result["reported_record_review"]["passed"] is False
+    assert plan == original
+    # The retained candidate must not be replaced by an unreviewed draft just
+    # because the latter stopped earlier and accumulated fewer diagnostics.
+    unreviewed = deepcopy(result)
+    unreviewed.pop("reported_assay_reviews")
+    rank = planner._candidate_rank(result, errors, used_authoritative_records=False)
+    assert rank > planner._candidate_rank(
+        unreviewed, ["Earlier draft failed source validation."], used_authoritative_records=False,
+    )
+    changed = deepcopy(result)
+    next(level for level in changed["levels"] if level["level"] == "assay")["entities"][0]["label"] += " changed"
+    assert planner._candidate_rank(changed, errors, used_authoritative_records=False) < rank
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("approval", ["approved", "rejected", "missing", "invented_evidence", "invalid_contract"])
+@pytest.mark.parametrize("thinking", [True, False])
+async def test_reported_result_materialization_requires_independent_semantic_review(monkeypatch, approval, thinking):
+    monkeypatch.setattr(entity_planner_module.config, "llm_enable_thinking", thinking)
+    plan, record, source = _reported_fit_fixture()
+    plan["design_claims"]["reported_assays"] = [record]
+    async def review(*args, **kwargs):
+        assert kwargs["max_tokens"] == (32768 if thinking else 8192)
+        assert "0.7" in args[1][0].content
+        return {"decisions": [] if approval == "missing" else [{
+            "record_id": record["record_id"], "approved": approval != "rejected",
+            "evidence_quote": "invented evidence" if approval == "invented_evidence" else record["source_quote"],
+            "rationale": (
+                "The fitted value belongs to a different material preparation."
+                if approval == "rejected"
+                else "The paper reports a fit for the named material, not individual replicates."
+            ),
+        }]}
+    monkeypatch.setattr(entity_planner_module, "invoke_structured_output", review)
+    planner = object.__new__(EntityStructurePlannerAgent)
+    planner.llm_helper = object()
+    knowledge = [{"term": "fitted response", "definition": "Source-reported fit coefficient.",
+                  "metadata": {"isa_sheet": "assay", "syntax": "{float}"}}]
+    if approval == "invalid_contract":
+        knowledge[0]["metadata"].update({"syntax": "[0-9]+", "regex": "^[0-9]+$"})
+    result = await planner._materialize_reviewed_results(plan, [record], knowledge, source)
+    errors = planner._plan_errors(result, source_text=source)
+    if approval == "approved":
+        assert errors == []
+        assert any(row["row_id"] == record["record_id"]
+                   for level in result["levels"] for row in level["entities"])
+        altered = deepcopy(result)
+        assay = next(level for level in altered["levels"] if level["level"] == "assay")
+        assay["entities"][-1]["attributes"][0]["value"] = "9.9"
+        assert planner._plan_errors(altered, source_text=source)
+        assert planner._plan_errors(result, source_text=source + " Changed source.")
+    else:
+        assert errors
+        assert result["levels"] == plan["levels"]
+        if approval == "rejected":
+            assert any(
+                record["record_id"] in error
+                and "different material preparation" in error
+                for error in errors
+            )
+        if approval == "invented_evidence":
+            assert any(
+                record["record_id"] in error and "evidence_quote" in error
+                for error in errors
+            )
+
+
+def test_declared_reported_result_cannot_silently_disappear_from_plan():
+    plan, record, source = _reported_fit_fixture()
+    plan["design_claims"]["reported_assays"] = [record]
+    assert any("reported" in error.lower()
+               for error in EntityStructurePlannerAgent._plan_errors(plan, source_text=source))
+
+
+def test_reported_result_can_cite_complete_compact_html_table_row():
+    from fairifier.utils.entity_plan import materialize_reported_assays
+    plan, record, _ = _reported_fit_fixture()
+    record["source_quote"] = "<tr><td>alpha</td><td>0.7</td></tr>"
+    source = "<table><tr><td>Material</td><td>Coefficient</td></tr>" + record["source_quote"] + "</table>"
+    result = materialize_reported_assays(plan, [record], source_text=source,
+                                        field_catalog={"assay": ["fitted response"]})
+    assert not result.get("materialization_errors")
+    assert next(level for level in result["levels"] if level["level"] == "assay")["cardinality"] == 3
+
+
+PIVOTED_KINETICS = (
+    "<table><tr><td rowspan=\"2\">Substrates</td><td colspan=\"2\">\\( K_m \\) (mM)</td>"
+    "<td colspan=\"2\">\\( k_{cat} \\) (\\( sec^{-1} \\))</td></tr>"
+    "<tr><td>BhrPETase</td><td>LCC</td><td>BhrPETase</td><td>LCC</td></tr>"
+    "<tr><td>BHET</td><td>16.78 ± 2.95</td><td>25.82 ± 2.31</td><td>7.3</td><td>8.3</td></tr></table>"
+)
+BHET_ROW = "<tr><td>BHET</td><td>16.78 ± 2.95</td><td>25.82 ± 2.31</td><td>7.3</td><td>8.3</td></tr>"
+
+
+@pytest.mark.parametrize("attributes,expected", [
+    # The pivoted row names neither enzyme nor unit; its rendering does.
+    ({"Michaelis constant Km": "25.82 ± 2.31 mM", "catalytic rate constant kcat": "8.3 sec−1"},
+     [("michaelis constant km", "25.82 ± 2.31 mM"), ("catalytic rate constant kcat", "8.3 sec−1")]),
+    # A bare mean keeps its unit and gains the cell's error.
+    ({"Michaelis constant Km": "25.82 mM"}, [("michaelis constant km", "25.82 ± 2.31 mM")]),
+    # BhrPETase's cell and a wrong unit are not LCC's values.
+    ({"Michaelis constant Km": "16.78 ± 2.95 mM", "catalytic rate constant kcat": "8.3 mM"}, None),
+])
+def test_reported_result_reads_a_pivoted_table_row_through_its_rendered_columns(attributes, expected):
+    from fairifier.utils.entity_plan import materialize_reported_assays
+
+    plan, record, _ = _reported_fit_fixture()
+    sample = next(level for level in plan["levels"] if level["level"] == "sample")["entities"][0]
+    sample["attributes"] = [{"dimension_name": "source material", "value": "LCC"}]
+    record.update(
+        source_subject="LCC",
+        # A caption and an annotation stitched to the row are not source text.
+        source_quote="Table 2 Kinetic parameters. [Columns: Km then kcat] " + BHET_ROW,
+        attributes=[{"field_name": name, "value": value} for name, value in attributes.items()],
+    )
+    result = materialize_reported_assays(
+        plan, [record], source_text="Kinetics of LCC. " + PIVOTED_KINETICS,
+        field_catalog={"assay": ["michaelis constant km", "catalytic rate constant kcat"]},
+    )
+    assay = next(level for level in result["levels"] if level["level"] == "assay")
+    added = [row for row in assay["entities"] if row["row_id"] == record["record_id"]]
+    if expected is None:
+        assert not added
+        return
+    assert [(a["field_name"], a["value"]) for a in added[0]["attributes"]] == expected
+    assert added[0]["source_quote"] == BHET_ROW
+
+
+@pytest.mark.parametrize("case", ["material_identity", "duplicate_material_identity", "physical_replicate"])
+def test_reported_result_distinguishes_material_identity_from_its_physical_replicates(case):
+    from fairifier.utils.entity_plan import materialize_reported_assays, materialize_reported_materials
+
+    plan, materials, source = _reported_material_fixture()
+    _, record, fit_source = _reported_fit_fixture()
+    source += " " + fit_source
+    plan = materialize_reported_materials(plan, materials, source_text=source)
+    samples = next(level for level in plan["levels"] if level["level"] == "sample")
+    material = samples["entities"][0]
+    for index in range(2):
+        replicate = deepcopy(material)
+        replicate["row_id"] = f"physical_sample_{index}"
+        replicate.pop("record_kind")
+        samples["entities"].append(replicate)
+    if case == "duplicate_material_identity":
+        duplicate = deepcopy(material)
+        duplicate["row_id"] = "other_material_alpha"
+        samples["entities"].append(duplicate)
+    samples["cardinality"] = len(samples["entities"])
+    record["sample_row_id"] = "physical_sample_0" if case == "physical_replicate" else "material_alpha"
+
+    result = materialize_reported_assays(
+        plan, [record], source_text=source, field_catalog={"assay": ["fitted response"]},
+    )
+    if case == "material_identity":
+        assert not result.get("materialization_errors")
+        assay = next(level for level in result["levels"] if level["level"] == "assay")
+        assert len(assay["entities"]) == 1
+        assert assay["entities"][0]["parent_row_id"] == "material_alpha"
+        assert next(level for level in result["levels"] if level["level"] == "sample") == samples
+        # Passing identity checks does not replace independent semantic review.
+        assert EntityStructurePlannerAgent._plan_errors(result, source_text=source)
+    else:
+        assert result.get("materialization_errors")
+        assert result["levels"] == plan["levels"]
+
+
+@pytest.mark.parametrize("reported_value", ["0.7", 0])
+def test_reported_fit_preserves_one_result_without_reconstructing_unknown_runs(reported_value):
+    from fairifier.utils.entity_plan import materialize_reported_assays
+    plan, record, source = _reported_fit_fixture()
+    source = source.replace("0.7", str(reported_value))
+    record["source_quote"] = record["source_quote"].replace("0.7", str(reported_value))
+    record["attributes"][0]["value"] = reported_value
+    original = deepcopy(plan)
+    result = materialize_reported_assays(plan, [record], source_text=source,
+                                        field_catalog={"assay": ["fitted response"]})
+    assays = next(x for x in result["levels"] if x["level"] == "assay")
+    assert assays["cardinality"] == 3  # Two existing records plus one reported fit.
+    row = assays["entities"][-1]
+    assert row["parent_row_id"] == record["sample_row_id"]
+    assert row["record_kind"] == "fitted_result"
+    assert row["attributes"][0]["value"] == str(reported_value)
+    assert row["unreported_design"] == record["unreported_design"]
+    assert plan == original
+
+
+@pytest.mark.parametrize("problem", ["unknown_parent", "different_material", "invented_quote", "invented_value", "wrong_field", "duplicate", "ambiguous_material"])
+def test_reported_fit_rejects_unverified_records_without_altering_existing_graph(problem):
+    from fairifier.utils.entity_plan import materialize_reported_assays
+    plan, record, source = _reported_fit_fixture()
+    if problem == "unknown_parent": record["sample_row_id"] = "missing"
+    if problem == "different_material": record["source_subject"] = "beta"
+    if problem == "invented_quote": record["source_quote"] = "For alpha the fitted response was 0.8."
+    if problem == "invented_value": record["attributes"][0]["value"] = "7"
+    if problem == "wrong_field": record["attributes"][0]["field_name"] = "unselected field"
+    if problem == "ambiguous_material":
+        samples = next(x for x in plan["levels"] if x["level"] == "sample")
+        samples["entities"][1]["attributes"] = deepcopy(samples["entities"][0]["attributes"])
+    records = [record, record] if problem == "duplicate" else [record]
+    result = materialize_reported_assays(plan, records, source_text=source,
+                                        field_catalog={"assay": ["fitted response"]})
+    assert result["levels"] == plan["levels"]
+    assert result["materialization_errors"]
+
+
+@pytest.mark.parametrize("audit_present", [True, False])
+def test_rejected_reuse_keeps_varying_assay_scope_pending_source_review(audit_present):
     claims = {
         "design_groups": [
             {
                 "group_id": "group_001",
-                "evidence": "Three preparations were made from a shared pool.",
+                "evidence": "Signal was measured at three detector settings.",
                 "reuse_same_sample_for_multiple_assays": True,
                 "sample_reuse_evidence": "shared pool",
                 "dimensions": [
                     {
-                        "name": "preparation_method",
+                        "name": "detector_setting",
                         "level_count": 3,
                         "applies_to": ["assay"],
                     }
@@ -2675,16 +3691,17 @@ def test_rejected_reuse_propagates_varying_assay_branch_through_sample():
     }
 
     rejected = EntityStructurePlannerAgent._enforce_independent_reuse_audit(
-        claims, audit
+        claims, audit if audit_present else {}
     )
 
     assert rejected == ["group_001"]
     group = claims["design_groups"][0]
     assert group["reuse_same_sample_for_multiple_assays"] is False
-    assert group["dimensions"][0]["applies_to"] == ["sample", "assay"]
+    # Missing reuse proof does not establish distinct physical material.
+    assert group["dimensions"][0]["applies_to"] == ["assay"]
 
 
-def test_scope_consensus_normalizes_varying_assay_only_factor_without_reuse():
+def test_scope_disagreement_is_not_hidden_by_absent_reuse_proof():
     claims = {
         "design_groups": [
             {
@@ -2715,7 +3732,243 @@ def test_scope_consensus_normalizes_varying_assay_only_factor_without_reuse():
     )
 
     assert applied == []
+    # Do not rewrite the independent audit into agreement with the draft.
+    assert any("disagreed" in error.lower() for error in errors)
+    assert claims["design_groups"][0]["dimensions"][0]["applies_to"] == ["sample", "assay"]
+
+
+def _physical_relation_claims(*, scope=("assay",), role="assay_process"):
+    return {
+        "investigations": [{"row_id": "inv_test", "label": "Synthetic investigation"}],
+        "studies": [{"row_id": "study_test", "label": "Synthetic study", "parent_row_id": "inv_test"}],
+        "design_groups": [{
+            "group_id": "scope_group", "study_row_id": "study_test",
+            "evidence": "Two detector settings were compared.",
+            "reuse_same_sample_for_multiple_assays": True,
+            "sample_reuse_evidence": None,
+            "dimensions": [{
+                "name": "readout", "level_count": 2, "explicit_values": ["A", "B"],
+                "origin": "explicit", "semantic_role": role, "applies_to": list(scope),
+            }],
+        }],
+    }
+
+
+def test_unknown_physical_relation_requires_review_even_when_row_counts_match():
+    claims = _physical_relation_claims(scope=("sample", "assay"))
+    EntityStructurePlannerAgent._enforce_independent_reuse_audit(claims, {})
+    plan = normalize_entity_plan(materialize_entity_claims(claims))
+    counts = {level["level"]: len(level["entities"]) for level in plan["levels"]}
+    assert counts["sample"] == counts["assay"] == 2
+    errors = EntityStructurePlannerAgent._plan_errors(plan)
+    assert any("physical" in error.lower() and "scope_group" in error for error in errors)
+
+
+def test_reuse_quote_present_only_in_generated_claims_is_rejected():
+    claims = _physical_relation_claims()
+    group = claims["design_groups"][0]
+    group["evidence"] = "The same identified sample was measured twice."
+    audit = {"reuse_validations": [{
+        "group_id": "scope_group", "approved": True,
+        "evidence_quote": "same identified sample",
+    }]}
+    rejected = EntityStructurePlannerAgent._enforce_independent_reuse_audit(
+        claims, audit, source_text="Two detector settings were compared; input identity was not reported.",
+    )
+    assert rejected == ["scope_group"]
+    assert group["reuse_same_sample_for_multiple_assays"] is False
+    assert group["sample_reuse_evidence"] is None
+    assert group["dimensions"][0]["applies_to"] == ["assay"]
+
+
+def test_source_reuse_quote_can_resolve_an_incomplete_draft_summary():
+    claims = _physical_relation_claims()
+    quote = "The same identified sample was measured twice."
+    audit = {"reuse_validations": [{
+        "group_id": "scope_group", "approved": True, "evidence_quote": quote,
+    }]}
+    rejected = EntityStructurePlannerAgent._enforce_independent_reuse_audit(
+        claims, audit, source_text=f"Methods. {quote}",
+    )
+    assert rejected == []
+    assert claims["design_groups"][0]["sample_reuse_evidence"] == quote
+
+
+@pytest.mark.parametrize("scope", [("assay",), ("sample", "assay")])
+def test_assay_process_with_unknown_input_relation_keeps_scope_and_requires_review(scope):
+    claims = _physical_relation_claims(scope=scope)
+    claims["design_groups"][0]["reuse_same_sample_for_multiple_assays"] = False
+    audit = {"dimension_scopes": [{
+        "group_id": "scope_group", "dimension_name": "readout",
+        "semantic_role": "assay_process", "applies_to": list(scope),
+        "sample_relation": "unknown", "evidence_quote": None,
+    }]}
+    applied, errors = EntityStructurePlannerAgent._apply_dimension_scope_audit(claims, audit)
+    assert applied == []
+    assert claims["design_groups"][0]["dimensions"][0]["applies_to"] == list(scope)
+    assert any("physical" in error.lower() and "scope_group" in error for error in errors)
+
+
+def test_explicit_distinct_material_evidence_retains_sample_scope():
+    claims = _physical_relation_claims(scope=("sample", "assay"), role="material_path")
+    group = claims["design_groups"][0]
+    source = "Aliquots A and B were separately prepared for analysis."
+    group["evidence"] = source
+    group["reuse_same_sample_for_multiple_assays"] = False
+    audit = {"dimension_scopes": [{
+        "group_id": "scope_group", "dimension_name": "readout",
+        "semantic_role": "material_path", "applies_to": ["sample", "assay"],
+        "sample_relation": "distinct_samples", "evidence_quote": source,
+    }]}
+    _, errors = EntityStructurePlannerAgent._apply_dimension_scope_audit(
+        claims, audit, source_text=source,
+    )
     assert errors == []
+    assert group["dimensions"][0]["applies_to"] == ["sample", "assay"]
+    assert EntityStructurePlannerAgent._plan_errors(
+        normalize_entity_plan(materialize_entity_claims(claims))
+    ) == []
+
+
+@pytest.mark.parametrize(("role", "relation", "quote_present", "valid"), [
+    ("observation_condition", "distinct_samples", True, True),
+    ("observation_condition", "distinct_samples", False, False),
+    ("observation_condition", "same_sample", True, False),
+    ("assay_process", "distinct_samples", True, False),
+    ("material_path", "distinct_samples", True, False),
+])
+def test_distinct_observed_units_retain_their_sample_and_assay_branches(
+    role, relation, quote_present, valid,
+):
+    scope = ["observationunit", "sample", "assay"]
+    claims = _physical_relation_claims(scope=scope, role=role)
+    group = claims["design_groups"][0]
+    source = "Independently observed plots A and B each provided one specimen."
+    group["evidence"] = source
+    group["reuse_same_sample_for_multiple_assays"] = False
+    audit = {"dimension_scopes": [{
+        "group_id": "scope_group", "dimension_name": "readout",
+        "semantic_role": role, "applies_to": scope,
+        "sample_relation": relation,
+        "evidence_quote": source if quote_present else None,
+    }]}
+
+    applied, errors = EntityStructurePlannerAgent._apply_dimension_scope_audit(
+        claims, audit, source_text=source,
+    )
+
+    assert applied == []
+    dimension = group["dimensions"][0]
+    assert dimension["applies_to"] == scope
+    plan = normalize_entity_plan(materialize_entity_claims(claims))
+    if valid:
+        assert errors == []
+        assert dimension["sample_relation_source_verified"] is True
+        assert EntityStructurePlannerAgent._plan_errors(plan, source_text=source) == []
+        counts = {level["level"]: len(level["entities"]) for level in plan["levels"]}
+        assert [counts[level] for level in scope] == [2, 2, 2]
+    else:
+        assert any("Unresolved physical sample relation" in error for error in errors)
+        assert dimension["physical_relation_review_required"] is True
+        assert EntityStructurePlannerAgent._plan_errors(plan, source_text=source)
+
+
+def test_mixed_material_and_readout_axes_keep_independent_sample_relations():
+    claims = _physical_relation_claims()
+    group = claims["design_groups"][0]
+    source = (
+        "Two separately prepared aliquots, A and B, were each read in both detector modes "
+        "without preparing new material."
+    )
+    group["evidence"] = source
+    group["dimensions"].insert(0, {
+        "name": "preparation", "level_count": 2, "explicit_values": ["A", "B"],
+        "origin": "explicit", "semantic_role": "assay_process", "applies_to": ["assay"],
+    })
+    audit = {"dimension_scopes": [
+        {"group_id": "scope_group", "dimension_name": "preparation",
+         "semantic_role": "assay_process", "applies_to": ["sample", "assay"],
+         "sample_relation": "distinct_samples", "evidence_quote": "Two separately prepared aliquots, A and B"},
+        {"group_id": "scope_group", "dimension_name": "readout",
+         "semantic_role": "assay_process", "applies_to": ["assay"],
+         "sample_relation": "same_sample", "evidence_quote": "were each read in both detector modes without preparing new material"},
+    ]}
+    _, errors = EntityStructurePlannerAgent._apply_dimension_scope_audit(
+        claims, audit, source_text=source,
+    )
+    assert errors == []
+    scopes = {dimension["name"]: dimension["applies_to"] for dimension in group["dimensions"]}
+    assert scopes == {"preparation": ["sample", "assay"], "readout": ["assay"]}
+    plan = materialize_entity_claims(claims)
+    counts = {level["level"]: len(level["entities"]) for level in plan["levels"]}
+    assert counts["sample"] == 2 and counts["assay"] == 4
+
+
+def test_scope_audit_schema_preserves_physical_relation_evidence():
+    payload = EntityPlanScopeAuditResponse.model_validate({"dimension_scopes": [{
+        "group_id": "scope_group", "dimension_name": "readout",
+        "semantic_role": "assay_process", "applies_to": ["assay"],
+        "sample_relation": "same_sample", "evidence_quote": "same identified sample",
+    }]}).model_dump()
+    assert payload["dimension_scopes"][0]["sample_relation"] == "same_sample"
+    assert payload["dimension_scopes"][0]["evidence_quote"] == "same identified sample"
+
+
+def test_scope_audit_receives_document_evidence_beyond_draft_prefix():
+    claims = _physical_relation_claims()
+    evidence = "Specimen Z was split into two separately prepared aliquots."
+    source = ("Background text. " * 1200) + evidence
+    assert source.index(evidence) > 18000
+    assert evidence not in json.dumps(claims)
+    agent = object.__new__(EntityStructurePlannerAgent)
+    prompt = agent._scope_audit_prompt(claims, {}, {}, [], source_text=source)
+    assert evidence in prompt
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_missing_physical_scope_audit_is_hard_review_with_equal_counts(duplicate):
+    claims = _physical_relation_claims(scope=("sample", "assay"), role="other")
+    claims["design_groups"][0]["reuse_same_sample_for_multiple_assays"] = False
+    finding = {
+        "group_id": "scope_group", "dimension_name": "readout", "semantic_role": "other",
+        "applies_to": ["sample", "assay"], "sample_relation": "unknown",
+    }
+    audit = {"dimension_scopes": [finding, deepcopy(finding)] if duplicate else []}
+    _, audit_errors = EntityStructurePlannerAgent._apply_dimension_scope_audit(claims, audit)
+    assert audit_errors
+    plan = normalize_entity_plan(materialize_entity_claims(claims))
+    counts = {level["level"]: len(level["entities"]) for level in plan["levels"]}
+    assert counts["sample"] == counts["assay"] == 2
+    errors = EntityStructurePlannerAgent._plan_errors(plan)
+    assert any("physical" in error.lower() and "scope_group" in error for error in errors)
+
+
+@pytest.mark.parametrize(("role", "scope"), [
+    ("assay_process", ("sample", "assay")),
+    ("other", ("sample", "assay")),
+    ("other", ("assay",)),
+])
+def test_legacy_plans_with_unresolved_physical_axes_require_reaudit(role, scope):
+    claims = _physical_relation_claims(scope=scope, role=role)
+    claims["design_groups"][0]["reuse_same_sample_for_multiple_assays"] = False
+    plan = normalize_entity_plan(materialize_entity_claims(claims))
+    assert EntityStructurePlannerAgent._requires_physical_relation_reaudit(plan) is True
+
+
+@pytest.mark.parametrize("case", ["material_path", "source_table", "current_policy"])
+def test_physical_relation_cache_preserves_unaffected_or_verified_plans(case):
+    claims = _physical_relation_claims(scope=("sample", "assay"))
+    claims["design_groups"][0]["reuse_same_sample_for_multiple_assays"] = False
+    if case == "material_path":
+        claims["design_groups"][0]["dimensions"][0]["semantic_role"] = "material_path"
+    plan = normalize_entity_plan(materialize_entity_claims(claims))
+    if case == "source_table":
+        plan["source_coverage"] = {
+            "complete": True, "tables": [{"source_id": "source_records", "coverage_complete": True}],
+        }
+    elif case == "current_policy":
+        plan["physical_relation_audit_version"] = entity_planner_module.PHYSICAL_RELATION_AUDIT_VERSION
+    assert EntityStructurePlannerAgent._requires_physical_relation_reaudit(plan) is False
 
 
 def test_dimension_scope_audit_fails_when_any_dimension_is_unreviewed():
@@ -2782,3 +4035,536 @@ def test_plan_validation_allows_crossed_dimensions_with_verbatim_full_factorial_
     )
 
     assert not any("crosses" in error for error in errors)
+
+
+def _case_variant_column_plan():
+    return {
+        "levels": [{
+            "level": "assay",
+            "entities": [
+                {
+                    "row_id": f"assay_{suffix}",
+                    "parent_row_id": f"sample_{suffix}",
+                    "source_group": f"group_{suffix}",
+                    "attributes": [],
+                }
+                for suffix in ("a", "b")
+            ],
+        }],
+    }
+
+
+def test_projection_preserves_case_variant_column_values_and_links():
+    matrix = {
+        "assay": {
+            "columns": ["Assay Identifier", "Sample Identifier", "solution pH", "DNA concentration"],
+            "rows": [
+                {" Assay Identifier ": "assay_a", "Sample Identifier": "sample_a",
+                 "solution pH": "7.2", "DNA concentration": "0.8 ng/uL"},
+                {"assay identifier": "assay_b", "sample identifier": "sample_b",
+                 "solution ph": "8.1", "dna concentration": 0},
+            ],
+        },
+    }
+    original = deepcopy(matrix)
+
+    result = project_matrix_onto_entity_plan(matrix, _case_variant_column_plan())
+
+    rows = result["assay"]["rows"]
+    assert [row["solution ph"] for row in rows] == ["7.2", "8.1"]
+    assert [row["dna concentration"] for row in rows] == ["0.8 ng/uL", 0]
+    assert [row["sample identifier"] for row in rows] == ["sample_a", "sample_b"]
+    assert len(result["assay"]["columns"]) == len(set(result["assay"]["columns"]))
+    assert matrix == original
+
+
+@pytest.mark.parametrize("left,right,expected", [
+    ("", "7.2", "7.2"),
+    ("7.2", "7.2", "7.2"),
+    ("7.2", "8.1", ""),
+    ("1 mM", "1 Mm", ""),
+    (0, 0, 0),
+])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_projection_merges_case_variant_cells_without_choosing_conflicts(left, right, expected, reverse):
+    values = [("DNA concentration", left), ("dna concentration", right)]
+    row = {"assay identifier": "assay_a", "sample identifier": "sample_a"}
+    row.update(reversed(values) if reverse else values)
+    matrix = {"assay": {"columns": list(row), "rows": [row]}}
+
+    result = project_matrix_onto_entity_plan(matrix, _case_variant_column_plan())
+
+    assert result["assay"]["rows"][0]["dna concentration"] == expected
+    assert result["assay"]["rows"][1]["dna concentration"] == ""
+
+
+@pytest.mark.parametrize("conflicting_key", ["assay identifier", "sample identifier", "source_group"])
+def test_projection_rejects_case_conflicting_identity_rows(conflicting_key, caplog):
+    row = {"assay identifier": "assay_a", "sample identifier": "sample_a",
+           "source_group": "group_a", "measurement": "11"}
+    row[conflicting_key.upper()] = "unrelated_identity"
+    matrix = {"assay": {"columns": list(row), "rows": [
+        row,
+        {"assay identifier": "assay_b", "sample identifier": "sample_b", "measurement": "22"},
+    ]}}
+
+    result = project_matrix_onto_entity_plan(matrix, _case_variant_column_plan())
+
+    assert [row["measurement"] for row in result["assay"]["rows"]] == ["", "22"]
+    assert [row["sample identifier"] for row in result["assay"]["rows"]] == ["sample_a", "sample_b"]
+    assert "conflict" in caplog.text.lower()
+
+
+@pytest.mark.parametrize("conflicting_key", ["measurement", "assay identifier", "sample identifier"])
+def test_row_normalization_preserves_case_conflict_before_projection(conflicting_key):
+    row = {"assay identifier": "assay_a", "sample identifier": "sample_a", "measurement": "11"}
+    row[conflicting_key.upper()] = "different"
+    matrix = {"assay": {"columns": list(row), "rows": [
+        row,
+        {"assay identifier": "assay_b", "sample identifier": "sample_b", "measurement": "22"},
+    ]}}
+    agent = object.__new__(ISAValueMapperAgent)
+
+    normalized = agent._normalize_row_columns(matrix)
+    result = project_matrix_onto_entity_plan(normalized, _case_variant_column_plan())
+
+    assert len(normalized["assay"]["rows"]) == (2 if conflicting_key == "measurement" else 1)
+    assert [row["measurement"] for row in result["assay"]["rows"]] == ["", "22"]
+
+
+def test_plan_scope_clearing_does_not_cross_design_groups():
+    """A field mapped only in group B says nothing about group A's rows."""
+    matrix = {
+        "assay": {
+            "columns": ["assay identifier", "substrate kind"],
+            "rows": [
+                {"assay identifier": "a1", "substrate kind": "proxy substrate"},
+                {"assay identifier": "a2", "substrate kind": "actual PET"},
+                {"assay identifier": "a3", "substrate kind": "actual PET"},
+            ],
+        }
+    }
+    plan = {
+        "levels": [
+            {
+                "level": "assay",
+                "entities": [
+                    {"row_id": "a1", "source_group": "kinetics", "attributes": []},
+                    {
+                        "row_id": "a2",
+                        "source_group": "hydrolysis",
+                        "attributes": [
+                            {"field_name": "substrate kind", "value": "actual PET"}
+                        ],
+                    },
+                    {"row_id": "a3", "source_group": "hydrolysis", "attributes": []},
+                ],
+            }
+        ]
+    }
+
+    cleaned, counts = ISAValueMapperAgent._clear_values_outside_plan_field_scope(
+        matrix, plan
+    )
+
+    assert [r["substrate kind"] for r in cleaned["assay"]["rows"]] == [
+        "proxy substrate", "actual PET", "",
+    ]
+    assert counts == {"assay.substrate kind": 1}
+
+
+def test_unknown_count_with_reported_range_records_the_span_once():
+    claims = _partially_enumerated_design_claims()
+    claims["design_groups"][1]["dimensions"][0]["reported_range"] = "30–80 °C"
+    plan = materialize_entity_claims(claims)
+
+    assert plan["materialization_errors"] == []
+    for level in plan["levels"]:
+        if level["level"] not in {"observationunit", "sample", "assay"}:
+            continue
+        rows = [r for r in level["entities"] if r["source_group"] == "unresolved_branch"]
+        assert len(rows) == 1
+        series = [a for a in rows[0]["attributes"] if a["dimension_name"] == "series"]
+        assert [(a["field_name"], a["value"], a["origin"]) for a in series] == [
+            ("series label", "30–80 °C", "explicit")
+        ]
+    assert EntityStructurePlannerAgent._plan_errors(plan) == []
+
+
+def test_paraphrased_material_quote_is_replaced_by_a_real_source_passage():
+    from fairifier.utils.entity_plan import (
+        materialize_reported_materials, repair_reported_material_quotes,
+    )
+
+    source = ("Methods. Variants were expressed in E. coli. The quadruple variant "
+              "H218S-F243T-D238C-S283C hydrolyzed PET microparticles at 70 °C. Results follow.")
+    records = [
+        {"record_id": "ou_v", "level": "observationunit", "parent_row_id": "study_001",
+         "record_kind": "material_preparation", "source_subject": "H218S-F243T-D238C-S283C",
+         "source_quote": "Table S6: H218S-F243T-D238C-S283C gives 96% at 70 C", "label": "v"},
+        {"record_id": "s_v", "level": "sample", "parent_row_id": "ou_v",
+         "record_kind": "material_identity", "source_subject": "H218S-F243T-D238C-S283C",
+         "source_quote": "paraphrase", "label": "v"},
+        {"record_id": "ou_x", "level": "observationunit", "parent_row_id": "study_001",
+         "record_kind": "material_preparation", "source_subject": "NotInPaper-9",
+         "source_quote": "invented", "label": "x"},
+    ]
+    repaired = repair_reported_material_quotes(records, source_text=source)
+
+    assert repaired[0]["source_quote"].startswith("The quadruple variant H218S-F243T-D238C-S283C")
+    from fairifier.utils.document_text import normalize_source_evidence_text
+    assert repaired[0]["source_quote"] in normalize_source_evidence_text(source)
+    assert repaired[2]["source_quote"] == "invented"  # absent material stays ungrounded
+    plan = {"levels": [{"level": "study", "entities": [{"row_id": "study_001"}]}]}
+    result = materialize_reported_materials(plan, repaired[:2], source_text=source)
+    assert not result.get("materialization_errors")
+    sample_ids = [e["row_id"] for lv in result["levels"] if lv["level"] == "sample" for e in lv["entities"]]
+    assert sample_ids == ["s_v"]
+
+
+def test_material_inventory_adds_only_unrepresented_materials():
+    claims = {
+        "studies": [{"row_id": "study_001"}],
+        "design_groups": [{"dimensions": [{"explicit_values": ["LCC ICCG"]}]}],
+        "reported_materials": [{"record_id": "s1", "source_subject": "BhrPETase", "label": "BhrPETase"}],
+    }
+    inventory = [{"name": "BhrPETase", "role": "enzyme_or_protein"},
+                 {"name": "LCC ICCG", "role": "enzyme_or_protein"},
+                 {"name": "F243A", "role": "enzyme_or_protein"}]
+    merged = EntityStructurePlannerAgent._with_material_inventory(claims, inventory)
+    added = [r for r in merged["reported_materials"] if r["record_id"].startswith("inv")]
+    assert [(r["level"], r["source_subject"], r["parent_row_id"]) for r in added] == [
+        ("observationunit", "F243A", "study_001"), ("sample", "F243A", "inv_ou_f243a"),
+    ]
+
+
+def test_study_level_material_gets_its_own_preparation_and_aliases_count_as_represented():
+    claims = {
+        "studies": [{"row_id": "study_001"}],
+        "reported_materials": [
+            {"record_id": "mat_1", "level": "sample", "parent_row_id": "study_001",
+             "record_kind": "material_identity", "label": "PET powder",
+             "source_subject": "Amorphous polyethylene terephthalate pellets (PET, Cat#138)"},
+            {"record_id": "mat_2", "level": "sample", "parent_row_id": "study_001",
+             "record_kind": "material_identity", "label": "BHET", "source_subject": "BHET"},
+            {"record_id": "mat_3", "level": "sample", "parent_row_id": "study_001",
+             "record_kind": "material_identity", "label": "LCC ICCG", "source_subject": "LCC ICCG"},
+        ],
+    }
+    inventory = [{"name": "Amorphous polyethylene terephthalate", "role": "substrate"},
+                 {"name": "BHET (bis(2-hydroxyethyl) terephthalate)", "role": "substrate"},
+                 {"name": "LCC", "role": "enzyme_or_protein"}]
+    merged = EntityStructurePlannerAgent._with_material_inventory(claims, inventory)
+    shape = [(r["record_id"], r["level"], r["parent_row_id"]) for r in merged["reported_materials"]]
+    assert shape[:6] == [
+        ("ou_mat_1", "observationunit", "study_001"), ("mat_1", "sample", "ou_mat_1"),
+        ("ou_mat_2", "observationunit", "study_001"), ("mat_2", "sample", "ou_mat_2"),
+        ("ou_mat_3", "observationunit", "study_001"), ("mat_3", "sample", "ou_mat_3"),
+    ]
+    # PET and BHET are already proposed; LCC is not the LCC ICCG variant.
+    assert [r["source_subject"] for r in merged["reported_materials"][6:]] == ["LCC", "LCC"]
+
+
+def test_ungrounded_material_is_dropped_and_its_children_keep_their_own_grounding():
+    from fairifier.utils.entity_plan import (
+        materialize_reported_materials, repair_reported_material_quotes,
+    )
+
+    source = ("In 2016, a PET-hydrolyzing enzyme (IsPETase) was isolated from Ideonella sakaiensis. "
+              "Pellets were ground by the manufacturer. Activity of IsPETase on amorphous PET powder "
+              "was measured at 30 to 80 °C.")
+    claims = {"studies": [{"row_id": "study_001"}], "reported_materials": [
+        {"record_id": "prep_enz", "level": "observationunit", "parent_row_id": "study_001",
+         "record_kind": "material_preparation", "source_subject": "purified IsPETase, LCC",
+         "source_quote": "All enzymes were purified."},
+        {"record_id": "enz", "level": "sample", "parent_row_id": "prep_enz",
+         "record_kind": "material_identity", "source_subject": "IsPETase",
+         "source_quote": "a PET-hydrolyzing enzyme (IsPETase) was isolated from Ideonella sakaiensis"},
+        # Real quote that does not name the subject; subject differs in case only.
+        {"record_id": "prep_pet", "level": "observationunit", "parent_row_id": "study_001",
+         "record_kind": "material_preparation", "source_subject": "Amorphous PET powder",
+         "source_quote": "Pellets were ground by the manufacturer."},
+    ]}
+    merged = EntityStructurePlannerAgent._with_material_inventory(claims, [], source_text=source)
+    assert merged["ungrounded_reported_materials"] == ["prep_enz"]
+    records = repair_reported_material_quotes(merged["reported_materials"], source_text=source)
+    assert [(r["record_id"], r["parent_row_id"]) for r in records] == [
+        ("ou_enz", "study_001"), ("enz", "ou_enz"), ("prep_pet", "study_001")]
+    assert "amorphous PET powder" in records[2]["source_quote"]
+    plan = {"levels": [{"level": "study", "entities": [{"row_id": "study_001"}]}]}
+    assert not materialize_reported_materials(plan, records, source_text=source).get(
+        "materialization_errors")
+
+
+def test_material_sample_hung_on_a_non_observation_unit_gets_its_own_preparation():
+    from fairifier.agents.entity_structure_planner import EntityStructurePlannerAgent
+
+    source = "Thc_Cut1 and Thc_Cut2 were expressed in E. coli."
+    claims = {"investigations": [{"row_id": "inv_001"}], "studies": [{"row_id": "study_001"}],
+              "reported_materials": [
+                  {"record_id": "mat_001", "level": "sample", "parent_row_id": "inv_001",
+                   "record_kind": "material_identity", "source_subject": "Thc_Cut1",
+                   "source_quote": source},
+                  {"record_id": "mat_002", "level": "sample", "parent_row_id": "nowhere",
+                   "record_kind": "material_identity", "source_subject": "Thc_Cut2",
+                   "source_quote": source}]}
+    merged = EntityStructurePlannerAgent._with_material_inventory(claims, [], source_text=source)
+    assert [(r["record_id"], r["parent_row_id"]) for r in merged["reported_materials"]] == [
+        ("ou_mat_001", "study_001"), ("mat_001", "ou_mat_001"),
+        ("ou_mat_002", "study_001"), ("mat_002", "ou_mat_002")]
+
+
+def test_review_quote_accepts_retyped_quote_but_not_invented_text():
+    from fairifier.agents.entity_structure_planner import _review_quote_in_source
+
+    source = ("Kinetic analysis employing BHET indicated that BhrPETase possessed a similar "
+              "turn over number ( $k_{cat}$ ) and a lower Km value than that of LCC (Table 2).")
+    retyped = ("Kinetic analysis employing BHET indicated that BhrPETase possessed a similar "
+               "turn over number (kcat) and a lower Km value than that of LCC (Table 2).")
+    assert _review_quote_in_source(retyped, source)
+    assert not _review_quote_in_source("invented evidence", source)
+    assert not _review_quote_in_source(
+        "BhrPETase showed the highest kcat on BHET of all enzymes tested at 70 °C.", source)
+
+
+def test_record_review_errors_do_not_block_the_entity_plan():
+    errors = [
+        "Reported results lack complete source-backed independent approval.",
+        "Reported record r1 review evidence_quote is not present in the source; copy ...",
+        "Independent review rejected reported record r2: missing unit.",
+        "Reported assay a1 has unverified identity, parent or evidence.",
+        "Unresolved physical sample relation for group_001:enzyme; cardinality requires source review.",
+    ]
+    assert EntityStructurePlannerAgent._blocking_plan_errors(errors) == []
+    structural = "Design group g1 assay row 1 matches 3 sample parents."
+    assert EntityStructurePlannerAgent._blocking_plan_errors(errors + [structural]) == [structural]
+    reuse = ("Design group g5 creates 6 assay rows from only 3 sample rows without an explicit "
+             "source quote authorizing reuse of the same sample. Resolve the physical input "
+             "relationship from source evidence; do not infer distinct Samples from missing "
+             "reuse evidence.")
+    assert EntityStructurePlannerAgent._blocking_plan_errors(errors + [reuse]) == []
+
+
+def test_explicit_distinct_values_override_an_undercounted_level_count():
+    claims = _partially_enumerated_design_claims(count=2, values=["a", "b", "c"], origin="explicit")
+    plan = materialize_entity_claims(claims)
+    assert plan["materialization_errors"] == []
+    rows = [r for lv in plan["levels"] if lv["level"] == "assay"
+            for r in lv["entities"] if r["source_group"] == "unresolved_branch"]
+    assert len(rows) == 3
+
+
+def test_duplicate_values_beyond_the_count_still_fail():
+    claims = _partially_enumerated_design_claims(count=2, values=["a", "a", "b"], origin="explicit")
+    plan = materialize_entity_claims(claims)
+    assert any("declares 2 levels but supplies 3 values" in e for e in plan["materialization_errors"])
+
+
+def test_unquoted_metadata_attribute_is_dropped_but_the_result_is_kept():
+    from fairifier.utils.entity_plan import materialize_reported_assays
+
+    plan, record, source = _reported_fit_fixture()
+    record["attributes"].append({"field_name": "source doi", "value": "10.1000/xyz"})
+    result = materialize_reported_assays(
+        plan, [record], source_text=source,
+        field_catalog={"assay": ["fitted response", "source doi"]},
+    )
+    assays = [e for lv in result["levels"] if lv["level"] == "assay" for e in lv["entities"]
+              if e["row_id"] == "reported_fit_a"]
+    assert len(assays) == 1
+    assert [(a["field_name"], a["value"]) for a in assays[0]["attributes"]] == [("fitted response", "0.7")]
+    assert any("dropped an unverified value or field: source doi" in e
+               for e in result["materialization_errors"])
+
+
+def test_two_factors_never_share_one_field_on_a_row():
+    """Enzyme and substrate both mapped to 'experimental subject name': the first keeps it."""
+    claims = _embryo_study_claims()
+    group = claims["design_groups"][0]
+    for name, values in (("enzyme", ["E1", "E2"]), ("substrate", ["S1", "S2"])):
+        group["dimensions"].append({
+            "name": name, "level_count": 2, "explicit_values": values, "origin": "explicit",
+            "field_mappings": [{"level": "sample", "field_name": "sampling strategy"}],
+            "applies_to": ["sample"],
+        })
+    plan = materialize_entity_claims(claims)
+    samples = next(level["entities"] for level in plan["levels"] if level["level"] == "sample")
+    mapped = {(a["dimension_name"], a["field_name"]) for e in samples for a in e["attributes"]
+              if a["dimension_name"] in ("enzyme", "substrate")}
+    assert mapped == {("enzyme", "sampling strategy"), ("substrate", None)}
+
+
+@pytest.mark.parametrize("source, quote", [
+    ("a weight loss of   $42.6 \\pm 2.9\\%$   of the PET film", "a weight loss of 42.6 ± 2.9% of the PET film"),
+    ("was produced at (1.2 g L  $^{-1}$  or 38  $\\mu$  M), followed", "was produced at (1.2 g L⁻¹ or 38 μM), followed"),
+    ("could be achieved at   $70^{\\circ}C$   with TfCut2", "could be achieved at 70°C with TfCut2"),
+    ("reached the maximum value (5 g L  $^{-1}$  ) at 16.5 h", "reached the maximum value (5 g L−1) at 16.5 h"),
+])
+def test_quote_in_plain_typography_matches_markdown_math_source(source, quote):
+    from fairifier.utils.document_text import normalize_source_evidence_text as norm
+    from fairifier.utils.entity_plan import _reported_quote_in_source
+    assert _reported_quote_in_source(norm(quote), norm(source))
+
+
+def test_math_with_names_or_other_numbers_is_not_rendered_plain():
+    from fairifier.utils.document_text import normalize_source_evidence_text as norm
+    assert norm("$k_{cat}$ of $1.2 \\times 10^{3}$") == "$k_{cat}$ of $1.2 \\times 10^{3}$"
+    assert norm("1.2 × 10³ s⁻¹") == "1.2 × 10³ s-1"
+    assert norm("$42.6 \\pm 2.9\\%$") != norm("42.6 ± 2.8%")
+
+
+ROW_TABLE = (
+    '<table><tr><td rowspan="2"></td><td rowspan="2">IsPETase variant</td>'
+    '<td rowspan="2">Melting point ± SD [°C]</td><td colspan="2">\\(T_{\\text{m}}\\) [°C] increase compared to</td></tr>'
+    '<tr><td>IsPETaseWT</td><td>IsPETaseTM</td></tr>'
+    '<tr><td>WT</td><td>IsPETaseWT</td><td>45.1 ± 0.1</td><td>-</td><td>-</td></tr>'
+    '<tr><td>TM1</td><td>\\(IsPETaseTM^{K95N/F201I}\\)</td><td>61.6 ± 0.1</td><td>16.6</td><td>5.1</td></tr>'
+    '<tr><td>TM2</td><td>\\(IsPETaseTM^{N233C/S282C}\\)</td><td>68.2 ± 1.6</td><td>23.1</td><td>11.6</td></tr></table>'
+)
+
+
+@pytest.mark.parametrize("quote, subject, value, expected", [
+    ("IsPETaseWT<br>45.1 ± 0.1", "IsPETaseWT", "45.1", "45.1"),
+    ("IsPETaseTMK95N/F201I<br>61.6 ± 0.1", "IsPETaseTMK95N/F201I", "61.6", "61.6"),
+    ("IsPETaseTMN233C/S282C<br>68.2 ± 1.6", "IsPETaseTMN233C/S282C", "1.6", "1.6"),
+    # Another variant's mean or error is not this row's cell.
+    ("IsPETaseTMK95N/F201I<br>61.6 ± 0.1", "IsPETaseTMK95N/F201I", "68.2", ""),
+    ("IsPETaseTMK95N/F201I<br>61.6 ± 0.1", "IsPETaseTMK95N/F201I", "1.6", ""),
+])
+def test_cells_rejoined_without_their_row_cite_the_source_row(quote, subject, value, expected):
+    from fairifier.utils.entity_plan import _cited_table_row, _row_cell_value
+
+    row, lines = _cited_table_row(quote, ROW_TABLE)
+    assert row.startswith("<tr>") and row in ROW_TABLE
+    assert _row_cell_value(value, subject, lines) == expected
+
+
+def test_fragments_matching_no_single_row_cite_nothing():
+    from fairifier.utils.entity_plan import _cited_table_row
+
+    assert _cited_table_row("IsPETaseWT<br>61.6 ± 0.1", ROW_TABLE) == ("", [])
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("approved", [True, False])
+async def test_one_reviewed_table_row_result_repeats_over_the_other_rows(monkeypatch, approved):
+    plan, materials, _ = _reported_material_fixture()
+    row = "<tr><td>alpha</td><td>1.1 ± 0.1</td><td>7.3</td></tr>"
+    source = (
+        "Material alpha was purified before characterisation.\n\n"
+        "<table><tr><td>Enzyme</td><td>Km (mM)</td><td>kcat (s-1)</td></tr>" + row
+        + "<tr><td>beta</td><td>2.4 ± 0.2</td><td>n.d.</td></tr>"
+        "<tr><td>gamma</td><td>0.9 ± 0.1</td><td>12.5</td></tr></table>"
+    )
+    template = {
+        "record_id": "kin_alpha", "sample_row_id": "material_alpha", "record_kind": "fitted_result",
+        "source_subject": "alpha", "source_quote": row, "label": "alpha kinetics",
+        "source_group": "kinetics", "repeat_for_table_rows": True,
+        "attributes": [{"field_name": "Michaelis constant Km", "value": "1.1 ± 0.1 mM"},
+                       {"field_name": "catalytic rate constant kcat", "value": "7.3 s-1"}],
+    }
+    knowledge = [
+        {"term": "Michaelis constant Km", "metadata": {"isa_sheet": "assay", "syntax": "{number}\\s+\\S.*"}},
+        {"term": "catalytic rate constant kcat", "metadata": {"isa_sheet": "assay"}},
+    ]
+    reviewed = []
+
+    async def review(*args, **kwargs):
+        prompt = args[1][0].content
+        listed = [item for item in [*materials, template] if f'"{item["record_id"]}"' in prompt]
+        reviewed.extend(item["record_id"] for item in listed)
+        return {"decisions": [
+            {"record_id": item["record_id"], "approved": approved or item is not template,
+             "evidence_quote": item["source_quote"], "rationale": "Checked."} for item in listed]}
+
+    monkeypatch.setattr(entity_planner_module, "invoke_structured_output", review)
+    planner = object.__new__(EntityStructurePlannerAgent)
+    planner.llm_helper = object()
+    result = await planner._materialize_reviewed_results(
+        plan, [template], knowledge, source, materials=materials)
+
+    # Only the template and the declared materials go to the reviewer.
+    assert sorted(reviewed) == ["kin_alpha", "material_alpha", "prep_alpha"]
+    assays = next(level for level in result["levels"] if level["level"] == "assay")["entities"]
+    values = {(row["parent_row_id"], a["field_name"]): a["value"]
+              for row in assays for a in row.get("attributes") or []}
+    if not approved:
+        assert not assays
+        return
+    assert values[("material_alpha", "catalytic rate constant kcat")].startswith("7.3")
+    assert values[("tbl_beta", "Michaelis constant Km")].startswith("2.4 ± 0.2")
+    assert ("tbl_beta", "catalytic rate constant kcat") not in values  # "n.d." is not a value
+    assert values[("tbl_gamma", "catalytic rate constant kcat")].startswith("12.5")
+    samples = {row["row_id"] for level in result["levels"] if level["level"] == "sample"
+               for row in level["entities"]}
+    assert {"tbl_beta", "tbl_gamma"} <= samples and "tbl_enzyme" not in samples
+
+
+GROUPED_TABLE = (
+    "<table><tr><td>T (°C)</td><td>massKM(g·L-1)</td><td>kcat(s-1)</td></tr>"
+    "<tr><td></td><td>Thc_Cut1</td><td></td></tr>"
+    "<tr><td>50</td><td>2.3 ± 0.68</td><td>0.072 ± 0.0056</td></tr>"
+    "<tr><td>60</td><td>6.9 ± 1.2</td><td>0.22 ± 0.017</td></tr>"
+    "<tr><td></td><td>Thc_Cut2</td><td></td></tr>"
+    "<tr><td>50</td><td>3.5 ± 0.68</td><td>0.057 ± 0.0036</td></tr></table>"
+)
+
+
+def test_label_rows_name_the_material_of_the_rows_below():
+    from fairifier.services.publication_tables import render_table_rows
+
+    assert render_table_rows(GROUPED_TABLE) == [
+        "section = Thc_Cut1; T (°C) = 50; massKM(g·L-1) = 2.3 ± 0.68; kcat(s-1) = 0.072 ± 0.0056",
+        "section = Thc_Cut1; T (°C) = 60; massKM(g·L-1) = 6.9 ± 1.2; kcat(s-1) = 0.22 ± 0.017",
+        "section = Thc_Cut2; T (°C) = 50; massKM(g·L-1) = 3.5 ± 0.68; kcat(s-1) = 0.057 ± 0.0036",
+    ]
+
+
+def test_grouped_table_template_repeats_per_label_and_condition_row():
+    from fairifier.utils.entity_plan import (
+        expand_table_row_templates, rebind_results_to_named_samples,
+    )
+
+    materials = [
+        {"record_id": f"ou_{n}", "level": "observationunit", "parent_row_id": "study_001",
+         "record_kind": "material_preparation", "source_subject": name, "source_quote": "x",
+         "label": name, "source_group": "enzymes"} for n, name in (("pet", "PET"), ("c1", "Thc_Cut1"), ("c2", "Thc_Cut2"))
+    ] + [
+        {"record_id": f"s_{n}", "level": "sample", "parent_row_id": f"ou_{n}",
+         "record_kind": "material_identity", "source_subject": name, "source_quote": "x",
+         "label": name, "source_group": "enzymes"} for n, name in (("pet", "PET"), ("c1", "Thc_Cut1"), ("c2", "Thc_Cut2"))
+    ]
+    template = {
+        "record_id": "kin", "sample_row_id": "s_pet", "record_kind": "fitted_result",
+        "source_subject": "Thc_Cut1", "repeat_for_table_rows": True, "label": "Thc_Cut1 kinetics",
+        "source_group": "kinetics",
+        "source_quote": "TABLE 1 Kinetics. <tr><td>50</td><td>2.3 ± 0.68</td><td>0.072 ± 0.0056</td></tr>",
+        "attributes": [{"field_name": "Michaelis constant Km", "value": "2.3 ± 0.68 g·L-1"},
+                       {"field_name": "catalytic rate constant kcat", "value": "0.072 ± 0.0056 s-1"},
+                       {"field_name": "reaction temperature", "value": "50"}],
+    }
+    # Filed under the PET substrate, the result moves to the one Sample it names.
+    records = rebind_results_to_named_samples([template], materials)
+    assert records[0]["sample_row_id"] == "s_c1"
+    records, new_materials, derived = expand_table_row_templates(records, materials, GROUPED_TABLE)
+    got = {(r["sample_row_id"], a["value"]) for r in records for a in r["attributes"]
+           if a["field_name"] in ("Michaelis constant Km", "reaction temperature")}
+    assert got == {("s_c1", "2.3 ± 0.68 g·L-1"), ("s_c1", "50"), ("s_c1", "6.9 ± 1.2 g·L-1"),
+                   ("s_c1", "60"), ("s_c2", "3.5 ± 0.68 g·L-1"), ("s_c2", "50")}
+    assert len(new_materials) == len(materials) and set(derived.values()) == {"kin"}
+
+
+@pytest.mark.parametrize("quote, expected", [
+    ("Thc_Cut1 50: KM 2.3 ± 0.68 g·L-1; kcat 0.072 ± 0.0056 s-1", "2.3 ± 0.68"),
+    ("Thc_Cut2 at 50 °C: KM 3.5 ± 0.68, kcat 0.057 ± 0.0036", "3.5 ± 0.68"),
+    # One pair matches rows of two materials: no single row is cited.
+    ("Km was 2.3 ± 0.68", None),
+])
+def test_row_retyped_as_prose_cites_the_one_row_holding_its_pairs(quote, expected):
+    from fairifier.utils.entity_plan import _cited_table_row
+
+    row, lines = _cited_table_row(quote, GROUPED_TABLE)
+    if expected is None:
+        assert (row, lines) == ("", [])
+    else:
+        assert f"<td>{expected}</td>" in row and len(lines) == 1 and "section = Thc_Cut" in lines[0]

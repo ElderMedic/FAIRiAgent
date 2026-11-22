@@ -421,3 +421,18 @@ def reconcile_fill_tasks_from_matrix(
 
 def fill_tasks_artifact(fill_tasks: Mapping[str, Any]) -> str:
     return json.dumps(fill_tasks, indent=2, ensure_ascii=False, default=str)
+
+
+def mapper_fixable_structure_issues(state: Dict[str, Any]) -> List[str]:
+    """Structure-gate errors that re-running ISAValueMapper could change.
+
+    Errors that the entity plan itself carries (its materialization or
+    validation errors) are fixed only by re-planning; re-running the value
+    mapper would redo the whole matrix for nothing.
+    """
+    gate = state.get("entity_matrix_validation") or {}
+    plan = state.get("entity_plan") or {}
+    plan_errors = set(plan.get("materialization_errors") or []) | set(
+        (state.get("entity_plan_validation") or {}).get("errors") or []
+    )
+    return [issue for issue in gate.get("errors") or [] if issue not in plan_errors]

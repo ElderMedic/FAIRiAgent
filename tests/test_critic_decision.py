@@ -1068,3 +1068,55 @@ def test_invalid_mapper_critic_uses_deterministic_gate_errors_for_retry():
     assert result["decision"] == "RETRY"
     assert result["issues"] == ["Assay row A has no matching Sample parent."]
     assert "human review" not in " ".join(result["improvement_ops"]).lower()
+
+
+def test_structure_gate_does_not_count_entity_plan_errors_as_mapper_fixable():
+    from fairifier.graph.nodes import mapper_fixable_structure_issues
+
+    plan_error = "Reported results lack complete source-backed independent approval."
+    state = {
+        "entity_plan": {"materialization_errors": [plan_error]},
+        "entity_plan_validation": {"errors": []},
+        "entity_matrix_validation": {"passed": False, "errors": [plan_error]},
+    }
+    assert mapper_fixable_structure_issues(state) == []
+    state["entity_matrix_validation"]["errors"].append("Assay row 3 has no Sample parent.")
+    assert mapper_fixable_structure_issues(state) == ["Assay row 3 has no Sample parent."]
+
+
+def test_agent_retry_budget_override(monkeypatch):
+    from fairifier.config import config
+    from fairifier.graph.nodes import agent_max_retries
+
+    monkeypatch.setattr(config, "agent_max_retries", {"JSONGenerator": 0})
+    assert agent_max_retries("JSONGenerator", 2) == 0
+    assert agent_max_retries("ISAValueMapper", 2) == 2
+
+
+def test_parallel_state_merge_takes_each_branch_changes():
+    from fairifier.graph.nodes import merge_parallel_states
+
+    before = {"errors": ["e0"], "artifacts": {"a": 1}, "needs_human_review": False, "x": 1}
+    gen = {"errors": ["e0", "json err"], "artifacts": {"a": 1, "metadata_json": "{}"},
+           "needs_human_review": False, "x": 1, "metadata_fields": [1]}
+    plan = {"errors": ["e0", "plan err"], "artifacts": {"a": 1, "entity_plan": "p"},
+            "needs_human_review": True, "x": 1, "entity_plan": {"levels": []}}
+    merged = merge_parallel_states(before, gen, plan)
+    assert merged["errors"] == ["e0", "json err", "plan err"]
+    assert merged["artifacts"] == {"a": 1, "metadata_json": "{}", "entity_plan": "p"}
+    assert merged["needs_human_review"] is True
+    assert merged["entity_plan"] == {"levels": []} and merged["metadata_fields"] == [1]
+
+
+def test_mapper_critic_sees_entity_plan_errors_apart_from_mapper_defects():
+    plan_error = "Reported material mat_001: parent_row_id must identify an existing observationunit record."
+    mapper_error = "Assay row 3 has no Sample parent."
+    state = {
+        "entity_plan": {"materialization_errors": [plan_error]},
+        "entity_matrix_validation": {"passed": False, "errors": [plan_error, mapper_error]},
+        "isa_value_quality": {"issues": [plan_error, mapper_error]},
+    }
+    context = json.loads(CriticAgent.__new__(CriticAgent)._build_isa_mapper_context(state))
+    assert context["entity_matrix_validation"]["errors"] == [mapper_error]
+    assert context["isa_value_quality"]["issues"] == [mapper_error]
+    assert context["entity_plan_errors"]["errors"] == [plan_error]

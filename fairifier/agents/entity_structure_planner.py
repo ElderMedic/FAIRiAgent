@@ -17,16 +17,25 @@ from .response_models import (
     EntityDesignClaimsResponse,
     EntityPlanRecordColumnAuditResponse,
     EntityPlanScopeAuditResponse,
+    MaterialInventoryResponse,
+    ReportedAssayReviewResponse,
 )
 from ..models import FAIRifierState
 from ..services.fairds_api_parser import FAIRDSAPIParser
-from ..utils.document_text import read_document_text
+from ..utils.document_text import normalize_source_evidence_text, read_document_text
 from ..utils.entity_plan import (
     contacts_from_names,
     contacts_from_source_text,
+    expand_table_row_templates,
     materialize_entity_claims,
+    rebind_results_to_named_samples,
+    materialize_reported_assays,
+    materialize_reported_materials,
     normalize_claim_measurement_units,
     normalize_entity_plan,
+    repair_reported_material_quotes,
+    text_names,
+    reported_parent_binding_digest,
 )
 from ..utils.llm_helper import get_llm_helper
 from ..utils.metadata_table_plan import (
@@ -48,6 +57,55 @@ from ..utils.fairds_value_contracts import (
 # group that crosses dimensions beyond this needs a source statement that every
 # combination was run; otherwise the cross-product invents untested rows.
 MAX_UNCONFIRMED_CROSSED_ROWS = 48
+PHYSICAL_RELATION_AUDIT_VERSION = 1
+
+_SCHEMA_SOURCE_RULES = """
+Schema defines record roles and allowed values; source defines actual identities,
+counts, and relationships. Read the selected field definitions and value contracts
+before assigning roles or links. A material category does not establish a distinct
+physical preparation. Repeated measurements do not by themselves establish new
+material. Reference endpoints require source evidence: a schema reference field
+specifies the permitted relationship, but does not prove which source entities are
+linked or how many entities exist. If the source does not establish reuse or
+distinct physical inputs, keep the physical relation unknown and record the
+ambiguity for review. Do not infer a physical entity or link from a field name,
+an allowed category, or a schema example.
+""".strip()
+
+
+def _quote_in_source(quote: Any, source_text: str | None) -> bool:
+    """Authenticate an audit quote against supplied source text, not draft prose."""
+    normalized = normalize_source_evidence_text(quote)
+    return bool(normalized and normalized in normalize_source_evidence_text(source_text))
+
+
+def _review_quote_in_source(quote: Any, source_text: str | None, threshold: float = 0.92) -> bool:
+    """Verbatim, or near-verbatim, presence of a reviewer quote in the source.
+
+    Models often re-type a quote with small differences (spacing, dashes,
+    rendered markup). Accept a quote of at least six words when at least
+    ``threshold`` of its characters match, in order, one contiguous source
+    window. An invented quote does not reach this similarity.
+    """
+    if _quote_in_source(quote, source_text):
+        return True
+    from difflib import SequenceMatcher
+
+    needle = normalize_source_evidence_text(quote)
+    haystack = normalize_source_evidence_text(source_text)
+    words = needle.split()
+    if len(words) < 6 or not haystack:
+        return False
+    anchors = {" ".join(words[i:i + 3]) for i in range(0, len(words) - 2, max(1, len(words) // 6))}
+    for anchor in anchors:
+        start = haystack.find(anchor)
+        while start != -1:
+            window = haystack[max(0, start - len(needle)): start + 2 * len(needle)]
+            blocks = SequenceMatcher(None, window, needle, autojunk=False).get_matching_blocks()
+            if sum(block.size for block in blocks) >= threshold * len(needle):
+                return True
+            start = haystack.find(anchor, start + 1)
+    return False
 
 
 class EntityStructurePlannerAgent(BaseAgent):
@@ -286,7 +344,7 @@ class EntityStructurePlannerAgent(BaseAgent):
     def _field_contract_catalog(
         knowledge: List[Dict[str, Any]],
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """Expose compact live field semantics to the mapping audit.
+        """Expose compact live field semantics to planning and mapping audits.
 
         Field labels alone are not enough to distinguish a specific factor
         column from a generic description/protocol column.  Keep this catalog
@@ -413,7 +471,39 @@ class EntityStructurePlannerAgent(BaseAgent):
         return promoted
 
     @staticmethod
-    def _plan_errors(plan: Mapping[str, Any]) -> List[str]:
+    def _requires_physical_relation_reaudit(plan: Mapping[str, Any]) -> bool:
+        """Identify legacy plans affected by the unproven-reuse fallback."""
+        if plan.get("physical_relation_audit_version") == PHYSICAL_RELATION_AUDIT_VERSION:
+            return False
+        coverage = plan.get("source_coverage") or {}
+        if coverage.get("complete") and coverage.get("tables"):
+            return False
+        for group in (plan.get("design_claims") or {}).get("design_groups") or []:
+            if not isinstance(group, Mapping):
+                continue
+            if group.get("reuse_same_sample_for_multiple_assays"):
+                return True
+            if group.get("sample_reuse_audit_status") == "unresolved":
+                return True
+            for dimension in group.get("dimensions") or []:
+                if not isinstance(dimension, Mapping):
+                    continue
+                count = int(dimension.get("level_count") or 0) or len(
+                    dimension.get("explicit_values") or []
+                )
+                role = str(dimension.get("semantic_role") or "other").strip().lower()
+                scope = tuple(dimension.get("applies_to") or [])
+                if count > 1 and "assay" in scope and (
+                    role == "assay_process"
+                    or (role == "other" and scope in {("assay",), ("sample", "assay")})
+                ):
+                    return True
+        return False
+
+    @staticmethod
+    def _plan_errors(
+        plan: Mapping[str, Any], *, source_text: str | None = None,
+    ) -> List[str]:
         errors: List[str] = list(plan.get("materialization_errors") or [])
         source_coverage = plan.get("source_coverage") or {}
         coverage_tables = source_coverage.get("tables") or []
@@ -462,17 +552,74 @@ class EntityStructurePlannerAgent(BaseAgent):
                         errors.append(
                             f"{level} row {entity.get('row_id')} has unresolved parent {parent}."
                         )
+        samples = {row["row_id"]: row for row in (levels.get("sample") or {}).get("entities") or []}
+        reviewed_results: set[str] = set()
+        receipts = plan.get("reported_assay_reviews") or {}
+        fingerprint = (hashlib.sha256(source_text.encode()).hexdigest()
+                       if source_text is not None else plan.get("source_fingerprint"))
+        material_receipts = plan.get("reported_material_reviews") or {}
+        reviewed_materials: set[str] = set()
+        for level_name, parent_name in (("observationunit", "study"), ("sample", "observationunit")):
+            parents = {row["row_id"]: row for row in (levels.get(parent_name) or {}).get("entities") or []}
+            for row in (levels.get(level_name) or {}).get("entities") or []:
+                if row.get("record_kind") not in {"material_preparation", "material_identity"}:
+                    continue
+                key = row["row_id"]
+                parent = parents.get(row.get("parent_row_id"))
+                receipt = material_receipts.get(key) or {}
+                if (parent and receipt.get("source_sha256") == fingerprint
+                        and receipt.get("record_sha256") == EntityStructurePlannerAgent._reported_record_digest(row, parent)):
+                    reviewed_materials.add(key)
+                else:
+                    errors.append(f"Reported material {key} lacks a current independent review.")
+        for proposal in (plan.get("design_claims") or {}).get("reported_materials") or []:
+            if proposal.get("record_id") not in reviewed_materials:
+                errors.append(f"Reported material {proposal.get('record_id')} was not materialized and reviewed.")
+        for row in (levels.get("assay") or {}).get("entities") or []:
+            if row.get("record_kind") not in {"fitted_result", "aggregate_result", "qualitative_result"}:
+                continue
+            key = row["row_id"]
+            parent = samples.get(row.get("parent_row_id"))
+            receipt = receipts.get(key) or {}
+            if (parent and receipt.get("source_sha256") == fingerprint
+                    and receipt.get("record_sha256") == EntityStructurePlannerAgent._reported_record_digest(row, parent)):
+                reviewed_results.add(key)
+            else:
+                errors.append(f"Reported assay {key} lacks a current independent review.")
+        for proposal in (plan.get("design_claims") or {}).get("reported_assays") or []:
+            if proposal.get("record_id") not in reviewed_results:
+                errors.append(f"Reported assay {proposal.get('record_id')} was not materialized and reviewed.")
         claims_groups = {
             str(group.get("group_id") or ""): group
             for group in ((plan.get("design_claims") or {}).get("design_groups") or [])
             if isinstance(group, Mapping)
         }
+        # Equal row counts do not resolve an uncertain physical-input relation.
+        # Fully materialized source records can establish identities and links
+        # directly; a draft's claimed table coverage alone cannot do so.
+        verified_records = bool(coverage_tables) and bool(source_coverage.get("complete"))
+        if not verified_records:
+            for group_id, claim in claims_groups.items():
+                if claim.get("sample_reuse_audit_status") == "unresolved":
+                    errors.append(
+                        f"Unresolved physical sample relation for design group {group_id}; "
+                        "source evidence must establish shared or distinct inputs."
+                    )
+                for dimension in claim.get("dimensions") or []:
+                    if isinstance(dimension, Mapping) and dimension.get("physical_relation_review_required"):
+                        errors.append(
+                            f"Unresolved physical sample relation for {group_id}:"
+                            f"{dimension.get('name')}; cardinality requires source review."
+                        )
         entities_by_level_group: Dict[str, Dict[str, int]] = {
             level: {} for level in ("observationunit", "sample", "assay")
         }
         for level in ("observationunit", "sample", "assay"):
             for entity in (levels.get(level) or {}).get("entities") or []:
                 if not isinstance(entity, Mapping):
+                    continue
+                if level == "assay" and entity.get("row_id") in reviewed_results:
+                    # An analysis result does not assert another physical run.
                     continue
                 group_id = str(entity.get("source_group") or "").strip()
                 entities_by_level_group[level][group_id] = (
@@ -490,17 +637,38 @@ class EntityStructurePlannerAgent(BaseAgent):
                 str(claim.get("sample_reuse_evidence") or "").split()
             )
             group_evidence = " ".join(str(claim.get("evidence") or "").split())
-            evidence_is_exact = bool(
-                reuse_evidence
-                and reuse_evidence.lower() in group_evidence.lower()
+            evidence_is_exact = (
+                _quote_in_source(reuse_evidence, source_text)
+                if source_text is not None
+                else bool(reuse_evidence and reuse_evidence in group_evidence)
             )
+            assay_only_dimensions = [
+                dimension for dimension in claim.get("dimensions") or []
+                if isinstance(dimension, Mapping)
+                and tuple(dimension.get("applies_to") or []) == ("assay",)
+                and int(dimension.get("level_count") or 0) > 1
+            ]
+            dimension_reuse = bool(assay_only_dimensions) and all(
+                dimension.get("sample_relation") == "same_sample"
+                and dimension.get("sample_relation_source_verified") is True
+                and (
+                    source_text is None
+                    or _quote_in_source(dimension.get("sample_relation_evidence"), source_text)
+                )
+                for dimension in assay_only_dimensions
+            )
+            if dimension_reuse and not any(
+                isinstance(dimension, Mapping) and dimension.get("physical_relation_review_required")
+                for dimension in claim.get("dimensions") or []
+            ):
+                reuse_allowed = evidence_is_exact = True
             if not reuse_allowed or not evidence_is_exact:
                 errors.append(
                     f"Design group {group_id} creates {assay_count} assay rows from "
                     f"only {sample_count} sample rows without an explicit source quote "
-                    "authorizing reuse of the same sample. Propagate the differing "
-                    "preparation/measurement dimension through Sample, or provide "
-                    "verbatim sample_reuse_evidence."
+                    "authorizing reuse of the same sample. Resolve the physical input "
+                    "relationship from source evidence; do not infer distinct Samples "
+                    "from missing reuse evidence."
                 )
         if not coverage_tables:
             for group_id, claim in claims_groups.items():
@@ -727,22 +895,40 @@ class EntityStructurePlannerAgent(BaseAgent):
         errors: List[str],
         *,
         used_authoritative_records: bool,
-    ) -> tuple[int, int, int, int]:
+    ) -> tuple[int, int, int, int, int]:
         """Rank retry candidates by deterministic validity and source fidelity.
 
         Counting diagnostics alone can prefer a coarse Cartesian fallback over
         a successfully materialized authoritative table.  A valid candidate is
         always best; among invalid candidates, exact source records and complete
-        source-column disposition outrank the raw number of diagnostics.
+        source-column disposition and currently verified reported results
+        outrank the raw number of diagnostics.
         """
         source_coverage = plan.get("source_coverage") or {}
         coverage_complete = bool(source_coverage.get("tables")) and bool(
             source_coverage.get("complete")
         )
+        rows = {
+            row["row_id"]: row for level in plan.get("levels") or []
+            for row in level.get("entities") or [] if row.get("row_id")
+        }
+        fingerprint = plan.get("source_fingerprint")
+        reviewed_results = 0
+        for row_id, receipt in (plan.get("reported_assay_reviews") or {}).items():
+            row = rows.get(row_id) or {}
+            parent = rows.get(row.get("parent_row_id"))
+            if (
+                fingerprint and parent
+                and row.get("record_kind") in {"fitted_result", "aggregate_result", "qualitative_result"}
+                and receipt.get("source_sha256") == fingerprint
+                and receipt.get("record_sha256") == EntityStructurePlannerAgent._reported_record_digest(row, parent)
+            ):
+                reviewed_results += 1
         return (
             int(bool(plan) and not errors),
             int(used_authoritative_records),
             int(coverage_complete),
+            reviewed_results,
             -len(errors),
         )
 
@@ -752,9 +938,14 @@ class EntityStructurePlannerAgent(BaseAgent):
         *,
         prior_errors: List[str] | None = None,
     ) -> str:
-        document_text = read_document_text(state, max_chars=18000)
+        # The scope audit reads the full working text but cannot add omitted
+        # design groups. Give initial planning the same source, including late
+        # methods/results, before cardinality and parent links are locked.
+        document_text = read_document_text(state)
         document_info = state.get("document_info") or {}
-        field_catalog = self._field_catalog(self._planning_knowledge(state))
+        planning_knowledge = self._planning_knowledge(state)
+        field_catalog = self._field_catalog(planning_knowledge)
+        field_contract_catalog = self._field_contract_catalog(planning_knowledge)
         table_profiles = metadata_table_profiles(state.get("source_workspace") or {})
         dataset_profiles = metadata_table_profiles_for_document_datasets(
             state.get("source_workspace") or {},
@@ -796,14 +987,20 @@ You are the structure-planning stage of FAIRiAgent. Determine the ISA entity
 matrix before any metadata values are filled. This is a scientific data-model
 task, not a prose summarization task.
 
+{_SCHEMA_SOURCE_RULES}
+
 Hard rules:
-1. Return COMPACT SOURCE DESIGN CLAIMS, not materialized rows. For each independent
+1. Return COMPACT SOURCE DESIGN CLAIMS for individually enumerated experiments.
+   Use reported_materials and reported_assays for source-reported material
+   identities and aggregate/fitted results as specified in rule 14. For each independent
    experimental branch, state each dimension's level_count once and which of
    observationunit, sample, assay it applies to. Code will build the cross-products.
 2. Use FAIR-DS ISOSA semantics and the curated workbook convention. An
    observationunit is the experimental unit or condition being observed; a sample
-   is one collected, isolated, pooled, or aliquoted material record; an assay is
-   one preparation/measurement event. Biological replicates are normally separate
+   is a source-described material record; an assay is a preparation, measurement
+   or analysis record. A material identity is not a claim that only one physical
+   vial existed. Label the source-supported grain explicitly. For individual
+   experimental records, biological replicates are normally separate
    sample rows under their observation unit, not automatically separate
    observationunit rows. They become separate observation units only when the
    source describes distinct independently observed organisms, plots, vessels, or
@@ -817,17 +1014,29 @@ Hard rules:
    event. Do not map the method to a Sample metadata term. Reuse one Sample row
    for multiple Assay rows only when the source explicitly describes reuse of
    the same identified material, repeated measurements, or distinct modalities
-   on that same sample. Otherwise use one traceable sample-to-assay path per
-   preparation condition.
-3. Represent every stated factorial design and replicate count. If N levels are
+   on that same sample. Add distinct Samples only when the source establishes
+   distinct physical inputs. Otherwise preserve the uncertainty for review;
+   absence of reuse evidence does not establish distinct material.
+3. For individual experimental inventories, represent every stated factorial
+   design and replicate count. Do not expand aggregate results into replicas.
+   If N levels are
    stated but their names are absent, set level_count=N, explicit_values=[],
    origin=derived, and record the missing labels as an ambiguity. Never invent
    or enumerate plausible scientific labels; code creates ordinal placeholders.
+   level_count must be a positive integer when the source establishes the total.
+   If the total is unknown, set level_count=null and record the missing count in
+   unresolved_ambiguities. Do not replace an unknown count with 0 or 1 to satisfy
+   the schema. An unknown count remains unresolved and requires review; it does
+   not authorize materializing a complete design.
    A stated range or a few examples/endpoints are not a complete enumeration.
    Keep explicit_values=[] and use known_values=[{{"position": 1, "value":
    "source label"}}, ...] only when the source fixes an ordinal position (for
    example the first and last values of a stated range). Unknown positions stay
    derived ordinal placeholders. Quote the incompleteness in the ambiguity.
+   When the total is unknown but the source states the span (for example
+   "incubated at temperatures ranging from 30–80 °C"), also copy that span
+   verbatim into reported_range and give the dimension its field_mappings.
+   The span is recorded as one value on the group's rows; it never creates rows.
    A replicate or factor applies only to the design group whose source statement
    explicitly contains it; never propagate dimensions across independent groups.
    Preserve source-exact units and qualifiers inside explicit_values (for example,
@@ -872,9 +1081,8 @@ Hard rules:
     If a group has more assay rows than sample rows, set
     reuse_same_sample_for_multiple_assays=true only when the group evidence
     explicitly states reuse/repeated measurement of the same material, and copy
-    that exact phrase into sample_reuse_evidence. Otherwise propagate the
-    assay-varying preparation dimension through Sample so each assay retains a
-    one-to-one physical input path.
+    that exact phrase into sample_reuse_evidence. A false reuse flag means only
+    that reuse is unproven. Do not use it to create distinct Sample rows.
 11. Code builds EVERY combination of the dimensions in a design group. Put two
     multi-level dimensions in the same group only when the source states that
     every combination was run, and copy that sentence into
@@ -887,7 +1095,8 @@ Hard rules:
 11. Give every design group a concise scientific label derived from its stated
     purpose or factors. group_id is an internal key and must not be used as the
     human-readable label.
-12. Be terse: this response must fit within 4,000 tokens.
+12. Be terse and reference shared material IDs instead of repeating their records.
+    Preserve all independently reported branches and results.
 13. When an authoritative metadata table explicitly enumerates the focal study's
     sample/assay records, return a record_table_plans entry. Table rows outrank a
     prose-derived Cartesian approximation, especially for incomplete or uneven
@@ -951,8 +1160,39 @@ Hard rules:
     superficial identifier resemblance. If these requirements are not met,
     return record_table_plans=[] and keep the factor design.
 
+14. Preserve reported means, fitted parameters and qualitative results even
+    when the underlying experiment count is unknown. Use reported_materials to
+    declare source-described preparation ObservationUnits (material_preparation)
+    and material Samples (material_identity), with exact source_subject labels,
+    source_quote, record_id, parent_row_id, label and source_group. These are
+    material identities, not invented individual vessels or aliquots. Their
+    roles and parent links must fit the selected package and source evidence.
+    Use reported_assays for aggregate_result, fitted_result or qualitative_result
+    records. Reference a declared material Sample record_id in sample_row_id;
+    never guess an ID that code may generate from a factorial design. Include
+    source_subject, a verbatim source_quote and attributes containing exact
+    selected Assay field_name/value pairs. Preserve source values and units;
+    normalisation happens after planning. A value read from a table cell
+    takes its unit from the column or row header (e.g. header "Km (mM)" and
+    cell "1.15 ± 0.01" give "1.15 ± 0.01 mM"); never drop a header unit. When a
+    table reports the same measurements for many materials, one per row, propose
+    ONE record for one of those rows: quote that complete HTML row, name its
+    material, map each measured cell, and set repeat_for_table_rows=true. Code
+    repeats it for every other row of the table, reading each value from the same
+    column, so do not list the other rows yourself. When the columns are levels of
+    one condition (e.g. 55 °C, 62 °C, 70 °C), propose one such record per column,
+    each with that column's condition. Put missing underlying counts in
+    unreported_design, not in a fabricated one-level factor. Never assign a
+    group mean to a single replicate. Keep distinct materials and measurement
+    conditions separate. Do not duplicate these records in design_groups or
+    complete source-table plans. If material identity or parentage is unknown,
+    retain the uncertainty rather than inventing a link. All reported records
+    receive independent source/schema review before they are accepted.
+
 Required nested JSON shape (use these exact keys; this is a structural example,
 not a design to copy):
+design_summary and unresolved_ambiguities are lists of strings, not objects.
+Use one short source-supported statement per string, or an empty list.
 {{
   "investigations": [{{
     "row_id": "investigation_001", "label": "...",
@@ -973,7 +1213,7 @@ not a design to copy):
       "name": "factor_name", "level_count": 2,
       "explicit_values": ["control", "treated"], "origin": "explicit",
       "semantic_role": "observation_condition",
-      "known_values": [],
+      "known_values": [], "reported_range": null,
       "field_mappings": [
         {{"level": "observationunit", "field_name": "catalog term"}}
       ],
@@ -1035,6 +1275,7 @@ not a design to copy):
     }}],
     "evidence": "why this table/filter covers the focal study"
   }}],
+  "reported_materials": [], "reported_assays": [],
   "design_summary": [], "unresolved_ambiguities": [], "confidence": 0.85
 }}
 
@@ -1043,6 +1284,9 @@ Parsed document information:
 
 Available FAIR-DS fields by level:
 {json.dumps(field_catalog, indent=2, ensure_ascii=False)}
+
+Live FAIR-DS field definitions and value contracts:
+{json.dumps(field_contract_catalog, indent=2, ensure_ascii=False)}
 
 Authoritative source metadata-table profiles (schema, distributions, and
 examples; code retains the complete tables for deterministic row selection):
@@ -1071,9 +1315,14 @@ Source document:
         field_catalog: Mapping[str, List[str]],
         field_contract_catalog: Mapping[str, List[Mapping[str, Any]]],
         table_profiles: List[Mapping[str, Any]],
+        *,
+        source_text: str = "",
     ) -> str:
         return f"""
 You are the semantic scope-and-field-mapping audit for an ISA entity plan.
+
+{_SCHEMA_SOURCE_RULES}
+
 Perform four bounded checks:
 A. Find source-explicit constant experimental conditions omitted from a design
    group. A constant has one value and does not increase row count.
@@ -1083,8 +1332,8 @@ B. Return exactly one mapping_decisions item for EVERY existing dimension,
    correct field exists. Field definitions and value contracts are provided below.
    mapping_corrections is legacy-only and must be an empty list.
 C. Independently verify every design group that sets
-   reuse_same_sample_for_multiple_assays=true. Approve only if the group's own
-   evidence explicitly says the same identified physical material was reused,
+   reuse_same_sample_for_multiple_assays=true. Approve only if the actual source
+   explicitly says the same identified physical material was reused,
    repeatedly measured, or measured in distinct modalities without a new
    preparation path. A shared source pool, dilution series, or several library
    preparation methods does not by itself prove reuse: distinct aliquot or
@@ -1147,11 +1396,17 @@ Strict rules:
    mapping_decisions and dimension_scopes must still review every dimension.
 8. Return one reuse_validations item for every proposed reuse claim. For an
    approval, evidence_quote must be the shortest verbatim phrase that proves
-   reuse. If proof is absent or ambiguous, approved=false.
+   reuse in the actual source, not merely in the draft claims. If proof is absent
+   or ambiguous, approved=false. That does not establish distinct physical inputs.
 9. Return exactly one dimension_scopes item for every draft dimension. applies_to
    must be one of these ordered suffixes: [observationunit, sample, assay],
    [sample, assay], or [assay]. Do not add, remove, or rename dimensions.
-   Each item must also contain semantic_role.
+   Each item must also contain semantic_role, sample_relation, and evidence_quote.
+   For each varying preparation/measurement axis, sample_relation is same_sample,
+   distinct_samples, or unknown. Support either positive relation with a verbatim
+   actual-source quote specific to that axis. Use unknown when the source does not
+   distinguish repeated readouts from separate material inputs. Do not infer one
+   axis's physical relation from another axis or from a group-wide reuse flag.
 10. A nested mapping item contains only level and field_name. Its group and
     dimension are inherited from the containing mapping_decisions item. It may
     use only a level present in the audited applies_to scope.
@@ -1165,8 +1420,11 @@ Strict rules:
     not library source. When no exact standard term exists, source_extension is
     the correct high-coverage answer, not a loose free-text mapping.
 
-Draft source claims:
+Draft claims (proposals, not an authoritative quote corpus):
 {json.dumps(claims, indent=2, ensure_ascii=False)}
+
+Actual document source (may extend beyond the draft's opening excerpt):
+{source_text or "(No document source supplied; retain unresolved physical relations.)"}
 
 Value-bearing FAIR-DS fields by level:
 {json.dumps(field_catalog, indent=2, ensure_ascii=False)}
@@ -1537,20 +1795,17 @@ Authoritative table profiles with value distributions and example rows:
 
     @staticmethod
     def _enforce_independent_reuse_audit(
-        claims: Dict[str, Any], audit: Mapping[str, Any]
+        claims: Dict[str, Any], audit: Mapping[str, Any], *, source_text: str | None = None,
     ) -> List[str]:
         """Fail closed on many-assays-per-sample claims without audit proof.
 
-        When reuse is rejected, every varying assay-only dimension represents
-        a distinct physical preparation path and is propagated through Sample.
-        This preserves one traceable sample-to-assay path without inventing
-        values or relying on domain-specific factor names.
+        Rejected or missing proof leaves the physical relation unresolved. It
+        must not create distinct Sample rows or authorize reuse by default.
         """
-        validations = {
-            str(item.get("group_id") or "").strip(): item
-            for item in audit.get("reuse_validations") or []
-            if isinstance(item, Mapping)
-        }
+        validations: Dict[str, List[Mapping[str, Any]]] = {}
+        for item in audit.get("reuse_validations") or []:
+            if isinstance(item, Mapping):
+                validations.setdefault(str(item.get("group_id") or "").strip(), []).append(item)
         rejected: List[str] = []
         for group in claims.get("design_groups") or []:
             if not isinstance(group, dict) or not group.get(
@@ -1558,17 +1813,17 @@ Authoritative table profiles with value distributions and example rows:
             ):
                 continue
             group_id = str(group.get("group_id") or "").strip()
-            validation = validations.get(group_id, {})
+            matches = validations.get(group_id, [])
+            validation = matches[0] if len(matches) == 1 else {}
             quote = " ".join(str(validation.get("evidence_quote") or "").split())
-            evidence = " ".join(str(group.get("evidence") or "").split())
-            approved = bool(validation.get("approved")) and bool(
-                quote and quote.lower() in evidence.lower()
-            )
+            approved = validation.get("approved") is True and _quote_in_source(quote, source_text)
             if approved:
                 group["sample_reuse_evidence"] = quote
+                group["sample_reuse_audit_status"] = "approved"
                 continue
             group["reuse_same_sample_for_multiple_assays"] = False
             group["sample_reuse_evidence"] = None
+            group["sample_reuse_audit_status"] = "unresolved"
             for dimension in group.get("dimensions") or []:
                 if not isinstance(dimension, dict):
                     continue
@@ -1578,17 +1833,18 @@ Authoritative table profiles with value distributions and example rows:
                 ]
                 if (
                     int(dimension.get("level_count") or 0) > 1
-                    and "assay" in scope
-                    and "sample" not in scope
-                    and "observationunit" not in scope
+                    and (
+                        scope == ["assay"]
+                        or dimension.get("semantic_role") == "assay_process"
+                    )
                 ):
-                    dimension["applies_to"] = ["sample", "assay"]
+                    dimension["physical_relation_review_required"] = True
             rejected.append(group_id or "unnamed design group")
         return rejected
 
     @staticmethod
     def _apply_dimension_scope_audit(
-        claims: Dict[str, Any], audit: Mapping[str, Any]
+        claims: Dict[str, Any], audit: Mapping[str, Any], *, source_text: str | None = None,
     ) -> tuple[List[str], List[str]]:
         """Require independent agreement on every ISA dimension scope.
 
@@ -1646,12 +1902,29 @@ Authoritative table profiles with value distributions and example rows:
                     continue
                 dimension_name = str(dimension.get("name") or "").strip()
                 key = (group_id, dimension_name.lower())
+                if int(dimension.get("level_count") or 0) > 1 and (
+                    dimension.get("semantic_role") == "assay_process"
+                    or (
+                        dimension.get("semantic_role", "other") == "other"
+                        and tuple(dimension.get("applies_to") or [])
+                        in {("assay",), ("sample", "assay")}
+                    )
+                ):
+                    dimension["physical_relation_review_required"] = True
                 finding = findings.get(key)
                 if not finding or key in duplicates:
                     errors.append(
                         f"Independent scope audit omitted or duplicated {group_id}:"
                         f"{dimension_name}."
                     )
+                    if (
+                        int(dimension.get("level_count") or 0) > 1
+                        and (
+                            dimension.get("semantic_role") == "assay_process"
+                            or tuple(dimension.get("applies_to") or []) == ("assay",)
+                        )
+                    ):
+                        dimension["physical_relation_review_required"] = True
                     continue
                 previous = tuple(dimension.get("applies_to") or [])
                 draft_role = str(
@@ -1682,50 +1955,78 @@ Authoritative table profiles with value distributions and example rows:
                         f"{group_id}:{dimension_name}.role={audit_role}"
                     )
                     draft_role = audit_role
-                semantic_scope = role_scopes.get(draft_role)
-                if draft_role == "assay_process":
-                    semantic_scope = (
-                        ("assay",)
-                        if group.get("reuse_same_sample_for_multiple_assays")
-                        else ("sample", "assay")
-                    )
-                if semantic_scope is not None:
-                    if previous != semantic_scope:
-                        dimension["applies_to"] = list(semantic_scope)
-                        applied.append(
-                            f"{group_id}:{dimension_name}="
-                            f"{'/'.join(semantic_scope)}"
-                        )
-                    continue
                 scope = tuple(
                     str(level or "").strip().lower()
                     for level in finding.get("applies_to") or []
                 )
-                # Without explicitly approved material reuse, a varying
-                # assay-only factor necessarily creates distinct preparation
-                # inputs. Normalize the audit to the traceable Sample→Assay
-                # path before comparing it with the draft.
-                if (
-                    not group.get("reuse_same_sample_for_multiple_assays")
-                    and int(dimension.get("level_count") or 0) > 1
-                    and scope == ("assay",)
-                ):
-                    scope = ("sample", "assay")
                 if scope not in allowed:
                     errors.append(
                         f"Independent scope audit returned invalid scope {list(scope)} "
                         f"for {group_id}:{dimension_name}."
                     )
                     continue
-                if previous != scope:
-                    explicit_count = len(
-                        {
-                            str(value).strip()
-                            for value in dimension.get("explicit_values") or []
-                            if str(value).strip()
-                        }
+                explicit_count = len({
+                    str(value).strip() for value in dimension.get("explicit_values") or []
+                    if str(value).strip()
+                })
+                dimension_count = int(dimension.get("level_count") or 0) or explicit_count
+                relation = str(finding.get("sample_relation") or "unknown").strip()
+                quote = " ".join(str(finding.get("evidence_quote") or "").split())
+                relation_scope = {
+                    "same_sample": ("assay",),
+                    "distinct_samples": ("sample", "assay"),
+                }.get(relation)
+                if (
+                    relation == "distinct_samples"
+                    and draft_role == "observation_condition"
+                    and scope == ("observationunit", "sample", "assay")
+                ):
+                    # Distinct observed units can each supply a distinct sample.
+                    # Keep their independently audited ObservationUnit grouping;
+                    # a material distinction need not start at Sample.
+                    relation_scope = scope
+                verified_relation = bool(
+                    relation_scope is not None
+                    and scope == relation_scope
+                    and _quote_in_source(quote, source_text)
+                )
+                relation_required = dimension_count > 1 and (
+                    draft_role == "assay_process"
+                    or bool(dimension.get("physical_relation_review_required"))
+                    or (draft_role == "other" and (scope == ("assay",) or previous == ("assay",)))
+                    or relation != "unknown"
+                )
+                if relation_required and not verified_relation:
+                    dimension["sample_relation"] = "unknown"
+                    dimension["sample_relation_source_verified"] = False
+                    dimension["physical_relation_review_required"] = True
+                    errors.append(
+                        f"Unresolved physical sample relation for {group_id}:{dimension_name}; "
+                        "the source must establish shared or distinct inputs."
                     )
-                    dimension_count = int(dimension.get("level_count") or 0) or explicit_count
+                    if previous != scope:
+                        errors.append(
+                            "Independent scope audit disagreed with the draft scope "
+                            f"for {group_id}:{dimension_name}: "
+                            f"draft={list(previous)}, audit={list(scope)}."
+                        )
+                    continue
+                if verified_relation:
+                    dimension["sample_relation"] = relation
+                    dimension["sample_relation_evidence"] = quote
+                    dimension["sample_relation_source_verified"] = True
+                    dimension["physical_relation_review_required"] = False
+                semantic_scope = role_scopes.get(draft_role)
+                if verified_relation:
+                    semantic_scope = relation_scope
+                if semantic_scope is not None:
+                    if previous != semantic_scope:
+                        dimension["applies_to"] = list(semantic_scope)
+                        applied.append(
+                            f"{group_id}:{dimension_name}={'/'.join(semantic_scope)}"
+                        )
+                    continue
+                if previous != scope:
                     if dimension_count == 1 or authoritative_record_plan:
                         dimension["applies_to"] = list(scope)
                         applied.append(
@@ -1738,6 +2039,24 @@ Authoritative table profiles with value distributions and example rows:
                         f"for {group_id}:{dimension_name}: "
                         f"draft={list(previous)}, audit={list(scope)}."
                     )
+            relation_dimensions = [
+                dimension for dimension in group.get("dimensions") or []
+                if isinstance(dimension, Mapping)
+                and (
+                    dimension.get("physical_relation_review_required")
+                    or dimension.get("sample_relation_source_verified")
+                )
+            ]
+            if (
+                group.get("sample_reuse_audit_status") == "unresolved"
+                and relation_dimensions
+                and all(
+                    dimension.get("sample_relation_source_verified")
+                    and not dimension.get("physical_relation_review_required")
+                    for dimension in relation_dimensions
+                )
+            ):
+                group["sample_reuse_audit_status"] = "resolved_by_dimension_evidence"
         return applied, errors
 
     @staticmethod
@@ -1936,6 +2255,364 @@ Authoritative table profiles with value distributions and example rows:
             )
         return applied, errors
 
+    _RECORD_REVIEW_ERROR_PREFIXES = (
+        "Reported results lack complete source-backed independent approval",
+        "Reported record ",
+        "Reported assay ",
+        "Reported material ",
+        "Independent review rejected reported record",
+        "Independent review referenced unknown reported record",
+        # Whether one physical sample is shared across assays is a semantic
+        # question for review; the row graph is complete either way.
+        "Unresolved physical sample relation",
+    )
+    # The same question, asked of a whole design group (more assays than
+    # samples without a quote authorising reuse).
+    _RECORD_REVIEW_ERROR_MARKERS = ("authorizing reuse of the same sample",)
+
+    @classmethod
+    def _blocking_plan_errors(cls, errors: List[str]) -> List[str]:
+        """Plan errors that make the entity graph itself unusable.
+
+        Review failures of individual reported materials/results are not
+        blocking: rejected records are dropped and approved ones kept.
+        """
+        return [
+            error for error in errors or []
+            if not str(error).startswith(cls._RECORD_REVIEW_ERROR_PREFIXES)
+            and not any(marker in str(error) for marker in cls._RECORD_REVIEW_ERROR_MARKERS)
+        ]
+
+    async def _material_inventory(self, source_text: str) -> List[Dict[str, str]]:
+        """List the distinct materials the study characterises, by exact name.
+
+        A focused call: the full planner prompt carries many structural rules
+        and tends to omit materials that are listed only in tables (e.g. a
+        screened variant panel). Each name must occur verbatim in the source.
+        """
+        if not source_text.strip():
+            return []
+        prompt = (
+            "List every distinct material that this study characterises or uses as a "
+            "measured subject: enzyme or protein variants, organisms or strains, "
+            "substrates and material samples. Include materials that appear only in "
+            "tables or supplementary information. Give each name exactly as written in "
+            "the source (copy it verbatim, including mutation codes). Do not list "
+            "reagents, buffers, instruments, or materials only cited from other work. "
+            "Merge spelling variants of the same material; keep different variants "
+            "separate.\n\nSource:\n" + source_text
+        )
+        try:
+            parsed = await invoke_structured_output(
+                self.llm_helper, [HumanMessage(content=prompt)], MaterialInventoryResponse,
+                operation_name="EntityStructurePlanner.material_inventory",
+                max_tokens=16384 if config.llm_enable_thinking else 4096,
+            )
+        except Exception as exc:  # optional enrichment; planning continues
+            self.logger.warning("Material inventory skipped: %s", exc)
+            return []
+        items = self._claims_payload(parsed).get("materials") or [] if parsed else []
+        source = normalize_source_evidence_text(source_text)
+        kept: Dict[str, Dict[str, str]] = {}
+        for item in items:
+            name = normalize_source_evidence_text(item.get("name"))
+            if len(name) < 2 or not re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", source):
+                continue
+            kept.setdefault(name.lower(), {"name": name, "role": str(item.get("role") or "other")})
+        # Keep the most discussed materials when a screen lists very many.
+        def mentions(entry: Dict[str, str]) -> int:
+            return len(re.findall(r"(?<!\w)" + re.escape(entry["name"]) + r"(?!\w)", source))
+
+        inventory = sorted(kept.values(), key=mentions, reverse=True)[:24]
+        self.logger.info("🧪 Material inventory: %d source-verified materials", len(inventory))
+        return inventory
+
+    @staticmethod
+    def _with_material_inventory(
+        claims: Dict[str, Any], inventory: List[Dict[str, str]], *, source_text: str = "",
+    ) -> Dict[str, Any]:
+        """Add inventory materials the claims do not already represent.
+
+        Each missing material becomes a source-described material identity
+        (a material_preparation ObservationUnit and a material_identity Sample
+        named by the material). They pass the same quote and independent
+        review gates as planner-proposed materials.
+
+        A proposed material Sample placed directly under the Study gets the
+        same shape: its own material_preparation ObservationUnit. A proposal
+        whose subject the source never names ("purified A, B, C") cannot be
+        grounded and is dropped; its Samples keep their own grounding through
+        their own ObservationUnit instead of failing with their parent.
+        """
+        studies = [s for s in claims.get("studies") or [] if isinstance(s, Mapping)]
+        study_id = str((studies[0] if studies else {}).get("row_id") or "").strip()
+        if not study_id:
+            return claims
+        proposed = [dict(record) for record in claims.get("reported_materials") or []]
+        if source_text:
+            source = normalize_source_evidence_text(source_text)
+            ungrounded = {
+                str(record.get("record_id") or "") for record in proposed
+                if not text_names(source, normalize_source_evidence_text(record.get("source_subject")))
+            }
+            proposed = [r for r in proposed if str(r.get("record_id") or "") not in ungrounded]
+            if ungrounded:
+                claims = {**claims, "ungrounded_reported_materials": sorted(ungrounded)}
+        # A Sample hung on anything but a proposed ObservationUnit (the
+        # Investigation id, an id defined nowhere) gets its own, as under Study.
+        proposed_ous = {str(r.get("record_id") or "") for r in proposed if r.get("level") == "observationunit"}
+        for record in proposed:
+            if record.get("level") == "sample" and record.get("parent_row_id") not in proposed_ous:
+                record["parent_row_id"] = study_id
+        materials: List[Dict[str, Any]] = []
+        used = {str(record.get("record_id") or "") for record in proposed}
+        for record in proposed:
+            if record.get("level") == "sample" and record.get("parent_row_id") == study_id:
+                ou_id = f"ou_{record.get('record_id') or 'material'}"
+                while ou_id in used:
+                    ou_id += "_ou"
+                used.add(ou_id)
+                materials.append({
+                    **record, "record_id": ou_id, "level": "observationunit",
+                    "record_kind": "material_preparation",
+                    "label": f"{record.get('label') or record.get('source_subject')} (material preparation)",
+                })
+                record["parent_row_id"] = ou_id
+            materials.append(record)
+        claims = {**claims, "reported_materials": materials}
+        if not inventory:
+            return claims
+        represented: set[str] = set()
+        for record in materials:
+            represented.add(normalize_source_evidence_text(record.get("source_subject")).lower())
+            represented.add(normalize_source_evidence_text(record.get("label")).lower())
+        for group in claims.get("design_groups") or []:
+            for dimension in (group or {}).get("dimensions") or []:
+                for value in (dimension or {}).get("explicit_values") or []:
+                    represented.add(normalize_source_evidence_text(value).lower())
+        represented.discard("")
+
+        def is_represented(name: str) -> bool:
+            # "BHET (bis(2-hydroxyethyl) terephthalate)" is BHET; a multi-word
+            # name inside a fuller description ("Amorphous polyethylene
+            # terephthalate pellets (PET, Cat#138)") is the same material. A
+            # single word is not: "LCC" inside "LCC ICCG" is another enzyme.
+            name = normalize_source_evidence_text(name).lower()
+            head, paren, rest = name.partition(" (")
+            aliases = {name, head.strip()} | ({rest[:-1].strip()} if paren and rest.endswith(")") else set())
+            if aliases & represented:
+                return True
+            return len(name.split()) > 1 and any(
+                re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", text) for text in represented
+            )
+
+        for item in inventory:
+            name = item["name"]
+            if is_represented(name):
+                continue
+            slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")[:40] or "material"
+            ou_id, sample_id = f"inv_ou_{slug}", f"inv_{slug}"
+            if ou_id in used or sample_id in used:
+                continue
+            used.update({ou_id, sample_id})
+            common = {"source_subject": name, "source_quote": "", "source_group": "material_inventory"}
+            materials.append({**common, "record_id": ou_id, "level": "observationunit",
+                              "parent_row_id": study_id, "record_kind": "material_preparation",
+                              "label": f"{name} (material preparation)"})
+            materials.append({**common, "record_id": sample_id, "level": "sample",
+                              "parent_row_id": ou_id, "record_kind": "material_identity",
+                              "label": name})
+        return {**claims, "reported_materials": materials}
+
+    @staticmethod
+    def _reported_record_digest(record: Mapping[str, Any], parent: Mapping[str, Any]) -> str:
+        payload = json.dumps([record, parent], sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    async def _materialize_reviewed_results(
+        self, plan: Mapping[str, Any], records: List[Dict[str, Any]],
+        knowledge: List[Dict[str, Any]], source_text: str,
+        *, materials: List[Dict[str, Any]] | None = None,
+    ) -> Dict[str, Any]:
+        materials = materials or []
+        if not records and not materials:
+            return dict(plan)
+        # A result proposed for one table row repeats over the table's other
+        # rows. Repeats are reviewed through their template, not one by one;
+        # each still passes the verbatim row and cell checks below.
+        records = rebind_results_to_named_samples(records, materials)
+        records, materials, derived = expand_table_row_templates(records, materials, source_text)
+        result = deepcopy(dict(plan))
+        # Check each material on its own: one misquoted variant drops only that
+        # material (and its children), not the whole inventory. Rejecting all of
+        # them left papers whose rows come only from this inventory with no
+        # Sample or Assay rows at all.
+        accepted, dropped, structural_errors = result, set(), []
+        for material in sorted(materials, key=lambda item: item.get("level") == "sample"):
+            step = materialize_reported_materials(accepted, [material], source_text=source_text)
+            new_errors = (step.get("materialization_errors") or [])[
+                len(accepted.get("materialization_errors") or []):
+            ]
+            if new_errors:
+                structural_errors.extend(new_errors)
+                dropped.add(material.get("record_id"))
+            else:
+                accepted = step
+        if structural_errors:
+            result.setdefault("materialization_errors", []).extend(structural_errors)
+            materials = [item for item in materials if item.get("record_id") not in dropped]
+            records = [item for item in records if item.get("sample_row_id") not in dropped]
+            if not records and not materials:
+                return result
+        candidate = materialize_reported_materials(result, materials, source_text=source_text)
+        if len(candidate.get("materialization_errors") or []) > len(result.get("materialization_errors") or []):
+            return candidate
+        contracts = build_contract_index(knowledge)
+        for record in records:
+            for attribute in record.get("attributes") or []:
+                contract = contract_for(contracts, "assay", attribute.get("field_name") or "")
+                if contract and canonicalize_value(attribute.get("value"), contract) is None:
+                    result.setdefault("materialization_errors", []).append(
+                        f"Reported assay {record.get('record_id')} violates field contract "
+                        f"{attribute.get('field_name')}."
+                    )
+                    return result
+        prompt = (
+            "Independently review EVERY proposed material/preparation and Assay result. Return decisions with "
+            "record_id, approved, evidence_quote and rationale. Approve only when the actual "
+            "source establishes the named material, its exact planned Sample parent, the "
+            "result grain, and the meaning of EVERY mapped field. A mean or fitted coefficient "
+            "is an analysis result, not an individual replicate observation. Never attach a "
+            "group result to an arbitrary replicate or a material from another experiment. "
+            "Check that units, uncertainty, conditions and scope mean what the selected field "
+            "definitions mean. Field syntax is already checked by code and normalised after "
+            "review: a value written as the source prints it (with its ± error or unit) is not a "
+            "reason to reject, and parameters the source reports for the same material in one "
+            "table row or sentence may share one result record. Reject for wrong facts only. "
+            "For each proposed material, verify both its identity and its ObservationUnit/Sample "
+            "role and parent link. A named material may represent the source-described material "
+            "identity; it must not claim an unreported individual vessel, aliquot or replicate. "
+            "When result and material labels differ, verify that the source establishes their "
+            "alias relationship in this experiment; similar names alone do not establish identity. "
+            "Reject missing or conflicting evidence. Copy a contiguous verbatim passage "
+            "from the Actual source below, preserving its Markdown and mathematical markup. "
+            "Do not render equations or units into a different spelling inside evidence_quote. "
+            "The proposals and existing plan are unverified claims, not source evidence.\n\n"
+            "Selected contracts:\n" + json.dumps(self._field_contract_catalog(knowledge), ensure_ascii=False)
+            + "\n\nProposed graph:\n" + json.dumps(candidate.get("levels") or [], ensure_ascii=False)
+            + "\n\nProposed materials:\n" + json.dumps(
+                [m for m in materials if m["record_id"] not in derived], ensure_ascii=False)
+            + "\n\nProposed results:\n" + json.dumps(
+                [r for r in records if r["record_id"] not in derived], ensure_ascii=False)
+            + "\n\nActual source:\n" + source_text
+        )
+        review = await invoke_structured_output(
+            self.llm_helper, [HumanMessage(content=prompt)], ReportedAssayReviewResponse,
+            operation_name="EntityStructurePlanner.reported_result_review",
+            max_tokens=32768 if config.llm_enable_thinking else 8192,
+        )
+        decisions = self._claims_payload(review).get("decisions") or []
+        expected = [record["record_id"] for record in [*materials, *records]
+                    if record["record_id"] not in derived]
+        actual = [item.get("record_id") for item in decisions]
+        valid = len(set(expected)) == len(expected) and sorted(actual) == sorted(expected)
+        valid = valid and all(item.get("approved") is True and
+                              _review_quote_in_source(item.get("evidence_quote"), source_text)
+                              for item in decisions)
+        review_record = {
+            "expected_record_ids": expected,
+            "decisions": decisions,
+            "passed": valid,
+        }
+        result["reported_record_review"] = review_record
+        candidate["reported_record_review"] = review_record
+        if not valid:
+            errors = result.setdefault("materialization_errors", [])
+            errors.append(
+                "Reported results lack complete source-backed independent approval."
+            )
+            if len(set(expected)) != len(expected):
+                errors.append("Reported record proposals contain duplicate record_id values.")
+            for record_id in expected:
+                if actual.count(record_id) != 1:
+                    errors.append(
+                        f"Reported record {record_id} needs exactly one independent review decision."
+                    )
+            for item in decisions:
+                record_id = item.get("record_id")
+                if record_id not in expected:
+                    errors.append(f"Independent review referenced unknown reported record {record_id}.")
+                    continue
+                if item.get("approved") is not True:
+                    rationale = " ".join(str(item.get("rationale") or "No reason supplied.").split())[:600]
+                    errors.append(
+                        f"Independent review rejected reported record {record_id}: {rationale} "
+                        "Recheck this review claim against the actual source before revising."
+                    )
+                elif not _review_quote_in_source(item.get("evidence_quote"), source_text):
+                    errors.append(
+                        f"Reported record {record_id} review evidence_quote is not present in the "
+                        "source; copy a verbatim source passage including its markup."
+                    )
+            if len(set(expected)) != len(expected) or set(actual) - set(expected):
+                return result
+        approved_ids = {
+            item["record_id"] for item in decisions
+            if actual.count(item.get("record_id")) == 1
+            and item.get("approved") is True
+            and _review_quote_in_source(item.get("evidence_quote"), source_text)
+        }
+        approved_ids |= {item for item, template in derived.items() if template in approved_ids}
+        # Keep independently verified records without treating a partial review
+        # as a complete plan. Descendants of rejected materials cannot survive.
+        available_parents = {
+            row["row_id"] for level in result.get("levels") or []
+            for row in level.get("entities") or []
+        }
+        accepted_materials = []
+        for material in sorted(materials, key=lambda item: item.get("level") == "sample"):
+            if material["record_id"] in approved_ids and material.get("parent_row_id") in available_parents:
+                accepted_materials.append(material)
+                available_parents.add(material["record_id"])
+        candidate = materialize_reported_materials(result, accepted_materials, source_text=source_text)
+        reviewed_samples = {
+            row["row_id"]: row for level in candidate.get("levels") or []
+            if level.get("level") == "sample" for row in level.get("entities") or []
+        }
+        # Only fully source-backed review decisions reach this handoff. Bind
+        # aliases to the exact reviewed proposal and parent, never to a global
+        # string synonym that could merge materials from different experiments.
+        parent_bindings = {
+            record["record_id"]: reported_parent_binding_digest(
+                record, reviewed_samples[record["sample_row_id"]], source_text
+            )
+            for record in records if record["record_id"] in approved_ids
+            and record.get("sample_row_id") in reviewed_samples
+        }
+        result = candidate
+        for record in records:
+            if record["record_id"] not in parent_bindings:
+                continue
+            result = materialize_reported_assays(
+                result, [record], source_text=source_text, field_catalog=self._field_catalog(knowledge),
+                reviewed_parent_bindings=parent_bindings,
+            )
+        parents = {row["row_id"]: row for level in result.get("levels") or []
+                   for row in level.get("entities") or []}
+        result["source_fingerprint"] = hashlib.sha256(source_text.encode()).hexdigest()
+        for level in result.get("levels") or []:
+            if level["level"] not in {"observationunit", "sample", "assay"}:
+                continue
+            receipt_key = "reported_assay_reviews" if level["level"] == "assay" else "reported_material_reviews"
+            receipts = result.setdefault(receipt_key, {})
+            for row in level.get("entities") or []:
+                if row["row_id"] in approved_ids:
+                    receipts[row["row_id"]] = {
+                        "source_sha256": result["source_fingerprint"],
+                        "record_sha256": self._reported_record_digest(row, parents[row["parent_row_id"]]),
+                    }
+        return result
+
     @traceable(name="EntityStructurePlanner", tags=["agent", "structure"])
     async def execute(self, state: FAIRifierState) -> FAIRifierState:
         self.log_execution(state, "🧱 Planning ISA entity cardinality and relations")
@@ -1943,9 +2620,11 @@ Authoritative table profiles with value distributions and example rows:
         source_fingerprint = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
         existing_plan = state.get("entity_plan") or {}
         existing_validation = state.get("entity_plan_validation") or {}
+        requires_physical_reaudit = self._requires_physical_relation_reaudit(existing_plan)
         if (
             existing_plan.get("source_fingerprint") == source_fingerprint
             and existing_validation.get("passed") is True
+            and not requires_physical_reaudit
         ):
             self.logger.info(
                 "Entity structure plan locked for unchanged source; reusing rows=%s contacts=%s",
@@ -1953,6 +2632,10 @@ Authoritative table profiles with value distributions and example rows:
                 existing_validation.get("investigation_contact_count", 0),
             )
             return state
+        if requires_physical_reaudit and existing_validation.get("passed") is True:
+            self.logger.info(
+                "Re-auditing a legacy entity plan with unverified physical input relations."
+            )
         contacts = self._source_contacts(state)
         planning_knowledge = self._planning_knowledge(state)
         table_profiles = metadata_table_profiles(state.get("source_workspace") or {})
@@ -1965,15 +2648,16 @@ Authoritative table profiles with value distributions and example rows:
         )
         plan: Dict[str, Any] = {}
         errors: List[str] = []
-        lessons: List[str] = []
+        retry_errors: List[str] = []
         best_plan: Dict[str, Any] = {}
         best_errors: List[str] = []
-        best_rank: tuple[int, int, int, int] | None = None
+        best_rank: tuple[int, int, int, int, int] | None = None
 
-        def _remember(items: List[str]) -> None:
-            for item in items:
-                if item and item not in lessons:
-                    lessons.append(item)
+        def _set_retry_errors(items: List[str]) -> None:
+            # Each validation describes the current candidate. Accumulating old
+            # failures lets resolved errors consume the bounded prompt and hide
+            # newer source/parentage review findings from subsequent attempts.
+            retry_errors[:] = list(dict.fromkeys(item for item in items if item))
 
         max_attempts = max(
             1,
@@ -1985,31 +2669,58 @@ Authoritative table profiles with value distributions and example rows:
                 )
             ),
         )
+        # The inventory only merges into parsed claims, so it runs alongside
+        # the first planning attempt instead of before it.
+        import asyncio
+
+        inventory_task = asyncio.ensure_future(self._material_inventory(source_text))
+        material_inventory: List[Dict[str, str]] | None = None
+        truncated_before = False
         for attempt in range(1, max_attempts + 1):
-            parsed = await invoke_structured_output(
-                self.llm_helper,
-                [HumanMessage(content=self._prompt(state, prior_errors=lessons or None))],
-                EntityDesignClaimsResponse,
-                operation_name=f"EntityStructurePlanner.attempt_{attempt}",
-                max_tokens=32768,
-            )
+            schema_errors: List[str] = []
+            from ..utils.llm_helper import thinking_override
+            from ..utils.structured_output import TRUNCATED_ANSWER_MARKER
+
+            # Thinking stays on for planning: a no-thinking retry produced
+            # complete but much coarser plans (entities merged) on Qwen.
+            with thinking_override(None):
+                parsed = await invoke_structured_output(
+                    self.llm_helper,
+                    [HumanMessage(content=self._prompt(state, prior_errors=retry_errors or None))],
+                    EntityDesignClaimsResponse,
+                    operation_name=f"EntityStructurePlanner.attempt_{attempt}",
+                    allow_truncated=True,
+                    # Reasoning consumes the same output allowance as the JSON answer.
+                    max_tokens=65536 if config.llm_enable_thinking else 32768,
+                    validation_errors=schema_errors,
+                )
+            if TRUNCATED_ANSWER_MARKER in schema_errors:
+                truncated_before = True
             if not parsed:
-                transport_error = "The model returned no parseable structure plan."
+                parse_errors = schema_errors or [
+                    "The model returned no parseable structure plan."
+                ]
                 if best_plan:
                     plan = best_plan
-                    errors = [*best_errors, transport_error]
+                    errors = [*best_errors, *parse_errors]
                 else:
-                    errors = [transport_error]
-                _remember(errors)
+                    errors = parse_errors
+                _set_retry_errors(errors)
                 continue
             claims = self._claims_payload(parsed)
             claims = normalize_claim_measurement_units(claims, source_text)
+            if material_inventory is None:
+                material_inventory = await inventory_task
+            claims = self._with_material_inventory(claims, material_inventory, source_text=source_text)
+            claims["reported_materials"] = repair_reported_material_quotes(
+                claims.get("reported_materials") or [], source_text=source_text
+            )
             candidate_errors = self._candidate_record_plan_errors(
                 claims, dataset_profiles
             )
             if candidate_errors:
                 errors = candidate_errors
-                _remember(errors)
+                _set_retry_errors(errors)
                 continue
             audit_table_profiles = metadata_table_profiles_for_record_plans(
                 state.get("source_workspace") or {},
@@ -2028,16 +2739,17 @@ Authoritative table profiles with value distributions and example rows:
                             field_catalog,
                             field_contract_catalog,
                             audit_table_profiles,
+                            source_text=source_text,
                         )
                     )
                 ],
                 EntityPlanScopeAuditResponse,
                 operation_name=f"EntityStructurePlanner.scope_audit_{attempt}",
-                max_tokens=8192,
+                max_tokens=32768 if config.llm_enable_thinking else 8192,
             )
             audit_payload = self._claims_payload(scope_audit) if scope_audit else {}
             rejected_reuse = self._enforce_independent_reuse_audit(
-                claims, audit_payload
+                claims, audit_payload, source_text=source_text
             )
             if rejected_reuse:
                 self.log_execution(
@@ -2046,7 +2758,7 @@ Authoritative table profiles with value distributions and example rows:
                     + ", ".join(rejected_reuse),
                 )
             scope_repairs, scope_audit_errors = self._apply_dimension_scope_audit(
-                claims, audit_payload
+                claims, audit_payload, source_text=source_text
             )
             if scope_repairs:
                 self.log_execution(
@@ -2093,7 +2805,7 @@ Authoritative table profiles with value distributions and example rows:
                     operation_name=(
                         f"EntityStructurePlanner.record_column_audit_{attempt}"
                     ),
-                    max_tokens=8192,
+                    max_tokens=32768 if config.llm_enable_thinking else 8192,
                 )
                 focused_payload = (
                     self._claims_payload(focused_record_audit)
@@ -2182,7 +2894,12 @@ Authoritative table profiles with value distributions and example rows:
                 investigation_contacts=contacts,
             )
             plan["source_fingerprint"] = source_fingerprint
-            errors = self._plan_errors(plan)
+            plan["physical_relation_audit_version"] = PHYSICAL_RELATION_AUDIT_VERSION
+            plan = await self._materialize_reviewed_results(
+                plan, claims.get("reported_assays") or [], planning_knowledge, source_text,
+                materials=claims.get("reported_materials") or [],
+            )
+            errors = self._plan_errors(plan, source_text=source_text)
             # The scope audit may repair a draft, but a disagreement or an
             # out-of-contract scope is not evidence that the materialized
             # entity graph is unusable. Those notes used to veto the whole
@@ -2204,6 +2921,13 @@ Authoritative table profiles with value distributions and example rows:
                     for item in mapping_audit_errors
                     if item not in (plan.get("unresolved_ambiguities") or [])
                 )
+            truncated = TRUNCATED_ANSWER_MARKER in schema_errors
+            if truncated:
+                truncated_before = True
+                # A recovered prefix lacks its tail (often the last design
+                # groups and reported results): rank it below complete plans
+                # and re-plan while attempts remain.
+                errors = [*errors, "The structure plan answer was truncated; re-planning."]
             candidate_rank = self._candidate_rank(
                 plan,
                 errors,
@@ -2213,9 +2937,21 @@ Authoritative table profiles with value distributions and example rows:
                 best_plan = plan
                 best_errors = list(errors)
                 best_rank = candidate_rank
-            _remember(errors)
+            _set_retry_errors(errors)
             if not errors:
                 break
+            if plan and not self._blocking_plan_errors(errors):
+                # Only individual reported records failed review; those are
+                # already dropped and the approved ones kept. Re-planning the
+                # whole study for them would redo all the work for nothing.
+                self.log_execution(
+                    state,
+                    f"🧾 Keeping plan: {len(errors)} per-record review issue(s), no structural error",
+                )
+                break
+
+        if material_inventory is None and not inventory_task.done():
+            inventory_task.cancel()
 
         if errors and best_plan:
             plan = best_plan
@@ -2223,7 +2959,7 @@ Authoritative table profiles with value distributions and example rows:
 
         promoted_fields = self._promote_planned_fields(
             state, plan, planning_knowledge
-        ) if plan and not errors else []
+        ) if plan and not self._blocking_plan_errors(errors) else []
         if promoted_fields:
             plan["promoted_fields"] = promoted_fields
             self.log_execution(

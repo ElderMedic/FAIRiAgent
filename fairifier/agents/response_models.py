@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -139,6 +139,14 @@ class DesignClaimDimensionResponse(BaseModel):
         description=(
             "Source-stated values whose ordinal position is known when the full "
             "factor enumeration is unavailable."
+        ),
+    )
+    reported_range: Optional[str] = Field(
+        default=None,
+        description=(
+            "Source-exact span of the factor when its individual levels are not "
+            "enumerated (for example '30–80 °C'). Recorded as one value; never "
+            "expanded into rows."
         ),
     )
     origin: str = Field(description="One of: explicit or derived")
@@ -302,6 +310,100 @@ class MetadataTableEntityPlanResponse(BaseModel):
     evidence: str = ""
 
 
+class ReportedResultAttributeResponse(BaseModel):
+    """A source-reported value mapped to an exact selected Assay field."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field_name: str = Field(min_length=1)
+    value: str = Field(
+        min_length=1,
+        description="Literal value present in this result's source_quote. Do not infer enum labels, paraphrase notes or convert units here; subsequent value mapping performs normalization.",
+    )
+
+
+class ReportedMaterialResponse(BaseModel):
+    """A source-described material or preparation, not an inferred vessel count."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    record_id: str = Field(min_length=1)
+    level: Literal["observationunit", "sample"]
+    parent_row_id: str = Field(
+        min_length=1,
+        description="An ObservationUnit must reference a declared Study row_id. A Sample must reference a declared ObservationUnit record_id, never a Study. Declare the source-supported parent in the same response if needed.",
+    )
+    record_kind: Literal["material_preparation", "material_identity"]
+    source_subject: str = Field(
+        min_length=1,
+        description="Exact source phrase identifying this material or preparation, present in source_quote. Use label for a descriptive or expanded name; do not invent a composite source_subject.",
+    )
+    source_quote: str = Field(
+        min_length=1,
+        description="Contiguous verbatim source passage naming source_subject. For a Sample it must also name its parent ObservationUnit's source_subject and support that relationship. Preserve source markup and scientific symbols.",
+    )
+    label: str = Field(min_length=1)
+    source_group: str = Field(min_length=1)
+
+
+class ReportedAssayResponse(BaseModel):
+    """One reported result, distinct from its unreported underlying runs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    record_id: str = Field(min_length=1)
+    sample_row_id: str = Field(
+        min_length=1,
+        description="record_id of the declared material Sample to which this result belongs, not its Study or ObservationUnit.",
+    )
+    record_kind: Literal["fitted_result", "aggregate_result", "qualitative_result"]
+    source_subject: str = Field(
+        min_length=1,
+        description="Exact source identity of the referenced Sample, also present in source_quote; not an expanded descriptive label.",
+    )
+    source_quote: str = Field(
+        min_length=1,
+        description="Contiguous verbatim source passage or complete HTML table region naming the material and containing every proposed attribute value. Preserve markup; omit inferred classifications and paraphrases from attributes.",
+    )
+    label: str = Field(min_length=1)
+    source_group: str = Field(min_length=1)
+    attributes: List[ReportedResultAttributeResponse] = Field(min_length=1)
+    unreported_design: List[str] = Field(default_factory=list)
+    repeat_for_table_rows: bool = Field(
+        default=False,
+        description="True when source_quote is one body row of a table that reports the same measurements for other materials in its other rows. Code repeats this record for every other row, reading each attribute from the same column.",
+    )
+
+
+class ReportedAssayReviewDecisionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    record_id: str
+    approved: bool
+    evidence_quote: str
+    rationale: str
+
+
+class MaterialInventoryItemResponse(BaseModel):
+    """One distinct material the study characterises or measures."""
+
+    name: str = Field(description="Exact name as written in the source")
+    role: str = Field(
+        default="other",
+        description="One of: enzyme_or_protein, substrate, organism_or_strain, other",
+    )
+
+
+class MaterialInventoryResponse(BaseModel):
+    materials: List[MaterialInventoryItemResponse] = Field(default_factory=list)
+
+
+class ReportedAssayReviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decisions: List[ReportedAssayReviewDecisionResponse]
+
+
 class EntityDesignClaimsResponse(BaseModel):
     """Minimal source claims from which all entity rows are expanded."""
 
@@ -310,6 +412,8 @@ class EntityDesignClaimsResponse(BaseModel):
     investigations: List[RootEntityResponse] = Field(default_factory=list)
     studies: List[RootEntityResponse] = Field(default_factory=list)
     design_groups: List[DesignClaimGroupResponse] = Field(default_factory=list)
+    reported_assays: List[ReportedAssayResponse] = Field(default_factory=list)
+    reported_materials: List[ReportedMaterialResponse] = Field(default_factory=list)
     record_table_plans: List[MetadataTableEntityPlanResponse] = Field(
         default_factory=list
     )
@@ -417,6 +521,11 @@ class EntityPlanDimensionScopeResponse(BaseModel):
     )
     applies_to: List[str] = Field(
         description="One of the ordered suffixes observationunit/sample/assay, sample/assay, or assay"
+    )
+    sample_relation: Literal["same_sample", "distinct_samples", "unknown"] = "unknown"
+    evidence_quote: Optional[str] = Field(
+        default=None,
+        description="Verbatim source passage supporting this dimension's physical input relation",
     )
 
 
