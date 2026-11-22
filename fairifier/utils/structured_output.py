@@ -101,6 +101,9 @@ def resolve_structured_output_mode(provider: Optional[str] = None) -> Structured
         return StructuredOutputMode.JSON_OBJECT
     if normalized == "openai":
         return StructuredOutputMode.JSON_SCHEMA
+    if normalized == "ollama" and getattr(config, "ollama_constrained_json", True):
+        # Ollama ``format="json"`` constrains decoding to complete JSON.
+        return StructuredOutputMode.JSON_OBJECT
     return StructuredOutputMode.PROMPT_JSON
 
 
@@ -143,7 +146,9 @@ def append_json_schema_instructions(
     """
     example = pydantic_json_example(model)
     example_text = json.dumps(example, indent=2, ensure_ascii=False)
-    property_names = list(model.model_json_schema().get("properties", {}).keys())
+    schema = model.model_json_schema()
+    schema_text = json.dumps(schema, ensure_ascii=False)
+    property_names = list(schema.get("properties", {}).keys())
 
     json_hint = ""
     if require_json_word and "json" not in prompt.lower():
@@ -154,7 +159,11 @@ def append_json_schema_instructions(
         f"{json_hint}"
         "OUTPUT FORMAT — JSON OBJECT (required keys only, no markdown fences):\n"
         f"{example_text}\n\n"
-        f"Required JSON keys: {property_names}\n"
+        f"JSON properties: {property_names}\n"
+        "The schema below defines required properties, nested records, allowed "
+        "values and nullability. Empty arrays above illustrate the outer shape; "
+        "populate source-supported records using their complete item schema.\n"
+        f"JSON Schema:\n{schema_text}\n"
         "Return a single JSON object. No preamble or explanation outside JSON."
     )
 
@@ -179,7 +188,121 @@ def _enhance_messages_for_json_object(
     return enhanced
 
 
-def _coerce_to_dict(parsed: Any, model: Type[BaseModel]) -> Optional[Dict[str, Any]]:
+_SCHEMA_ERROR_MESSAGES = {
+    "missing": "Required field is missing.",
+    "extra_forbidden": "Unexpected property is not permitted.",
+    "string_type": "Input should be a valid string.",
+    "list_type": "Input should be a valid list.",
+    "dict_type": "Input should be a valid dictionary.",
+    "int_type": "Input should be a valid integer.",
+    "int_parsing": "Input should be a valid integer.",
+    "float_type": "Input should be a valid number.",
+    "float_parsing": "Input should be a valid number.",
+    "bool_type": "Input should be a valid boolean.",
+    "bool_parsing": "Input should be a valid boolean.",
+    "none_required": "Input should be null.",
+    "literal_error": "Input must match an allowed literal in the schema.",
+    "enum": "Input must match an allowed enum value in the schema.",
+    "model_type": "Input should match the required object schema.",
+    "value_error": "Custom validation failed; check the field against the schema.",
+    "assertion_error": "Custom validation failed; check the field against the schema.",
+}
+_SCHEMA_NUMERIC_LIMITS = {
+    "greater_than_equal": ("ge", "Input should be greater than or equal to"),
+    "greater_than": ("gt", "Input should be greater than"),
+    "less_than_equal": ("le", "Input should be less than or equal to"),
+    "less_than": ("lt", "Input should be less than"),
+    "multiple_of": ("multiple_of", "Input should be a multiple of"),
+}
+
+
+def _schema_property_names(model: Type[BaseModel]) -> set[str]:
+    """Collect trusted property names, including nested schema definitions."""
+    names: set[str] = set()
+    pending: List[Any] = [model.model_json_schema()]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                names.update(properties)
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+    return names
+
+
+def _record_schema_failure(
+    error: Optional[Exception],
+    model: Type[BaseModel],
+    validation_errors: Optional[List[str]],
+) -> None:
+    """Report bounded schema diagnostics without copying the rejected payload."""
+    validation_error = error
+    seen: set[int] = set()
+    for _ in range(5):
+        if isinstance(validation_error, ValidationError) or validation_error is None:
+            break
+        if id(validation_error) in seen:
+            break
+        seen.add(id(validation_error))
+        validation_error = validation_error.__cause__ or validation_error.__context__
+
+    if isinstance(validation_error, ValidationError):
+        details = validation_error.errors(
+            include_url=False, include_context=True, include_input=False
+        )
+        property_names = _schema_property_names(model)
+        messages = []
+        for detail in details[:20]:
+            path = ".".join(
+                str(part) if type(part) is int or part in property_names else "<key>"
+                for part in detail.get("loc", ())
+            ) or "root"
+            error_type = str(detail.get("type") or "validation_error")
+            message = _SCHEMA_ERROR_MESSAGES.get(error_type)
+            if error_type in _SCHEMA_NUMERIC_LIMITS:
+                context_key, prefix = _SCHEMA_NUMERIC_LIMITS[error_type]
+                limit = (detail.get("ctx") or {}).get(context_key)
+                message = (
+                    f"{prefix} {limit}." if type(limit) in {int, float}
+                    else "Input must satisfy the numeric constraint in the schema."
+                )
+            if message is None:
+                error_type = "validation_error"
+                message = "Input does not satisfy the field schema."
+            # Even detail['msg'] and dynamic loc keys can contain rejected input
+            # from custom validators. Render trusted labels and numeric limits
+            # instead of copying provider/custom exception text or context.
+            messages.append(f"{path} [{error_type}]: {message}"[:220])
+        if len(details) > 20:
+            messages.append(
+                f"{len(details) - 20} further schema errors omitted; fix the same patterns."
+            )
+    elif error is None:
+        messages = ["root [json_object]: Response did not contain a parseable JSON object."]
+    else:
+        # Provider parser exceptions can embed the entire response in str(exc).
+        # Only Pydantic's structured diagnostics are safe to send back verbatim.
+        messages = [
+            f"root [validation_error]: Response does not satisfy {model.__name__}."
+        ]
+
+    logger.warning(
+        "Structured output failed %s validation: %s", model.__name__, "; ".join(messages)
+    )
+    if validation_errors is not None:
+        validation_errors.extend(
+            message for message in messages if message not in validation_errors
+        )
+
+
+def _coerce_to_dict(
+    parsed: Any,
+    model: Type[BaseModel],
+    *,
+    validation_errors: Optional[List[str]] = None,
+) -> Optional[Dict[str, Any]]:
     """Validate provider output and return canonical schema field names.
 
     Prompt-JSON and JSON-object providers return ordinary dictionaries. Passing
@@ -189,15 +312,13 @@ def _coerce_to_dict(parsed: Any, model: Type[BaseModel]) -> Optional[Dict[str, A
     provider instead.
     """
     if parsed is None:
+        if validation_errors is not None:
+            _record_schema_failure(None, model, validation_errors)
         return None
     try:
         validated = parsed if isinstance(parsed, model) else model.model_validate(parsed)
     except (ValidationError, TypeError, ValueError) as exc:
-        logger.warning(
-            "Structured output failed %s validation: %s",
-            model.__name__,
-            exc,
-        )
+        _record_schema_failure(exc, model, validation_errors)
         return None
     return validated.model_dump()
 
@@ -210,15 +331,27 @@ async def invoke_structured_output(
     operation_name: str = "StructuredOutput",
     max_tokens: Optional[int] = None,
     provider: Optional[str] = None,
+    validation_errors: Optional[List[str]] = None,
+    allow_truncated: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Invoke an LLM and parse a structured Pydantic-shaped JSON response.
+
+    ``allow_truncated`` recovers the complete prefix of an answer whose JSON
+    was cut off (the caller must validate the result as a partial answer).
 
     Strategy by provider:
     - deepseek: ``response_format={'type': 'json_object'}`` (DeepSeek JSON Output)
     - openai: LangChain ``with_structured_output`` (JSON Schema), then fallbacks
     - others: prompt-guided JSON parsing
+
+    The optional caller-owned ``validation_errors`` list receives bounded
+    path/type/message diagnostics. Schema failures still return None; the
+    owning stage retains its existing retry budget.
     """
+    from .llm_helper import call_output_budget
+
+    max_tokens = call_output_budget(max_tokens)
     mode = resolve_structured_output_mode(provider or llm_helper.provider)
 
     if mode == StructuredOutputMode.JSON_SCHEMA:
@@ -292,12 +425,19 @@ async def invoke_structured_output(
                 # direct Pydantic return path discarded that provenance.
                 raw_result = result
                 parsed_result = result
+                parsing_error = None
                 if isinstance(result, dict) and "raw" in result:
                     raw_result = result.get("raw")
                     parsed_result = result.get("parsed")
+                    parsing_error = result.get("parsing_error")
                 if raw_result is not None and hasattr(llm_helper, "_log_llm_response"):
                     llm_helper._log_llm_response(raw_result, messages, operation_name)
-                return _coerce_to_dict(parsed_result, schema_model)
+                if parsed_result is None and isinstance(parsing_error, Exception):
+                    _record_schema_failure(parsing_error, schema_model, validation_errors)
+                    return None
+                return _coerce_to_dict(
+                    parsed_result, schema_model, validation_errors=validation_errors
+                )
 
     if mode == StructuredOutputMode.JSON_OBJECT:
         try:
@@ -309,7 +449,13 @@ async def invoke_structured_output(
                 max_tokens=max_tokens,
             )
             content = getattr(response, "content", "") if response else ""
-            return _coerce_to_dict(parse_llm_json(content), schema_model)
+            parsed_json = parse_llm_json(content)
+            if parsed_json is None:
+                _log_unparseable_response(response, content, schema_model, operation_name)
+                parsed_json = _salvage(content, allow_truncated, operation_name, validation_errors)
+            return _coerce_to_dict(
+                parsed_json, schema_model, validation_errors=validation_errors
+            )
         except Exception as exc:
             logger.warning(
                 "JSON Object mode failed (%s); falling back to prompt JSON",
@@ -325,7 +471,48 @@ async def invoke_structured_output(
         max_tokens=max_tokens,
     )
     content = getattr(response, "content", "") if response else ""
-    return _coerce_to_dict(parse_llm_json(content), schema_model)
+    parsed_json = parse_llm_json(content)
+    if parsed_json is None:
+        _log_unparseable_response(response, content, schema_model, operation_name)
+        parsed_json = _salvage(content, allow_truncated, operation_name, validation_errors)
+    return _coerce_to_dict(
+        parsed_json, schema_model, validation_errors=validation_errors
+    )
+
+
+TRUNCATED_ANSWER_MARKER = "root [truncated]: the answer was cut off; only its complete prefix was recovered."
+
+
+def _salvage(
+    content: Any, allowed: bool, operation_name: str,
+    validation_errors: Optional[List[str]] = None,
+) -> Optional[Dict[str, Any]]:
+    if not allowed:
+        return None
+    from .json_parse import salvage_truncated_json
+
+    salvaged = salvage_truncated_json(content)
+    if salvaged is not None:
+        logger.warning("Recovered the complete prefix of a truncated answer for %s", operation_name)
+        if validation_errors is not None:
+            # A recovered prefix is partial by definition; tell the caller.
+            validation_errors.append(TRUNCATED_ANSWER_MARKER)
+    return salvaged
+
+
+def _log_unparseable_response(response: Any, content: Any, schema_model: Any, operation_name: str) -> None:
+    """Say whether an unparseable answer was truncated, empty or malformed."""
+    metadata = getattr(response, "response_metadata", {}) or {}
+    reason = (
+        metadata.get("done_reason") or metadata.get("finish_reason")
+        or metadata.get("stop_reason") or "unknown"
+    )
+    text = str(content or "")
+    logger.warning(
+        "Unparseable %s answer for %s: %d chars, stop=%s, tail=%r",
+        getattr(schema_model, "__name__", "schema"), operation_name, len(text), reason,
+        text[-160:],
+    )
 
 
 def supports_api_json_object(provider: Optional[str] = None) -> bool:

@@ -3,8 +3,8 @@
 import logging
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
-from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
 
 # Load .env file if it exists
 def load_env_file(env_file_path: Optional[Path] = None, verbose: bool = False):
@@ -111,6 +111,49 @@ class FAIRifierConfig:
     record_value_resolution_enabled: bool = True
     record_value_resolution_batch_size: int = 25
     record_value_resolution_max_records: int = 400
+    # Upper bound on review calls per ISA level (0 = unlimited).
+    record_value_resolution_max_calls_per_level: int = 40
+    # Independent LLM batches (ISA mapping, record-level review) run with this
+    # many concurrent calls. 1 keeps the serial behaviour; raise it for hosted
+    # APIs, keep 1 for a single self-hosted GPU server.
+    llm_batch_concurrency: int = 1
+    # Mechanical ISA mapping and record-review calls: optional smaller model on
+    # the same provider/endpoint, and thinking off by default.
+    mapping_llm_model: str = ""
+    mapping_llm_thinking: bool = False
+    # Critic retries of ISAValueMapper repair the flagged cells of the previous
+    # matrix instead of redoing the whole mapping.
+    isa_targeted_repair: bool = True
+    # JSONGenerator extracts document-level values; per-entity values belong
+    # to ISAValueMapper. True restores per-entity generation in JSONGenerator.
+    jsongen_per_entity: bool = False
+    # Run EntityStructurePlanner and (document-level) JSONGenerator together.
+    parallel_plan_and_json: bool = True
+    # Thinking for document-level JSONGenerator candidate extraction.
+    jsongen_thinking: bool = False
+    # LLM pre-normalization of retrieval candidates before JSON generation.
+    jsongen_normalize_candidates: bool = False
+    # Ollama: per-request context window (0 = server default) and
+    # grammar-constrained JSON for structured calls.
+    ollama_num_ctx: int = 0
+    ollama_constrained_json: bool = True
+    # Give mapping/review calls the complete source (as a cacheable prefix)
+    # instead of bounded excerpts sized for small-context models.
+    full_source_context: bool = True
+    # Record review cites numbered source units instead of copying quotes,
+    # and reports decided cells only.
+    record_review_compact: bool = True
+    # Per-agent Critic retry budgets overriding max_step_retries,
+    # from FAIRIFIER_AGENT_MAX_RETRIES="JSONGenerator=0,KnowledgeRetriever=1".
+    # Retries that redo a whole step are expensive; ISAValueMapper retries are
+    # targeted repairs and keep the global budget.
+    agent_max_retries: Dict[str, int] = field(
+        default_factory=lambda: {
+            "DocumentParser": 1,
+            "KnowledgeRetriever": 1,
+            "JSONGenerator": 0,
+        }
+    )
     
     # Document parsing context limits (characters)
     # Modern LLMs support 200K+ tokens (~800K chars), these limits are conservative
@@ -264,8 +307,8 @@ class FAIRifierConfig:
     mineru_popo_model_path: Optional[str] = None
 
     # Deep agent inner-loop contracts
-    react_loop_max_iterations: int = 6
-    react_loop_max_tool_calls: int = 18
+    react_loop_max_iterations: int = 12
+    react_loop_max_tool_calls: int = 40
     cross_layer_max_restarts: int = 1  # Max rollback cycles from JSON -> retrieval
     # EntityStructurePlanner: total planning attempts before the hard gate. Each
     # attempt after the first receives the previous validation errors as feedback.
@@ -894,6 +937,73 @@ def apply_env_overrides(config_instance: FAIRifierConfig):
     if os.getenv("FAIRIFIER_MIN_CONFIDENCE_THRESHOLD"):
         config_instance.min_confidence_threshold = float(os.getenv("FAIRIFIER_MIN_CONFIDENCE_THRESHOLD"))
     
+    if os.getenv("FAIRIFIER_RECORD_REVIEW_MAX_CALLS_PER_LEVEL"):
+        config_instance.record_value_resolution_max_calls_per_level = max(
+            0, int(os.getenv("FAIRIFIER_RECORD_REVIEW_MAX_CALLS_PER_LEVEL"))
+        )
+
+    if os.getenv("FAIRIFIER_MAPPING_LLM_MODEL") is not None:
+        config_instance.mapping_llm_model = os.getenv("FAIRIFIER_MAPPING_LLM_MODEL", "").strip()
+    if os.getenv("FAIRIFIER_MAPPING_LLM_THINKING"):
+        config_instance.mapping_llm_thinking = os.getenv(
+            "FAIRIFIER_MAPPING_LLM_THINKING"
+        ).strip().lower() in ("1", "true", "yes", "on")
+
+    if os.getenv("FAIRIFIER_AGENT_MAX_RETRIES"):
+        parsed_budgets = {}
+        for item in os.getenv("FAIRIFIER_AGENT_MAX_RETRIES", "").split(","):
+            name, _, value = item.partition("=")
+            if name.strip() and value.strip().isdigit():
+                parsed_budgets[name.strip()] = int(value.strip())
+        config_instance.agent_max_retries = parsed_budgets
+
+    if os.getenv("FAIRIFIER_RECORD_REVIEW_COMPACT"):
+        config_instance.record_review_compact = os.getenv(
+            "FAIRIFIER_RECORD_REVIEW_COMPACT"
+        ).strip().lower() in ("1", "true", "yes", "on")
+
+    if os.getenv("FAIRIFIER_FULL_SOURCE_CONTEXT"):
+        config_instance.full_source_context = os.getenv(
+            "FAIRIFIER_FULL_SOURCE_CONTEXT"
+        ).strip().lower() in ("1", "true", "yes", "on")
+
+    if os.getenv("FAIRIFIER_OLLAMA_NUM_CTX"):
+        config_instance.ollama_num_ctx = max(0, int(os.getenv("FAIRIFIER_OLLAMA_NUM_CTX")))
+    if os.getenv("FAIRIFIER_OLLAMA_CONSTRAINED_JSON"):
+        config_instance.ollama_constrained_json = os.getenv(
+            "FAIRIFIER_OLLAMA_CONSTRAINED_JSON"
+        ).strip().lower() in ("1", "true", "yes", "on")
+
+    if os.getenv("FAIRIFIER_JSONGEN_NORMALIZE_CANDIDATES"):
+        config_instance.jsongen_normalize_candidates = os.getenv(
+            "FAIRIFIER_JSONGEN_NORMALIZE_CANDIDATES"
+        ).strip().lower() in ("1", "true", "yes", "on")
+
+    if os.getenv("FAIRIFIER_JSONGEN_THINKING"):
+        config_instance.jsongen_thinking = os.getenv(
+            "FAIRIFIER_JSONGEN_THINKING"
+        ).strip().lower() in ("1", "true", "yes", "on")
+
+    if os.getenv("FAIRIFIER_PARALLEL_PLAN_AND_JSON"):
+        config_instance.parallel_plan_and_json = os.getenv(
+            "FAIRIFIER_PARALLEL_PLAN_AND_JSON"
+        ).strip().lower() in ("1", "true", "yes", "on")
+
+    if os.getenv("FAIRIFIER_JSONGEN_PER_ENTITY"):
+        config_instance.jsongen_per_entity = os.getenv(
+            "FAIRIFIER_JSONGEN_PER_ENTITY"
+        ).strip().lower() in ("1", "true", "yes", "on")
+
+    if os.getenv("FAIRIFIER_ISA_TARGETED_REPAIR"):
+        config_instance.isa_targeted_repair = os.getenv(
+            "FAIRIFIER_ISA_TARGETED_REPAIR"
+        ).strip().lower() in ("1", "true", "yes", "on")
+
+    if os.getenv("FAIRIFIER_LLM_BATCH_CONCURRENCY"):
+        config_instance.llm_batch_concurrency = max(
+            1, int(os.getenv("FAIRIFIER_LLM_BATCH_CONCURRENCY"))
+        )
+
     # Retry configuration
     if os.getenv("FAIRIFIER_MAX_STEP_RETRIES"):
         config_instance.max_step_retries = int(os.getenv("FAIRIFIER_MAX_STEP_RETRIES"))

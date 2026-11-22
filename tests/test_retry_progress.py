@@ -217,6 +217,7 @@ async def test_retry_controller_restores_best_candidate_after_regression(monkeyp
     from fairifier.config import config
 
     monkeypatch.setattr(config, "disable_critic", False)
+    monkeypatch.setattr(config, "agent_max_retries", {})  # test the retry mechanics
     app = _bare_app(max_step_retries=3)
     app.critic = _RetryCritic([0.6, 0.5, 0.4])
     calls = 0
@@ -235,8 +236,8 @@ async def test_retry_controller_restores_best_candidate_after_regression(monkeyp
         lambda state: bool(state.get("document_info")),
     )
 
-    assert calls == 3
-    assert result["retry_termination_reason"] == "repeated_regression"
+    assert calls == 2
+    assert result["retry_termination_reason"] == "regression"
     assert result["retry_restored_best"] is True
     assert result["retry_best_attempt"] == 1
     assert result["document_info"]["title"] == "revision-1"

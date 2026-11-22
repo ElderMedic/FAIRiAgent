@@ -270,12 +270,11 @@ def should_stop_for_no_progress(
     status = current.get("status")
     if status in {"oscillating", "stagnant"}:
         return "oscillation" if status == "oscillating" else "stagnation"
+    # A targeted repair that scores worse is the evidence that the critic's
+    # remaining issues are beyond what this agent can fix. The best attempt is
+    # restored, and a further retry would only repair the worse candidate.
     if status == "regressed":
-        recent = trajectory[-(stagnant_limit + 1) :]
-        if len(recent) >= stagnant_limit + 1 and all(
-            item.get("status") in {"regressed", "stagnant"} for item in recent
-        ):
-            return "repeated_regression"
+        return "regression"
     return None
 
 

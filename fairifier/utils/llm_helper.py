@@ -53,6 +53,81 @@ _llm_call_started_at: ContextVar[float | None] = ContextVar(
 
 QWEN_MAX_TOKENS_LIMIT = 65536
 
+# Per-call thinking override (e.g. off for mechanical mapping/review calls).
+# None means "use config.llm_enable_thinking".
+_thinking_override: ContextVar[Optional[bool]] = ContextVar(
+    "llm_thinking_override", default=None
+)
+
+
+def output_unbounded() -> bool:
+    """LLM_MAX_TOKENS=0: no client-side output cap; only the model/context limit."""
+    value = config.llm_max_tokens
+    return value is None or value <= 0
+
+
+def call_output_budget(max_tokens: Optional[int]) -> Optional[int]:
+    """Per-call output cap, dropped entirely in unbounded mode."""
+    return None if output_unbounded() else max_tokens
+
+
+def effective_thinking() -> bool:
+    override = _thinking_override.get()
+    return config.llm_enable_thinking if override is None else bool(override)
+
+
+class thinking_override:
+    """Context manager that sets thinking for LLM calls made inside it."""
+
+    def __init__(self, enabled: Optional[bool]):
+        self.enabled = enabled
+        self._token = None
+
+    def __enter__(self):
+        self._token = _thinking_override.set(self.enabled)
+        return self
+
+    def __exit__(self, *exc):
+        _thinking_override.reset(self._token)
+        return False
+
+# A dropped connection to a self-hosted server (tunnel blip, server restart)
+# is not a model failure. Retry it a few times before failing the step, so a
+# single blip does not discard an hour of record-level review.
+_TRANSPORT_ERROR_MARKERS = (
+    "peer closed connection",
+    "server disconnected",
+    "incomplete chunked read",
+    "connection reset",
+    "connection refused",
+    "all connection attempts failed",
+    "remoteprotocolerror",
+    "connecterror",
+    "readerror",
+)
+_TRANSPORT_RETRY_DELAYS_SECONDS = (10.0, 30.0)
+
+
+def _is_transport_error(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(marker in text for marker in _TRANSPORT_ERROR_MARKERS)
+
+
+async def _ainvoke_with_transport_retry(runnable, messages, run_config, operation_name):
+    import asyncio
+
+    for attempt, delay in enumerate((*_TRANSPORT_RETRY_DELAYS_SECONDS, None), start=1):
+        try:
+            return await runnable.ainvoke(messages, config=run_config)
+        except Exception as exc:
+            if delay is None or not _is_transport_error(exc):
+                raise
+            logger.warning(
+                "Transport error for %s (attempt %d): %s; retrying in %.0fs",
+                operation_name, attempt, exc, delay,
+            )
+            await asyncio.sleep(delay)
+
 
 def _is_kimi_k3_model(model_name: Optional[str]) -> bool:
     """Return whether a model name refers to Moonshot's Kimi K3."""
@@ -120,6 +195,18 @@ def resolve_openai_use_responses_api(
 
 
 if ChatOpenAI is not None:
+    class DeepSeekChatOpenAI(ChatOpenAI):
+        """Keep DeepSeek's documented token-limit key on the wire."""
+
+        def _get_request_payload(self, input_, *, stop=None, **kwargs):
+            payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+            # Recent LangChain versions rename max_tokens for OpenAI. DeepSeek
+            # documents max_tokens; sending the renamed key loses the limit.
+            if "max_completion_tokens" in payload:
+                payload["max_tokens"] = payload.pop("max_completion_tokens")
+            return payload
+
+
     class KimiK3ChatOpenAI(ChatOpenAI):
         """ChatOpenAI adapter for K3's preserved-thinking message contract.
 
@@ -160,6 +247,7 @@ if ChatOpenAI is not None:
                     payload_message["reasoning_content"] = reasoning_content
             return payload
 else:  # pragma: no cover - only used when langchain-openai is unavailable
+    DeepSeekChatOpenAI = None
     KimiK3ChatOpenAI = None
 
 
@@ -1148,7 +1236,13 @@ class LLMHelper:
 
         if self.provider == "deepseek":
             # DeepSeek JSON Output: https://api-docs.deepseek.com/guides/json_mode
-            bind_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            bind_kwargs["extra_body"] = {
+                "thinking": {
+                    "type": "enabled" if effective_thinking() else "disabled"
+                }
+            }
+            if effective_thinking():
+                bind_kwargs["reasoning_effort"] = effort or "high"
         elif self.provider == "qwen":
             bind_kwargs["extra_body"] = self._qwen_extra_body(False)
 
@@ -1163,18 +1257,13 @@ class LLMHelper:
                 self.provider,
                 exc,
             )
-            # Keep per-call max_tokens on the fallback path so a failed
-            # json_object attempt cannot inherit a truncated shared budget.
-            if max_tokens is not None:
-                try:
-                    result = await self.llm.bind(max_tokens=max_tokens).ainvoke(
-                        messages, config=run_config
-                    )
-                    self._log_llm_response(result, messages, operation_name)
-                    return result
-                except Exception:
-                    pass
-            result = await self.llm.ainvoke(messages, config=run_config)
+            # A format fallback must not change the run's thinking mode,
+            # reasoning effort or per-call output budget.
+            fallback_kwargs = dict(bind_kwargs)
+            fallback_kwargs.pop("response_format")
+            result = await self.llm.bind(**fallback_kwargs).ainvoke(
+                messages, config=run_config
+            )
             self._log_llm_response(result, messages, operation_name)
             return result
 
@@ -1230,6 +1319,7 @@ class LLMHelper:
             json_mode: Use provider JSON Output mode when supported.
             max_tokens: Optional output token cap for this call.
         """
+        max_tokens = call_output_budget(max_tokens)
         run_config = self._build_run_config()
         if json_mode and self.provider in {"deepseek", "openai", "qwen", "zhipu"}:
             return await self._call_llm_json_object(
@@ -1239,7 +1329,7 @@ class LLMHelper:
                 run_config,
             )
 
-        enable_thinking = config.llm_enable_thinking
+        enable_thinking = effective_thinking()
 
         # For Qwen provider, use extra_body as per official documentation
         if self.provider == "qwen":
@@ -1392,19 +1482,54 @@ class LLMHelper:
                 # per-call ``options`` mapping to Ollama. Include the full
                 # configured sampler set when this optional card parameter is
                 # present so the options override does not drop other values.
-                if config.llm_presence_penalty is not None:
+                # A per-call output budget (e.g. the structure planner's larger
+                # allowance for thinking + a long JSON plan) must reach Ollama;
+                # otherwise every call is capped at the global num_predict and a
+                # long answer is silently truncated into unparseable JSON.
+                call_budget = max_tokens if max_tokens else None
+                if config.llm_presence_penalty is not None or call_budget:
+                    # A per-call ``options`` mapping replaces ChatOllama's own
+                    # option set, so it must carry every option, num_ctx included.
                     sampler_options = {
                         "temperature": config.llm_temperature,
                         "top_p": config.llm_top_p,
                         "top_k": config.llm_top_k,
                         "repeat_penalty": config.llm_repeat_penalty,
                         "presence_penalty": config.llm_presence_penalty,
-                        "num_predict": self._resolved_max_tokens(),
+                        "num_predict": call_budget or self._resolved_max_tokens() or -1,
+                        "num_ctx": getattr(config, "ollama_num_ctx", 0) or None,
                     }
                     llm_with_params = llm_with_params.bind(
                         options={key: value for key, value in sampler_options.items() if value is not None}
                     )
-                result = await llm_with_params.ainvoke(messages, config=run_config)
+                if json_mode:
+                    # Grammar-constrained decoding: the model cannot end its
+                    # turn before the JSON value is complete. Without it, long
+                    # sampled answers (thinking at temperature 1.0) sometimes
+                    # stopped mid-JSON with done_reason "stop".
+                    llm_with_params = llm_with_params.bind(format="json")
+                result = await _ainvoke_with_transport_retry(
+                    llm_with_params, messages, run_config, operation_name
+                )
+                if enable_thinking and not str(getattr(result, "content", "") or "").strip():
+                    # The model spent its whole turn thinking and stopped
+                    # without an answer. Retrying identically tends to repeat
+                    # that; ask once more without thinking.
+                    logger.warning(
+                        "Ollama thinking produced no answer for %s; retrying once without thinking",
+                        operation_name,
+                    )
+                    no_think = self.llm.bind(think=False)
+                    bound_options = next(
+                        (kw.get("options") for kw in [getattr(llm_with_params, "kwargs", {}) or {}]
+                         if kw.get("options")),
+                        None,
+                    )
+                    if bound_options:
+                        no_think = no_think.bind(options=bound_options)
+                    result = await _ainvoke_with_transport_retry(
+                        no_think, messages, run_config, operation_name
+                    )
 
                 if not result:
                     logger.error(f"❌ Ollama returned None result for {operation_name}")
@@ -1552,7 +1677,11 @@ class LLMHelper:
                 top_p=config.llm_top_p,
                 top_k=config.llm_top_k,
                 repeat_penalty=config.llm_repeat_penalty,
-                num_predict=self._resolved_max_tokens(),  # Limit output tokens to prevent runaway generation
+                # -1: no output cap; generation ends at the model's own stop or the context window.
+                num_predict=self._resolved_max_tokens() or -1,
+                # 0 keeps the server's loaded context; set it to the model's full
+                # window so no request falls back to a smaller default.
+                num_ctx=(getattr(config, "ollama_num_ctx", 0) or None),
             )
         elif self.provider == "openai":
             if ChatOpenAI is None:
@@ -1663,7 +1792,7 @@ class LLMHelper:
             base_url = config.llm_base_url
             logger.info(f"Initializing DeepSeek LLM: {self.model} at {base_url}")
             # Thinking is controlled per-call via extra_body in _call_llm
-            return ChatOpenAI(
+            return DeepSeekChatOpenAI(
                 model=self.model,
                 api_key=config.llm_api_key,
                 base_url=base_url,
@@ -2251,6 +2380,13 @@ Do NOT analyze, summarize, or rewrite the content.
 4. Capture relationships and hierarchy (study→experiments→samples→measurements)
 5. Ensure FAIR compliance: include identifiers, controlled vocabularies, provenance
 
+Use these exact top-level keys whenever the source states them (copy the
+abstract verbatim): "document_type", "title", "abstract", "authors",
+"keywords", "doi", "journal", "publication_date", "research_domain",
+"methodology", "location", "datasets_mentioned", "instruments", "variables",
+"key_findings". Other keys are discarded, so put study-design and measurement
+details into "methodology", "variables" and "key_findings".
+
 Return structured JSON metadata ONLY. No narrative text.
 Stop immediately after the closing ```."""
         else:
@@ -2612,7 +2748,9 @@ REQUIREMENTS:
         document_text: str,
         critic_feedback: Optional[Dict[str, Any]] = None,
         planner_instruction: Optional[str] = None,
-        prior_memory_context: Optional[str] = None
+        prior_memory_context: Optional[str] = None,
+        field_evidence_by_name: Optional[Dict[str, List[str]]] = None,
+        entity_plan: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Generate complete metadata for all selected fields.
@@ -2624,6 +2762,7 @@ REQUIREMENTS:
             document_text: Full document text (truncated)
             critic_feedback: Optional feedback for improvement
             prior_memory_context: Optional compressed context from mem0 (saves tokens)
+            entity_plan: Authoritative rows, delivered outside the source-text budget
             
         Returns:
             List of metadata field dictionaries with values
@@ -2648,7 +2787,40 @@ REQUIREMENTS:
             for field in selected_fields
             if str(field.get("name", "")).strip()
         }
-        for batch_index, batch in enumerate(batches, start=1):
+        if not entity_plan and len(batches) > 1:
+            # Document-level batches do not depend on each other's entity
+            # rows: run them concurrently and merge in batch order.
+            import asyncio
+
+            semaphore = asyncio.Semaphore(max(1, int(getattr(config, "llm_batch_concurrency", 1) or 1)))
+
+            async def run_batch(batch_index: int, batch: List[Dict[str, Any]]):
+                async with semaphore:
+                    batch_label = f"{batch_index}/{len(batches)}"
+                    logger.info("Generating metadata batch %s with %s fields", batch_label, len(batch))
+                    return await self._generate_complete_metadata_with_fallback(
+                        document_info=document_info,
+                        selected_fields=batch,
+                        document_text=document_text,
+                        critic_feedback=critic_feedback,
+                        planner_instruction=planner_instruction,
+                        prior_memory_context=prior_memory_context,
+                        batch_label=batch_label,
+                        established_entities=None,
+                        field_evidence_by_name=field_evidence_by_name,
+                        entity_plan=None,
+                    )
+
+            outcomes = await asyncio.gather(*(
+                run_batch(index, batch) for index, batch in enumerate(batches, start=1)
+            ))
+            for batch, batch_metadata in zip(batches, outcomes):
+                reconciled = self._reconcile_metadata_batch(batch, batch_metadata)
+                all_metadata.extend(reconciled)
+            batches_done = True
+        else:
+            batches_done = False
+        for batch_index, batch in enumerate([] if batches_done else batches, start=1):
             batch_label = f"{batch_index}/{len(batches)}"
             logger.info(
                 "Generating metadata batch %s with %s fields",
@@ -2664,6 +2836,8 @@ REQUIREMENTS:
                 prior_memory_context=prior_memory_context,
                 batch_label=batch_label,
                 established_entities=established_entities or None,
+                field_evidence_by_name=field_evidence_by_name,
+                entity_plan=entity_plan,
             )
             reconciled = self._reconcile_metadata_batch(batch, batch_metadata)
             all_metadata.extend(reconciled)
@@ -2725,9 +2899,21 @@ REQUIREMENTS:
         self,
         document_text: str,
         selected_fields: List[Dict[str, Any]],
+        *,
+        field_evidence_by_name: Optional[Dict[str, List[str]]] = None,
     ) -> str:
         """Bound direct prompt context without discarding source workspace content."""
         budget = self._metadata_context_budget(len(selected_fields))
+        if field_evidence_by_name:
+            evidence = self._render_batch_field_evidence(
+                selected_fields, field_evidence_by_name, max_chars=budget // 2,
+            )
+            if evidence:
+                separator = "\n\n" if document_text else ""
+                shared = self._clip_metadata_context(
+                    document_text, max(0, budget - len(evidence) - len(separator)),
+                )
+                return shared + separator + evidence
         if len(document_text) <= budget:
             return document_text
         keep_start = int(budget * 0.75)
@@ -2738,6 +2924,69 @@ REQUIREMENTS:
             + f"\n\n[... metadata context budget omitted {omitted:,} characters; use source workspace search for exact evidence ...]\n\n"
             + document_text[-keep_end:].lstrip()
         )
+
+    @staticmethod
+    def _clip_metadata_context(text: str, max_chars: int) -> str:
+        """Declare clipping while keeping source references and trailing context."""
+        if max_chars <= 0:
+            return ""
+        if len(text) <= max_chars:
+            return text
+        marker = "\n[... context truncated; inspect the referenced source ...]\n"
+        if max_chars <= len(marker):
+            return marker[:max_chars]
+        available = max_chars - len(marker)
+        keep_start = (available * 3) // 4
+        keep_end = available - keep_start
+        return text[:keep_start] + marker + (text[-keep_end:] if keep_end else "")
+
+    def _render_batch_field_evidence(
+        self,
+        selected_fields: List[Dict[str, Any]],
+        field_evidence_by_name: Dict[str, List[str]],
+        *,
+        max_chars: int,
+    ) -> str:
+        """Allocate the bounded evidence budget fairly to this batch's fields."""
+        index = {
+            str(name).strip().lower(): snippets
+            for name, snippets in field_evidence_by_name.items()
+        }
+        requested = []
+        seen = set()
+        for field in selected_fields:
+            name = str(field.get("name") or field.get("field_name") or "").strip()
+            key = name.lower()
+            if key in seen or not index.get(key):
+                continue
+            seen.add(key)
+            requested.append((name, index[key]))
+        if not requested:
+            return ""
+        heading = "Field-specific source evidence for this batch:\n"
+        share = (max_chars - len(heading)) // len(requested)
+        if share <= 0:
+            return ""
+        blocks = []
+        for name, snippets in requested:
+            label = f"\nField: {name}\n"
+            remaining = max(0, share - len(label))
+            pieces = []
+            for snippet in snippets:
+                snippet = str(snippet)
+                if len(snippet) + 1 <= remaining:
+                    pieces.append(snippet + "\n")
+                    remaining -= len(snippet) + 1
+                elif not pieces:
+                    pieces.append(self._clip_metadata_context(snippet, remaining))
+                    break
+                else:
+                    notice = "[Further evidence omitted; inspect source references.]\n"
+                    if len(notice) <= remaining:
+                        pieces.append(notice)
+                    break
+            blocks.append(self._clip_metadata_context(label + "".join(pieces), share))
+        return heading + "".join(blocks)
 
     def _update_established_entities(
         self,
@@ -2763,6 +3012,100 @@ REQUIREMENTS:
                 field_name
             ] = value[:120]
 
+    @staticmethod
+    def _render_metadata_entity_context(
+        entity_plan: Optional[Dict[str, Any]],
+        selected_fields: List[Dict[str, Any]],
+    ) -> str:
+        """Render complete batch identities and their actual ancestors.
+
+        Identity context is separate from the configurable source excerpt budget.
+        Its 14,000-character target is soft: exceeding it is reported, never
+        handled by clipping rows, links, labels or design attributes. Long plan
+        evidence and summaries are omitted instead. This does not change the
+        plan or turn derived attributes into source-supported values.
+        """
+        if not entity_plan:
+            return ""
+        selected_levels = {
+            str(field.get("isa_sheet") or "study").strip().lower()
+            for field in selected_fields
+        }
+        rows_by_level: Dict[str, List[Dict[str, Any]]] = {
+            level: [] for level in ISA_LEVEL_ORDER
+        }
+        for level_plan in entity_plan.get("levels") or []:
+            if not isinstance(level_plan, dict):
+                continue
+            level = str(level_plan.get("level") or "").strip().lower()
+            if level in rows_by_level:
+                rows_by_level[level].extend(
+                    row for row in level_plan.get("entities") or []
+                    if isinstance(row, dict)
+                )
+
+        # Track row positions rather than labels or external aliases. Distinct
+        # source rows can legitimately share those human-readable values.
+        row_locations: Dict[str, List[tuple[str, int]]] = {}
+        for level, rows in rows_by_level.items():
+            for index, row in enumerate(rows):
+                row_id = str(row.get("row_id") or "").strip()
+                if row_id:
+                    row_locations.setdefault(row_id, []).append((level, index))
+        included = {
+            (level, index)
+            for level, rows in rows_by_level.items()
+            if level in selected_levels
+            for index in range(len(rows))
+        }
+        pending = list(included)
+        level_positions = {level: index for index, level in enumerate(ISA_LEVEL_ORDER)}
+        while pending:
+            level, index = pending.pop()
+            parent_id = str(rows_by_level[level][index].get("parent_row_id") or "").strip()
+            for parent_location in row_locations.get(parent_id, []):
+                parent_level, _ = parent_location
+                if (
+                    level_positions[parent_level] < level_positions[level]
+                    and parent_location not in included
+                ):
+                    included.add(parent_location)
+                    pending.append(parent_location)
+
+        identity_keys = (
+            "row_id", "parent_row_id", "external_identifier", "source_group",
+            "label", "attributes",
+        )
+        levels = []
+        for level, rows in rows_by_level.items():
+            entities = [
+                {key: row.get(key) for key in identity_keys}
+                for index, row in enumerate(rows)
+                if (level, index) in included
+            ]
+            if entities:
+                levels.append({"level": level, "cardinality": len(entities), "entities": entities})
+        if not levels:
+            return ""
+        payload: Dict[str, Any] = {"levels": levels}
+        if "investigation" in selected_levels and entity_plan.get("investigation_contacts"):
+            payload["investigation_contacts"] = entity_plan["investigation_contacts"]
+        rendered = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(rendered) > 14000:
+            logger.warning(
+                "Complete metadata identity context uses %s characters (soft target 14000); "
+                "all batch identities and ancestor links retained outside the source excerpt budget",
+                len(rendered),
+            )
+        return (
+            "Authoritative entity identities (complete for this batch):\n"
+            + rendered
+            + "\nUse the exact row_id as entity_id for its ISA level. Parent rows provide "
+            "identity and condition context, not additional fields to generate. Do not "
+            "replace, merge or invent planned identities. Derived labels or attributes "
+            "are not source evidence for scientific values.\n\n"
+        )
+
     def _split_metadata_generation_batches(
         self,
         selected_fields: List[Dict[str, Any]],
@@ -2784,6 +3127,8 @@ REQUIREMENTS:
         prior_memory_context: Optional[str] = None,
         batch_label: Optional[str] = None,
         established_entities: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None,
+        field_evidence_by_name: Optional[Dict[str, List[str]]] = None,
+        entity_plan: Optional[Dict[str, Any]] = None,
     ):
         """Build prompt messages for one metadata-generation batch."""
         system_prompt = """You are an expert at generating FAIR metadata from research documents.
@@ -2800,7 +3145,7 @@ REQUIREMENTS:
 1. **MUST generate coverage for ALL fields** - every field in the provided list must appear at least once in the response
 2. **Investigation-level fields** - Project-level metadata. Extract from title/abstract
 3. **Study-level fields** - Study description. Extract from title/abstract/methods/results
-4. **Assay-level fields** - Measurement methods. Extract from methods
+4. **Assay-level fields** - Measurement methods, conditions, and results. Extract explicitly reported values from relevant methods, results, tables, figure captions, and supplements; preserve the associated conditions and entities
 5. **Sample-level fields** - Biological material. Extract from methods/results
 6. **ObservationUnit-level fields** - Sampling sites. Extract from methods/environmental context
 
@@ -2819,6 +3164,9 @@ REQUIREMENTS:
 8. When a field declares FAIR-DS `regex` or `syntax`, every non-empty value MUST
    full-match it. Translate an explicitly supported source phrase to the canonical
    controlled value; if no listed value is justified, return the empty string.
+9. `preferred_unit` is an output-unit contract, not evidence of the source unit.
+   Convert only when the source states the unit and the conversion is unambiguous.
+   If the quantity cannot be expressed reliably in that unit, leave it empty.
 
 **For each field, provide:**
 - field_name: MUST match exactly one of the field names in the provided list
@@ -2835,6 +3183,8 @@ REQUIREMENTS:
 - When separate entities exist, assign a stable entity_id and reuse it for every field of that entity — do NOT create a new entity_id per field
 - Only use separate entity_id values when the document clearly describes distinct entities (different samples, conditions, or measurement instances)
 - Reuse entity_id values from the authoritative entity plan when it is supplied
+- An authoritative plan takes precedence over prior model output: use its exact
+  row_id for the corresponding ISA level; do not invent or merge planned identities
 - Do NOT skip any fields, even if information is limited
 - Investigation/study titles or descriptions may summarize supplied title/abstract text;
   identifiers and all scientific attributes still require explicit source evidence
@@ -2894,6 +3244,7 @@ REQUIREMENTS:
                 "isa_sheet": field.get("isa_sheet", "study"),
                 "multi_row": field.get("isa_sheet", "study") in {"observationunit", "sample", "assay"},
                 "syntax": metadata.get("syntax", ""),
+                "preferred_unit": metadata.get("preferred_unit") or metadata.get("preferredUnit", ""),
                 "regex": metadata.get("regex", ""),
                 "example": metadata.get("example", ""),
             })
@@ -2914,7 +3265,7 @@ REQUIREMENTS:
         batch_note = ""
         if batch_label:
             batch_note = f"\nCurrent batch: {batch_label}. Only return fields from this batch.\n"
-        if established_entities:
+        if established_entities and not entity_plan:
             batch_note += (
                 "\n**Known entities from prior batches — REUSE these entity_id labels "
                 "when new fields belong to the same entity:**\n"
@@ -2924,12 +3275,14 @@ REQUIREMENTS:
         prepared_document_text = self._prepare_metadata_document_context(
             document_text,
             selected_fields,
+            **({"field_evidence_by_name": field_evidence_by_name} if field_evidence_by_name else {}),
         )
+        identity_context = self._render_metadata_entity_context(entity_plan, selected_fields)
 
         user_prompt = f"""Document information:
 {json.dumps(document_info, indent=2, ensure_ascii=False)}
 
-Document excerpt:
+{identity_context}Document excerpt:
 {prepared_document_text}
 
 Metadata fields to populate (TOTAL: {len(selected_fields)} fields):
@@ -2945,7 +3298,7 @@ Fields by ISA hierarchy:
 3. For `observationunit`, `sample`, and `assay` fields, you MAY and often SHOULD repeat the same field_name across multiple records when the document describes multiple entities
 4. **Investigation-level fields** ({field_counts.get('investigation', 0)} fields): Extract values from supplied title or abstract
 5. **Study-level fields** ({field_counts.get('study', 0)} fields): Extract values from supplied title, abstract, methods, or results
-6. **Assay-level fields** ({field_counts.get('assay', 0)} fields): Extract values explicitly stated in methods
+6. **Assay-level fields** ({field_counts.get('assay', 0)} fields): Extract explicitly reported values from relevant methods, results, tables, figure captions, and supplements; preserve the associated conditions and entities
 7. **Sample-level fields** ({field_counts.get('sample', 0)} fields): Extract values explicitly stated in methods or results
 8. **ObservationUnit-level fields** ({field_counts.get('observationunit', 0)} fields): Extract values explicitly stated in methods or environmental context
 9. If the document excerpt contains "Field-specific source evidence", use matching source_id/span/table row references in the evidence field.
@@ -3000,6 +3353,8 @@ REQUIREMENTS:
         prior_memory_context: Optional[str] = None,
         batch_label: Optional[str] = None,
         established_entities: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None,
+        field_evidence_by_name: Optional[Dict[str, List[str]]] = None,
+        entity_plan: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Generate one batch of metadata fields with a single LLM call."""
         messages = self._build_metadata_generation_messages(
@@ -3011,6 +3366,8 @@ REQUIREMENTS:
             prior_memory_context=prior_memory_context,
             batch_label=batch_label,
             established_entities=established_entities,
+            field_evidence_by_name=field_evidence_by_name,
+            entity_plan=entity_plan,
         )
 
         try:
@@ -3097,6 +3454,8 @@ REQUIREMENTS:
         prior_memory_context: Optional[str] = None,
         batch_label: Optional[str] = None,
         established_entities: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None,
+        field_evidence_by_name: Optional[Dict[str, List[str]]] = None,
+        entity_plan: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Generate metadata, recursively splitting a failing batch when needed."""
         try:
@@ -3109,6 +3468,8 @@ REQUIREMENTS:
                 prior_memory_context=prior_memory_context,
                 batch_label=batch_label,
                 established_entities=established_entities,
+                field_evidence_by_name=field_evidence_by_name,
+                entity_plan=entity_plan,
             )
         except Exception as exc:
             if len(selected_fields) <= 1:
@@ -3142,6 +3503,8 @@ REQUIREMENTS:
                 prior_memory_context=prior_memory_context,
                 batch_label=f"{batch_label or '1/1'}-a",
                 established_entities=established_entities,
+                field_evidence_by_name=field_evidence_by_name,
+                entity_plan=entity_plan,
             )
             right = await self._generate_complete_metadata_with_fallback(
                 document_info=document_info,
@@ -3152,6 +3515,8 @@ REQUIREMENTS:
                 prior_memory_context=prior_memory_context,
                 batch_label=f"{batch_label or '1/1'}-b",
                 established_entities=established_entities,
+                field_evidence_by_name=field_evidence_by_name,
+                entity_plan=entity_plan,
             )
             return left + right
 
@@ -3494,3 +3859,32 @@ def save_llm_responses(output_path: Path, llm_helper: Optional[LLMHelper] = None
         json.dump(llm_helper.llm_responses, f, indent=2, ensure_ascii=False)
     
     logger.info(f"Saved {len(llm_helper.llm_responses)} LLM responses to {responses_file}")
+
+
+_mapping_helpers: Dict[tuple, "LLMHelper"] = {}
+
+
+def get_mapping_llm_helper() -> "LLMHelper":
+    """LLM for mechanical mapping/review calls.
+
+    Uses ``config.mapping_llm_model`` on the same provider and endpoint when
+    set (e.g. a smaller non-thinking model served by the same Ollama), else
+    the main helper. Responses are logged into the main helper's list so
+    llm_responses.json stays complete.
+    """
+    main = get_llm_helper()
+    model = (getattr(config, "mapping_llm_model", "") or "").strip()
+    if not model or model == main.model:
+        return main
+    key = (main.provider, model, config.llm_base_url)
+    helper = _mapping_helpers.get(key)
+    if helper is None:
+        helper = LLMHelper.__new__(LLMHelper)
+        helper.provider = main.provider
+        helper.model = model
+        helper.llm = helper._initialize_llm()
+        helper._langfuse_handler = main._langfuse_handler
+        _mapping_helpers[key] = helper
+    helper.llm_responses = main.llm_responses
+    return helper
+
