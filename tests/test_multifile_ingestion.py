@@ -439,3 +439,32 @@ def test_directory_bundle_collects_bio_file_paths(tmp_path: Path):
     bio_docs = [d for d in info["input_documents"] if d.get("content_type") == "bio_binary"]
     assert len(bio_docs) == 1
     assert Path(bio_docs[0]["host_path"]).resolve() == bam.resolve()
+
+
+def test_multi_file_parse_restores_merged_text_for_downstream_agents(tmp_path):
+    """Downstream agents read the source through document_text_path."""
+    import asyncio
+    from fairifier.utils.document_text import read_document_text
+
+    from fairifier.graph.nodes import OrchestrateNode
+
+    app = object.__new__(OrchestrateNode)
+    merged = tmp_path / "extracted_document_content.txt"
+    merged.write_text("MAIN TEXT\nSUPPLEMENT TEXT", encoding="utf-8")
+    state = {"document_path": "/tmp/bundle", "document_text_path": str(merged),
+             "document_content": None, "context": {}}
+
+    async def fake_parse(*, state, source_path, source_content, **kwargs):
+        app._prepare_single_input_source_state(
+            state=state, source_path=source_path, source_content=source_content,
+            source_index=1, source_total=2, base_document_path="/tmp/bundle",
+        )
+        state["document_info"] = {"title": source_path, "a": 1, "b": 2, "c": 3}
+        return state
+
+    app._parse_single_input_source = fake_parse
+    result = asyncio.run(app._parse_documents_individually(state, [
+        {"path": "main.pdf", "content": "MAIN TEXT"},
+        {"path": "si.pdf", "content": "SUPPLEMENT TEXT"},
+    ]))
+    assert read_document_text(result) == "MAIN TEXT\nSUPPLEMENT TEXT"

@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import tool
 
+from ..services.source_workspace import compact_table_context
+
 
 def _workspace_root(source_workspace: Dict[str, Any]) -> Path:
     root_dir = source_workspace.get("root_dir")
@@ -62,6 +64,19 @@ def _resolve_source_path(source_workspace: Dict[str, Any], source_id: str) -> Op
         if entry.get("source_id") == source_id and entry.get("path"):
             return Path(str(entry["path"]))
     return None
+
+
+def _has_excluded_source_regions(source_workspace: Dict[str, Any]) -> bool:
+    entries = _workspace_sources(source_workspace)
+    manifest = source_workspace.get("manifest")
+    if isinstance(manifest, dict) and isinstance(manifest.get("sources"), list):
+        entries.extend(manifest["sources"])
+    return any(
+        isinstance(entry, dict)
+        and isinstance(entry.get("source_evidence"), dict)
+        and bool(entry["source_evidence"].get("derived_regions"))
+        for entry in entries
+    )
 
 
 def _selected_source_ids(source_workspace: Dict[str, Any], source_ids: str = "") -> List[str]:
@@ -118,6 +133,12 @@ def _search_tables(
     selected = set(_selected_source_ids(source_workspace, source_ids))
     needle = query.casefold()
     matches: List[Dict[str, Any]] = []
+    table_metadata = {
+        f"{source.get('source_id')}:{table.get('name')}": table
+        for source in _workspace_sources(source_workspace)
+        for table in source.get("tables") or []
+        if isinstance(table, dict) and table.get("header_status")
+    }
     for table_id, table_path in (source_workspace.get("table_paths") or {}).items():
         table_source_id = str(table_id).split(":", 1)[0]
         if selected and table_source_id not in selected:
@@ -125,6 +146,12 @@ def _search_tables(
         path = Path(table_path)
         if not path.exists():
             continue
+        table = table_metadata.get(str(table_id))
+        context = compact_table_context(
+            table,
+            manifest_path=source_workspace.get("manifest_path"),
+            max_chars=1500,
+        ) if table else None
         for idx, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if needle not in raw_line.casefold():
                 continue
@@ -132,14 +159,18 @@ def _search_tables(
                 row = json.loads(raw_line)
             except json.JSONDecodeError:
                 row = raw_line
-            matches.append(
-                {
-                    "table_id": str(table_id),
-                    "source_id": table_source_id,
-                    "row_number": idx,
-                    "row": row,
-                }
-            )
+            match = {
+                "table_id": str(table_id),
+                "source_id": table_source_id,
+                "row_number": idx,
+                "row": row,
+            }
+            if context is not None:
+                match["table_context"] = context
+                row_indices = table.get("row_indices") or []
+                if idx - 1 < len(row_indices):
+                    match["source_row_index"] = row_indices[idx - 1]
+            matches.append(match)
             if len(matches) >= max_matches:
                 return matches
     return matches
@@ -279,7 +310,11 @@ def create_isa_structure_tools(source_workspace: Optional[Dict[str, Any]] = None
 
     @tool
     def search_workspace_tables(query: str, source_ids: str = "", max_matches: int = 8) -> Dict[str, Any]:
-        """Search materialized table rows when tables exist in the source workspace."""
+        """Search rows with bounded captions, footnotes and source locations.
+
+        Unresolved leading rows are source previews, not asserted headers.
+        The manifest_path reference retains complete table context.
+        """
         matches = _search_tables(
             workspace,
             query,
@@ -291,6 +326,17 @@ def create_isa_structure_tools(source_workspace: Optional[Dict[str, Any]] = None
     @tool
     def run_source_shell_command(command: str) -> Dict[str, Any]:
         """Run a read-only shell command in the workspace root for flexible text inspection."""
+        if _has_excluded_source_regions(workspace):
+            return {
+                "success": False,
+                "data": None,
+                "error": (
+                    "This workspace excludes unverified derived content from source evidence. "
+                    "Shell access is disabled to preserve that boundary. Use "
+                    "grep_source_workspace, read_source_excerpt, or search_workspace_tables "
+                    "to inspect the working sources."
+                ),
+            }
         error = _validate_shell_command(command)
         if error:
             return {"success": False, "data": None, "error": error}

@@ -181,10 +181,13 @@ class TestMinerUCLI:
                 [cli_path, "--version"],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                # The CLI imports its parsing stack even for --version.
+                # Allow cold startup on a shared host; verify availability,
+                # not an unrelated five-second performance requirement.
+                timeout=30,
             )
-            if result.returncode == 0:
-                assert "mineru" in result.stdout.lower() or "version" in result.stdout.lower()
+            assert result.returncode == 0, result.stderr
+            assert "mineru" in result.stdout.lower() or "version" in result.stdout.lower()
         except FileNotFoundError:
             pytest.skip(f"MinerU CLI not found: {cli_path}")
 

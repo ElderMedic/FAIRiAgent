@@ -25,6 +25,7 @@ class SourceRecord:
     source_role: str = "unknown"
     relevance_score: float = 1.0
     tables: List[Dict[str, Any]] = field(default_factory=list)
+    source_evidence: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -37,6 +38,94 @@ class SourceWorkspace:
     source_paths: Dict[str, Path]
     table_paths: Dict[str, Path]
     manifest: Dict[str, Any]
+
+
+_PUBLICATION_TABLE_CONTEXT = (
+    "raw_html", "captions", "footnotes", "columns", "header_status",
+    "header_rows", "row_indices", "cells", "grid_origins", "provenance", "issues",
+    "leading_rows", "representations",
+)
+
+
+def compact_table_context(
+    table: Dict[str, Any], *, manifest_path: Optional[Any] = None, max_chars: int = 3000,
+) -> Dict[str, Any]:
+    """Bound table evidence for tools while full structure stays in the manifest.
+
+    Accept either a manifest table entry or an already compact context. Physical
+    leading rows are previews, never asserted headers for unresolved tables.
+    """
+    budget = max(512, int(max_chars))
+    context: Dict[str, Any] = {
+        "header_status": table.get("header_status", "unresolved"),
+        "truncated": bool(table.get("truncated")),
+    }
+    for key, limit in (("captions", 8), ("footnotes", 8), ("columns", 64), ("issues", 8)):
+        values = table.get(key) or []
+        values = [values] if isinstance(values, str) else list(values)
+        context[key] = [str(value) for value in values[:limit]]
+        context["truncated"] = context["truncated"] or len(values) > limit
+    provenance = table.get("provenance") or {}
+    context["provenance"] = {
+        key: _json_safe_value(provenance[key])
+        for key in (
+            "artifact_path", "artifact_sha256", "page_idx", "bbox",
+            "block_index", "json_pointer", "table_index", "start", "end",
+        )
+        if key in provenance
+    }
+    path = manifest_path or table.get("manifest_path")
+    if path is not None:
+        context["manifest_path"] = str(path)
+    if context["header_status"] == "unresolved":
+        leading = table.get("leading_rows") or []
+        context["leading_rows"] = []
+        context["truncated"] = context["truncated"] or len(leading) > 3
+        for row in leading[:3]:
+            if not isinstance(row, dict):
+                continue
+            values = row.get("cells") or []
+            context["leading_rows"].append({
+                "source_row_index": row.get("source_row_index"),
+                "cells": [str(value) for value in values[:16]],
+            })
+            context["truncated"] = context["truncated"] or len(values) > 16
+
+    def serialized_length() -> int:
+        return len(json.dumps(context, ensure_ascii=False))
+
+    # Reduce the largest text fragments first instead of dropping whole unit-
+    # bearing leading rows. Every reduction is declared and the manifest path
+    # remains available for exact evidence inspection.
+    while serialized_length() > budget:
+        context["truncated"] = True
+        groups = [context[key] for key in ("columns", "footnotes", "captions")]
+        groups.extend(row["cells"] for row in context.get("leading_rows", []))
+        # Keep conflict warnings after ordinary context when a very small
+        # budget requires removing complete items, not just shortening text.
+        groups.append(context["issues"])
+        candidates = [
+            (len(value), group, index)
+            for group in groups for index, value in enumerate(group)
+            if len(value) > 32
+        ]
+        if candidates:
+            length, group, index = max(candidates, key=lambda item: item[0])
+            group[index] = group[index][:max(16, length // 2)] + "…"
+            continue
+        nonempty = next((group for group in groups if group), None)
+        if nonempty is not None:
+            nonempty.pop()
+            continue
+        if context["provenance"]:
+            # Paths/hashes are not silently shortened into invalid references.
+            # The manifest is the complete fallback when the budget is tiny.
+            context["provenance"].pop(next(iter(context["provenance"])))
+            continue
+        # A caller-supplied manifest path can itself exceed a requested budget.
+        # Retain a valid reference rather than fabricate a shortened path.
+        break
+    return context
 
 
 def _safe_source_filename(source_id: str) -> str:
@@ -187,13 +276,18 @@ def build_source_workspace(
                     fh.write(json.dumps(_json_safe_value(row), ensure_ascii=False) + "\n")
             table_key = f"{source_id}:{table_name}"
             table_paths[table_key] = table_path
-            table_refs.append(
-                {
-                    "name": table_name,
-                    "path": str(table_path.relative_to(root_dir)),
-                    "rows": len(rows),
-                }
-            )
+            table_ref = {
+                "name": table_name,
+                "path": str(table_path.relative_to(root_dir)),
+                "rows": len(rows),
+            }
+            # Table context is evidence, not a set of scientific data columns.
+            # Keep it beside the JSONL projection so captions, merged headers,
+            # and cell origins remain available to search and source audits.
+            for key in _PUBLICATION_TABLE_CONTEXT:
+                if key in table:
+                    table_ref[key] = _json_safe_value(table[key])
+            table_refs.append(table_ref)
 
         entry = {
             "source_id": source_id,
@@ -206,6 +300,8 @@ def build_source_workspace(
             "workspace_path": str(source_path.relative_to(root_dir)),
             "tables": table_refs,
         }
+        if record.source_evidence:
+            entry["source_evidence"] = _json_safe_value(record.source_evidence)
         manifest_sources.append(entry)
         summary_lines.extend(
             [
@@ -379,6 +475,16 @@ def search_table(
     match_limit = config.table_search_max_matches if max_matches is None else max_matches
     needle = query.casefold()
     matches: List[Dict[str, Any]] = []
+    table_records = {
+        f"{source.get('source_id')}:{table.get('name')}": table
+        for source in workspace.manifest.get("sources", [])
+        for table in source.get("tables", [])
+        if table.get("header_status")
+    }
+    contexts = {
+        key: compact_table_context(table, manifest_path=workspace.manifest_path)
+        for key, table in table_records.items()
+    }
 
     for table_key, table_path in workspace.table_paths.items():
         source_id, table_name = table_key.split(":", 1)
@@ -395,16 +501,20 @@ def search_table(
                     column_text = str(column)
                     value_text = str(value)
                     if needle in column_text.casefold() or needle in value_text.casefold():
-                        matches.append(
-                            {
-                                "source_id": source_id,
-                                "table": table_name,
-                                "row_index": row_index,
-                                "column": column_text,
-                                "value": value_text,
-                                "row": row,
-                            }
-                        )
+                        match = {
+                            "source_id": source_id,
+                            "table": table_name,
+                            "row_index": row_index,
+                            "column": column_text,
+                            "value": value_text,
+                            "row": row,
+                        }
+                        if table_key in contexts:
+                            match["table_context"] = contexts[table_key]
+                            row_indices = table_records[table_key].get("row_indices", [])
+                            if row_index < len(row_indices):
+                                match["source_row_index"] = row_indices[row_index]
+                        matches.append(match)
                         if len(matches) >= match_limit:
                             return matches
     return matches

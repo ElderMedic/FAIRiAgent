@@ -1,8 +1,13 @@
 import asyncio
 import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from fairifier.agents.isa_value_mapper import ISAValueMapperAgent
 from fairifier.agents.response_models import ISAValueMappingResponse
+from fairifier.config import config
 from fairifier.tools.isa_structure_tools import create_isa_structure_tools
 
 
@@ -74,7 +79,160 @@ def test_isa_structure_tools_expose_generic_workspace_search(tmp_path):
     assert "ERR3152366" in shell_result["data"]["stdout"]
 
 
+@pytest.mark.parametrize("manifest_location", ["disk", "state"])
+def test_source_shell_cannot_read_excluded_raw_chart_artifacts(
+    tmp_path, monkeypatch, manifest_location,
+):
+    source = tmp_path / "source_001.md"
+    source.write_text("The experiment ended at 48 h.", encoding="utf-8")
+    raw_path = tmp_path / "raw_mineru.md"
+    raw_path.write_text("Derived chart: 51 h, signal 999.25.", encoding="utf-8")
+    entry = {
+        "source_id": "source_001", "path": "paper.pdf",
+        "source_evidence": {
+            "raw_markdown_path": str(raw_path),
+            "derived_regions": [{"kind": "chart_reconstruction", "status": "unverified"}],
+        },
+    }
+    workspace = {
+        "root_dir": str(tmp_path),
+        "source_paths": {"source_001": str(source)},
+    }
+    manifest = {"sources": [entry]}
+    if manifest_location == "disk":
+        manifest_path = tmp_path / "source_manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        workspace["manifest_path"] = str(manifest_path)
+    else:
+        workspace["manifest"] = manifest
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout="999.25", stderr="")
+
+    monkeypatch.setattr("fairifier.tools.isa_structure_tools.subprocess.run", fake_run)
+    tools = create_isa_structure_tools(workspace)
+    result = _tool_by_name(tools, "run_source_shell_command").invoke({
+        "command": f"cat {raw_path}",
+    })
+
+    assert calls == []
+    assert result["success"] is False and result["data"] is None
+    for tool_name in (
+        "grep_source_workspace", "read_source_excerpt", "search_workspace_tables",
+    ):
+        assert tool_name in result["error"]
+    assert _tool_by_name(tools, "read_source_excerpt").invoke({
+        "source_id": "source_001",
+    })["data"]["text"] == "The experiment ended at 48 h."
+    assert raw_path.read_text(encoding="utf-8") == "Derived chart: 51 h, signal 999.25."
+
+
+def _publication_table_workspace(tmp_path, *, long_notes=False):
+    source = tmp_path / "source_001.md"
+    source.write_text("Publication table source.", encoding="utf-8")
+    table_path = tmp_path / "rates.jsonl"
+    rows = [
+        {"Specimen": "A1", "Rate | Initial": "0"},
+        {"Specimen": "A2", "Rate | Initial": "−0.025"},
+    ]
+    table_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
+        encoding="utf-8",
+    )
+    manifest_path = tmp_path / "source_manifest.json"
+    table = {
+        "name": "table_001", "path": table_path.name, "rows": 2,
+        "columns": ["Specimen", "Rate | Initial"],
+        "captions": ["Table 1. Initial rates at 30 °C."],
+        "footnotes": ["Rates are in µmol cm−2 h−1; values are means."],
+        "header_status": "resolved", "row_indices": [2, 3],
+        "provenance": {
+            "artifact_path": "/source/paper_content_list.json",
+            "page_idx": 2, "bbox": [10, 20, 300, 180], "json_pointer": "/2/1",
+        },
+        "raw_html": "DO_NOT_COPY_RAW_TABLE " * 1000,
+        "cells": [{"text": "DO_NOT_COPY_GRID_CELL"}] * 1000,
+        "grid_origins": [[[0, 0]]] * 1000,
+    }
+    if long_notes:
+        table["captions"] = ["Long caption " * 3000]
+        table["footnotes"] = ["Long scientific footnote " * 3000]
+    manifest_path.write_text(json.dumps({"sources": [{
+        "source_id": "source_001", "path": "paper.pdf",
+        "source_role": "main_manuscript", "tables": [table],
+    }]}, ensure_ascii=False), encoding="utf-8")
+    return {
+        "root_dir": str(tmp_path), "manifest_path": str(manifest_path),
+        "source_paths": {"source_001": str(source)},
+        "table_paths": {"source_001:table_001": str(table_path)},
+    }
+
+
+def test_table_search_tool_preserves_scientific_context_without_full_grid(tmp_path):
+    workspace = _publication_table_workspace(tmp_path)
+    tool = _tool_by_name(create_isa_structure_tools(workspace), "search_workspace_tables")
+
+    result = tool.invoke({"query": "A", "max_matches": 2})
+
+    matches = result["data"]["matches"]
+    assert len(matches) == 2
+    assert [match["row"]["Rate | Initial"] for match in matches] == ["0", "−0.025"]
+    assert [match["source_row_index"] for match in matches] == [2, 3]
+    for match in matches:
+        context = match["table_context"]
+        assert context["captions"] == ["Table 1. Initial rates at 30 °C."]
+        assert context["footnotes"] == ["Rates are in µmol cm−2 h−1; values are means."]
+        assert context["columns"] == ["Specimen", "Rate | Initial"]
+        assert context["provenance"]["page_idx"] == 2
+        assert context["provenance"]["json_pointer"] == "/2/1"
+        assert not {"raw_html", "cells", "grid_origins"}.intersection(context)
+    rendered = json.dumps(result, ensure_ascii=False)
+    assert "DO_NOT_COPY_RAW_TABLE" not in rendered
+    assert "DO_NOT_COPY_GRID_CELL" not in rendered
+    assert len(rendered) <= 5000
+
+
+def test_table_search_tool_bounds_context_with_complete_source_reference(tmp_path):
+    workspace = _publication_table_workspace(tmp_path, long_notes=True)
+    tool = _tool_by_name(create_isa_structure_tools(workspace), "search_workspace_tables")
+
+    result = tool.invoke({"query": "A1", "max_matches": 1})
+
+    match = result["data"]["matches"][0]
+    context = match["table_context"]
+    assert context["manifest_path"] == workspace["manifest_path"]
+    assert context["truncated"] is True
+    assert len(json.dumps(result, ensure_ascii=False)) <= 2600
+    assert match["row"] == {"Specimen": "A1", "Rate | Initial": "0"}
+
+
+def test_table_search_tool_retains_unresolved_leading_rows(tmp_path):
+    workspace = _publication_table_workspace(tmp_path)
+    manifest_path = Path(workspace["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    table = manifest["sources"][0]["tables"][0]
+    table.update({
+        "header_status": "unresolved",
+        "leading_rows": [
+            {"source_row_index": 0, "cells": ["Specimen", "Rate (µmol cm−2 h−1)"]},
+            {"source_row_index": 1, "cells": ["", "0 h / 24 h"]},
+        ],
+    })
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    tool = _tool_by_name(create_isa_structure_tools(workspace), "search_workspace_tables")
+
+    result = tool.invoke({"query": "A1", "max_matches": 1})
+
+    context = result["data"]["matches"][0]["table_context"]
+    assert context["header_status"] == "unresolved"
+    assert context["leading_rows"] == table["leading_rows"]
+    assert "raw_html" not in context and "grid_origins" not in context
+
+
 def test_isa_value_mapper_prefers_agentic_structure_result(monkeypatch):
+    monkeypatch.setattr(config, "enable_deep_agents", True)
     agent = ISAValueMapperAgent()
 
     async def fail_llm_matrix(**_kwargs):
@@ -177,6 +335,7 @@ def test_isa_value_mapper_prefers_agentic_structure_result(monkeypatch):
 
 
 def test_isa_value_mapper_falls_back_when_agentic_result_is_empty(monkeypatch):
+    monkeypatch.setattr(config, "enable_deep_agents", True)
     agent = ISAValueMapperAgent()
 
     async def fake_invoke(*args, **kwargs):
@@ -246,6 +405,7 @@ def test_isa_value_mapper_falls_back_when_agentic_result_is_empty(monkeypatch):
 
 
 def test_isa_value_mapper_fills_missing_core_study_identifier(monkeypatch):
+    monkeypatch.setattr(config, "enable_deep_agents", False)
     agent = ISAValueMapperAgent()
 
     async def fake_llm_matrix(**_kwargs):
@@ -300,6 +460,7 @@ def test_isa_value_mapper_fills_missing_core_study_identifier(monkeypatch):
 
 
 def test_isa_value_mapper_normalizes_existing_doi_identifiers(monkeypatch):
+    monkeypatch.setattr(config, "enable_deep_agents", False)
     agent = ISAValueMapperAgent()
 
     async def fake_llm_matrix(**_kwargs):
@@ -355,6 +516,7 @@ def test_isa_value_mapper_normalizes_existing_doi_identifiers(monkeypatch):
 
 
 def test_isa_value_mapper_seeds_rows_from_source_workspace_sheet_headers(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "enable_deep_agents", True)
     agent = ISAValueMapperAgent()
 
     source = tmp_path / "source_001.md"
@@ -411,6 +573,7 @@ def test_isa_value_mapper_seeds_rows_from_source_workspace_sheet_headers(monkeyp
 
 
 def test_isa_value_mapper_merges_identifierless_rows_into_seeded_entities(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "enable_deep_agents", True)
     agent = ISAValueMapperAgent()
 
     source = tmp_path / "source_001.md"
@@ -464,6 +627,7 @@ def test_isa_value_mapper_merges_identifierless_rows_into_seeded_entities(monkey
 
 
 def test_isa_value_mapper_collapses_single_row_levels_and_unlinked_assays(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "enable_deep_agents", True)
     agent = ISAValueMapperAgent()
 
     source = tmp_path / "source_001.md"

@@ -152,6 +152,26 @@ class TestFAIRDSAPIParser:
         result = FAIRDSAPIParser.extract_field_info(field)
         assert result["data_type"] == "string"
 
+    @pytest.mark.parametrize(("syntax", "expected_type"), [
+        ("{number}", "number"),
+        ("{float}", "number"),
+        (" {number} ", "number"),
+        (r"{number}\s+\S.*", "string"),
+        ("{number} mg", "string"),
+        ("{float} {unit}", "string"),
+    ])
+    def test_numeric_type_inference_distinguishes_scalar_and_composite_templates(
+        self, syntax, expected_type,
+    ):
+        term = {"label": "reported quantity", "syntax": syntax, "preferredUnit": "mg"}
+        field_info = FAIRDSAPIParser.extract_field_info({
+            "label": "reported quantity", "sheetName": "Assay", "term": term,
+        })
+        term_info = FAIRDSAPIParser.extract_term_info("reported quantity", term)
+        assert field_info["data_type"] == term_info["data_type"] == expected_type
+        assert field_info["syntax"] == term_info["syntax"] == syntax
+        assert field_info["preferred_unit"] == term_info["preferred_unit"] == "mg"
+
     def test_extract_field_info_minimal(self):
         """Test extracting field information with minimal data."""
         field = {

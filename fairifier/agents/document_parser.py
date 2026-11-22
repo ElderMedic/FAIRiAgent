@@ -17,6 +17,7 @@ from ..config import config
 from ..skills import load_skill_files, skills_catalog_seed_files
 from ..services.evidence_packets import build_evidence_packets, merge_evidence_packets
 from ..services.retrieval_cache import get_cache_bucket
+from ..services.mineru_evidence import prepare_mineru_evidence
 from ..tools.science_tools import create_science_tools
 from ..tools.bio_tools import create_bio_tools
 from ..utils.llm_helper import get_llm_helper
@@ -359,6 +360,8 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
                     out_path.parent.mkdir(parents=True, exist_ok=True)
                     out_path.write_text(text, encoding="utf-8")
                     state["document_text_path"] = str(out_path)
+                    if (conversion_info.get("source_evidence") or {}).get("derived_regions"):
+                        conversion_info["working_text_path"] = str(out_path)
                 else:
                     # No output_dir (in-memory tests / ephemeral runs) — keep
                     # text in state as transient fallback.
@@ -686,7 +689,12 @@ class DocumentParserAgent(ReactLoopMixin, BaseAgent):
                         state,
                         f"🪄 MinerU converted PDF to Markdown at {result['markdown_path']}"
                     )
-                    return result["markdown_text"], conversion_info, "mineru"
+                    working_text, evidence = prepare_mineru_evidence(
+                        result["markdown_text"], Path(result["markdown_path"])
+                    )
+                    if evidence:
+                        conversion_info["source_evidence"] = evidence
+                    return working_text, conversion_info, "mineru"
                 else:
                     # Conversion failed, log and fallback
                     warning_msg = f"MinerU conversion failed: {result['error']}. Falling back to local PDF extraction."

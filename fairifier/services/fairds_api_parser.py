@@ -368,9 +368,13 @@ class FAIRDSAPIParser:
         elif term.get("date"):
             return "date"
         
-        syntax = term.get("syntax") or ""
-        if "{number}" in syntax or "{float}" in syntax:
+        syntax = str(term.get("syntax") or "").strip()
+        if syntax in {"{number}", "{float}"}:
             return "number"
+        elif "{number}" in syntax or "{float}" in syntax:
+            # A numeric component does not make the entire cell a scalar:
+            # templates can also require a unit, range, or other source text.
+            return "string"
         elif "{date}" in syntax:
             return "date"
         elif "{id}" in syntax:

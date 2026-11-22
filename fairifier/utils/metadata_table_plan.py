@@ -441,9 +441,30 @@ def _embedded_header_index(rows: List[Mapping[str, Any]]) -> Optional[int]:
 
 def normalized_table_rows(path: Path) -> Tuple[List[str], List[Dict[str, Any]], int]:
     """Return promoted columns, data records, and physical header index."""
+    # Publication grids can deliberately have unresolved all-td headers. They
+    # remain searchable source evidence, but must not be promoted by the
+    # spreadsheet-only heuristic into invented metadata-table records.
+    header_status = None
+    manifest_path = path.parent.parent / "source_manifest.json"
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for source in manifest.get("sources", []):
+                for table in source.get("tables", []):
+                    table_path = manifest_path.parent / str(table.get("path") or "")
+                    if table_path.resolve() == path.resolve():
+                        header_status = table.get("header_status")
+        except (OSError, ValueError, TypeError):
+            pass
+    if header_status in {"unresolved", "inferred"}:
+        # Inferred publication-table headers name columns for evidence search;
+        # they never promote a results table into metadata records.
+        return [], [], -1
     raw_rows = _load_jsonl(path)
     if not raw_rows:
         return [], [], -1
+    if header_status == "resolved":
+        return [str(key) for key in raw_rows[0]], raw_rows, -1
     header_index = _embedded_header_index(raw_rows)
     if header_index is None:
         return [str(key) for key in raw_rows[0]], raw_rows, -1
