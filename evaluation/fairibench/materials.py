@@ -27,6 +27,9 @@ def _alnum(text: str) -> str:
 
 
 def mutations(text: str) -> frozenset:
+    # A superscript mark separates a variant's mutations ("IsPETaseTM^K95N/F201I"),
+    # and a flattened name glues the first one to the parent ("IsPETaseTMK95N/F201I").
+    text = re.sub(r"(?<=[A-Za-z])([A-Z]\d{1,4}[A-Z])(?=/|$|[\s,;)])", r" \1", text.replace("^", " "))
     return frozenset(_MUT_RE.findall(text.replace("_", " ")))
 
 

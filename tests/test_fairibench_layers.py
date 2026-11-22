@@ -148,3 +148,19 @@ def test_same_conditions_on_different_samples_are_not_duplicate_assays():
                         {"assay identifier": "A2", "sample identifier": "M1", **row},
                         {"assay identifier": "A3", "sample identifier": "M1", **row}]}
     assert structure_diagnostics(sheets)["duplicate_row_share"]["assay"] == pytest.approx(1 / 3, abs=1e-3)
+
+
+def test_superscript_and_flattened_variant_names_carry_the_same_mutations():
+    from evaluation.fairibench.materials import mutations
+
+    assert mutations("IsPETaseTM^K95N/F201I") == mutations("IsPETaseTMK95N/F201I") == {"K95N", "F201I"}
+    assert mutations("IsPETaseTMQ119L") == {"Q119L"}
+    assert mutations("Thc_Cut1") == frozenset() and mutations("PETase") == frozenset()
+
+
+def test_variant_named_relative_to_its_parent_is_read_from_its_own_name():
+    from evaluation.fairibench.fact_scorer import row_material
+
+    names = ["IsPETaseTM / S121E/D186H/R280A", "IsPETaseTMK95N/F201I", "DuraPETaseK95N/S121E/F201I/R280A"]
+    row = {"enzyme type": "IsPETaseTM^K95N/F201I", "enzyme mutation": "S121E/D186H/R280A/K95N/F201I"}
+    assert row_material(row, "sample", "enzyme", names) == "IsPETaseTMK95N/F201I"

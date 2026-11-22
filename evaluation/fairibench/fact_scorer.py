@@ -258,7 +258,11 @@ def row_material(row: Dict[str, str], sheet: str, kind: str, names: Sequence[str
     # Free-text notes often list every material of the paper; they never say
     # which one the row is about.
     described = [f for f in row if not f.endswith("notes")]
-    for fields in (IDENTITY_FIELDS[kind], NAMING_FIELDS, described):
+    # Each identity field on its own first: the name "IsPETaseTM^K95N/F201I"
+    # singles out a variant whose full mutation list (parent's plus its own)
+    # would also fit the parent when the fields are read together.
+    singles = [(f,) for f in IDENTITY_FIELDS[kind]]
+    for fields in (*singles, IDENTITY_FIELDS[kind], NAMING_FIELDS, described):
         text = _row_text(row, sheet, fields)
         if not text:
             continue
@@ -266,6 +270,8 @@ def row_material(row: Dict[str, str], sheet: str, kind: str, names: Sequence[str
         winners = best_entities(names, info, max_tied=len(names))
         if len(winners) == 1:
             return winners[0]
+        if winners and fields in singles:
+            continue  # one field alone is ambiguous: read the fields together
         if winners:
             return _SEVERAL
         # Wild type: stated as such, or the parent named without any mutation.
