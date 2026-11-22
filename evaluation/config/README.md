@@ -25,6 +25,11 @@ not new publication conditions. Parameter history:
 
 ## Local package injection
 
+Runtime manifests and machine/provider environment files belong in `runtime/`,
+not beside run outputs. Use project-relative dataset and package paths in shared
+manifests. Host-specific environment files may contain credentials and remain
+internal; sharing between development hosts does not authorize a Git push.
+
 `packages/petase_enzyme_engineering_package.json` is a temporary PETase field
 package. Its canonical home is the public `fairds-metadata` repository. This
 copy is not loaded by default. Set `FAIRIFIER_LOCAL_PACKAGE_PATHS` to the file,
