@@ -19,15 +19,13 @@ every value type FAIRiAgent extracts (identifiers vs. numeric measurements vs.
 controlled-vocabulary terms vs. free text). ``match_value()`` dispatches to a
 per-type scorer based on ``match_type``:
 
-- ``exact``            — strict identifiers after normalization; falls back to
-                          ``identifier_match`` (DOI/URL containment, token overlap)
-                          with capped partial credit when formats differ.
-- ``identifier``       — same flexible identifier scorer (explicit GT override).
+- ``exact``            — normalized identifier equality, including DOI wrappers.
+- ``identifier``       — the same equality scorer; similarity is not identity.
 - ``numeric_tolerance`` — measurements: 1.0 within tolerance, graded decay when
                           close, 0.0 when far off (not strictly binary).
 - ``categorical``       — controlled-vocabulary terms. Binary after normalization.
 - ``semantic`` (default) — free text. ``max(semantic_sim, token_f1)`` with partial
-                           credit via continuous score (not only match/wrong bins).
+                           credit, excluding directly negated identical content.
 """
 
 from __future__ import annotations
@@ -49,9 +47,6 @@ import numpy as np
 # ---------------------------------------------------------------------------
 MATCH_THRESHOLD = 0.75    # score >= this -> status "match"
 PARTIAL_THRESHOLD = 0.35  # score >= this -> status "partial" (graded credit below)
-
-# Cap semantic fallback when scoring identifier-like fields (format mismatch).
-_IDENTIFIER_SEMANTIC_CAP = 0.75
 
 # ---------------------------------------------------------------------------
 # sentence-transformers semantic similarity (lazy-loaded, optional)
@@ -145,7 +140,7 @@ def semantic_sim(a: str, b: str) -> float:
 _STOPWORDS = frozenset({
     "the", "a", "an", "is", "are", "was", "were", "be", "been",
     "and", "or", "of", "in", "to", "for", "with", "on", "at",
-    "by", "from", "as", "not", "no", "n/a", "na", "unknown",
+    "by", "from", "as", "n/a", "na", "unknown",
 })
 
 
@@ -173,16 +168,46 @@ def token_f1(pred: str, gt: str) -> Tuple[float, float, float]:
     return (prec, rec, f1)
 
 
+def _direct_negation_conflict(pred: str, gt: str) -> bool:
+    """Detect otherwise identical content with a single added ``not`` or ``no``.
+
+    This is deliberately narrower than comparing whether either text contains
+    negation. Paraphrases such as ``absent`` and ``not detected``, and phrases
+    such as ``not only``, still require the normal semantic scorer.
+    """
+    negators = {"not", "no"}
+
+    def content_tokens(text: str) -> List[str]:
+        # ``No. 1`` denotes a number; punctuation removal must not negate it.
+        text = re.sub(r"\bno\.\s*(?=\d)", "number ", text, flags=re.IGNORECASE)
+        return [t for t in normalize_tokens(text) if t not in _STOPWORDS]
+
+    pred_tokens = content_tokens(pred)
+    gt_tokens = content_tokens(gt)
+    counts = (
+        sum(t in negators for t in pred_tokens),
+        sum(t in negators for t in gt_tokens),
+    )
+    if counts not in {(1, 0), (0, 1)}:
+        return False
+    pred_content = [t for t in pred_tokens if t not in negators]
+    gt_content = [t for t in gt_tokens if t not in negators]
+    return bool(pred_content) and pred_content == gt_content
+
+
 def combined_score(pred: str, gt: str) -> float:
     """
     Best-of semantic similarity and token-F1 (the "semantic" match type).
 
-    Always takes the maximum of both signals so short paraphrases (e.g.
+    Takes the maximum of both signals so short paraphrases (e.g.
     ``LCC`` vs ``leaf-branch compost cutinase (LCC) wild-type``) are not
-    forced through token-F1 alone.
+    forced through token-F1 alone. A direct negation of otherwise identical
+    content cannot be overridden by embedding similarity.
     """
     if pred.strip() == gt.strip():
         return 1.0
+    if _direct_negation_conflict(pred, gt):
+        return 0.0
     _, _, tf1 = token_f1(pred, gt)
     if not pred.strip() or not gt.strip():
         return tf1
@@ -204,68 +229,27 @@ def _normalize_categorical(text: str) -> str:
     return text.strip()
 
 
-_DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:\w]+", re.I)
-
-
 def _normalize_identifier(text: str) -> str:
     text = text.strip().lower()
-    text = re.sub(r"^https?://(dx\.)?doi\.org/", "", text)
     text = re.sub(r"^doi:\s*", "", text)
+    text = re.sub(r"^https?://(dx\.)?doi\.org/", "", text)
     text = re.sub(r"\s+", "", text)
     return text
 
 
-def _extract_doi(text: str) -> Optional[str]:
-    match = _DOI_RE.search(text)
-    return match.group(0).lower().rstrip(".,;") if match else None
-
-
 def identifier_match(pred: str, gt: str) -> float:
     """
-    Flexible identifier / code matching with graded partial credit.
+    Compare complete identifiers after whitespace, case, and DOI normalization.
 
-    Handles common FAIRiAgent mismatches: DOI vs ``INV_*`` id, URL vs bare DOI,
-    enzyme shorthand (``LCC_wt``) vs canonical codes, etc.
+    DOI URLs and ``doi:`` wrappers are equivalent to the bare DOI. Containment,
+    token overlap, and embeddings cannot establish identifier identity.
+    Document-local ISA identifiers are aligned separately by the evaluators.
     """
-    p_norm = _normalize_identifier(pred)
-    g_norm = _normalize_identifier(gt)
-    if not g_norm:
-        return 1.0 if not p_norm else 0.0
-    if not p_norm:
-        return 0.0
-    if p_norm == g_norm:
-        return 1.0
-
-    p_doi, g_doi = _extract_doi(pred), _extract_doi(gt)
-    if p_doi and g_doi and p_doi == g_doi:
-        return 0.95
-    if p_doi and g_doi and (p_doi in g_doi or g_doi in p_doi):
-        return 0.9
-
-    if g_norm in p_norm or p_norm in g_norm:
-        return 0.88
-
-    p_toks = set(re.findall(r"[a-z0-9]+", p_norm))
-    g_toks = set(re.findall(r"[a-z0-9]+", g_norm))
-    if g_toks:
-        overlap = len(p_toks & g_toks) / len(g_toks)
-        if overlap >= 0.6:
-            return 0.75 + 0.2 * overlap
-        if overlap >= 0.3:
-            return 0.45 + 0.5 * overlap
-
-    sem = combined_score(pred, gt)
-    return min(sem, _IDENTIFIER_SEMANTIC_CAP)
+    return float(_normalize_identifier(pred) == _normalize_identifier(gt))
 
 
 def exact_match(pred: str, gt: str) -> float:
-    """Strict normalized equality; near-miss identifiers get partial credit."""
-    p = re.sub(r"\s+", "", pred.strip().lower())
-    g = re.sub(r"\s+", "", gt.strip().lower())
-    if not g:
-        return 1.0 if not p else 0.0
-    if p == g:
-        return 1.0
+    """Strict normalized identifier equality, allowing equivalent DOI wrappers."""
     return identifier_match(pred, gt)
 
 

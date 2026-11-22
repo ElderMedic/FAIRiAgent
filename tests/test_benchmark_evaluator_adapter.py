@@ -115,3 +115,46 @@ def test_aggregate_document_record_is_rejected() -> None:
             artifact=CHECKS,
             validation=VALIDATION,
         )
+
+
+def test_cell_coverage_never_substitutes_for_missing_field_recall() -> None:
+    record = _record()
+    record["correctness"]["summary_metrics"] = {
+        "field_coverage_recall": 0.0,
+        "total_ground_truth_fields": 0,
+    }
+    record["value_accuracy"]["summary_metrics"].update(
+        {"n_gt_populated_fields": 10, "missing_count": 1}
+    )
+
+    result = adapt_evaluator_record(
+        RUN_SPEC, record, artifact=CHECKS, validation=VALIDATION
+    )
+
+    assert result["axes"]["information_coverage"] == 0.0
+    assert "information_coverage" in result["failure"]["missing_metrics"]
+    coverage = result["provenance"]["coverage_diagnostics"]
+    assert coverage["aligned_cell_coverage"] == pytest.approx(0.9)
+    assert coverage["n_gt_populated_cells"] == 10
+    assert coverage["nonmissing_gt_cells"] == 9
+    assert score_run(result)["success"] is False
+
+
+def test_field_recall_remains_independent_of_cell_repetition_and_missingness() -> None:
+    record = _record()
+    record["correctness"]["summary_metrics"].update(
+        {"total_ground_truth_fields": 100, "present_fields": 91}
+    )
+    record["value_accuracy"]["summary_metrics"].update(
+        {"n_gt_populated_fields": 1000, "missing_count": 999}
+    )
+
+    result = adapt_evaluator_record(
+        RUN_SPEC, record, artifact=CHECKS, validation=VALIDATION
+    )
+
+    assert result["axes"]["information_coverage"] == pytest.approx(0.91)
+    coverage = result["provenance"]["coverage_diagnostics"]
+    assert coverage["field_coverage_recall"] == pytest.approx(0.91)
+    assert coverage["total_ground_truth_fields"] == 100
+    assert coverage["aligned_cell_coverage"] == pytest.approx(0.001)

@@ -11,6 +11,10 @@ Evaluates field *presence* (name matching only, never values):
   fraction have *any* non-empty value. This is NOT a correctness/value
   check -- see ``evaluation/evaluators/value_accuracy_evaluator.py``
   (Layer 2) for real value-vs-GT comparison.
+- Values-first references derive unique fields from populated ``expected_rows``;
+  final matrix columns count as presence even when their cells are empty.
+- ``field_level_recall`` and ``populated_field_level_recall`` use unique
+  (field, ISOSA level) pairs, independently of entity counts or row alignment.
 
 Extra (non-GT) fields are reported in ``excess_field_details`` for
 inspection, but are no longer penalized/exempted based on the model's own
@@ -20,7 +24,7 @@ an extra field is legitimate; see
 evidence-grounded replacement (``precision_excl_discoveries``).
 """
 
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Mapping
 import os
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_anthropic import ChatAnthropic
@@ -33,6 +37,7 @@ import json
 import re
 
 from fairifier.utils.dotenv_compat import load_dotenv
+from ._value_matching import normalise_field_name
 
 
 class CorrectnessEvaluator:
@@ -107,7 +112,9 @@ class CorrectnessEvaluator:
         self,
         fairifier_output: Dict[str, Any],
         ground_truth_doc: Dict[str, Any],
-        use_llm_judge: bool = False  # Not used for field presence evaluation
+        use_llm_judge: bool = False,  # Not used for field presence evaluation
+        *,
+        ground_truth_values_doc: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Evaluate field presence (not values) of FAIRiAgent output against ground truth.
@@ -118,18 +125,30 @@ class CorrectnessEvaluator:
             fairifier_output: Parsed metadata.json from FAIRiAgent
             ground_truth_doc: Ground truth annotation for this document
             use_llm_judge: Not used (kept for compatibility)
+            ground_truth_values_doc: Optional expected_rows reference. Supplies
+                field names when the explicit field list is absent, and sheet
+                placement where available. Repeated rows do not add fields.
             
         Returns:
             Dict with field presence metrics
         """
         # Extract fields
         extracted_fields = self._extract_fields_from_fairifier(fairifier_output)
-        ground_truth_fields = ground_truth_doc.get('ground_truth_fields', [])
+        gt_field_names, gt_field_level_pairs, reference_source = self._reference_fields(
+            ground_truth_doc, ground_truth_values_doc
+        )
         
         # Build lookup maps (only field names matter)
         extracted_field_names = {f['field_name'] for f in extracted_fields}
-        gt_field_names = {f['field_name'] for f in ground_truth_fields}
-        gt_map = {f['field_name']: f for f in ground_truth_fields}
+        extracted_pairs = {
+            (field['isa_sheet'], field['field_name'])
+            for field in extracted_fields if field.get('isa_sheet')
+        }
+        populated_pairs = {
+            (field['isa_sheet'], field['field_name'])
+            for field in extracted_fields
+            if field.get('isa_sheet') and self._has_value(field.get('value'))
+        }
         
         # Evaluate field-by-field (GT-only quality; extras are reported separately)
         field_results = {}
@@ -144,10 +163,13 @@ class CorrectnessEvaluator:
             
             if is_present:
                 present_fields += 1
-                extracted_field = next(f for f in extracted_fields if f['field_name'] == field_name)
-                has_value = bool(extracted_field.get('value'))
-                has_evidence = bool(extracted_field.get('evidence'))
-                is_confirmed = str(extracted_field.get('status', '')).lower() == 'confirmed'
+                occurrences = [f for f in extracted_fields if f['field_name'] == field_name]
+                extracted_field = occurrences[0]
+                has_value = any(self._has_value(f.get('value')) for f in occurrences)
+                has_evidence = any(f.get('evidence') for f in occurrences)
+                is_confirmed = any(
+                    str(f.get('status', '')).lower() == 'confirmed' for f in occurrences
+                )
                 if has_value:
                     gt_fields_with_values += 1
                 if has_evidence:
@@ -213,11 +235,15 @@ class CorrectnessEvaluator:
             if (field_coverage_precision + field_coverage_recall) > 0
             else 0.0
         )
+        n_gt_pairs = len(gt_field_level_pairs)
+        present_pairs = len(gt_field_level_pairs & extracted_pairs)
+        populated_gt_pairs = len(gt_field_level_pairs & populated_pairs)
 
         result = {
             'field_level_results': field_results,
             'excess_field_details': excess_field_details,
             'summary_metrics': {
+                'reference_source': reference_source,
                 'total_ground_truth_fields': n_gt_fields,
                 'total_extracted_fields': n_extracted_fields,
                 'present_fields': present_fields,
@@ -237,44 +263,113 @@ class CorrectnessEvaluator:
                 'gt_field_populated_rate': gt_fields_with_values / n_gt_fields if n_gt_fields > 0 else 0.0,
                 'gt_evidence_accuracy': gt_fields_with_evidence / n_gt_fields if n_gt_fields > 0 else 0.0,
                 'gt_confirmed_accuracy': gt_fields_confirmed / n_gt_fields if n_gt_fields > 0 else 0.0,
+                # Unique (field, ISOSA level) recall includes missing fields in
+                # its denominator. It is independent of predicted row counts.
+                'total_ground_truth_field_level_pairs': n_gt_pairs,
+                'present_field_level_pairs': present_pairs,
+                'populated_field_level_pairs': populated_gt_pairs,
+                'field_level_recall': present_pairs / n_gt_pairs if n_gt_pairs else None,
+                'populated_field_level_recall': populated_gt_pairs / n_gt_pairs if n_gt_pairs else None,
             }
         }
         
         return result
     
-    def _extract_fields_from_fairifier(self, fairifier_output: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Extract all fields from FAIRiAgent output."""
-        fields = []
-        
-        # Check ISA structure
-        isa_structure = fairifier_output.get('isa_structure', {})
-        for sheet_name, sheet_data in isa_structure.items():
-            if sheet_name == 'description':
+    @staticmethod
+    def _has_value(value: Any) -> bool:
+        if isinstance(value, (list, dict, tuple, set)):
+            return bool(value)
+        return value is not None and bool(str(value).strip())
+
+    @staticmethod
+    def _sheet_name(name: Any) -> str:
+        normalized = re.sub(r"[\s_-]+", "", str(name or "").lower())
+        return normalized if normalized in {
+            'investigation', 'study', 'observationunit', 'sample', 'assay'
+        } else ''
+
+    @classmethod
+    def _reference_fields(cls, ground_truth_doc, values_doc=None):
+        """Use explicit field scope first; derive it from populated GT rows otherwise."""
+        explicit = [
+            field for field in ground_truth_doc.get('ground_truth_fields', [])
+            if isinstance(field, Mapping) and field.get('field_name')
+        ]
+        names = {normalise_field_name(field['field_name']) for field in explicit}
+        pairs = {
+            (cls._sheet_name(field.get('isa_sheet')), normalise_field_name(field['field_name']))
+            for field in explicit if cls._sheet_name(field.get('isa_sheet'))
+        }
+        values_reference = values_doc if values_doc is not None else ground_truth_doc
+        row_pairs = set()
+        for sheet, block in values_reference.get('isa_sheets', {}).items():
+            level = cls._sheet_name(sheet)
+            if not level or not isinstance(block, Mapping):
                 continue
-            
-            if isinstance(sheet_data, dict):
-                for field in sheet_data.get('fields', []):
-                    fields.append({
-                        'field_name': field.get('field_name', ''),
-                        'value': field.get('value', ''),
-                        'evidence': field.get('evidence', ''),
-                        'confidence': field.get('confidence', 0.0),
-                        'status': field.get('status', ''),  # confirmed/provisional
-                    })
-        
-        # Fallback: check flat metadata list
+            for row in block.get('expected_rows', []):
+                if not isinstance(row, Mapping):
+                    continue
+                row_pairs.update(
+                    (level, normalise_field_name(name))
+                    for name, value in row.items()
+                    if isinstance(name, str) and name.strip()
+                    and not name.startswith('_') and cls._has_value(value)
+                )
+        if explicit:
+            pairs.update(pair for pair in row_pairs if pair[1] in names)
+            return names, pairs, 'ground_truth_fields'
+        return (
+            {name for _, name in row_pairs}, row_pairs,
+            'isa_sheets.expected_rows' if row_pairs else 'unavailable',
+        )
+
+    def _extract_fields_from_fairifier(self, fairifier_output: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Read declarations and columns; use final rows for populated-field checks."""
+        fields = {}
+        matrices = {}
+        for representation in ('isa_structure', 'isa_values'):
+            for sheet_name, block in (fairifier_output.get(representation) or {}).items():
+                sheet = self._sheet_name(sheet_name)
+                if not sheet or not isinstance(block, Mapping):
+                    continue
+                for field in block.get('fields', []):
+                    if isinstance(field, Mapping) and field.get('field_name'):
+                        name = normalise_field_name(field['field_name'])
+                        fields[(sheet, name)] = {
+                            **dict(field), 'field_name': name, 'isa_sheet': sheet,
+                        }
+                if isinstance(block.get('columns'), list) and isinstance(block.get('rows'), list):
+                    matrices[sheet] = block
+
+        for sheet, block in matrices.items():
+            # A declaration's example value cannot fill an empty final cell.
+            for (field_sheet, _), field in fields.items():
+                if field_sheet == sheet:
+                    field['value'] = ''
+            columns = [normalise_field_name(str(column)) for column in block['columns']]
+            for name in columns:
+                if name:
+                    fields.setdefault((sheet, name), {'field_name': name, 'isa_sheet': sheet})
+            for row in block['rows']:
+                if isinstance(row, list):
+                    row_values = dict(zip(columns, row))
+                elif isinstance(row, Mapping):
+                    row_values = {normalise_field_name(str(k)): v for k, v in row.items()}
+                else:
+                    continue
+                for name in columns:
+                    if name and self._has_value(row_values.get(name)):
+                        fields[(sheet, name)]['value'] = row_values[name]
+
         if not fields:
-            metadata_list = fairifier_output.get('metadata', [])
-            for field in metadata_list:
-                fields.append({
-                    'field_name': field.get('field_name', ''),
-                    'value': field.get('value', ''),
-                    'evidence': field.get('evidence', ''),
-                    'confidence': field.get('confidence', 0.0),
-                    'status': field.get('status', ''),
-                })
-        
-        return fields
+            for field in fairifier_output.get('metadata', []):
+                if isinstance(field, Mapping) and field.get('field_name'):
+                    name = normalise_field_name(field['field_name'])
+                    sheet = self._sheet_name(field.get('isa_sheet'))
+                    fields[(sheet, name)] = {
+                        **dict(field), 'field_name': name, 'isa_sheet': sheet,
+                    }
+        return list(fields.values())
     
     
     def evaluate_batch(

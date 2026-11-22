@@ -46,6 +46,54 @@ def test_missing_identifier_has_no_containment_credit():
     assert matching.identifier_match("", "ABC123") == 0
 
 
+@pytest.mark.parametrize("match_type", ["exact", "identifier"])
+@pytest.mark.parametrize("pred, gt", [
+    ("https://doi.org/10.1234/example.12", "10.1234/example.1"),
+    ("AB1234", "AB123"),
+    ("RUN-2026-ALPHA-2", "RUN-2026-ALPHA-1"),
+    ("https://example.org/data/12", "https://example.org/data/1"),
+])
+def test_distinct_identifiers_never_receive_similarity_credit(monkeypatch, match_type, pred, gt):
+    # Similar wording or embeddings cannot establish identifier equality.
+    monkeypatch.setattr(matching, "semantic_sim", lambda *_: 1.0)
+    assert matching.match_value(pred, gt, match_type=match_type) == 0.0
+
+
+@pytest.mark.parametrize("match_type", ["exact", "identifier"])
+@pytest.mark.parametrize("pred", [
+    "https://doi.org/10.1234/example.1",
+    "http://dx.doi.org/10.1234/example.1",
+    "DOI: 10.1234/EXAMPLE.1",
+    "doi: https://doi.org/10.1234/example.1",
+])
+def test_doi_wrappers_preserve_canonical_identifier_equality(match_type, pred):
+    assert matching.match_value(pred, "10.1234/example.1", match_type=match_type) == 1.0
+
+
+@pytest.mark.parametrize("negated, affirmative", [
+    ("Signal not detected", "Signal detected"),
+    ("No signal was detected", "A signal was detected"),
+    ("The material was not stable", "The material was stable"),
+])
+def test_direct_negation_is_not_overridden_by_embedding_similarity(monkeypatch, negated, affirmative):
+    monkeypatch.setattr(matching, "semantic_sim", lambda *_: 1.0)
+    assert matching.match_value(negated, affirmative, match_type="semantic") == 0.0
+    assert matching.match_value(affirmative, negated, match_type="semantic") == 0.0
+    assert matching.token_f1(negated, affirmative)[2] < 1.0
+
+
+@pytest.mark.parametrize("pred, gt", [
+    ("The signal was not detected", "Signal not detected"),
+    ("No signal was detected", "Signal was absent"),
+    ("The sample was not only stable but also soluble", "The sample was stable and soluble"),
+    ("Samples were kept cold", "The samples were stored at low temperature"),
+    ("Sample No. 1", "Sample 1"),
+])
+def test_semantic_paraphrases_remain_eligible_for_similarity(monkeypatch, pred, gt):
+    monkeypatch.setattr(matching, "semantic_sim", lambda *_: 0.92)
+    assert matching.match_value(pred, gt, match_type="semantic") >= matching.MATCH_THRESHOLD
+
+
 def test_unknown_compound_units_require_same_expression():
     assert matching.numeric_tolerance_match("1 mg tissue", "0.001 g tissue") == 0
 
@@ -117,6 +165,86 @@ def test_external_identifiers_are_still_scored(sheet, field, replacement):
     gt, pred = _documents()
     pred["isa_values"][sheet]["rows"][0][field] = replacement
     assert _scores(gt, pred)[0] < 1
+
+
+def _contact_investigation_documents(include_gt_contacts=True):
+    common = {"investigation identifier": "I1", "investigation title": "Material stability study"}
+    contacts = [{"firstname": "Ada", "lastname": "Example"},
+                {"firstname": "Ben", "lastname": "Other"}]
+    roots = [{**common, **contact} for contact in contacts]
+    gt_rows = roots if include_gt_contacts else [common]
+    study = {"study identifier": "S1", "study title": "Heating experiment",
+             "investigation identifier": "I1"}
+    gt = {"isa_sheets": {
+        "investigation": {"expected_rows": deepcopy(gt_rows)},
+        "study": {"expected_rows": [deepcopy(study)]},
+    }}
+    pred = {"isa_values": {
+        "investigation": {"columns": list(roots[0]), "rows": [
+            {**row, "investigation identifier": "local-investigation"} for row in roots[::-1]
+        ]},
+        "study": {"columns": list(study), "rows": [{
+            **study, "study identifier": "local-study", "investigation identifier": "local-investigation"
+        }]},
+    }}
+    return gt, pred
+
+
+@pytest.mark.parametrize("include_gt_contacts", [False, True])
+def test_investigation_contact_rows_do_not_duplicate_the_logical_parent(include_gt_contacts):
+    gt, pred = _contact_investigation_documents(include_gt_contacts)
+    assert _scores(gt, pred) == (1, 1, 1)
+
+
+@pytest.mark.parametrize("error", ["conflicting_title", "duplicate_contact", "split_parent", "wrong_contact"])
+def test_investigation_contact_representation_does_not_hide_errors(error):
+    gt, pred = _contact_investigation_documents()
+    rows = pred["isa_values"]["investigation"]["rows"]
+    if error == "conflicting_title":
+        rows[0]["investigation title"] = "Different scientific investigation"
+    elif error == "duplicate_contact":
+        rows[0] = deepcopy(rows[1])
+    elif error == "split_parent":
+        rows[0]["investigation identifier"] = "second-investigation"
+    else:
+        rows[0]["firstname"] = "Wrong"
+    assert _scores(gt, pred)[0] < 1
+
+
+def test_contact_parent_alignment_survives_unrelated_broken_links_and_row_order():
+    gt, pred = _contact_investigation_documents()
+    second = deepcopy(gt["isa_sheets"]["investigation"]["expected_rows"])
+    for index, row in enumerate(second):
+        row.update({"investigation identifier": "I2", "investigation title": "Storage experiment",
+                    "firstname": ["Cy", "Dee"][index]})
+    gt["isa_sheets"]["investigation"]["expected_rows"].extend(second)
+    pred["isa_values"]["investigation"]["rows"].extend(
+        {**row, "investigation identifier": "local-second"} for row in second
+    )
+    gt["isa_sheets"]["study"]["expected_rows"].append({
+        "study identifier": "S2", "study title": "Heating experiment", "investigation identifier": "I2"
+    })
+    pred["isa_values"]["study"]["rows"].append({
+        "study identifier": "local-S2", "study title": "Heating experiment", "investigation identifier": "local-second"
+    })
+    extra = {
+        "sample": [{"sample identifier": "M1", "sample name": "Known material"}],
+        "assay": [{"assay identifier": "A1", "assay name": "Control measurement", "sample identifier": "M1"}],
+    }
+    for sheet, rows in extra.items():
+        gt["isa_sheets"][sheet] = {"expected_rows": deepcopy(rows)}
+        pred["isa_values"][sheet] = {"columns": list(rows[0]), "rows": deepcopy(rows)}
+    pred["isa_values"]["assay"]["rows"][0]["sample identifier"] = "missing"
+    before = _scores(gt, pred)
+    assert before[0] < 1
+    pred["isa_values"]["study"]["rows"].reverse()
+    pred["isa_values"]["investigation"]["rows"].reverse()
+    assert _scores(gt, pred) == before
+    evaluator = ValueAccuracyEvaluator()
+    gt_sheets, overrides = evaluator.load_gt_sheets(gt)
+    alignment = evaluator.align_document(gt_sheets, evaluator.load_pred_sheets(pred), overrides)
+    assert all(alignment.links_valid(gt_row, pred_row)
+               for gt_row, pred_row in alignment.pairs["study"])
 
 
 def test_ids_alone_cannot_prove_entity_alignment():

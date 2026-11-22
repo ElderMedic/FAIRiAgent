@@ -111,15 +111,11 @@ def adapt_evaluator_record(
     information_coverage = _bounded_number(
         correctness, ("field_coverage_recall", "information_coverage")
     )
-    # Public curated GT is values-first: Layer-1 field lists are often empty
-    # (total_ground_truth_fields==0 → recall forced to 0). Prefer values-GT
-    # presence coverage in that case so the axis is not degenerate.
+    # Field recall always has unique GT fields as its denominator. A record
+    # without field-reference evidence cannot substitute aligned cell coverage.
     gt_field_n = correctness.get("total_ground_truth_fields")
-    if (information_coverage is None or gt_field_n == 0) and values:
-        total_v = values.get("n_gt_populated_fields")
-        missing_v = values.get("missing_count")
-        if isinstance(total_v, int) and total_v > 0 and isinstance(missing_v, (int, float)):
-            information_coverage = max(0.0, min(1.0, 1.0 - float(missing_v) / float(total_v)))
+    if gt_field_n == 0:
+        information_coverage = None
     if information_coverage is None:
         missing_metrics.append("information_coverage")
         information_coverage = 0.0
@@ -147,6 +143,31 @@ def adapt_evaluator_record(
     if interoperability is None:
         missing_metrics.append("interoperability")
         interoperability = 0.0
+
+    coverage_diagnostics = {
+        key: correctness[key]
+        for key in (
+            "reference_source", "total_ground_truth_fields", "present_fields",
+            "missing_fields", "field_coverage_recall", "gt_field_populated_rate",
+            "total_ground_truth_field_level_pairs", "present_field_level_pairs",
+            "populated_field_level_pairs", "field_level_recall",
+            "populated_field_level_recall",
+        )
+        if key in correctness
+    }
+    coverage_diagnostics["information_coverage_definition"] = "unique_gt_field_recall"
+    total_v = values.get("n_gt_populated_fields")
+    missing_v = values.get("missing_count")
+    if (
+        isinstance(total_v, int) and not isinstance(total_v, bool) and total_v > 0
+        and isinstance(missing_v, int) and not isinstance(missing_v, bool)
+        and 0 <= missing_v <= total_v
+    ):
+        coverage_diagnostics.update({
+            "n_gt_populated_cells": total_v,
+            "nonmissing_gt_cells": total_v - missing_v,
+            "aligned_cell_coverage": (total_v - missing_v) / total_v,
+        })
 
     artifact_data = dict(artifact)
     validation_data = dict(validation)
@@ -182,6 +203,7 @@ def adapt_evaluator_record(
         "provenance": {
             "evaluator_adapter": "layer1_4_to_result_envelope_v2",
             **dict(provenance or {}),
+            "coverage_diagnostics": coverage_diagnostics,
         },
     }
     errors = validate_result(result)

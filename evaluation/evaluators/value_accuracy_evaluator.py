@@ -97,12 +97,16 @@ _ENTITY_ID_FIELDS = {
     "assay": "assay identifier",
 }
 _EXTERNAL_ID_FIELDS = re.compile(r"accession|doi|url|uri|orcid|taxonomy|ontology|reference")
+_CONTACT_ID_FIELDS = ("firstname", "lastname", "email address", "orcid")
+_CONTACT_FIELDS = {*_CONTACT_ID_FIELDS, "organization", "department"}
 
 
 class _EntityAlignment:
     """Document-local row mappings; external identifiers keep normal scoring."""
 
     def __init__(self, gt_sheets, pred_sheets):
+        self.gt_row_ids = self._counts(gt_sheets, collapse_contacts=False)
+        self.pred_row_ids = self._counts(pred_sheets, collapse_contacts=False)
         self.gt_ids = self._counts(gt_sheets)
         self.pred_ids = self._counts(pred_sheets)
         self.id_map = {sheet: {} for sheet in _ENTITY_ID_FIELDS}
@@ -112,13 +116,35 @@ class _EntityAlignment:
         self.overrides = {}
 
     @staticmethod
-    def _counts(sheets):
-        return {
+    def _counts(sheets, *, collapse_contacts=True):
+        counts = {
             sheet: Counter(
                 row.get(field, "") for row in sheets.get(sheet, []) if row.get(field)
             )
             for sheet, field in _ENTITY_ID_FIELDS.items()
         }
+        if not collapse_contacts:
+            return counts
+        primary = _ENTITY_ID_FIELDS["investigation"]
+        for identifier, count in list(counts["investigation"].items()):
+            if count < 2:
+                continue
+            rows = [row for row in sheets.get("investigation", [])
+                    if row.get(primary) == identifier]
+            contacts = [tuple(str(row.get(field, "")).strip().casefold()
+                              for field in _CONTACT_ID_FIELDS) for row in rows]
+            shared = {}
+            for row in rows:
+                for field, value in row.items():
+                    if value and field != primary and field not in _CONTACT_FIELDS:
+                        shared.setdefault(field, set()).add(" ".join(str(value).split()))
+            # FAIR-DS repeats one Investigation across distinct contacts. Only
+            # consistent non-contact metadata establishes a single parent.
+            if (shared and all(len(values) == 1 for values in shared.values())
+                    and all(any(contact) for contact in contacts)
+                    and len(set(contacts)) == len(contacts)):
+                counts["investigation"][identifier] = 1
+        return counts
 
     def target(self, field, gt_value):
         field = normalise_field_name(field)
@@ -159,6 +185,22 @@ class _EntityAlignment:
         scores = [score for score in scores if score is not None]
         return sum(scores) / len(scores) if scores else 0.0
 
+    def _preserves_grouped_parent(self, gt_row, current_row, candidate_row):
+        for field, value in gt_row.items():
+            target = self.target(field, value)
+            if target != "investigation":
+                continue
+            if not (self.gt_row_ids[target][value] > 1 or any(
+                self.pred_row_ids[target][identifier] > 1
+                for identifier, mapped in self.id_map[target].items() if mapped == value
+            )):
+                continue
+            if self.score(field, value, candidate_row.get(field, "")) < self.score(
+                field, value, current_row.get(field, "")
+            ):
+                return False
+        return True
+
     def resolve_reference_ties(self, evaluator, gt_sheets, pred_sheets, overrides):
         """Resolve content ties using incoming and outgoing links, with a bounded search.
 
@@ -174,13 +216,18 @@ class _EntityAlignment:
                 continue
             for pred_row in pred_sheets.get(sheet, []):
                 pred_id = pred_row.get(primary, "")
-                if self.pred_ids[sheet][pred_id] == 1:
+                if self.pred_row_ids[sheet][pred_id] == 1:
                     pred_nodes[sheet, pred_id] = pred_row
             for gt_row, pred_row in pairs:
                 gt_id = gt_row.get(primary, "")
                 if not gt_id:
                     continue
                 if pred_row is None or self.gt_ids[sheet][gt_id] != 1:
+                    continue
+                # One graph node cannot replace several independently scored
+                # contact rows. Their already-aligned parent remains fixed.
+                if (self.gt_row_ids[sheet][gt_id] != 1 or
+                        self.pred_row_ids[sheet][pred_row.get(primary, "")] != 1):
                     continue
                 key = (sheet, gt_id)
                 score = evaluator._row_similarity(gt_row, pred_row, overrides.get(sheet), self, True)
@@ -191,7 +238,7 @@ class _EntityAlignment:
                     pred_key for pred_key, row in pred_nodes.items()
                     if pred_key[0] == sheet and abs(
                         evaluator._row_similarity(gt_row, row, overrides.get(sheet), self, True) - score
-                    ) < 1e-12
+                    ) < 1e-12 and self._preserves_grouped_parent(gt_row, pred_row, row)
                 ]
         if not any(len(options) > 1 for options in candidates.values()):
             return
@@ -529,8 +576,8 @@ class ValueAccuracyEvaluator:
     def align_document(self, gt_sheets, pred_sheets, overrides_by_sheet):
         """Align scientific content before resolving arbitrary local IDs.
 
-        ID-only rows cannot justify a mapping. Duplicate IDs remain unresolved,
-        so both their definitions and incoming links receive zero credit.
+        ID-only rows cannot justify a mapping. Conflicting duplicate IDs remain
+        unresolved; consistent Investigation contact rows share one parent.
         """
         context = _EntityAlignment(gt_sheets, pred_sheets)
         context.overrides = overrides_by_sheet
@@ -548,6 +595,7 @@ class ValueAccuracyEvaluator:
                 if primary is None:
                     continue
                 context.id_map[sheet] = {}
+                candidate_ids = []
                 for gt_row, pred_row in pairs:
                     if pred_row is None:
                         continue
@@ -559,6 +607,13 @@ class ValueAccuracyEvaluator:
                         context.gt_ids[sheet][gt_id] == context.pred_ids[sheet][pred_id] == 1
                         and content_score >= 0.3
                     ):
+                        candidate_ids.append((gt_id, pred_id))
+                gt_targets, pred_targets = {}, {}
+                for gt_id, pred_id in candidate_ids:
+                    gt_targets.setdefault(gt_id, set()).add(pred_id)
+                    pred_targets.setdefault(pred_id, set()).add(gt_id)
+                for gt_id, pred_id in candidate_ids:
+                    if len(gt_targets[gt_id]) == len(pred_targets[pred_id]) == 1:
                         context.id_map[sheet][pred_id] = gt_id
             if previous == context.id_map:
                 break

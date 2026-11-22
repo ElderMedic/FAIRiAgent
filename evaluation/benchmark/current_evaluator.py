@@ -81,7 +81,13 @@ def evaluate_current_run(
         )
     artifact["parseable"] = True
 
-    correctness = CorrectnessEvaluator().evaluate(output, dict(ground_truth_doc))
+    correctness = CorrectnessEvaluator().evaluate(
+        output,
+        dict(ground_truth_doc),
+        ground_truth_values_doc=(
+            dict(ground_truth_values_doc) if ground_truth_values_doc is not None else None
+        ),
+    )
     schema = SchemaValidator().validate(output)
     evaluator_record: Dict[str, Any] = {
         "correctness": correctness,
@@ -99,11 +105,7 @@ def evaluate_current_run(
 
     # Layer 4 remains a diagnostic.  It is retained in provenance for audit
     # but is deliberately excluded from the benchmark axes and hard gates.
-    field_names = {
-        field.get("field_name")
-        for field in ground_truth_doc.get("ground_truth_fields", [])
-        if isinstance(field, Mapping) and field.get("field_name")
-    }
+    field_names = set(correctness["field_level_results"])
     novel = NovelFieldEvaluator().evaluate(
         output,
         field_names,
