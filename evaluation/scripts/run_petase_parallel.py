@@ -17,6 +17,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -117,20 +118,23 @@ def main():
     parser.add_argument("--degraded-after", type=int, default=3,
                         help="mark a run degraded (rerun by --skip-done) after this many failed LLM calls")
     args = parser.parse_args()
+    if args.ids is not None and not args.ids:
+        parser.error("--ids was given without any instance id (it would select every paper)")
     args.out = args.out if args.out.is_absolute() else ROOT / args.out
     args.out.mkdir(parents=True, exist_ok=True)
 
     overrides = dict(ISOLATION)
     overrides.update(item.split("=", 1) for item in args.set)
-    env_file = args.out / "run.env"
     overlays = "".join(
         f"\n# --- overlay {path} ---\n" + (path if path.is_absolute() else ROOT / path).read_text()
         for path in args.overlay
     )
-    env_file.write_text(
-        args.env.read_text() + overlays + "\n# --- run_petase_parallel overrides ---\n"
-        + "".join(f"{k}={v}\n" for k, v in overrides.items())
-    )
+    env_text = (args.env.read_text() + overlays + "\n# --- run_petase_parallel overrides ---\n"
+                + "".join(f"{k}={v}\n" for k, v in overrides.items()))
+    # Named by content: two runners sharing --out with different envs (e.g. one
+    # Ollama per GPU) must not overwrite each other's settings.
+    env_file = args.out / f"run_{hashlib.sha256(env_text.encode()).hexdigest()[:8]}.env"
+    env_file.write_text(env_text)
     os.chmod(env_file, 0o600)  # holds API keys from the base env
 
     instances = select(json.loads(MANIFEST.read_text())["instances"], args.split, args.ids, args.papers)
