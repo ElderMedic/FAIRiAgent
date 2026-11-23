@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -66,6 +67,13 @@ def run_one(instance, args, env_file: Path, status_path: Path):
         "-o", str(paper_out), "-p", instance["instance_id"], "-e", str(env_file),
     ]
     log = args.out / f"{instance['instance_id']}.log"
+    # A rerun keeps the earlier attempt's outputs and log as traces.
+    if paper_out.exists() or log.exists():
+        keep = args.out / "_attempts" / instance["instance_id"] / time.strftime("%Y%m%d-%H%M%S")
+        keep.mkdir(parents=True, exist_ok=True)
+        for old in (paper_out, log):
+            if old.exists():
+                shutil.move(str(old), str(keep / old.name))
     started = time.time()
     with open(log, "w") as handle:
         try:
@@ -75,10 +83,16 @@ def run_one(instance, args, env_file: Path, status_path: Path):
             ).returncode
         except subprocess.TimeoutExpired:
             code = "timeout"
+    # A run that lost its model mid-way still exits 0 with a degraded record;
+    # mark it so --skip-done runs it again.
+    failed_calls = sum(1 for line in log.read_text(errors="ignore").splitlines() if "call failed" in line)
+    if code == 0 and failed_calls >= args.degraded_after:
+        code = "degraded"
     record = {
         "instance_id": instance["instance_id"], "split": instance["split"],
         "exit": code, "minutes": round((time.time() - started) / 60, 1),
         "metadata": str(next(paper_out.rglob("metadata.json"), "")) if paper_out.exists() else "",
+        "failed_llm_calls": failed_calls,
     }
     with open(status_path, "a") as handle:
         handle.write(json.dumps(record) + "\n")
@@ -100,6 +114,8 @@ def main():
     parser.add_argument("--set", action="append", default=[], help="KEY=VALUE env override")
     parser.add_argument("--skip-done", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="print how many papers would run, then exit")
+    parser.add_argument("--degraded-after", type=int, default=3,
+                        help="mark a run degraded (rerun by --skip-done) after this many failed LLM calls")
     args = parser.parse_args()
     args.out = args.out if args.out.is_absolute() else ROOT / args.out
     args.out.mkdir(parents=True, exist_ok=True)
