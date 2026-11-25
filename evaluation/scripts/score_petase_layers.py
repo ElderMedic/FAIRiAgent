@@ -29,7 +29,8 @@ DEFAULT_FACTS = ROOT / "evaluation/datasets/annotated/facts/petase_facts_v1"
 def find_records(run_dir: Path) -> dict:
     found: dict = {}
     for path in sorted(run_dir.rglob("metadata.json")):
-        if "_failed" in path.parts:
+        # Earlier attempts of a rerun paper and runs set aside are traces, not results.
+        if {"_failed", "_attempts", "_degraded"} & set(path.parts):
             continue
         doc = next((p for p in reversed(path.parts) if p.startswith("petase_10_")), None)
         if doc and doc not in found:
