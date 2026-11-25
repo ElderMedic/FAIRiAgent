@@ -61,7 +61,11 @@ while true; do
   remaining="$("$PYTHON" evaluation/scripts/run_petase_parallel.py "$@" --skip-done --dry-run 2>/dev/null | head -1 | grep -oE '^[0-9]+' || echo "?")"
   echo "$(date '+%F %T') round end: $after papers done, $remaining left"
   [[ "$remaining" == "0" ]] && { echo "all papers done"; exit 0; }
-  if (( after > before )); then stall=0; else stall=$((stall + 1)); fi
+  # A round that ended because a service went down says nothing about the papers:
+  # only a round that finished with the services up and no new paper counts as a stall.
+  if ! services_up; then :
+  elif (( after > before )); then stall=0
+  else stall=$((stall + 1)); fi
   if (( stall >= MAX_STALL )); then
     echo "no paper completed in $MAX_STALL rounds; stopping (see $out/run_status.jsonl)" >&2
     exit 1
