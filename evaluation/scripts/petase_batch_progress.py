@@ -13,6 +13,7 @@ import argparse
 import json
 import re
 import statistics
+import subprocess
 import time
 from pathlib import Path
 
@@ -62,6 +63,14 @@ def paper_progress(log: Path) -> tuple[float, str]:
     return fraction, stage
 
 
+def live_papers(out: Path) -> set:
+    """Papers a run_fairifier.py process is working on right now for this batch."""
+    listing = subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True).stdout
+    return {m[1] for line in listing.splitlines()
+            if "run_fairifier.py process" in line and str(out) in line
+            for m in [re.search(r"-p (\S+)", line)] if m}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("out", type=Path, help="batch output folder (holds run_status.jsonl)")
@@ -83,12 +92,12 @@ def main() -> int:
     minutes = [next(r["minutes"] for r in records[i] if r["exit"] == 0) for i in done]
 
     running = []
+    live = live_papers(args.out.resolve())
     for i in ids:
-        log = args.out / f"{i}.log"
-        if i in done or i in skipped or not log.exists():
-            continue
-        if time.time() - log.stat().st_mtime < 1800:  # written to in the last 30 min
-            running.append((i, *paper_progress(log)))
+        # A paper counts as running only while its process exists: a queue that fails
+        # fast while a service is down also rewrites logs, but starts nothing.
+        if i not in done and i not in skipped and i in live:
+            running.append((i, *paper_progress(args.out / f"{i}.log")))
 
     total = len(ids) - len(skipped)
     fraction = (len(done) + sum(f for _, f, _ in running)) / total if total else 0
