@@ -164,3 +164,19 @@ def test_variant_named_relative_to_its_parent_is_read_from_its_own_name():
     names = ["IsPETaseTM / S121E/D186H/R280A", "IsPETaseTMK95N/F201I", "DuraPETaseK95N/S121E/F201I/R280A"]
     row = {"enzyme type": "IsPETaseTM^K95N/F201I", "enzyme mutation": "S121E/D186H/R280A/K95N/F201I"}
     assert row_material(row, "sample", "enzyme", names) == "IsPETaseTMK95N/F201I"
+
+
+def test_scorer_ignores_earlier_attempts_and_set_aside_runs(tmp_path):
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "score_petase_layers", Path(__file__).resolve().parents[1] / "evaluation/scripts/score_petase_layers.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for rel in ("petase_10_x/deliverables", "_attempts/petase_10_x/20261123/petase_10_x/deliverables",
+                "_degraded/petase_10_y/deliverables"):
+        (tmp_path / rel).mkdir(parents=True)
+        (tmp_path / rel / "metadata.json").write_text("{}")
+    found = module.find_records(tmp_path)
+    assert list(found) == ["petase_10_x"] and "_attempts" not in found["petase_10_x"].parts
