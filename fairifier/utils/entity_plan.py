@@ -1254,7 +1254,7 @@ def expand_table_row_templates(
     records and materials and, for each new id, its template's record_id;
     every new record still passes the verbatim row and cell checks.
     """
-    from ..services.publication_tables import _NUMERIC_CELL_RE, _TableGrid
+    from ..services.publication_tables import _NUMERIC_CELL_RE, _TableGrid, _unwrap_number
 
     source = normalize_source_evidence_text(source_text)
     by_id = {str(item.get("record_id") or ""): item for item in materials}
@@ -1276,13 +1276,13 @@ def expand_table_row_templates(
         table = next((t for t in _HTML_TABLE_RE.findall(source) if row and row in t), "")
         if not table:
             continue
-        cells = [_cell_text(cell) for cell in _HTML_CELL_RE.findall(row)]
+        cells = [_unwrap_number(_cell_text(cell)) for cell in _HTML_CELL_RE.findall(row)]
         rows = _HTML_ROW_RE.findall(table)
         # A row holding one label ("Thc_Cut1") heads the rows below it.
         sections, label_rows, current = [], {}, ""
         for raw in rows:
             filled = [_cell_text(cell) for cell in _HTML_CELL_RE.findall(raw) if _cell_text(cell)]
-            if len(filled) == 1 and not _NUMERIC_CELL_RE.match(filled[0]):
+            if len(filled) == 1 and not _NUMERIC_CELL_RE.match(_unwrap_number(filled[0])):
                 current = filled[0]
                 label_rows[current] = raw
             sections.append(current)
@@ -1290,7 +1290,11 @@ def expand_table_row_templates(
         named = [i for i, cell in enumerate(cells) if _plain_cell(cell) == _plain_cell(subject)]
         if len(named) == 1:
             subject_index = named[0]
-        elif row in rows and _plain_cell(sections[rows.index(row)]) == _plain_cell(subject):
+        elif row in rows and sections[rows.index(row)] and (
+            _plain_cell(subject) == _plain_cell(sections[rows.index(row)])
+            # "Thc_Cut1 50°C": the label row's material plus the row's own condition
+            or _plain_cell(subject).startswith(_plain_cell(sections[rows.index(row)]) + " ")
+        ):
             subject_index = -1  # the material is the row's section label
         else:
             continue
@@ -1308,7 +1312,7 @@ def expand_table_row_templates(
         grid.close()
         header_rows = set(grid.project()["header_rows"])
         for number, sibling in enumerate(rows, start=1):
-            row_cells = [_cell_text(cell) for cell in _HTML_CELL_RE.findall(sibling)]
+            row_cells = [_unwrap_number(_cell_text(cell)) for cell in _HTML_CELL_RE.findall(sibling)]
             if (number - 1 in header_rows or sibling in cited or sibling == row
                     or len(row_cells) != len(cells) or sibling in label_rows.values()):
                 continue

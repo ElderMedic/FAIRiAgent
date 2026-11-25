@@ -4620,3 +4620,61 @@ def test_named_levels_are_never_collapsed_and_an_oversized_product_is_refused():
     levels = {level["level"]: level for level in plan["levels"]}
     assert not levels["assay"]["entities"]
     assert any("11600 rows" in error for error in plan["materialization_errors"])
+
+
+def _template_materials(*subjects):
+    materials = []
+    for index, subject in enumerate(subjects):
+        materials += [
+            {"record_id": f"ou_{index}", "level": "observationunit", "parent_row_id": "study_001",
+             "record_kind": "material_preparation", "source_subject": subject, "source_quote": "x",
+             "label": subject, "source_group": "g"},
+            {"record_id": f"s_{index}", "level": "sample", "parent_row_id": f"ou_{index}",
+             "record_kind": "material_identity", "source_subject": subject, "source_quote": "x",
+             "label": subject, "source_group": "g"},
+        ]
+    return materials
+
+
+ANNEAL_TABLE = (
+    "<table><tr><td>Annealing condition</td><td>\\( V_{max} \\)[μM s-1]</td></tr>"
+    "<tr><td>5 min at 85°C</td><td>\\( 0.22 ± 0.01^{\\text{a}} \\)</td></tr>"
+    "<tr><td>3 min at 115°C</td><td>\\( 0.16 ± 0.01^{\\text{ab}} \\)</td></tr>"
+    "<tr><td>4 min at 115°C</td><td>\\( 0.13 ± 0.010^{\\text{b}} \\)</td></tr></table>"
+)
+
+
+def test_template_repeats_over_rows_whose_cells_carry_math_markup_and_digit_led_labels():
+    from fairifier.utils.entity_plan import expand_table_row_templates
+
+    template = {
+        "record_id": "vmax", "sample_row_id": "s_0", "record_kind": "fitted_result",
+        "source_subject": "5 min at 85°C", "repeat_for_table_rows": True, "label": "Vmax",
+        "source_group": "kinetics", "source_quote": "<tr><td>5 min at 85°C</td><td>\\( 0.22 ± 0.01^{\\text{a}} \\)</td></tr>",
+        "attributes": [{"field_name": "reported measurement", "value": "0.22 ± 0.01 μM s-1"}],
+    }
+    records, materials, derived = expand_table_row_templates(
+        [template], _template_materials("5 min at 85°C"), ANNEAL_TABLE)
+
+    clones = {r["source_subject"]: r["attributes"][0]["value"] for r in records if r["record_id"] != "vmax"}
+    assert clones == {"3 min at 115°C": "0.16 ± 0.01 μM s-1", "4 min at 115°C": "0.13 ± 0.010 μM s-1"}
+    assert {m["source_subject"] for m in materials if m["level"] == "sample"} >= set(clones)
+
+
+def test_template_whose_subject_is_the_label_row_plus_its_condition_repeats_per_row():
+    from fairifier.utils.entity_plan import expand_table_row_templates
+
+    template = {
+        "record_id": "kin", "sample_row_id": "s_0", "record_kind": "fitted_result",
+        "source_subject": "Thc_Cut1 50°C", "repeat_for_table_rows": True, "label": "kinetics",
+        "source_group": "kinetics",
+        "source_quote": "<tr><td>50</td><td>2.3 ± 0.68</td><td>0.072 ± 0.0056</td></tr>",
+        "attributes": [{"field_name": "Michaelis constant Km", "value": "2.3 ± 0.68 g·L-1"},
+                       {"field_name": "reaction temperature", "value": "50"}],
+    }
+    records, _, _ = expand_table_row_templates(
+        [template], _template_materials("Thc_Cut1", "Thc_Cut2"), GROUPED_TABLE)
+
+    got = {(r["sample_row_id"], r["attributes"][0]["value"], r["attributes"][1]["value"])
+           for r in records if r["record_id"] != "kin"}
+    assert got == {("s_0", "6.9 ± 1.2 g·L-1", "60"), ("s_1", "3.5 ± 0.68 g·L-1", "50")}
