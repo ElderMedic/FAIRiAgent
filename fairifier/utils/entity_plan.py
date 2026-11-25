@@ -402,6 +402,47 @@ def normalize_entity_plan(
     return result
 
 
+# Rows one design group may expand to at one ISA level. A screening campaign
+# ("about 12 000 clones", 200 per position) declares clone numbers as levels;
+# crossed with the positions that is one Assay row per clone nobody reported.
+MAX_ROWS_PER_GROUP_LEVEL = 2000
+
+
+def _collapse_unreported_dimensions(
+    group_id: str, dimensions: Mapping[str, Mapping[str, Any]],
+    expansions: Mapping[str, Mapping[str, Any]],
+) -> Dict[str, int]:
+    """Dimensions left out of the row product so no level of a group exceeds the cap.
+
+    Only dimensions whose levels are all unnamed placeholders qualify (the
+    source states how many there are, not which): the largest go first. A
+    dimension dropped at one level is dropped at every level of the group, so
+    parents and children keep joining on the same dimensions. Returns each
+    dropped dimension with its level count.
+    """
+    def usable(name: str) -> List[Mapping[str, Any]]:
+        return [value for value in dimensions[name].get("levels") or []
+                if isinstance(value, Mapping) and str(value.get("value") or "").strip()]
+
+    dropped: Dict[str, int] = {}
+    for level in ("observationunit", "sample", "assay"):
+        names = [str(n).strip() for n in (expansions.get(level) or {}).get("dimension_names") or []]
+        names = [n for n in names if n in dimensions and n not in dropped]
+        size = 1
+        for name in names:
+            size *= max(len(usable(name)), 1)
+        placeholders = sorted(
+            (n for n in names if usable(n) and all(v.get("origin") != "explicit" for v in usable(n))),
+            key=lambda n: -len(usable(n)),
+        )
+        for name in placeholders:
+            if size <= MAX_ROWS_PER_GROUP_LEVEL:
+                break
+            size //= len(usable(name))
+            dropped[name] = len(usable(name))
+    return dropped
+
+
 def materialize_entity_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
     """Expand compact factorial design claims into the five ISOSA levels."""
     errors: List[str] = []
@@ -462,6 +503,7 @@ def materialize_entity_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
             if isinstance(expansion, Mapping)
         }
         materialized: Dict[str, List[Dict[str, Any]]] = {}
+        collapsed = _collapse_unreported_dimensions(group_id, dimensions, expansions)
 
         for level in ("observationunit", "sample", "assay"):
             expansion = expansions.get(level)
@@ -469,6 +511,12 @@ def materialize_entity_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
                 errors.append(f"Design group {group_id} is missing {level} expansion.")
                 continue
             names = [str(name).strip() for name in expansion.get("dimension_names") or []]
+            for name in [n for n in names if n in collapsed]:
+                levels[level]["unresolved_ambiguities"].append(
+                    f"{group_id}: dimension {name} has {collapsed[name]} unnamed levels "
+                    "(a count the source states, not entities it reports); not expanded into rows."
+                )
+            names = [name for name in names if name not in collapsed]
             unknown = [name for name in names if name not in dimensions]
             if unknown:
                 errors.append(
@@ -486,6 +534,16 @@ def materialize_entity_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
                 if not values:
                     errors.append(f"Design dimension {group_id}.{name} has no levels.")
                 factor_levels.append(values)
+            expected_rows = 1
+            for values in factor_levels:
+                expected_rows *= max(len(values), 1)
+            if expected_rows > MAX_ROWS_PER_GROUP_LEVEL:
+                errors.append(
+                    f"Design group {group_id} {level} would expand to {expected_rows} rows "
+                    f"(limit {MAX_ROWS_PER_GROUP_LEVEL}); not expanded. Name the levels the "
+                    "source reports and leave counts it does not enumerate in unreported_design."
+                )
+                continue
             combinations = list(product(*factor_levels)) if factor_levels else [tuple()]
             level_entities: List[Dict[str, Any]] = []
             for index, combination in enumerate(combinations, start=1):

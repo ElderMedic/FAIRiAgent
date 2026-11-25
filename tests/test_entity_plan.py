@@ -4568,3 +4568,55 @@ def test_row_retyped_as_prose_cites_the_one_row_holding_its_pairs(quote, expecte
         assert (row, lines) == ("", [])
     else:
         assert f"<td>{expected}</td>" in row and len(lines) == 1 and "section = Thc_Cut" in lines[0]
+
+
+def _screening_claims(positions, clones, clone_origin="derived", clone_values=None):
+    return {
+        "investigations": [{"row_id": "inv_a", "label": "Screen", "evidence": "SSM libraries were screened."}],
+        "studies": [{"row_id": "study_a", "parent_row_id": "inv_a", "label": "Screen", "evidence": "SSM screen."}],
+        "design_groups": [{
+            "group_id": "ssm", "label": "SSM screen", "study_row_id": "study_a",
+            "evidence": "Two hundred clones were screened for each SSM library.",
+            "dimensions": [
+                {"name": "engineered_position", "level_count": positions,
+                 "explicit_values": [f"P{i}" for i in range(1, positions + 1)], "origin": "explicit",
+                 "semantic_role": "material_path", "field_name": "material label",
+                 "applies_to": ["observationunit", "sample", "assay"]},
+                {"name": "screened_clones_per_position", "level_count": clones,
+                 "explicit_values": list(clone_values or []), "origin": clone_origin,
+                 "semantic_role": "observation_condition", "field_name": "clone label",
+                 "applies_to": ["assay"]},
+            ],
+        }],
+        "unresolved_ambiguities": [],
+    }
+
+
+def test_screening_campaign_is_not_expanded_into_one_assay_per_unreported_clone():
+    plan = materialize_entity_claims(_screening_claims(positions=58, clones=200))
+    levels = {level["level"]: level for level in plan["levels"]}
+
+    # 58 positions x 200 unnamed clones would be 11,600 assays
+    assert len(levels["assay"]["entities"]) == 58
+    assert len(levels["sample"]["entities"]) == 58
+    assert not plan["materialization_errors"]
+    assert any("screened_clones_per_position" in note and "200" in note
+               for note in levels["assay"]["unresolved_ambiguities"])
+    assert not any(a["dimension_name"] == "screened_clones_per_position"
+                   for row in levels["assay"]["entities"] for a in row["attributes"])
+
+
+def test_plan_under_the_row_cap_is_expanded_as_before():
+    plan = materialize_entity_claims(_screening_claims(positions=10, clones=5))
+    levels = {level["level"]: level for level in plan["levels"]}
+    assert len(levels["assay"]["entities"]) == 50
+    assert not plan["materialization_errors"]
+
+
+def test_named_levels_are_never_collapsed_and_an_oversized_product_is_refused():
+    names = [f"clone {i}" for i in range(1, 201)]
+    plan = materialize_entity_claims(
+        _screening_claims(positions=58, clones=200, clone_origin="explicit", clone_values=names))
+    levels = {level["level"]: level for level in plan["levels"]}
+    assert not levels["assay"]["entities"]
+    assert any("11600 rows" in error for error in plan["materialization_errors"])
