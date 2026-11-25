@@ -52,3 +52,23 @@ def test_rerun_keeps_the_earlier_attempt(runner, tmp_path, monkeypatch):
     assert len(kept) == 1 and (kept[0] / "petase_x.log").read_text() == "first attempt\n"
     assert (kept[0] / "petase_x" / "metadata.json").exists()
     assert json.loads((tmp_path / "out" / "status.jsonl").read_text())["exit"] == 0
+
+
+def test_skipped_paper_counts_as_done_for_skip_done(runner, tmp_path, monkeypatch):
+    """A paper set aside on purpose (e.g. a review that explodes into 800k cells) is not retried."""
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "run_status.jsonl").write_text(
+        json.dumps({"instance_id": "a", "exit": "skipped", "reason": "plan too large"}) + "\n"
+        + json.dumps({"instance_id": "b", "exit": 1}) + "\n")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"instances": [
+        {"instance_id": i, "split": "dev", "source_path": "x.pdf"} for i in ("a", "b", "c")]}))
+    monkeypatch.setattr(runner, "MANIFEST", manifest)
+    env = tmp_path / "e.env"
+    env.write_text("X=1\n")
+    monkeypatch.setattr("sys.argv", ["run", "--env", str(env), "--out", str(out), "--skip-done", "--dry-run"])
+    printed = []
+    monkeypatch.setattr("builtins.print", lambda *a, **k: printed.append(" ".join(map(str, a))))
+    runner.main()
+    assert printed[0].startswith("2 papers")

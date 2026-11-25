@@ -45,7 +45,7 @@ services_up() {
 
 succeeded() {
   [[ -f "$out/run_status.jsonl" ]] || { echo 0; return; }
-  "$PYTHON" -c 'import json,sys; print(len({json.loads(l)["instance_id"] for l in open(sys.argv[1]) if l.strip() and json.loads(l)["exit"] == 0}))' "$out/run_status.jsonl"
+  "$PYTHON" -c 'import json,sys; print(len({json.loads(l)["instance_id"] for l in open(sys.argv[1]) if l.strip() and json.loads(l)["exit"] in (0, "skipped")}))' "$out/run_status.jsonl"
 }
 
 stall=0

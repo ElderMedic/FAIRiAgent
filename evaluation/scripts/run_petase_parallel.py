@@ -141,7 +141,7 @@ def main():
     status_path = args.out / "run_status.jsonl"
     if args.skip_done and status_path.exists():
         done = {json.loads(line)["instance_id"] for line in status_path.read_text().splitlines()
-                if line.strip() and json.loads(line)["exit"] == 0}
+                if line.strip() and json.loads(line)["exit"] in (0, "skipped")}
         instances = [i for i in instances if i["instance_id"] not in done]
     print(f"{len(instances)} papers, {args.workers} workers -> {args.out}", flush=True)
     if args.dry_run:
