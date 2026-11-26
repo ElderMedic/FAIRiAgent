@@ -1309,6 +1309,111 @@ Source document:
             return parsed.model_dump()
         return dict(parsed or {})
 
+    _CLAIM_IDENTIFIERS = (
+        ("investigations", "row_id"),
+        ("studies", "row_id"),
+        ("design_groups", "group_id"),
+        ("reported_materials", "record_id"),
+        ("reported_assays", "record_id"),
+    )
+
+    @staticmethod
+    def _identifier_mentioned(identifier: str, text: str) -> bool:
+        if not identifier:
+            return False
+        return re.search(rf"(?<![\w-]){re.escape(identifier)}(?![\w-])", text) is not None
+
+    @classmethod
+    def claims_for_repair(cls, claims: Mapping[str, Any], errors: List[str]) -> Dict[str, Any]:
+        """Objects a retry must change. Unnamed structural errors see the whole plan."""
+        text = "\n".join(errors)
+        selected: Dict[str, Any] = {}
+        named = False
+        for key, ident in cls._CLAIM_IDENTIFIERS:
+            hits = [
+                item for item in claims.get(key) or []
+                if isinstance(item, Mapping)
+                and cls._identifier_mentioned(str(item.get(ident) or ""), text)
+            ]
+            if hits:
+                named = True
+                selected[key] = hits
+        tables = [
+            item for item in claims.get("record_table_plans") or []
+            if isinstance(item, Mapping)
+            and (
+                cls._identifier_mentioned(str(item.get("source_id") or ""), text)
+                or cls._identifier_mentioned(str(item.get("table_name") or ""), text)
+            )
+        ]
+        if tables:
+            named = True
+            selected["record_table_plans"] = tables
+        return selected if named else dict(claims)
+
+    @classmethod
+    def merge_entity_claim_patch(
+        cls, base: Mapping[str, Any], patch: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Replace only the objects a repair returned. Empty lists do not delete."""
+        merged = deepcopy(dict(base))
+        for key, ident in cls._CLAIM_IDENTIFIERS:
+            incoming = [item for item in patch.get(key) or [] if isinstance(item, Mapping)]
+            if not incoming:
+                continue
+            current = [item for item in merged.get(key) or [] if isinstance(item, Mapping)]
+            order = [str(item.get(ident) or "") for item in current]
+            by_id = {str(item.get(ident) or ""): dict(item) for item in current if item.get(ident)}
+            for item in incoming:
+                item_id = str(item.get(ident) or "")
+                if not item_id:
+                    continue
+                if item_id not in by_id:
+                    order.append(item_id)
+                by_id[item_id] = dict(item)
+            merged[key] = [by_id[item_id] for item_id in order if item_id in by_id]
+        incoming_tables = [
+            item for item in patch.get("record_table_plans") or [] if isinstance(item, Mapping)
+        ]
+        if incoming_tables:
+            tables = [dict(item) for item in merged.get("record_table_plans") or [] if isinstance(item, Mapping)]
+
+            def table_key(item: Mapping[str, Any]) -> tuple[str, str]:
+                return (str(item.get("source_id") or ""), str(item.get("table_name") or ""))
+
+            index = {table_key(item): position for position, item in enumerate(tables)}
+            for item in incoming_tables:
+                key = table_key(item)
+                if key in index:
+                    tables[index[key]] = dict(item)
+                else:
+                    tables.append(dict(item))
+            merged["record_table_plans"] = tables
+        extra_notes = [
+            note for note in patch.get("unresolved_ambiguities") or [] if str(note).strip()
+        ]
+        if extra_notes:
+            merged["unresolved_ambiguities"] = list(dict.fromkeys(
+                [*(merged.get("unresolved_ambiguities") or []), *extra_notes]
+            ))
+        return merged
+
+    def _repair_prompt(self, claims: Mapping[str, Any], errors: List[str]) -> str:
+        subset = self.claims_for_repair(claims, errors)
+        shown = errors[:20]
+        omitted = len(errors) - len(shown)
+        return (
+            "The main entity plan stands. Repair only the objects named by the issues "
+            "below and return those objects alone. Do not resubmit unchanged "
+            "investigations, studies, design groups, materials, assays, or table plans. "
+            "Reuse each object's existing id. An empty list means no change, not deletion.\n\n"
+            "Issues:\n- "
+            + "\n- ".join(shown)
+            + (f"\n- {omitted} further issues were omitted; fix the same patterns." if omitted else "")
+            + "\n\nObjects to repair:\n"
+            + json.dumps(subset, ensure_ascii=False)
+        )
+
     def _scope_audit_prompt(
         self,
         claims: Mapping[str, Any],
@@ -2652,6 +2757,7 @@ Authoritative table profiles with value distributions and example rows:
         best_plan: Dict[str, Any] = {}
         best_errors: List[str] = []
         best_rank: tuple[int, int, int, int, int] | None = None
+        base_claims: Dict[str, Any] | None = None
 
         def _set_retry_errors(items: List[str]) -> None:
             # Each validation describes the current candidate. Accumulating old
@@ -2684,9 +2790,15 @@ Authoritative table profiles with value distributions and example rows:
             # Thinking stays on for planning: a no-thinking retry produced
             # complete but much coarser plans (entities merged) on Qwen.
             with thinking_override(None):
+                repairing = base_claims is not None
+                prompt = (
+                    self._repair_prompt(base_claims, retry_errors)
+                    if repairing
+                    else self._prompt(state, prior_errors=retry_errors or None)
+                )
                 parsed = await invoke_structured_output(
                     self.llm_helper,
-                    [HumanMessage(content=self._prompt(state, prior_errors=retry_errors or None))],
+                    [HumanMessage(content=prompt)],
                     EntityDesignClaimsResponse,
                     operation_name=f"EntityStructurePlanner.attempt_{attempt}",
                     allow_truncated=True,
@@ -2694,7 +2806,8 @@ Authoritative table profiles with value distributions and example rows:
                     max_tokens=65536 if config.llm_enable_thinking else 32768,
                     validation_errors=schema_errors,
                 )
-            if TRUNCATED_ANSWER_MARKER in schema_errors:
+            truncated = TRUNCATED_ANSWER_MARKER in schema_errors
+            if truncated:
                 truncated_before = True
             if not parsed:
                 parse_errors = schema_errors or [
@@ -2708,6 +2821,12 @@ Authoritative table profiles with value distributions and example rows:
                 _set_retry_errors(errors)
                 continue
             claims = self._claims_payload(parsed)
+            if repairing and not truncated and base_claims is not None:
+                claims = self.merge_entity_claim_patch(base_claims, claims)
+            elif repairing and truncated and base_claims is not None:
+                claims = base_claims
+            if not truncated:
+                base_claims = claims
             claims = normalize_claim_measurement_units(claims, source_text)
             if material_inventory is None:
                 material_inventory = await inventory_task

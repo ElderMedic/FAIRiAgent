@@ -160,10 +160,11 @@ parameter. The DeepSeek adapter sends the provider's `max_tokens` parameter.
 For thinking models, entity planning requests 65,536 output tokens and its
 reviews request 32,768, including reasoning; non-thinking requests remain
 32,768 and 8,192. Provider adapters determine the effective request limit.
-Independent reported-record review retains each rejection rationale so the
-next planning attempt can correct the source identity or relationship.
-Each planning retry receives the latest candidate's validation errors;
-resolved errors from older candidates cannot displace the current feedback.
+Independent reported-record review retains each rejection rationale. A later
+planning attempt repairs only the objects named by the current errors and
+merges them back by their existing ids. Empty lists in that repair mean no
+change, not deletion. Unnamed objects in the standing plan stay as they are.
+Resolved errors from older candidates cannot displace the current feedback.
 Different source labels can identify the same material only after independent
 review verifies that association. The alias handoff is bound to the exact
 proposal, material parent and source; it cannot override a conflicting material

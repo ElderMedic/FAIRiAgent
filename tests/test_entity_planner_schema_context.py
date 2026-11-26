@@ -328,3 +328,95 @@ async def test_planner_retries_a_truncated_answer_and_keeps_thinking(planner_con
     monkeypatch.setattr(planner_module, "invoke_structured_output", truncated_then_empty)
     await planner.execute(state)
     assert thinking == [True, True]
+
+
+def test_claim_patch_replaces_only_the_named_object():
+    base = {
+        "design_groups": [
+            {"group_id": "branch_a", "label": "keep me", "study_row_id": "study_a"},
+            {"group_id": "branch_b", "label": "broken", "study_row_id": "study_a"},
+        ],
+        "reported_assays": [{"record_id": "fit_alpha", "label": "kept result"}],
+        "record_table_plans": [{
+            "source_id": "source_002", "table_name": "Table S4", "evidence": "old",
+        }],
+        "unresolved_ambiguities": ["already noted"],
+    }
+    patch = {
+        "design_groups": [{"group_id": "branch_b", "label": "repaired", "study_row_id": "study_a"}],
+        "reported_assays": [],
+        "record_table_plans": [{
+            "source_id": "source_002", "table_name": "Table S4", "evidence": "new",
+        }],
+        "unresolved_ambiguities": ["row 90 stays unresolved"],
+    }
+    merged = EntityStructurePlannerAgent.merge_entity_claim_patch(base, patch)
+    assert [group["label"] for group in merged["design_groups"]] == ["keep me", "repaired"]
+    assert merged["reported_assays"] == base["reported_assays"]
+    assert merged["record_table_plans"][0]["evidence"] == "new"
+    assert merged["unresolved_ambiguities"] == ["already noted", "row 90 stays unresolved"]
+
+
+def test_repair_prompt_names_only_the_failing_group():
+    claims = {
+        "design_groups": [
+            {"group_id": "branch_a", "label": "untouched branch"},
+            {"group_id": "branch_b", "label": "broken branch"},
+        ],
+    }
+    planner = object.__new__(EntityStructurePlannerAgent)
+    prompt = planner._repair_prompt(claims, ["design group branch_b has a bad level_count"])
+    assert "branch_b" in prompt
+    assert "untouched branch" not in prompt
+    assert "return those objects alone" in prompt
+
+
+@pytest.mark.asyncio
+async def test_planner_retry_merges_a_patch_into_the_standing_plan(planner_context, monkeypatch):
+    planner, state = planner_context
+    planner.llm_helper = MagicMock()
+    planner.logger = MagicMock()
+    monkeypatch.setattr(planner, "log_execution", lambda *args: None)
+    monkeypatch.setattr(planner, "update_confidence", lambda *args: None)
+    monkeypatch.setattr(planner, "_source_contacts", lambda *args: [])
+    monkeypatch.setattr(planner_module.config, "entity_plan_max_attempts", 2)
+    group = lambda group_id, label: {
+        "group_id": group_id, "label": label, "study_row_id": "study_a",
+        "evidence": "A named specimen was measured.",
+        "dimensions": [{
+            "name": "time", "level_count": 2, "explicit_values": ["t1", "t2"],
+            "origin": "explicit", "applies_to": ["sample"],
+        }],
+    }
+    prompts = []
+    plan_checks = {"n": 0}
+
+    def fail_once(plan, **kwargs):
+        plan_checks["n"] += 1
+        if plan_checks["n"] == 1:
+            return ["design group branch_b has a bad level_count"]
+        return []
+
+    async def model(helper, messages, schema_model, **kwargs):
+        if schema_model.__name__ != "EntityDesignClaimsResponse":
+            return None
+        prompts.append(messages[-1].content)
+        if len(prompts) == 1:
+            return EntityDesignClaimsResponse.model_validate({
+                "design_groups": [group("branch_a", "untouched branch"), group("branch_b", "broken branch")],
+            })
+        return EntityDesignClaimsResponse.model_validate({
+            "design_groups": [group("branch_b", "repaired branch")],
+        })
+
+    monkeypatch.setattr(planner_module, "invoke_structured_output", model)
+    monkeypatch.setattr(planner, "_plan_errors", fail_once)
+    result = await planner.execute(state)
+
+    assert "return those objects alone" in prompts[1]
+    assert "untouched branch" not in prompts[1]
+    labels = [
+        item["label"] for item in result["entity_plan"]["design_claims"]["design_groups"]
+    ]
+    assert labels == ["untouched branch", "repaired branch"]
+    assert result["entity_plan_validation"]["passed"] is True
