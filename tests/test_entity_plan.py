@@ -4468,6 +4468,40 @@ def test_cells_rejoined_without_their_row_cite_the_source_row(quote, subject, va
     assert _row_cell_value(value, subject, lines) == expected
 
 
+TIME_TABLE = (
+    '<table><tr><td rowspan="2"></td><td colspan="3">TPA variation (mM)</td></tr>'
+    '<tr><td>0 h</td><td>2 h</td><td>48 h</td></tr>'
+    '<tr><td>Tfu_0883</td><td>5.4 ± 0.1</td><td>7.2 ± 0.2</td><td>12.3 ± 0.1</td></tr>'
+    '<tr><td>Q132A/T101A</td><td>1.1 ± 0.2</td><td>16.9 ± 0.2</td><td>19.3 ± 0.1</td></tr></table>'
+)
+ENZYME_COLUMN_TABLE = (
+    '<table><tr><td rowspan="2">Substrate</td><td colspan="2">Km (mM)</td></tr>'
+    '<tr><td>EnzA</td><td>EnzB</td></tr>'
+    '<tr><td>S1</td><td>1.15 ± 0.01</td><td>5.28</td></tr></table>'
+)
+
+
+def test_a_row_naming_the_material_owns_its_time_point_cells():
+    """The record is the row; 0 h / 2 h / 48 h are conditions, not other records."""
+    from fairifier.utils.entity_plan import _cited_table_row, _row_cell_value
+
+    quote = "<tr><td>Q132A/T101A</td><td>1.1 ± 0.2</td><td>16.9 ± 0.2</td><td>19.3 ± 0.1</td></tr>"
+    row, lines = _cited_table_row(quote, TIME_TABLE)
+    assert row == quote
+    assert _row_cell_value("16.9 ± 0.2 mM", "Q132A/T101A", lines) == "16.9 ± 0.2 mM"
+    # Another row's cell is still not this material's.
+    assert _row_cell_value("7.2 ± 0.2 mM", "Q132A/T101A", lines) == ""
+
+
+def test_a_pivoted_enzyme_column_still_belongs_to_that_enzyme_only():
+    from fairifier.utils.entity_plan import _cited_table_row, _row_cell_value
+
+    quote = "<tr><td>S1</td><td>1.15 ± 0.01</td><td>5.28</td></tr>"
+    _, lines = _cited_table_row(quote, ENZYME_COLUMN_TABLE)
+    assert _row_cell_value("5.28", "EnzB", lines) == "5.28"
+    assert _row_cell_value("1.15", "EnzB", lines) == ""
+
+
 def test_fragments_matching_no_single_row_cite_nothing():
     from fairifier.utils.entity_plan import _cited_table_row
 

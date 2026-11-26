@@ -195,8 +195,16 @@ class _TableGrid(HTMLParser):
         def bare(text: str) -> bool:
             return bool(_BARE_NUMBER_RE.match(_unwrap_number(text)))
 
+        def level_label(text: str) -> bool:
+            # A condition level used as a column label ("2 h", "50 °C") has a
+            # unit and no error term; a measured value does not look like that.
+            return numeric(text) and not bare(text) and "±" not in text
+
         def text_only(r: int) -> bool:
-            return all(not numeric(cell["text"]) for cell in self.rows[r]["cells"])
+            # Rows inside the declared header depth may carry such level labels
+            # under a spanning group label ("TPA variation (mM)" over 0 h, 2 h, 48 h).
+            return all(not numeric(cell["text"]) or level_label(cell["text"])
+                       for cell in self.rows[r]["cells"])
 
         top = self.rows[0]["cells"]
         depth = max((cell["rowspan"] for cell in top), default=1)
