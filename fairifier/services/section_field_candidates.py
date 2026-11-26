@@ -26,7 +26,6 @@ _KV_LINE = re.compile(
     r"[:=]\s*"
     r"(?P<value>.+?)\s*$"
 )
-_TABLE_ROW_CAP = 80
 _HTML_TABLE = re.compile(r"<table\b[^>]*>(.*?)(?:</table>|$)", re.IGNORECASE | re.DOTALL)
 _HTML_ROW = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.IGNORECASE | re.DOTALL)
 _HTML_CELL = re.compile(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", re.IGNORECASE | re.DOTALL)
@@ -88,8 +87,6 @@ def _row_records(rows: List[List[str]]) -> List[Tuple[str, str]]:
         if not pairs:
             continue
         records.append((_measurement_label(headers + row), "; ".join(pairs)))
-        if len(records) >= _TABLE_ROW_CAP:
-            break
     return records
 
 

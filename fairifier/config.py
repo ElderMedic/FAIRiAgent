@@ -202,7 +202,8 @@ class FAIRifierConfig:
     section_target_tokens: int = 2400
     section_soft_cap_tokens: int = 3200
     mapreduce_max_workers: int = 5
-    mapreduce_max_sections: int = 80
+    # 0 keeps every section. A positive value is an optional operator ceiling.
+    mapreduce_max_sections: int = 0
     retrieval_rrf_k: int = 60
     retrieval_lexical_max_queries: int = 10
     retrieval_lexical_max_hits: int = 20

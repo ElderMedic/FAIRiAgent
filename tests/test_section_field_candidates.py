@@ -46,7 +46,7 @@ def test_html_table_cells_become_field_candidates():
 
 
 def test_html_table_keeps_later_measurement_rows():
-    body = "".join(f"<tr><td>Var{i}</td><td>{i}.63 ± 0.1</td></tr>" for i in range(1, 46))
+    body = "".join(f"<tr><td>Var{i}</td><td>{i}.63 ± 0.1</td></tr>" for i in range(1, 91))
     section = {
         "section_id": "source_002_section_005",
         "source_id": "source_002",
@@ -58,7 +58,7 @@ def test_html_table_keeps_later_measurement_rows():
     }
     records = extract_field_candidates_from_section(section)
     blob = " ".join(record["value"] for record in records)
-    assert "45.63" in blob
+    assert "90.63" in blob
 
 
 def test_extract_field_candidates_from_label_value_lines():

@@ -6,13 +6,24 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
-from fairifier.services.chunking import chunk_source_text, infer_section_type
+from fairifier.services.chunking import (
+    chunk_source_text,
+    infer_section_type,
+    section_processing_limit,
+)
 from fairifier.services.semantic_index import reciprocal_rank_fusion
 from fairifier.services.source_workspace import (
     SourceRecord,
     build_source_workspace,
     hybrid_search_sources,
 )
+
+
+def test_section_processing_limit_leaves_the_choice_to_the_agent():
+    sections = list(range(120))
+    assert section_processing_limit(sections, 0) == sections
+    assert section_processing_limit(sections, None) == sections
+    assert section_processing_limit(sections, 80) == list(range(80))
 
 
 def test_infer_section_type_recognizes_methods():

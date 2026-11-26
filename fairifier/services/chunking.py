@@ -92,6 +92,16 @@ class ChunkingResult:
     sections_manifest_path: Optional[Path] = None
 
 
+def section_processing_limit(sections: Sequence[Any], limit: Optional[int]) -> List[Any]:
+    """Keep every section unless an operator sets a positive ceiling.
+
+    ``None`` and ``0`` leave the full list for the later agent to judge.
+    """
+    if limit is None or int(limit) <= 0:
+        return list(sections)
+    return list(sections)[: int(limit)]
+
+
 def is_biopolymer_sequence(text: str) -> bool:
     """True for a nucleotide or protein string, which is not a section title.
 
@@ -398,7 +408,7 @@ def chunk_workspace(
     workspace = load_source_workspace(workspace_meta)
     all_chunks: List[SourceChunk] = []
     all_sections: List[SourceSection] = []
-    section_limit = max_sections or config.mapreduce_max_sections
+    section_limit = config.mapreduce_max_sections if max_sections is None else max_sections
 
     structured_blocks = workspace_meta.get("mineru_structured_blocks") or {}
     content_list_path = workspace_meta.get("mineru_content_list_v2_path")
@@ -418,8 +428,9 @@ def chunk_workspace(
         result = chunk_source_text(source_id, source_text, blocks=blocks)
         all_chunks.extend(result.chunks)
         all_sections.extend(result.sections)
-        if len(all_sections) >= section_limit:
-            all_sections = all_sections[:section_limit]
+        bounded = section_processing_limit(all_sections, section_limit)
+        if len(bounded) != len(all_sections):
+            all_sections = bounded
             allowed_chunk_ids = {chunk_id for section in all_sections for chunk_id in section.chunk_ids}
             all_chunks = [chunk for chunk in all_chunks if chunk.chunk_id in allowed_chunk_ids]
             break

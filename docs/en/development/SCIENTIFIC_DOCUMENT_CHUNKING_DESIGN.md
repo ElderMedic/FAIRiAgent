@@ -307,11 +307,13 @@ already computed above:
   additional provenance on the original section's result — this still lets
   `_upstream_reconcile_candidates()`'s multi-source-agreement scoring see
   "confirmed in 2 sources" without paying for a duplicate extraction call.
-- **Section-count cap applies after prioritization, not before**: when a
-  directory/zip bundle produces more sections than
-  `FAIRIFIER_MAPREDUCE_MAX_SECTIONS`, keep the highest-ranked sections by
-  `(source_role_priority, section_type relevance)` first, not simply the
-  first N encountered in file-scan order.
+- **Section coverage is not truncated by default.**
+  `FAIRIFIER_MAPREDUCE_MAX_SECTIONS=0` sends every section to evidence
+  extraction. A positive value is an operator cost ceiling and keeps the
+  first N sections in pipeline order. It does not rank sections. HTML and
+  Markdown measurement tables become field candidates for the later agent
+  to accept or leave blank; nucleotide and protein sequence lines stay in
+  the section body and are not treated as titles.
 
 ---
 

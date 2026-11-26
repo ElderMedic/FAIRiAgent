@@ -19,7 +19,7 @@ except ImportError:
         return decorator
 
 from ..config import config
-from ..services.chunking import chunk_workspace, serialize_chunking_result
+from ..services.chunking import chunk_workspace, section_processing_limit, serialize_chunking_result
 from ..services.evidence_packets import merge_evidence_packets
 from ..services.evidence_store import EvidenceStore, evidence_from_section
 from ..services.section_field_candidates import field_candidate_record_to_dict
@@ -175,10 +175,11 @@ class SectionMapReduceNode:
                 "field_candidates": field_candidates,
             }
 
+        selected_sections = section_processing_limit(sections, config.mapreduce_max_sections)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(_process_section, section): section
-                for section in sections[: config.mapreduce_max_sections]
+                for section in selected_sections
             }
             for future in as_completed(futures):
                 try:
@@ -205,7 +206,7 @@ class SectionMapReduceNode:
         state["evidence_store"] = evidence_store.serialize()
 
         sections_by_type: Dict[str, int] = {}
-        for section in sections[: config.mapreduce_max_sections]:
+        for section in selected_sections:
             section_type = str(section.get("section_type") or "unknown")
             sections_by_type[section_type] = sections_by_type.get(section_type, 0) + 1
 

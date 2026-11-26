@@ -19,7 +19,9 @@ system). Do not put `phase4` or `tuned` on figures or manifests.
 | `env.evaluation.shadow_tuned` | Same tuned budget as `phase4_tuned`, still lexical-in-prompt (A/B control). |
 
 `dimfix` / `auto` are later engineering checkpoints in historical run names,
-not new publication conditions. Parameter history:
+not new publication conditions. `FAIRIFIER_MAPREDUCE_MAX_SECTIONS=0` in these
+env files means every section is extracted; the later agent decides which
+values to keep. A positive value is only an operator cost ceiling. Parameter history:
 [Hybrid Retrieval and Coverage Upgrade Plan](../../docs/en/development/HYBRID_RETRIEVAL_AND_COVERAGE_UPGRADE_PLAN.md)
 §10.3–10.4.
 
