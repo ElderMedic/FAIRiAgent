@@ -4195,6 +4195,19 @@ class AutoRepairNode:
         return state
 
 
+def llm_service_failure_messages(state: Dict[str, Any]) -> List[str]:
+    """Final LLM failures during mapping. A retry that then succeeded is not one.
+
+    Those calls are logged as ``service failure`` only after the provider
+    dropped the request. The workbook would otherwise be saved with blank
+    result columns and a successful exit.
+    """
+    return [
+        str(err) for err in (state.get("errors") or [])
+        if "service failure" in str(err).lower()
+    ]
+
+
 class FinalizeNode:
     """Node class to finalize workflow execution and write summaries."""
     
@@ -4369,7 +4382,16 @@ class FinalizeNode:
             except Exception:
                 pass  # best-effort; validation still works without this
         
-        if not metadata_json or not metadata_fields:
+        service_failures = llm_service_failure_messages(state)
+        if service_failures:
+            # A dropped model call during mapping leaves the workbook with blank
+            # result columns and still used to exit 0. That run is not usable.
+            state["status"] = ProcessingStatus.FAILED.value
+            logger.error(
+                "❌ Workflow FAILED: LLM service failure during mapping (%d)",
+                len(service_failures),
+            )
+        elif not metadata_json or not metadata_fields:
             # Critical output missing - this is a failure
             state["status"] = ProcessingStatus.FAILED.value
             logger.error(

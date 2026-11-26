@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Entity-plan retries repair only the objects named by the current validation
+  errors and merge them into the standing plan by id. An empty list in the
+  repair does not delete the rest of the plan.
+- `FAIRIFIER_MAPREDUCE_MAX_SECTIONS` defaults to 0, so section coverage is not
+  cut off at 80. A positive value remains an optional cost ceiling.
+- HTML and Markdown measurement tables become section field candidates.
+  Nucleotide and protein sequence lines are not section titles.
+- An HTML table cell whose unit is only in the column header stays grounded.
+  An LLM service failure during mapping fails the workflow instead of saving
+  a workbook with blank result columns and exit 0.
+
 ### Planned / in progress
 
 - End-to-end 3/6-document LLM re-evaluation after ISA single-projection sync

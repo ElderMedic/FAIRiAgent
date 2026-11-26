@@ -37,6 +37,7 @@ from .base import BaseAgent
 from ..utils.json_parse import safe_json_parse
 from ..utils.document_text import read_document_text, without_reference_list
 from ..services.publication_tables import (
+    DERIVED_TABLE_ROWS_HEADER,
     header_unit_for_value,
     unit_key,
     with_derived_table_rows,
@@ -298,12 +299,30 @@ def _table_header_supports(normalized_source: str, value: str) -> bool:
     )
 
 
+def _labelled_table_cells(text: str) -> tuple[tuple[str, str], ...]:
+    """Header/value pairs from derived table rows.
+
+    Two spellings occur. LaTeX tables keep ``header | row = value``. HTML
+    tables are rendered as ``header = value`` segments separated by ``; ``.
+    The unit often lives only in the header (``kcat(s-1) = 0.072 ± 0.0056``),
+    so a cell written ``0.072 s^-1`` is still that table value.
+    """
+    cells = [
+        (unit_key(header), re.sub(r"\s+", "", cell))
+        for header, cell in _DERIVED_CELL_RE.findall(text)
+    ]
+    _, marker, derived = text.partition(DERIVED_TABLE_ROWS_HEADER)
+    if marker:
+        for segment in derived.split("; "):
+            header, sep, cell = segment.rpartition(" = ")
+            if sep and header and cell:
+                cells.append((unit_key(header), re.sub(r"\s+", "", cell)))
+    return tuple(cells)
+
+
 @lru_cache(maxsize=4)
 def _derived_cells(normalized_source: str) -> tuple[tuple[str, str], ...]:
-    return tuple(
-        (unit_key(header), re.sub(r"\s+", "", cell))
-        for header, cell in _DERIVED_CELL_RE.findall(normalized_source)
-    )
+    return _labelled_table_cells(normalized_source)
 
 
 def _verified_cell_matches(

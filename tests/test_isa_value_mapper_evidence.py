@@ -2181,6 +2181,49 @@ def test_plan_determined_fields_are_those_fixed_on_every_entity():
     assert ISAValueMapperAgent._plan_determined_fields(plan) == {"assay": {"reaction temperature"}}
 
 
+def test_html_table_keeps_a_kinetic_constant_whose_unit_is_in_the_header():
+    """Table 1 writes ``0.072 ± 0.0056`` under ``kcat(s-1)``.
+
+    The mapped cell ``0.072 s^-1`` is that value. It must survive the evidence
+    gate; a number that is not in the table must not.
+    """
+    from fairifier.agents.isa_value_mapper import ISAValueMapperAgent
+    from fairifier.services.publication_tables import with_derived_table_rows
+
+    table = (
+        "<table><tr><td>T (°C)</td><td>massKM(g·L-1)</td><td>kcat(s-1)</td></tr>"
+        "<tr><td>50</td><td>2.3 ± 0.68</td><td>0.072 ± 0.0056</td></tr></table>"
+    )
+    source = with_derived_table_rows("TABLE 1\n" + table)
+    fields = {"assay": [
+        {"field_name": "catalytic rate constant kcat", "requirement": "OPTIONAL"},
+    ]}
+
+    def kept(value: str) -> bool:
+        matrix = {"assay": {"columns": ["catalytic rate constant kcat"],
+                             "rows": [{"catalytic rate constant kcat": value}]}}
+        cleaned, removed = ISAValueMapperAgent._prune_uninformative_optional_columns(
+            matrix, fields, {}, source_text=source,
+        )
+        cell = cleaned["assay"]["rows"][0].get("catalytic rate constant kcat", "")
+        return cell == value
+
+    assert kept("0.072 s^-1")
+    assert kept("0.072 ± 0.0056 s^-1")
+    assert not kept("9.9 s^-1")
+
+
+def test_mapping_service_failure_fails_the_workflow():
+    from fairifier.graph.nodes import llm_service_failure_messages
+
+    assert llm_service_failure_messages({
+        "errors": ["ISAValueMapper: Record-level resolution service failure for assay; subsequent calls stopped."],
+    })
+    assert not llm_service_failure_messages({
+        "errors": ["ISAValueMapper: Reported assay was not materialized."],
+    })
+
+
 @pytest.mark.parametrize(("value", "kept"), [
     ("40.3 s^-1", True),
     ("9.98 ± 0.49 mM", True),
