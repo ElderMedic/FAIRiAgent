@@ -92,6 +92,19 @@ class ChunkingResult:
     sections_manifest_path: Optional[Path] = None
 
 
+def is_biopolymer_sequence(text: str) -> bool:
+    """True for a nucleotide or protein string, which is not a section title.
+
+    A leading residue number such as ``Q28TNPY...`` still counts. Ordinary
+    titles contain spaces or letters outside the amino-acid alphabet.
+    """
+    compact = re.sub(r"\s+", "", text or "")
+    letters = re.sub(r"[^A-Za-z]", "", compact)
+    if len(letters) < 25 or not compact or len(letters) / len(compact) < 0.85:
+        return False
+    return re.fullmatch(r"[ACDEFGHIKLMNPQRSTVWYUN]+", letters) is not None
+
+
 def infer_section_type(title: str) -> str:
     lowered = re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
     for token, section_type in _IMRAD_HINTS.items():
@@ -154,6 +167,9 @@ def blocks_from_content_list_v2(
         block_type = str(block.get("type") or "text")
         if text_level or block_type in {"title", "heading"} or text.startswith("#"):
             heading = text.lstrip("# ").strip()
+            if is_biopolymer_sequence(heading):
+                heading = None
+                block_type = "text"
         normalized.append(
             SourceBlock(
                 source_id=source_id,
@@ -193,6 +209,8 @@ def blocks_from_text(source_id: str, source_text: str) -> List[SourceBlock]:
                     )
                 )
         heading = match.group(0).lstrip("# ").strip()
+        if is_biopolymer_sequence(heading):
+            continue
         blocks.append(
             SourceBlock(
                 source_id=source_id,

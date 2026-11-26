@@ -16,6 +16,51 @@ Sampling site longitude: 5.8 E
 """
 
 
+SI_TABLE = """
+Supporting information
+
+ACGTTCGGTGGCATCGCGATGAGTCCGGGTTATACCGCAGATGCTAGCTCTCTGGCATGGCTGGGTCGTCGCCTG
+
+<table><tr><td>Temperature</td><td>Performance criteria</td><td>FAST-PETase</td><td>LCC ICCG</td></tr>
+<tr><td>45 °C</td><td>Specific activity (µmol h^-1 mg enzyme^-1)</td><td>245.5 ± 12.5</td><td>55.8 ± 15.3</td></tr>
+<tr><td></td><td>Specific activity (µmol h^-1 mg enzyme^-1)</td><td>347.5 ± 46.1</td><td>1350.8 ± 135.8</td></tr>
+</table>
+"""
+
+
+def test_html_table_cells_become_field_candidates():
+    section = {
+        "section_id": "source_002_section_004",
+        "source_id": "source_002",
+        "title": "Supporting information",
+        "section_type": "supplement",
+        "char_start": 0,
+        "char_end": len(SI_TABLE),
+        "text": SI_TABLE,
+    }
+    records = extract_field_candidates_from_section(section)
+    blob = " ".join(f"{record['field_name']} {record['value']} {record['evidence_text']}" for record in records)
+    assert "245.5" in blob
+    assert "347.5" in blob
+    assert "1350.8" in blob
+
+
+def test_html_table_keeps_later_measurement_rows():
+    body = "".join(f"<tr><td>Var{i}</td><td>{i}.63 ± 0.1</td></tr>" for i in range(1, 46))
+    section = {
+        "section_id": "source_002_section_005",
+        "source_id": "source_002",
+        "title": "Table S4",
+        "section_type": "supplement",
+        "char_start": 0,
+        "char_end": 10,
+        "text": f"<table><tr><td>Enzyme</td><td>Activity</td></tr>{body}</table>",
+    }
+    records = extract_field_candidates_from_section(section)
+    blob = " ".join(record["value"] for record in records)
+    assert "45.63" in blob
+
+
 def test_extract_field_candidates_from_label_value_lines():
     section = {
         "section_id": "source_001_section_002",

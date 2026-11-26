@@ -20,6 +20,22 @@ def test_infer_section_type_recognizes_methods():
     assert infer_section_type("Results and Discussion") in {"results", "discussion"}
 
 
+def test_sequence_lines_do_not_become_section_titles():
+    sequence = "ACGTTCGGTGGCATCGCGATGAGTCCGGGTTATACCGCAGATGCTAGCTCTCTGGCATGGCTGGGTCGTCGCCTG"
+    protein = "Q28TNPYARGPNPTAASLEASAGPFTVRSFTVSRPSGYGAGTVYYPTNAGGTVGAIAIVPGYTARQSSIKWWGPRL"
+    text = (
+        "# Supporting information\n\n"
+        f"{sequence}\n\n"
+        f"{protein}\n\n"
+        "<table><tr><td>Specific activity</td><td>245.5 ± 12.5</td></tr></table>\n"
+    )
+    result = chunk_source_text("source_002", text)
+    titles = [section.title for section in result.sections]
+    assert sequence not in titles
+    assert protein not in titles
+    assert any("245.5" in section.text for section in result.sections)
+
+
 def test_chunk_source_text_splits_headings_and_paragraphs():
     text = (
         "# Introduction\n\n"

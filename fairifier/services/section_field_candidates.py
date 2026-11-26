@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+from fairifier.services.chunking import is_biopolymer_sequence
 
 _SECTION_TYPE_FIELD_HINTS: Dict[str, List[str]] = {
     "introduction": ["investigation description", "study description", "project name"],
@@ -24,6 +26,17 @@ _KV_LINE = re.compile(
     r"[:=]\s*"
     r"(?P<value>.+?)\s*$"
 )
+_TABLE_ROW_CAP = 80
+_HTML_TABLE = re.compile(r"<table\b[^>]*>(.*?)(?:</table>|$)", re.IGNORECASE | re.DOTALL)
+_HTML_ROW = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.IGNORECASE | re.DOTALL)
+_HTML_CELL = re.compile(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", re.IGNORECASE | re.DOTALL)
+_HTML_TAG = re.compile(r"<[^>]+>")
+_MD_SEP = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+_MEASUREMENT = re.compile(
+    r"specific activity|activity|crystallinity|temperature|yield|conversion|concentration",
+    re.IGNORECASE,
+)
+
 _NUMERIC_HINT = re.compile(
     r"\b("
     r"latitude|longitude|elevation|depth|temperature|pH|"
@@ -42,6 +55,84 @@ def _normalize_value(value: str) -> str:
     if len(cleaned) > 500:
         cleaned = cleaned[:497].rstrip() + "..."
     return cleaned
+
+
+def _plain_cell(value: str) -> str:
+    return " ".join(_HTML_TAG.sub(" ", value).replace("&nbsp;", " ").split())
+
+
+def _measurement_label(cells: List[str]) -> str:
+    for cell in cells:
+        match = _MEASUREMENT.search(cell)
+        if match:
+            return match.group(0).lower()
+    return "table row"
+
+
+def _row_records(rows: List[List[str]]) -> List[Tuple[str, str]]:
+    if len(rows) < 2:
+        return []
+    headers = rows[0]
+    records: List[Tuple[str, str]] = []
+    for row in rows[1:]:
+        if not any(re.search(r"\d", cell) for cell in row):
+            continue
+        if all(is_biopolymer_sequence(cell) for cell in row):
+            continue
+        pairs = []
+        for index, cell in enumerate(row):
+            if not cell or is_biopolymer_sequence(cell):
+                continue
+            header = headers[index] if index < len(headers) and headers[index] else f"column {index + 1}"
+            pairs.append(f"{header}: {cell}")
+        if not pairs:
+            continue
+        records.append((_measurement_label(headers + row), "; ".join(pairs)))
+        if len(records) >= _TABLE_ROW_CAP:
+            break
+    return records
+
+
+def _html_table_records(text: str) -> List[Tuple[int, int, str, str]]:
+    found: List[Tuple[int, int, str, str]] = []
+    for table in _HTML_TABLE.finditer(text):
+        rows: List[List[str]] = []
+        for row_html in _HTML_ROW.findall(table.group(1)):
+            cells = [_plain_cell(cell) for cell in _HTML_CELL.findall(row_html)]
+            if any(cells):
+                rows.append(cells)
+        for label, value in _row_records(rows):
+            found.append((table.start(), table.end(), label, value))
+    return found
+
+
+def _markdown_table_records(text: str) -> List[Tuple[int, int, str, str]]:
+    found: List[Tuple[int, int, str, str]] = []
+    lines = text.splitlines(keepends=True)
+    offset = 0
+    index = 0
+    while index < len(lines):
+        if not lines[index].strip().startswith("|"):
+            offset += len(lines[index])
+            index += 1
+            continue
+        block_start = offset
+        block: List[str] = []
+        while index < len(lines) and lines[index].strip().startswith("|"):
+            block.append(lines[index])
+            offset += len(lines[index])
+            index += 1
+        rows = []
+        for line in block:
+            if _MD_SEP.match(line):
+                continue
+            cells = [_plain_cell(cell) for cell in line.strip().strip("|").split("|")]
+            cells = [cell for cell in cells if cell]
+            if cells:
+                rows.append(cells)
+        for label, value in _row_records(rows):
+            found.append((block_start, offset, label, value))
+    return found
 
 
 def _line_char_offset(section_text: str, line_start: int, section_char_start: int) -> tuple[int, int]:
@@ -118,7 +209,7 @@ def extract_field_candidates_from_section(
         excerpt = text[max(0, match.start() - 80) : min(len(text), match.end() + 120)]
         _append(label, value, excerpt, abs_start, abs_end)
         if len(records) >= max_candidates:
-            return records
+            break
 
     for hint_field in _SECTION_TYPE_FIELD_HINTS.get(section_type, []):
         pattern = re.compile(re.escape(hint_field.replace("_", " ")), re.IGNORECASE)
@@ -133,7 +224,7 @@ def extract_field_candidates_from_section(
         abs_end = min(char_end, char_start + snippet_end)
         _append(hint_field, value, snippet, abs_start, abs_end)
         if len(records) >= max_candidates:
-            return records
+            break
 
     for match in _NUMERIC_HINT.finditer(text):
         hint = match.group(1).lower()
@@ -145,9 +236,12 @@ def extract_field_candidates_from_section(
         value = value_match.group(1).strip() if value_match else " ".join(snippet.split())[:120]
         abs_start = char_start + snippet_start
         abs_end = min(char_end, char_start + snippet_end)
-        _append(hint, value, snippet, abs_start, abs_end)
         if len(records) >= max_candidates:
             break
+        _append(hint, value, snippet, abs_start, abs_end)
+
+    for start, end, label, value in _html_table_records(text) + _markdown_table_records(text):
+        _append(label, value, value, char_start + start, min(char_end, char_start + end))
 
     return records
 
