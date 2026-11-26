@@ -33,6 +33,7 @@ from ..utils.entity_plan import (
     materialize_reported_materials,
     normalize_claim_measurement_units,
     normalize_entity_plan,
+    repair_reported_assay_quotes,
     repair_reported_material_quotes,
     text_names,
     reported_parent_binding_digest,
@@ -2441,6 +2442,7 @@ Authoritative table profiles with value distributions and example rows:
         # rows. Repeats are reviewed through their template, not one by one;
         # each still passes the verbatim row and cell checks below.
         records = rebind_results_to_named_samples(records, materials)
+        records = repair_reported_assay_quotes(records, source_text=source_text)
         records, materials, derived = expand_table_row_templates(records, materials, source_text)
         result = deepcopy(dict(plan))
         # Check each material on its own: one misquoted variant drops only that

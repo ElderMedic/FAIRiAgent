@@ -1012,6 +1012,61 @@ def repair_reported_material_quotes(
     return repaired
 
 
+def _verbatim_source_span(quote: str, source: str, threshold: float = 0.92) -> str:
+    """The source passage a retyped ``quote`` was copied from, or ''.
+
+    A quote of at least six words whose characters match one contiguous source
+    window in order (``threshold``) is a copy with small typographic changes
+    (``$T_{g}$`` typed as ``Tg``). The returned text is the source's own, so
+    the verbatim-quote rule keeps holding. An invented quote does not reach
+    this similarity.
+    """
+    from difflib import SequenceMatcher
+
+    words = quote.split()
+    if len(words) < 6 or not source:
+        return ""
+    anchors = {" ".join(words[i:i + 3]) for i in range(0, len(words) - 2, max(1, len(words) // 6))}
+    for anchor in anchors:
+        start = source.find(anchor)
+        while start != -1:
+            begin = max(0, start - len(quote))
+            window = source[begin: start + 2 * len(quote)]
+            blocks = SequenceMatcher(None, window, quote, autojunk=False).get_matching_blocks()
+            if sum(block.size for block in blocks) >= threshold * len(quote):
+                # Ends are set by real runs, not by stray single characters.
+                runs = [block for block in blocks if block.size >= 4]
+                if runs:
+                    span = window[runs[0].a: runs[-1].a + runs[-1].size].strip()
+                    if 0.8 * len(quote) <= len(span) <= 1.6 * len(quote) and span in source:
+                        return span
+            start = source.find(anchor, start + 1)
+    return ""
+
+
+def repair_reported_assay_quotes(
+    records: Iterable[Mapping[str, Any]], *, source_text: str,
+) -> List[Dict[str, Any]]:
+    """Replace a retyped result quote with the source passage it was copied from.
+
+    Models often rewrite rendered math in a quote ("$T_{g1}$" as "Tg1"), and
+    such a result was dropped for a quote that is not verbatim although every
+    word of it is in the source. HTML table rows are left to the row checks.
+    """
+    source = normalize_source_evidence_text(source_text)
+    repaired: List[Dict[str, Any]] = []
+    for record in records:
+        item = dict(record)
+        quote = normalize_source_evidence_text(item.get("source_quote"))
+        if quote and "<tr" not in quote.lower() and not _reported_quote_in_source(quote, source):
+            span = _verbatim_source_span(quote, source)
+            if span:
+                item["source_quote"] = span
+                item["source_quote_repaired"] = True
+        repaired.append(item)
+    return repaired
+
+
 def materialize_reported_materials(
     plan: Mapping[str, Any], records: Iterable[Mapping[str, Any]], *, source_text: str,
 ) -> Dict[str, Any]:

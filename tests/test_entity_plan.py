@@ -4502,6 +4502,36 @@ def test_a_pivoted_enzyme_column_still_belongs_to_that_enzyme_only():
     assert _row_cell_value("1.15", "EnzB", lines) == ""
 
 
+def test_a_result_quote_retyped_from_rendered_math_is_snapped_to_the_source_passage():
+    from fairifier.utils.entity_plan import _reported_quote_in_source, repair_reported_assay_quotes
+    from fairifier.utils.document_text import normalize_source_evidence_text as norm
+
+    source = ("Compared with GF-PET, the post-consumer PET packaging materials revealed two separate "
+              "endothermic peaks in the glass transition range, corresponding to a $T_{g1}$ of 75–78°C "
+              "and a $T_{g2}$ of 83–85°C for AP-PET and a $T_{g1}$ of 77–80°C for CP-PET. Other text.")
+    retyped = ("the post-consumer PET packaging materials revealed two separate endothermic peaks in "
+               "the glass transition range, corresponding to a Tg1 of 75–78°C and a Tg2 of 83–85°C for AP-PET")
+    record = {"record_id": "ra_tg_appet", "source_quote": retyped}
+    [fixed] = repair_reported_assay_quotes([record], source_text=source)
+    assert fixed["source_quote_repaired"] is True
+    assert "$T_{g1}$" in fixed["source_quote"]
+    assert _reported_quote_in_source(norm(fixed["source_quote"]), norm(source))
+    assert "75–78°C" in fixed["source_quote"] and "83–85°C" in fixed["source_quote"]
+
+
+def test_invented_short_and_table_row_quotes_are_not_repaired():
+    from fairifier.utils.entity_plan import repair_reported_assay_quotes
+
+    source = ("The enzyme reached a turnover of 12.3 per second at 50 °C on amorphous film, "
+              "while the crystalline film was hydrolysed more slowly. <table><tr><td>A</td><td>1.0</td></tr></table>")
+    invented = "The enzyme reached a turnover of 99.9 per second at 70 °C on crystalline pellets and fibres"
+    short = "turnover of 12.3"
+    row = "<tr><td>A</td><td>1.1</td></tr>"
+    for quote in (invented, short, row):
+        [kept] = repair_reported_assay_quotes([{"record_id": "r", "source_quote": quote}], source_text=source)
+        assert kept["source_quote"] == quote and "source_quote_repaired" not in kept
+
+
 def test_fragments_matching_no_single_row_cite_nothing():
     from fairifier.utils.entity_plan import _cited_table_row
 
