@@ -3279,6 +3279,35 @@ async def test_reviewed_material_and_fit_form_complete_isosa_without_raw_run_inv
 
 
 @pytest.mark.anyio
+async def test_review_decision_for_an_unknown_record_does_not_discard_approved_records(monkeypatch):
+    """The reviewer once answered for six ids nobody proposed (bit_27984) and the whole
+    reviewed set, including five approved assays, was thrown away."""
+    plan, materials, source = _reported_material_fixture()
+    _, record, fit_source = _reported_fit_fixture()
+    record["sample_row_id"] = "material_alpha"
+    source += " " + fit_source
+
+    async def review(*args, **kwargs):
+        decisions = [{"record_id": item["record_id"], "approved": True,
+                      "evidence_quote": item["source_quote"], "rationale": "Supported."}
+                     for item in [*materials, record]]
+        decisions.append({"record_id": "tbl_invented_row", "approved": False,
+                          "evidence_quote": "", "rationale": "No such record was proposed."})
+        return {"decisions": decisions}
+
+    monkeypatch.setattr(entity_planner_module, "invoke_structured_output", review)
+    planner = object.__new__(EntityStructurePlannerAgent)
+    planner.llm_helper = object()
+    knowledge = [{"term": "fitted response", "metadata": {"isa_sheet": "assay", "syntax": "{float}"}}]
+    result = await planner._materialize_reviewed_results(plan, [record], knowledge, source, materials=materials)
+
+    rows = {row["row_id"] for level in result["levels"] for row in level.get("entities") or []}
+    assert {"prep_alpha", "material_alpha", record["record_id"]} <= rows
+    assert any("referenced unknown reported record tbl_invented_row" in e
+               for e in result["materialization_errors"])
+
+
+@pytest.mark.anyio
 async def test_misquoted_material_drops_alone_and_well_quoted_materials_keep_their_rows(monkeypatch):
     plan, materials, source = _reported_material_fixture()
     beta = "Material beta was synthesised in house."

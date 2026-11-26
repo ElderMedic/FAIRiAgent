@@ -2554,7 +2554,11 @@ Authoritative table profiles with value distributions and example rows:
                         f"Reported record {record_id} review evidence_quote is not present in the "
                         "source; copy a verbatim source passage including its markup."
                     )
-            if len(set(expected)) != len(expected) or set(actual) - set(expected):
+            # Only ambiguous proposals end the review. A decision for an id nobody
+            # proposed is recorded above and ignored: the records that were approved
+            # one by one keep their rows (the reviewer once invented six ids and
+            # five approved assays were lost with them).
+            if len(set(expected)) != len(expected):
                 return result
         approved_ids = {
             item["record_id"] for item in decisions
