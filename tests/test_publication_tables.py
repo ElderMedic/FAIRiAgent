@@ -22,6 +22,24 @@ def test_all_td_multirow_header_is_inferred_from_spans():
     ]
 
 
+def test_time_points_under_a_spanning_group_label_are_header_cells():
+    """biot_201000391 Table 1: "TPA variation (mM)" over 0 h / 2 h / 48 h."""
+    from fairifier.services.publication_tables import render_table_rows
+
+    html = ("<table><tr><td rowspan=\"2\"></td><td colspan=\"3\">TPA variation (mM)</td></tr>"
+            "<tr><td>0 h</td><td>2 h</td><td>48 h</td></tr>"
+            "<tr><td>Q132A/T101A</td><td>1.1 ± 0.2</td><td>16.9 ± 0.2</td><td>19.3 ± 0.1</td></tr></table>")
+    table = _project(html)
+    assert table["header_status"] == "inferred"
+    assert table["columns"][1:] == ["TPA variation (mM) | 0 h", "TPA variation (mM) | 2 h",
+                                    "TPA variation (mM) | 48 h"]
+    assert render_table_rows(html) == [
+        "column_1 = Q132A/T101A; TPA variation (mM) | 0 h = 1.1 ± 0.2; "
+        "TPA variation (mM) | 2 h = 16.9 ± 0.2; TPA variation (mM) | 48 h = 19.3 ± 0.1"]
+    # A second row of measured values (with an error term) is data, not a header.
+    assert _project(html.replace("0 h", "5.4 ± 0.1"))["header_status"] == "unresolved"
+
+
 def test_all_td_text_table_keeps_headers_unresolved():
     html = (
         "<table><tr><td>Primers</td><td>Sequence</td></tr>"

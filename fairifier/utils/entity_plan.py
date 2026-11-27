@@ -402,6 +402,47 @@ def normalize_entity_plan(
     return result
 
 
+# Rows one design group may expand to at one ISA level. A screening campaign
+# ("about 12 000 clones", 200 per position) declares clone numbers as levels;
+# crossed with the positions that is one Assay row per clone nobody reported.
+MAX_ROWS_PER_GROUP_LEVEL = 2000
+
+
+def _collapse_unreported_dimensions(
+    group_id: str, dimensions: Mapping[str, Mapping[str, Any]],
+    expansions: Mapping[str, Mapping[str, Any]],
+) -> Dict[str, int]:
+    """Dimensions left out of the row product so no level of a group exceeds the cap.
+
+    Only dimensions whose levels are all unnamed placeholders qualify (the
+    source states how many there are, not which): the largest go first. A
+    dimension dropped at one level is dropped at every level of the group, so
+    parents and children keep joining on the same dimensions. Returns each
+    dropped dimension with its level count.
+    """
+    def usable(name: str) -> List[Mapping[str, Any]]:
+        return [value for value in dimensions[name].get("levels") or []
+                if isinstance(value, Mapping) and str(value.get("value") or "").strip()]
+
+    dropped: Dict[str, int] = {}
+    for level in ("observationunit", "sample", "assay"):
+        names = [str(n).strip() for n in (expansions.get(level) or {}).get("dimension_names") or []]
+        names = [n for n in names if n in dimensions and n not in dropped]
+        size = 1
+        for name in names:
+            size *= max(len(usable(name)), 1)
+        placeholders = sorted(
+            (n for n in names if usable(n) and all(v.get("origin") != "explicit" for v in usable(n))),
+            key=lambda n: -len(usable(n)),
+        )
+        for name in placeholders:
+            if size <= MAX_ROWS_PER_GROUP_LEVEL:
+                break
+            size //= len(usable(name))
+            dropped[name] = len(usable(name))
+    return dropped
+
+
 def materialize_entity_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
     """Expand compact factorial design claims into the five ISOSA levels."""
     errors: List[str] = []
@@ -462,6 +503,7 @@ def materialize_entity_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
             if isinstance(expansion, Mapping)
         }
         materialized: Dict[str, List[Dict[str, Any]]] = {}
+        collapsed = _collapse_unreported_dimensions(group_id, dimensions, expansions)
 
         for level in ("observationunit", "sample", "assay"):
             expansion = expansions.get(level)
@@ -469,6 +511,12 @@ def materialize_entity_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
                 errors.append(f"Design group {group_id} is missing {level} expansion.")
                 continue
             names = [str(name).strip() for name in expansion.get("dimension_names") or []]
+            for name in [n for n in names if n in collapsed]:
+                levels[level]["unresolved_ambiguities"].append(
+                    f"{group_id}: dimension {name} has {collapsed[name]} unnamed levels "
+                    "(a count the source states, not entities it reports); not expanded into rows."
+                )
+            names = [name for name in names if name not in collapsed]
             unknown = [name for name in names if name not in dimensions]
             if unknown:
                 errors.append(
@@ -486,6 +534,16 @@ def materialize_entity_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
                 if not values:
                     errors.append(f"Design dimension {group_id}.{name} has no levels.")
                 factor_levels.append(values)
+            expected_rows = 1
+            for values in factor_levels:
+                expected_rows *= max(len(values), 1)
+            if expected_rows > MAX_ROWS_PER_GROUP_LEVEL:
+                errors.append(
+                    f"Design group {group_id} {level} would expand to {expected_rows} rows "
+                    f"(limit {MAX_ROWS_PER_GROUP_LEVEL}); not expanded. Name the levels the "
+                    "source reports and leave counts it does not enumerate in unreported_design."
+                )
+                continue
             combinations = list(product(*factor_levels)) if factor_levels else [tuple()]
             level_entities: List[Dict[str, Any]] = []
             for index, combination in enumerate(combinations, start=1):
@@ -954,6 +1012,61 @@ def repair_reported_material_quotes(
     return repaired
 
 
+def _verbatim_source_span(quote: str, source: str, threshold: float = 0.92) -> str:
+    """The source passage a retyped ``quote`` was copied from, or ''.
+
+    A quote of at least six words whose characters match one contiguous source
+    window in order (``threshold``) is a copy with small typographic changes
+    (``$T_{g}$`` typed as ``Tg``). The returned text is the source's own, so
+    the verbatim-quote rule keeps holding. An invented quote does not reach
+    this similarity.
+    """
+    from difflib import SequenceMatcher
+
+    words = quote.split()
+    if len(words) < 6 or not source:
+        return ""
+    anchors = {" ".join(words[i:i + 3]) for i in range(0, len(words) - 2, max(1, len(words) // 6))}
+    for anchor in anchors:
+        start = source.find(anchor)
+        while start != -1:
+            begin = max(0, start - len(quote))
+            window = source[begin: start + 2 * len(quote)]
+            blocks = SequenceMatcher(None, window, quote, autojunk=False).get_matching_blocks()
+            if sum(block.size for block in blocks) >= threshold * len(quote):
+                # Ends are set by real runs, not by stray single characters.
+                runs = [block for block in blocks if block.size >= 4]
+                if runs:
+                    span = window[runs[0].a: runs[-1].a + runs[-1].size].strip()
+                    if 0.8 * len(quote) <= len(span) <= 1.6 * len(quote) and span in source:
+                        return span
+            start = source.find(anchor, start + 1)
+    return ""
+
+
+def repair_reported_assay_quotes(
+    records: Iterable[Mapping[str, Any]], *, source_text: str,
+) -> List[Dict[str, Any]]:
+    """Replace a retyped result quote with the source passage it was copied from.
+
+    Models often rewrite rendered math in a quote ("$T_{g1}$" as "Tg1"), and
+    such a result was dropped for a quote that is not verbatim although every
+    word of it is in the source. HTML table rows are left to the row checks.
+    """
+    source = normalize_source_evidence_text(source_text)
+    repaired: List[Dict[str, Any]] = []
+    for record in records:
+        item = dict(record)
+        quote = normalize_source_evidence_text(item.get("source_quote"))
+        if quote and "<tr" not in quote.lower() and not _reported_quote_in_source(quote, source):
+            span = _verbatim_source_span(quote, source)
+            if span:
+                item["source_quote"] = span
+                item["source_quote_repaired"] = True
+        repaired.append(item)
+    return repaired
+
+
 def materialize_reported_materials(
     plan: Mapping[str, Any], records: Iterable[Mapping[str, Any]], *, source_text: str,
 ) -> Dict[str, Any]:
@@ -1270,7 +1383,7 @@ def expand_table_row_templates(
     records and materials and, for each new id, its template's record_id;
     every new record still passes the verbatim row and cell checks.
     """
-    from ..services.publication_tables import _NUMERIC_CELL_RE, _TableGrid
+    from ..services.publication_tables import _NUMERIC_CELL_RE, _TableGrid, _unwrap_number
 
     source = normalize_source_evidence_text(source_text)
     by_id = {str(item.get("record_id") or ""): item for item in materials}
@@ -1292,13 +1405,13 @@ def expand_table_row_templates(
         table = next((t for t in _HTML_TABLE_RE.findall(source) if row and row in t), "")
         if not table:
             continue
-        cells = [_cell_text(cell) for cell in _HTML_CELL_RE.findall(row)]
+        cells = [_unwrap_number(_cell_text(cell)) for cell in _HTML_CELL_RE.findall(row)]
         rows = _HTML_ROW_RE.findall(table)
         # A row holding one label ("Thc_Cut1") heads the rows below it.
         sections, label_rows, current = [], {}, ""
         for raw in rows:
             filled = [_cell_text(cell) for cell in _HTML_CELL_RE.findall(raw) if _cell_text(cell)]
-            if len(filled) == 1 and not _NUMERIC_CELL_RE.match(filled[0]):
+            if len(filled) == 1 and not _NUMERIC_CELL_RE.match(_unwrap_number(filled[0])):
                 current = filled[0]
                 label_rows[current] = raw
             sections.append(current)
@@ -1306,7 +1419,11 @@ def expand_table_row_templates(
         named = [i for i, cell in enumerate(cells) if _plain_cell(cell) == _plain_cell(subject)]
         if len(named) == 1:
             subject_index = named[0]
-        elif row in rows and _plain_cell(sections[rows.index(row)]) == _plain_cell(subject):
+        elif row in rows and sections[rows.index(row)] and (
+            _plain_cell(subject) == _plain_cell(sections[rows.index(row)])
+            # "Thc_Cut1 50°C": the label row's material plus the row's own condition
+            or _plain_cell(subject).startswith(_plain_cell(sections[rows.index(row)]) + " ")
+        ):
             subject_index = -1  # the material is the row's section label
         else:
             # A pivoted table: the material heads the column, not the row.
@@ -1326,7 +1443,7 @@ def expand_table_row_templates(
         grid.close()
         header_rows = set(grid.project()["header_rows"])
         for number, sibling in enumerate(rows, start=1):
-            row_cells = [_cell_text(cell) for cell in _HTML_CELL_RE.findall(sibling)]
+            row_cells = [_unwrap_number(_cell_text(cell)) for cell in _HTML_CELL_RE.findall(sibling)]
             if (number - 1 in header_rows or sibling in cited or sibling == row
                     or len(row_cells) != len(cells) or sibling in label_rows.values()):
                 continue

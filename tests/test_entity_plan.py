@@ -3279,6 +3279,35 @@ async def test_reviewed_material_and_fit_form_complete_isosa_without_raw_run_inv
 
 
 @pytest.mark.anyio
+async def test_review_decision_for_an_unknown_record_does_not_discard_approved_records(monkeypatch):
+    """The reviewer once answered for six ids nobody proposed (bit_27984) and the whole
+    reviewed set, including five approved assays, was thrown away."""
+    plan, materials, source = _reported_material_fixture()
+    _, record, fit_source = _reported_fit_fixture()
+    record["sample_row_id"] = "material_alpha"
+    source += " " + fit_source
+
+    async def review(*args, **kwargs):
+        decisions = [{"record_id": item["record_id"], "approved": True,
+                      "evidence_quote": item["source_quote"], "rationale": "Supported."}
+                     for item in [*materials, record]]
+        decisions.append({"record_id": "tbl_invented_row", "approved": False,
+                          "evidence_quote": "", "rationale": "No such record was proposed."})
+        return {"decisions": decisions}
+
+    monkeypatch.setattr(entity_planner_module, "invoke_structured_output", review)
+    planner = object.__new__(EntityStructurePlannerAgent)
+    planner.llm_helper = object()
+    knowledge = [{"term": "fitted response", "metadata": {"isa_sheet": "assay", "syntax": "{float}"}}]
+    result = await planner._materialize_reviewed_results(plan, [record], knowledge, source, materials=materials)
+
+    rows = {row["row_id"] for level in result["levels"] for row in level.get("entities") or []}
+    assert {"prep_alpha", "material_alpha", record["record_id"]} <= rows
+    assert any("referenced unknown reported record tbl_invented_row" in e
+               for e in result["materialization_errors"])
+
+
+@pytest.mark.anyio
 async def test_misquoted_material_drops_alone_and_well_quoted_materials_keep_their_rows(monkeypatch):
     plan, materials, source = _reported_material_fixture()
     beta = "Material beta was synthesised in house."
@@ -4439,6 +4468,70 @@ def test_cells_rejoined_without_their_row_cite_the_source_row(quote, subject, va
     assert _row_cell_value(value, subject, lines) == expected
 
 
+TIME_TABLE = (
+    '<table><tr><td rowspan="2"></td><td colspan="3">TPA variation (mM)</td></tr>'
+    '<tr><td>0 h</td><td>2 h</td><td>48 h</td></tr>'
+    '<tr><td>Tfu_0883</td><td>5.4 ± 0.1</td><td>7.2 ± 0.2</td><td>12.3 ± 0.1</td></tr>'
+    '<tr><td>Q132A/T101A</td><td>1.1 ± 0.2</td><td>16.9 ± 0.2</td><td>19.3 ± 0.1</td></tr></table>'
+)
+ENZYME_COLUMN_TABLE = (
+    '<table><tr><td rowspan="2">Substrate</td><td colspan="2">Km (mM)</td></tr>'
+    '<tr><td>EnzA</td><td>EnzB</td></tr>'
+    '<tr><td>S1</td><td>1.15 ± 0.01</td><td>5.28</td></tr></table>'
+)
+
+
+def test_a_row_naming_the_material_owns_its_time_point_cells():
+    """The record is the row; 0 h / 2 h / 48 h are conditions, not other records."""
+    from fairifier.utils.entity_plan import _cited_table_row, _row_cell_value
+
+    quote = "<tr><td>Q132A/T101A</td><td>1.1 ± 0.2</td><td>16.9 ± 0.2</td><td>19.3 ± 0.1</td></tr>"
+    row, lines = _cited_table_row(quote, TIME_TABLE)
+    assert row == quote
+    assert _row_cell_value("16.9 ± 0.2 mM", "Q132A/T101A", lines) == "16.9 ± 0.2 mM"
+    # Another row's cell is still not this material's.
+    assert _row_cell_value("7.2 ± 0.2 mM", "Q132A/T101A", lines) == ""
+
+
+def test_a_pivoted_enzyme_column_still_belongs_to_that_enzyme_only():
+    from fairifier.utils.entity_plan import _cited_table_row, _row_cell_value
+
+    quote = "<tr><td>S1</td><td>1.15 ± 0.01</td><td>5.28</td></tr>"
+    _, lines = _cited_table_row(quote, ENZYME_COLUMN_TABLE)
+    assert _row_cell_value("5.28", "EnzB", lines) == "5.28"
+    assert _row_cell_value("1.15", "EnzB", lines) == ""
+
+
+def test_a_result_quote_retyped_from_rendered_math_is_snapped_to_the_source_passage():
+    from fairifier.utils.entity_plan import _reported_quote_in_source, repair_reported_assay_quotes
+    from fairifier.utils.document_text import normalize_source_evidence_text as norm
+
+    source = ("Compared with GF-PET, the post-consumer PET packaging materials revealed two separate "
+              "endothermic peaks in the glass transition range, corresponding to a $T_{g1}$ of 75–78°C "
+              "and a $T_{g2}$ of 83–85°C for AP-PET and a $T_{g1}$ of 77–80°C for CP-PET. Other text.")
+    retyped = ("the post-consumer PET packaging materials revealed two separate endothermic peaks in "
+               "the glass transition range, corresponding to a Tg1 of 75–78°C and a Tg2 of 83–85°C for AP-PET")
+    record = {"record_id": "ra_tg_appet", "source_quote": retyped}
+    [fixed] = repair_reported_assay_quotes([record], source_text=source)
+    assert fixed["source_quote_repaired"] is True
+    assert "$T_{g1}$" in fixed["source_quote"]
+    assert _reported_quote_in_source(norm(fixed["source_quote"]), norm(source))
+    assert "75–78°C" in fixed["source_quote"] and "83–85°C" in fixed["source_quote"]
+
+
+def test_invented_short_and_table_row_quotes_are_not_repaired():
+    from fairifier.utils.entity_plan import repair_reported_assay_quotes
+
+    source = ("The enzyme reached a turnover of 12.3 per second at 50 °C on amorphous film, "
+              "while the crystalline film was hydrolysed more slowly. <table><tr><td>A</td><td>1.0</td></tr></table>")
+    invented = "The enzyme reached a turnover of 99.9 per second at 70 °C on crystalline pellets and fibres"
+    short = "turnover of 12.3"
+    row = "<tr><td>A</td><td>1.1</td></tr>"
+    for quote in (invented, short, row):
+        [kept] = repair_reported_assay_quotes([{"record_id": "r", "source_quote": quote}], source_text=source)
+        assert kept["source_quote"] == quote and "source_quote_repaired" not in kept
+
+
 def test_fragments_matching_no_single_row_cite_nothing():
     from fairifier.utils.entity_plan import _cited_table_row
 
@@ -4599,3 +4692,111 @@ def test_pivoted_table_result_repeats_over_the_other_enzyme_columns():
     cited = {**template, "record_id": "conv_beta", "sample_row_id": "s_beta"}
     again = _repeat_across_columns(template, PIVOT_ROW, PIVOT_TABLE, samples, [template, cited], {})
     assert {r["sample_row_id"] for r in again} == {"s_gamma"}
+def _screening_claims(positions, clones, clone_origin="derived", clone_values=None):
+    return {
+        "investigations": [{"row_id": "inv_a", "label": "Screen", "evidence": "SSM libraries were screened."}],
+        "studies": [{"row_id": "study_a", "parent_row_id": "inv_a", "label": "Screen", "evidence": "SSM screen."}],
+        "design_groups": [{
+            "group_id": "ssm", "label": "SSM screen", "study_row_id": "study_a",
+            "evidence": "Two hundred clones were screened for each SSM library.",
+            "dimensions": [
+                {"name": "engineered_position", "level_count": positions,
+                 "explicit_values": [f"P{i}" for i in range(1, positions + 1)], "origin": "explicit",
+                 "semantic_role": "material_path", "field_name": "material label",
+                 "applies_to": ["observationunit", "sample", "assay"]},
+                {"name": "screened_clones_per_position", "level_count": clones,
+                 "explicit_values": list(clone_values or []), "origin": clone_origin,
+                 "semantic_role": "observation_condition", "field_name": "clone label",
+                 "applies_to": ["assay"]},
+            ],
+        }],
+        "unresolved_ambiguities": [],
+    }
+
+
+def test_screening_campaign_is_not_expanded_into_one_assay_per_unreported_clone():
+    plan = materialize_entity_claims(_screening_claims(positions=58, clones=200))
+    levels = {level["level"]: level for level in plan["levels"]}
+
+    # 58 positions x 200 unnamed clones would be 11,600 assays
+    assert len(levels["assay"]["entities"]) == 58
+    assert len(levels["sample"]["entities"]) == 58
+    assert not plan["materialization_errors"]
+    assert any("screened_clones_per_position" in note and "200" in note
+               for note in levels["assay"]["unresolved_ambiguities"])
+    assert not any(a["dimension_name"] == "screened_clones_per_position"
+                   for row in levels["assay"]["entities"] for a in row["attributes"])
+
+
+def test_plan_under_the_row_cap_is_expanded_as_before():
+    plan = materialize_entity_claims(_screening_claims(positions=10, clones=5))
+    levels = {level["level"]: level for level in plan["levels"]}
+    assert len(levels["assay"]["entities"]) == 50
+    assert not plan["materialization_errors"]
+
+
+def test_named_levels_are_never_collapsed_and_an_oversized_product_is_refused():
+    names = [f"clone {i}" for i in range(1, 201)]
+    plan = materialize_entity_claims(
+        _screening_claims(positions=58, clones=200, clone_origin="explicit", clone_values=names))
+    levels = {level["level"]: level for level in plan["levels"]}
+    assert not levels["assay"]["entities"]
+    assert any("11600 rows" in error for error in plan["materialization_errors"])
+
+
+def _template_materials(*subjects):
+    materials = []
+    for index, subject in enumerate(subjects):
+        materials += [
+            {"record_id": f"ou_{index}", "level": "observationunit", "parent_row_id": "study_001",
+             "record_kind": "material_preparation", "source_subject": subject, "source_quote": "x",
+             "label": subject, "source_group": "g"},
+            {"record_id": f"s_{index}", "level": "sample", "parent_row_id": f"ou_{index}",
+             "record_kind": "material_identity", "source_subject": subject, "source_quote": "x",
+             "label": subject, "source_group": "g"},
+        ]
+    return materials
+
+
+ANNEAL_TABLE = (
+    "<table><tr><td>Annealing condition</td><td>\\( V_{max} \\)[μM s-1]</td></tr>"
+    "<tr><td>5 min at 85°C</td><td>\\( 0.22 ± 0.01^{\\text{a}} \\)</td></tr>"
+    "<tr><td>3 min at 115°C</td><td>\\( 0.16 ± 0.01^{\\text{ab}} \\)</td></tr>"
+    "<tr><td>4 min at 115°C</td><td>\\( 0.13 ± 0.010^{\\text{b}} \\)</td></tr></table>"
+)
+
+
+def test_template_repeats_over_rows_whose_cells_carry_math_markup_and_digit_led_labels():
+    from fairifier.utils.entity_plan import expand_table_row_templates
+
+    template = {
+        "record_id": "vmax", "sample_row_id": "s_0", "record_kind": "fitted_result",
+        "source_subject": "5 min at 85°C", "repeat_for_table_rows": True, "label": "Vmax",
+        "source_group": "kinetics", "source_quote": "<tr><td>5 min at 85°C</td><td>\\( 0.22 ± 0.01^{\\text{a}} \\)</td></tr>",
+        "attributes": [{"field_name": "reported measurement", "value": "0.22 ± 0.01 μM s-1"}],
+    }
+    records, materials, derived = expand_table_row_templates(
+        [template], _template_materials("5 min at 85°C"), ANNEAL_TABLE)
+
+    clones = {r["source_subject"]: r["attributes"][0]["value"] for r in records if r["record_id"] != "vmax"}
+    assert clones == {"3 min at 115°C": "0.16 ± 0.01 μM s-1", "4 min at 115°C": "0.13 ± 0.010 μM s-1"}
+    assert {m["source_subject"] for m in materials if m["level"] == "sample"} >= set(clones)
+
+
+def test_template_whose_subject_is_the_label_row_plus_its_condition_repeats_per_row():
+    from fairifier.utils.entity_plan import expand_table_row_templates
+
+    template = {
+        "record_id": "kin", "sample_row_id": "s_0", "record_kind": "fitted_result",
+        "source_subject": "Thc_Cut1 50°C", "repeat_for_table_rows": True, "label": "kinetics",
+        "source_group": "kinetics",
+        "source_quote": "<tr><td>50</td><td>2.3 ± 0.68</td><td>0.072 ± 0.0056</td></tr>",
+        "attributes": [{"field_name": "Michaelis constant Km", "value": "2.3 ± 0.68 g·L-1"},
+                       {"field_name": "reaction temperature", "value": "50"}],
+    }
+    records, _, _ = expand_table_row_templates(
+        [template], _template_materials("Thc_Cut1", "Thc_Cut2"), GROUPED_TABLE)
+
+    got = {(r["sample_row_id"], r["attributes"][0]["value"], r["attributes"][1]["value"])
+           for r in records if r["record_id"] != "kin"}
+    assert got == {("s_0", "6.9 ± 1.2 g·L-1", "60"), ("s_1", "3.5 ± 0.68 g·L-1", "50")}

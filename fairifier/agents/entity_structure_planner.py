@@ -33,6 +33,7 @@ from ..utils.entity_plan import (
     materialize_reported_materials,
     normalize_claim_measurement_units,
     normalize_entity_plan,
+    repair_reported_assay_quotes,
     repair_reported_material_quotes,
     text_names,
     reported_parent_binding_digest,
@@ -2551,6 +2552,7 @@ Authoritative table profiles with value distributions and example rows:
         # rows. Repeats are reviewed through their template, not one by one;
         # each still passes the verbatim row and cell checks below.
         records = rebind_results_to_named_samples(records, materials)
+        records = repair_reported_assay_quotes(records, source_text=source_text)
         records, materials, derived = expand_table_row_templates(records, materials, source_text)
         result = deepcopy(dict(plan))
         # Check each material on its own: one misquoted variant drops only that
@@ -2664,7 +2666,11 @@ Authoritative table profiles with value distributions and example rows:
                         f"Reported record {record_id} review evidence_quote is not present in the "
                         "source; copy a verbatim source passage including its markup."
                     )
-            if len(set(expected)) != len(expected) or set(actual) - set(expected):
+            # Only ambiguous proposals end the review. A decision for an id nobody
+            # proposed is recorded above and ignored: the records that were approved
+            # one by one keep their rows (the reviewer once invented six ids and
+            # five approved assays were lost with them).
+            if len(set(expected)) != len(expected):
                 return result
         approved_ids = {
             item["record_id"] for item in decisions

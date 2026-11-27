@@ -525,6 +525,11 @@ _TABLE_QUANTITY_RE = re.compile(
 _NUMERIC_START_RE = re.compile(r"[<>≤≥~]?\s*[+-]?\.?\d")
 
 
+def _is_numeric_cell(cell: str) -> bool:
+    """A value cell, not a row label: "9.7 ± 0.5" or "55 °C", but not "3 min at 115°C"."""
+    return bool(_NUMERIC_START_RE.match(cell)) and not re.search(r"[A-Za-z]{3,}", cell)
+
+
 def _entries(record: Mapping[str, Any]) -> List[Tuple[str, str]]:
     pairs = []
     for key in ("attributes", "parent_attributes"):
@@ -658,7 +663,7 @@ def _table_cell_binding(
     ]
     labels = " ; ".join(
         f"{header} = {cell}" for header, cell in cells
-        if "|" not in header and not _NUMERIC_START_RE.match(cell)
+        if "|" not in header and not _is_numeric_cell(cell)
     )
     sub_columns: Dict[str, set] = {}
     for header, _ in cells:
@@ -679,7 +684,16 @@ def _table_cell_binding(
         if len(sub_columns[top.strip()]) > 1 and not any(
             _source_contains(sub.lower(), own) for _, own in entries
         ):
-            continue  # a pivoted cell must sit in this record's own sub-column
+            # A pivoted cell must sit in this record's own sub-column, unless the
+            # row itself names the record and the sub-columns are something else
+            # (time points under "TPA variation (mM)"): then the row decides.
+            row_names_record = any(_source_contains(labels.lower(), own) for _, own in entries)
+            sub_names_other = any(
+                rival not in own and _source_contains(sub.lower(), rival)
+                for name, own in entries for rival in rivals.get(name, ())
+            )
+            if not row_names_record or sub_names_other:
+                continue
         coordinates = f"{header} ; {labels}".lower()
         keys = []
         for name, own in entries:
