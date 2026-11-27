@@ -1200,10 +1200,14 @@ def _repeat_across_columns(
         [(label.strip(), cell.strip()) for label, sep, cell in (part.partition(" = ") for part in line.split(";")) if sep]
         for line in lines
     ]
+    def name_key(value: Any) -> str:
+        return re.sub(r"\s+", "", _plain_cell(normalize_source_evidence_text(value))).lower()
+
+    by_name = {name_key(name): sample for name, sample in samples.items()}
     out: List[Dict[str, Any]] = []
     for pairs, line in zip(labelled, lines):
         cells = [cell for _, cell in pairs]
-        own = [i for i, (label, _) in enumerate(pairs) if _plain_cell(label) == subject]
+        own = [i for i, (label, _) in enumerate(pairs) if name_key(label) == name_key(subject)]
         if len(own) != 1:
             continue
         roles = {}
@@ -1215,7 +1219,7 @@ def _repeat_across_columns(
             continue
         taken = {(str(r.get("sample_row_id") or ""), r.get("source_quote")) for r in records}
         for index, (label, cell) in enumerate(pairs):
-            sample_id = samples.get(normalize_source_evidence_text(_plain_cell(label)).lower())
+            sample_id = by_name.get(name_key(label))
             if index == own[0] or not sample_id or (sample_id, row) in taken or not re.search(r"\d", cell):
                 continue
             attributes = []
