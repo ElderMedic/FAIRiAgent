@@ -1179,7 +1179,12 @@ Hard rules:
     ONE record for one of those rows: quote that complete HTML row, name its
     material, map each measured cell, and set repeat_for_table_rows=true. Code
     repeats it for every other row of the table, reading each value from the same
-    column, so do not list the other rows yourself. When the columns are levels of
+    column, so do not list the other rows yourself. When instead the materials
+    head the columns and each row is a condition or measure (enzymes across,
+    "45 °C specific activity" down), propose one record per row for one
+    material's column with repeat_for_table_rows=true; code repeats it over the
+    other material columns of that row. Cover every result table of the
+    document this way, supplementary tables included. When the columns are levels of
     one condition (e.g. 55 °C, 62 °C, 70 °C), propose one such record per column,
     each with that column's condition. Put missing underlying counts in
     unreported_design, not in a fabricated one-level factor. Never assign a

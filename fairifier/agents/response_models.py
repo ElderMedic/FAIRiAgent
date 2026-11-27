@@ -371,7 +371,7 @@ class ReportedAssayResponse(BaseModel):
     unreported_design: List[str] = Field(default_factory=list)
     repeat_for_table_rows: bool = Field(
         default=False,
-        description="True when source_quote is one body row of a table that reports the same measurements for other materials in its other rows. Code repeats this record for every other row, reading each attribute from the same column.",
+        description="True when source_quote is one body row of a table that reports the same measurements for other materials in its other rows. Code repeats this record for every other row, reading each attribute from the same column. In a table whose columns are materials, it repeats the record over the other material columns of the same row.",
     )
 
 

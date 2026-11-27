@@ -4568,3 +4568,34 @@ def test_row_retyped_as_prose_cites_the_one_row_holding_its_pairs(quote, expecte
         assert (row, lines) == ("", [])
     else:
         assert f"<td>{expected}</td>" in row and len(lines) == 1 and "section = Thc_Cut" in lines[0]
+
+
+PIVOT_TABLE = (
+    "<table><tr><td>Temperature</td><td>Measure</td><td>alpha</td><td>beta</td><td>gamma</td></tr>"
+    '<tr><td rowspan="2">45 °C</td><td>Specific activity (µmol h-1 mg-1)</td>'
+    "<td>245.5 ± 12.5</td><td>210.9 ± 13.5</td><td>n.d.</td></tr>"
+    "<tr><td>Conversion (%)</td><td>8.7 ± 2.3</td><td>10.4 ± 0.7</td><td>4.9 ± 0.4</td></tr></table>"
+)
+PIVOT_ROW = ("<tr><td>Conversion (%)</td><td>8.7 ± 2.3</td><td>10.4 ± 0.7</td>"
+             "<td>4.9 ± 0.4</td></tr>")
+
+
+def test_pivoted_table_result_repeats_over_the_other_enzyme_columns():
+    from fairifier.utils.entity_plan import _repeat_across_columns
+
+    template = {
+        "record_id": "conv_alpha", "sample_row_id": "s_alpha", "record_kind": "aggregate_result",
+        "source_subject": "alpha", "source_quote": PIVOT_ROW, "label": "alpha conversion",
+        "source_group": "activity", "repeat_for_table_rows": True,
+        "attributes": [{"field_name": "conversion", "value": "8.7 ± 2.3 %"}],
+    }
+    samples = {"alpha": "s_alpha", "beta": "s_beta", "gamma": "s_gamma"}
+    derived: dict = {}
+    out = _repeat_across_columns(template, PIVOT_ROW, PIVOT_TABLE, samples, [template], derived)
+    values = {r["sample_row_id"]: r["attributes"][0]["value"] for r in out}
+    assert values == {"s_beta": "10.4 ± 0.7 %", "s_gamma": "4.9 ± 0.4 %"}
+    assert set(derived.values()) == {"conv_alpha"}
+    # A column the planner already cited for that sample is not repeated.
+    cited = {**template, "record_id": "conv_beta", "sample_row_id": "s_beta"}
+    again = _repeat_across_columns(template, PIVOT_ROW, PIVOT_TABLE, samples, [template, cited], {})
+    assert {r["sample_row_id"] for r in again} == {"s_gamma"}

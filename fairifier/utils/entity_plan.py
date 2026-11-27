@@ -1178,6 +1178,76 @@ def rebind_results_to_named_samples(
     return out
 
 
+def _repeat_across_columns(
+    template: Mapping[str, Any], row: str, source: str,
+    samples: Mapping[str, str], records: List[Dict[str, Any]], derived: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    """Repeat a result read from one material's column over the row's other columns.
+
+    In a pivoted table the materials (enzymes) head the columns and each row
+    is a condition or measure ("45 °C, specific activity"). The template names
+    one column; every other column headed by a declared material Sample gets
+    the same record, each attribute read from that column's cell of the same
+    row. Columns a proposed record already cites for that Sample, cells
+    without a number, and values the row checks reject are skipped.
+    """
+    rid = str(template.get("record_id") or "")
+    subject = _plain_cell(normalize_source_evidence_text(template.get("source_subject")))
+    _, lines = _cited_table_row(row, source)
+    if not lines:
+        return []
+    labelled = [
+        [(label.strip(), cell.strip()) for label, sep, cell in (part.partition(" = ") for part in line.split(";")) if sep]
+        for line in lines
+    ]
+    out: List[Dict[str, Any]] = []
+    for pairs, line in zip(labelled, lines):
+        cells = [cell for _, cell in pairs]
+        own = [i for i, (label, _) in enumerate(pairs) if _plain_cell(label) == subject]
+        if len(own) != 1:
+            continue
+        roles = {}
+        for position, attribute in enumerate(template.get("attributes") or []):
+            role = _cell_role(str(attribute.get("value") or ""), cells, -1)
+            if role and role[0] == own[0]:
+                roles[position] = role
+        if not roles:
+            continue
+        taken = {(str(r.get("sample_row_id") or ""), r.get("source_quote")) for r in records}
+        for index, (label, cell) in enumerate(pairs):
+            sample_id = samples.get(normalize_source_evidence_text(_plain_cell(label)).lower())
+            if index == own[0] or not sample_id or (sample_id, row) in taken or not re.search(r"\d", cell):
+                continue
+            attributes = []
+            for position, attribute in enumerate(template.get("attributes") or []):
+                if position not in roles:
+                    attributes.append(dict(attribute))
+                    continue
+                _, part, suffix = roles[position]
+                value = _cell_part(cell, part)
+                if re.search(r"\d", value):
+                    attributes.append({**attribute, "value": value + suffix})
+            if len(attributes) != len(template.get("attributes") or []):
+                continue
+            if not all(
+                _row_cell_value(str(a.get("value") or ""), label, [line])
+                for position, a in enumerate(attributes) if position in roles
+            ):
+                continue
+            clone_id = f"{rid}_col{index}"
+            name = _plain_cell(label)
+            out.append({
+                **template, "record_id": clone_id, "sample_row_id": sample_id,
+                "source_subject": name, "source_quote": row, "attributes": attributes,
+                "label": str(template.get("label") or "").replace(subject, name) or name,
+                "repeat_for_table_rows": False,
+            })
+            derived[clone_id] = rid
+    return out
+
+
+
+
 def expand_table_row_templates(
     records: List[Dict[str, Any]], materials: List[Dict[str, Any]], source_text: str,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, str]]:
@@ -1235,6 +1305,8 @@ def expand_table_row_templates(
         elif row in rows and _plain_cell(sections[rows.index(row)]) == _plain_cell(subject):
             subject_index = -1  # the material is the row's section label
         else:
+            # A pivoted table: the material heads the column, not the row.
+            new_records.extend(_repeat_across_columns(template, row, source, samples, records, derived))
             continue
         roles = {}
         for position, attribute in enumerate(template.get("attributes") or []):
