@@ -670,7 +670,10 @@ def _table_cell_binding(
         if magnitude not in (compact, compact.partition("±")[0]):
             continue
         found = True
-        if unit and ((len(unit) < 2 and unit != "%") or unit not in unit_key(header)):
+        # The unit sits in the column header, or in the row's own label when
+        # the materials head the columns ("Specific activity (µmol h-1 mg-1)").
+        if unit and ((len(unit) < 2 and unit != "%")
+                     or (unit not in unit_key(header) and unit not in unit_key(labels))):
             continue
         top, _, sub = header.partition("|")
         if len(sub_columns[top.strip()]) > 1 and not any(
